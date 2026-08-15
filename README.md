@@ -31,4 +31,15 @@ completeness.
 
 ## Status
 
-Pilotage Agent is in early design. There is no stable runtime or public API yet.
+Pilotage Agent is in early development. A runtime core is now in place, but there
+is no stable public API yet and interfaces change without notice.
+
+## Origin
+
+Pilotage Agent builds on [Hermes Agent](https://hermes-agent.nousresearch.com) by
+Nous Research, used under the MIT License. Upstream supplies the gateway, session
+handling, messaging adapters, and agent loop. Pilotage removes what it does not
+need and reshapes the rest around the principles above.
+
+The original copyright notice is retained in [LICENSE](LICENSE), as the MIT
+License requires.

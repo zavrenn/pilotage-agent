@@ -1,6 +1,11 @@
 MIT License
 
 Copyright (c) 2026 Pilotage Agent contributors
+Copyright (c) 2025 Nous Research
+
+This software is derived in part from Hermes Agent by Nous Research, which is
+distributed under the MIT License. The original copyright notice is retained
+above as that license requires.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
