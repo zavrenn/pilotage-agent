@@ -193,7 +193,7 @@ def _base_attrs(*, profile: str, install_id: str, version: str, supervision_mode
     return {
         "service.instance.id": _safe_instance_id(install_id),
         "service.version": _safe_metric_value(version, limit=64),
-        "hermes.supervision_mode": mode if mode in _SUPERVISION_MODES else "unknown",
+        "pilotage.supervision_mode": mode if mode in _SUPERVISION_MODES else "unknown",
     }
 
 
@@ -226,14 +226,14 @@ def build_gateway_health_snapshot(
     base = _base_attrs(profile=profile, install_id=install_id, version=version, supervision_mode=supervision_mode)
 
     metrics: list[GatewayMetric] = [
-        _metric("hermes.gateway.up", 1 if gateway_running else 0, base),
-        _metric("hermes.gateway.active_agents", active_agents, base),
-        _metric("hermes.gateway.busy", 1 if busy else 0, base),
-        _metric("hermes.gateway.drainable", 1 if drainable else 0, base),
-        _metric("hermes.gateway.restart_requested", 1 if runtime.get("restart_requested") else 0, base),
+        _metric("pilotage.gateway.up", 1 if gateway_running else 0, base),
+        _metric("pilotage.gateway.active_agents", active_agents, base),
+        _metric("pilotage.gateway.busy", 1 if busy else 0, base),
+        _metric("pilotage.gateway.drainable", 1 if drainable else 0, base),
+        _metric("pilotage.gateway.restart_requested", 1 if runtime.get("restart_requested") else 0, base),
     ]
     if gateway_state:
-        metrics.append(_metric("hermes.gateway.state", 1, base, **{"hermes.gateway.state": str(gateway_state)}))
+        metrics.append(_metric("pilotage.gateway.state", 1, base, **{"pilotage.gateway.state": str(gateway_state)}))
 
     fatal_count = 0
     events: list[GatewayHealthEvent | GatewayDiagnosticEvent] = []
@@ -249,16 +249,16 @@ def build_gateway_health_snapshot(
         if is_degraded:
             fatal_count += 1
         metrics.append(_metric(
-            "hermes.platform.up",
+            "pilotage.platform.up",
             1 if is_up else 0,
             base,
-            **{"hermes.platform": str(platform), "hermes.platform.state": state},
+            **{"pilotage.platform": str(platform), "pilotage.platform.state": state},
         ))
         metrics.append(_metric(
-            "hermes.platform.degraded",
+            "pilotage.platform.degraded",
             1 if is_degraded else 0,
             base,
-            **{"hermes.platform": str(platform), "hermes.platform.state": state, "hermes.error_code": error_code},
+            **{"pilotage.platform": str(platform), "pilotage.platform.state": state, "pilotage.error_code": error_code},
         ))
         if is_degraded:
             events.append(GatewayDiagnosticEvent(
@@ -291,7 +291,7 @@ def build_gateway_health_snapshot(
 
 def _safe_profile() -> str:
     try:
-        from hermes_cli.profiles import get_active_profile_name
+        from pilotage_cli.profiles import get_active_profile_name
         return str(get_active_profile_name() or "default")
     except Exception:
         return "default"
@@ -299,7 +299,7 @@ def _safe_profile() -> str:
 
 def _safe_version() -> str:
     try:
-        from hermes_cli import __version__
+        from pilotage_cli import __version__
         return str(__version__)
     except Exception:
         return "unknown"

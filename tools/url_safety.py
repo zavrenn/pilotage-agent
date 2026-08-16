@@ -15,7 +15,7 @@ metadata hostnames (metadata.google.internal, 169.254.169.254) are
 Limitations:
   - DNS rebinding (TOCTOU): an attacker-controlled DNS server with TTL=0
     can return a public IP for the check, then a private IP for the actual
-    connection. Hermes-owned direct httpx request paths should use
+    connection. Pilotage-owned direct httpx request paths should use
     ``create_ssrf_safe_client()`` / ``create_ssrf_safe_async_client()`` so the
     same policy is applied immediately before TCP connect and the client
     connects to the validated IP while preserving Host/SNI semantics.
@@ -39,7 +39,7 @@ import re
 from typing import Any, Optional
 from urllib.parse import parse_qsl, quote, unquote, urljoin, urlparse, urlsplit, urlunsplit
 
-from hermes_constants import get_hermes_home_override
+from pilotage_constants import get_pilotage_home_override
 from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ def _proxy_is_configured() -> bool:
 
 
 def normalize_url_for_request(url: str) -> str:
-    """Return an ASCII-safe HTTP URL for Hermes-owned URL tools.
+    """Return an ASCII-safe HTTP URL for Pilotage-owned URL tools.
 
     Browsers and HTTP clients expect URIs, but users and models often provide
     IRIs such as ``https://wttr.in/Köln``.  Preserve URL syntax and existing
@@ -261,7 +261,7 @@ def _global_allow_private_urls() -> bool:
     """Return True when the user has opted out of private-IP blocking.
 
     Checks (in priority order):
-    1. ``HERMES_ALLOW_PRIVATE_URLS`` env var  (``true``/``1``/``yes``)
+    1. ``PILOTAGE_ALLOW_PRIVATE_URLS`` env var  (``true``/``1``/``yes``)
     2. ``security.allow_private_urls`` in config.yaml
     3. ``browser.allow_private_urls`` in config.yaml  (legacy / backward compat)
 
@@ -274,7 +274,7 @@ def _global_allow_private_urls() -> bool:
     # A multiplex gateway serves several independently configured profiles in
     # one process. Reusing the first profile's opt-out here would let it disable
     # private-network blocking for every later profile in that process.
-    if get_hermes_home_override() is not None:
+    if get_pilotage_home_override() is not None:
         return _resolve_allow_private_urls()
 
     if _allow_private_resolved:
@@ -289,7 +289,7 @@ def _resolve_allow_private_urls() -> bool:
     """Resolve the effective private-URL toggle from the active config scope."""
 
     # 1. Env var override (highest priority)
-    env_val = os.getenv("HERMES_ALLOW_PRIVATE_URLS", "").strip().lower()
+    env_val = os.getenv("PILOTAGE_ALLOW_PRIVATE_URLS", "").strip().lower()
     if env_val in {"true", "1", "yes"}:
         return True
     if env_val in {"false", "0", "no"}:
@@ -298,7 +298,7 @@ def _resolve_allow_private_urls() -> bool:
 
     # 2. Config file
     try:
-        from hermes_cli.config import read_raw_config
+        from pilotage_cli.config import read_raw_config
         cfg = read_raw_config()
         # security.allow_private_urls (preferred)
         sec = cfg.get("security", {})
@@ -475,7 +475,7 @@ def is_safe_url(url: str) -> bool:
     Fails closed: DNS errors and unexpected exceptions block the request.
 
     When ``security.allow_private_urls`` is enabled (or the env var
-    ``HERMES_ALLOW_PRIVATE_URLS=true``), private-IP blocking is skipped.
+    ``PILOTAGE_ALLOW_PRIVATE_URLS=true``), private-IP blocking is skipped.
     Cloud metadata endpoints (169.254.169.254, metadata.google.internal)
     remain blocked regardless — they are never legitimate agent targets.
     """
@@ -765,7 +765,7 @@ def ssrf_safe_async_http_transport(**kwargs: Any) -> Any:
     import contextvars
     import httpx
 
-    schemes_by_origin_var = contextvars.ContextVar("hermes_ssrf_async_origin_schemes")
+    schemes_by_origin_var = contextvars.ContextVar("pilotage_ssrf_async_origin_schemes")
 
     class _Transport(httpx.AsyncHTTPTransport):
         def __init__(self, **transport_kwargs: Any):
@@ -789,7 +789,7 @@ def ssrf_safe_http_transport(**kwargs: Any) -> Any:
     import contextvars
     import httpx
 
-    schemes_by_origin_var = contextvars.ContextVar("hermes_ssrf_origin_schemes")
+    schemes_by_origin_var = contextvars.ContextVar("pilotage_ssrf_origin_schemes")
 
     class _Transport(httpx.HTTPTransport):
         def __init__(self, **transport_kwargs: Any):
@@ -810,7 +810,7 @@ def ssrf_safe_http_transport(**kwargs: Any) -> Any:
 
 def _install_ssrf_guard_on_async_transport(transport: Any, schemes_by_origin_var: Any) -> None:
     state = getattr(transport, "__dict__", {}) if transport is not None else {}
-    if transport is None or state.get("_hermes_ssrf_guarded", False):
+    if transport is None or state.get("_pilotage_ssrf_guarded", False):
         return
 
     pool = state.get("_pool")
@@ -830,12 +830,12 @@ def _install_ssrf_guard_on_async_transport(transport: Any, schemes_by_origin_var
             schemes_by_origin_var.reset(token)
 
     transport.handle_async_request = guarded_handle_async_request
-    transport._hermes_ssrf_guarded = True
+    transport._pilotage_ssrf_guarded = True
 
 
 def _install_ssrf_guard_on_transport(transport: Any, schemes_by_origin_var: Any) -> None:
     state = getattr(transport, "__dict__", {}) if transport is not None else {}
-    if transport is None or state.get("_hermes_ssrf_guarded", False):
+    if transport is None or state.get("_pilotage_ssrf_guarded", False):
         return
 
     pool = state.get("_pool")
@@ -855,13 +855,13 @@ def _install_ssrf_guard_on_transport(transport: Any, schemes_by_origin_var: Any)
             schemes_by_origin_var.reset(token)
 
     transport.handle_request = guarded_handle_request
-    transport._hermes_ssrf_guarded = True
+    transport._pilotage_ssrf_guarded = True
 
 
 def _install_ssrf_guard_on_async_client(client: Any) -> None:
     import contextvars
 
-    schemes_by_origin_var = contextvars.ContextVar("hermes_ssrf_async_origin_schemes")
+    schemes_by_origin_var = contextvars.ContextVar("pilotage_ssrf_async_origin_schemes")
     state = getattr(client, "__dict__", {})
     _install_ssrf_guard_on_async_transport(
         state.get("_transport"), schemes_by_origin_var
@@ -871,7 +871,7 @@ def _install_ssrf_guard_on_async_client(client: Any) -> None:
 def _install_ssrf_guard_on_client(client: Any) -> None:
     import contextvars
 
-    schemes_by_origin_var = contextvars.ContextVar("hermes_ssrf_origin_schemes")
+    schemes_by_origin_var = contextvars.ContextVar("pilotage_ssrf_origin_schemes")
     state = getattr(client, "__dict__", {})
     _install_ssrf_guard_on_transport(
         state.get("_transport"), schemes_by_origin_var

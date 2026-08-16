@@ -4,7 +4,7 @@ Skill Manager Tool -- Agent-Managed Skill Creation & Editing
 
 Allows the agent to create, update, and delete skills, turning successful
 approaches into reusable procedural knowledge. New skills are created in
-~/.hermes/skills/. Existing skills (bundled, hub-installed, or user-created)
+~/.pilotage/skills/. Existing skills (bundled, hub-installed, or user-created)
 can be modified or deleted wherever they live.
 
 Skills are the agent's procedural memory: they capture *how to do a specific
@@ -20,7 +20,7 @@ Actions:
   remove_file-- Remove a supporting file from a user skill
 
 Directory layout for user skills:
-    ~/.hermes/skills/
+    ~/.pilotage/skills/
     ├── my-skill/
     │   ├── SKILL.md
     │   ├── references/
@@ -40,9 +40,9 @@ import contextvars as _ctxvars
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from hermes_constants import get_hermes_home, display_hermes_home
+from pilotage_constants import get_pilotage_home, display_pilotage_home
 from utils import atomic_write_text, is_truthy_value
-from hermes_cli.config import cfg_get
+from pilotage_cli.config import cfg_get
 from agent.skill_utils import (
     extract_skill_description,
     is_skill_description_truncated_for_prompt,
@@ -109,10 +109,10 @@ def _guard_agent_created_enabled() -> bool:
     Off by default because the agent can already execute the same code
     paths via terminal() with no gate, so the scan adds friction without
     meaningful security.  Users who want belt-and-suspenders can turn it
-    on via `hermes config set skills.guard_agent_created true`.
+    on via `pilotage config set skills.guard_agent_created true`.
     """
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
         cfg = load_config()
         return is_truthy_value(
             cfg_get(cfg, "skills", "guard_agent_created"),
@@ -151,9 +151,9 @@ def _security_scan_skill(skill_dir: Path) -> Optional[str]:
 import yaml
 
 
-# All skills live in ~/.hermes/skills/ (single source of truth)
-HERMES_HOME = get_hermes_home()
-SKILLS_DIR = HERMES_HOME / "skills"
+# All skills live in ~/.pilotage/skills/ (single source of truth)
+PILOTAGE_HOME = get_pilotage_home()
+SKILLS_DIR = PILOTAGE_HOME / "skills"
 _SKILLS_DIR_AT_IMPORT = SKILLS_DIR
 
 
@@ -161,15 +161,15 @@ def _skills_dir() -> Path:
     """Return the active profile's skills directory at call time.
 
     Long-lived multi-profile runtimes (Dashboard/TUI/Desktop backend, cron,
-    kanban workers) import this module once under the launch HERMES_HOME and
+    kanban workers) import this module once under the launch PILOTAGE_HOME and
     later bind a different profile per session (#40677). Honor an explicitly
     patched module-level ``SKILLS_DIR`` (tests), otherwise resolve from the
-    live profile-scoped HERMES_HOME on every call.
+    live profile-scoped PILOTAGE_HOME on every call.
     """
     configured = Path(SKILLS_DIR)
     if configured != _SKILLS_DIR_AT_IMPORT:
         return configured
-    return get_hermes_home() / "skills"
+    return get_pilotage_home() / "skills"
 
 MAX_NAME_LENGTH = 64
 MAX_DESCRIPTION_LENGTH = 1024
@@ -289,7 +289,7 @@ def _pinned_guard(name: str) -> Optional[str]:
             return (
                 f"Skill '{name}' is pinned and cannot be deleted by "
                 f"skill_manage. Ask the user to run "
-                f"`hermes curator unpin {name}` if they want to delete it. "
+                f"`pilotage curator unpin {name}` if they want to delete it. "
                 f"Patches and edits are allowed on pinned skills; only "
                 f"deletion is blocked."
             )
@@ -332,7 +332,7 @@ def _background_review_write_guard(
                     f"Refusing background curator {action} for pinned skill "
                     f"'{name}': pinned skills are off-limits to autonomous "
                     "maintenance. Ask the user to run "
-                    f"`hermes curator unpin {name}` if they want it changed."
+                    f"`pilotage curator unpin {name}` if they want it changed."
                 ),
             }
     except Exception:
@@ -391,7 +391,7 @@ def _background_review_write_guard(
         # bump_patch() which created a `created_by: null` record, and the very
         # same write was refused from then on. "Allowed exactly once" is not a
         # policy — it is a race with our own bookkeeping. Fail closed for both
-        # shapes; `hermes curator adopt <name>` is the supported way in.
+        # shapes; `pilotage curator adopt <name>` is the supported way in.
         usage_data = skill_usage.load_usage()
         usage_rec = usage_data.get(name)
         if not skill_usage._is_curator_managed_record(usage_rec):
@@ -405,7 +405,7 @@ def _background_review_write_guard(
                     f"Refusing background curator {action} for skill "
                     f"'{name}': the skill is not curator-managed ({_detail}). "
                     "User-owned skills are off-limits to autonomous curation. "
-                    f"Run `hermes curator adopt {name}` to opt it in."
+                    f"Run `pilotage curator adopt {name}` to opt it in."
                 ),
             }
     except Exception:
@@ -646,7 +646,7 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     """
     Find a skill by name across all skill directories.
 
-    Searches the local skills dir (~/.hermes/skills/) first, then any
+    Searches the local skills dir (~/.pilotage/skills/) first, then any
     external dirs configured via skills.external_dirs.  Returns
     {"path": Path} or None.
     """
@@ -679,7 +679,7 @@ def _maybe_auto_propose_org_edit(name: str, skill_path: Path) -> Optional[str]:
             return (
                 f"This skill is shared by your organisation. Your edit is "
                 f"saved locally and will not be overwritten by org updates. "
-                f"Run `hermes sync propose {name}` to share it back."
+                f"Run `pilotage sync propose {name}` to share it back."
             )
         result = ssc.propose_skill(name)
         if result.get("proposal_pending"):
@@ -692,7 +692,7 @@ def _maybe_auto_propose_org_edit(name: str, skill_path: Path) -> Optional[str]:
         logger.debug("auto-propose skipped for %s: %s", name, e)
         return (
             f"Edit saved locally. Could not submit it to your organisation "
-            f"right now — run `hermes sync propose {name}` to retry."
+            f"right now — run `pilotage sync propose {name}` to retry."
         )
 
 
@@ -708,7 +708,7 @@ def _org_mirror_write_guard(name: str, skill_path: Path, action: str) -> Optiona
 
     Now an edit lands in the mirror and is protected from being overwritten by
     the next org pull (see the baseline sidecar in skills_sync_client). It
-    reaches the organisation when the user runs `hermes sync propose`, or
+    reaches the organisation when the user runs `pilotage sync propose`, or
     immediately if `sync.org_auto_propose` is on.
 
     Deletion is still refused: the mirror is a materialized view of the org
@@ -728,7 +728,7 @@ def _org_mirror_write_guard(name: str, skill_path: Path, action: str) -> Optiona
                     "organisation, so a local delete would just come back on "
                     "the next sync. Ask an org admin to remove it for "
                     "everyone. (Editing it IS allowed — your changes are kept "
-                    "and can be proposed back with `hermes sync propose "
+                    "and can be proposed back with `pilotage sync propose "
                     f"{name}`.)"
                 ),
             }
@@ -738,7 +738,7 @@ def _org_mirror_write_guard(name: str, skill_path: Path, action: str) -> Optiona
 
 
 def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
-    """Look for ``name`` under SKILL.md across OTHER Hermes profiles.
+    """Look for ``name`` under SKILL.md across OTHER Pilotage profiles.
 
     Returns a list of ``(profile_name, skill_dir)`` pairs. Used to make
     the "Skill X not found" error explain when the user is editing the
@@ -748,13 +748,13 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
     """
     matches: List[Tuple[str, Path]] = []
     try:
-        from hermes_constants import get_default_hermes_root
+        from pilotage_constants import get_default_pilotage_root
         from agent.skill_utils import is_excluded_skill_path
     except Exception:
         return matches
 
     try:
-        root = get_default_hermes_root()
+        root = get_default_pilotage_root()
     except Exception:
         return matches
 
@@ -764,7 +764,7 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
     active_dir = _active.resolve() if _active.exists() else _active
     candidates: List[Tuple[str, Path]] = []
 
-    # Default profile (~/.hermes/skills) — only consider when active is non-default.
+    # Default profile (~/.pilotage/skills) — only consider when active is non-default.
     default_skills = root / "skills"
     try:
         if default_skills.resolve() != active_dir:
@@ -772,7 +772,7 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
     except (OSError, RuntimeError):
         pass
 
-    # All named profiles (~/.hermes/profiles/*/skills)
+    # All named profiles (~/.pilotage/profiles/*/skills)
     profiles_root = root / "profiles"
     if profiles_root.is_dir():
         try:
@@ -822,7 +822,7 @@ def _skill_not_found_error(name: str, suffix: str = "") -> str:
             base += (
                 f" A skill by that name exists in profile "
                 f"'{other_profile}' ({other_path}). To edit a skill in "
-                f"another profile, switch profiles (`hermes -p "
+                f"another profile, switch profiles (`pilotage -p "
                 f"{other_profile}`) or operate via explicit file tools "
                 f"with ``cross_profile=True``."
             )
@@ -830,7 +830,7 @@ def _skill_not_found_error(name: str, suffix: str = "") -> str:
             names = ", ".join(f"'{p}'" for p, _ in others)
             base += (
                 f" Skills by that name exist in other profiles: {names}. "
-                f"Switch profiles (`hermes -p <name>`) to edit there, or "
+                f"Switch profiles (`pilotage -p <name>`) to edit there, or "
                 f"operate via explicit file tools with ``cross_profile=True``."
             )
     else:
@@ -999,7 +999,7 @@ def _attach_lint_findings(result: Dict[str, Any], skill_md: Path) -> None:
     result["lint_hint"] = (
         "The skill was created. These are advisory authoring-convention "
         "findings (not blockers) — fix them with skill_manage(action='patch') "
-        "to match Hermes skill standards."
+        "to match Pilotage skill standards."
     )
 
 
@@ -1251,9 +1251,9 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
         return {"success": False, "error": unsafe}
 
     # During the curator consolidation pass, a verified consolidation must be
-    # RECOVERABLE: archival into ~/.hermes/skills/.archive/ is documented as
+    # RECOVERABLE: archival into ~/.pilotage/skills/.archive/ is documented as
     # the maximum destructive action the curator may take, and
-    # `hermes curator restore` promises the skill can be brought back. Route
+    # `pilotage curator restore` promises the skill can be brought back. Route
     # through the recoverable archive primitive instead of permanent rmtree so
     # a misjudged consolidation can be undone (#29912). Foreground,
     # user-directed deletes keep their existing hard-delete semantics.
@@ -1641,7 +1641,7 @@ def skill_manage(
                 )
             elif action == "delete":
                 # A recoverable curator archive (routed through archive_skill)
-                # keeps its usage record as STATE_ARCHIVED so `hermes curator
+                # keeps its usage record as STATE_ARCHIVED so `pilotage curator
                 # status`/`restore` still see it. Only a hard delete forgets.
                 if not result.get("_archived"):
                     forget(name)
@@ -1672,7 +1672,7 @@ SKILL_MANAGE_SCHEMA = {
     "description": (
         "Manage skills (create, update, delete). Skills are your procedural "
         "memory — reusable approaches for recurring task types. "
-        f"New skills go to {display_hermes_home()}/skills/; existing skills can be modified wherever they live.\n\n"
+        f"New skills go to {display_pilotage_home()}/skills/; existing skills can be modified wherever they live.\n\n"
         "Actions: create (full SKILL.md + optional category), "
         "patch (old_string/new_string — preferred for fixes), "
         "edit (full SKILL.md rewrite — major overhauls only), "
@@ -1699,7 +1699,7 @@ SKILL_MANAGE_SCHEMA = {
         "via skills_list/skill_view. Keep the trigger self-contained in that "
         "first 57-char window: 'Use when <trigger>. <one-line behavior>.'\n\n"
         "Pinned skills are protected from deletion only — skill_manage(action='delete') "
-        "will refuse with a message pointing the user to `hermes curator unpin <name>`. "
+        "will refuse with a message pointing the user to `pilotage curator unpin <name>`. "
         "Patches and edits go through on pinned skills so you can still improve them as "
         "pitfalls come up; pin only guards against irrecoverable loss."
     ),

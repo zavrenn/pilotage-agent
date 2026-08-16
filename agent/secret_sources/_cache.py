@@ -15,7 +15,7 @@ backend supplies only its own cache-key shape and a serializer for it.
 
 Nothing in this module ever raises out to the caller's hot path: the disk
 layer is strictly best-effort (a miss just triggers a refetch), because a
-cache problem must never block Hermes startup.
+cache problem must never block Pilotage startup.
 """
 
 from __future__ import annotations
@@ -75,16 +75,16 @@ class CachedFetch:
 
 
 def resolve_cache_home(home_path: Optional[Path] = None) -> Path:
-    """Resolve the Hermes home used for cache paths.
+    """Resolve the Pilotage home used for cache paths.
 
-    ``home_path`` is whatever ``load_hermes_dotenv()`` already resolved;
-    falling back to ``$HERMES_HOME`` / ``~/.hermes`` keeps direct callers
+    ``home_path`` is whatever ``load_pilotage_dotenv()`` already resolved;
+    falling back to ``$PILOTAGE_HOME`` / ``~/.pilotage`` keeps direct callers
     (and tests that don't thread a home through) working.
     """
     if home_path is None:
-        from hermes_constants import get_hermes_home
+        from pilotage_constants import get_pilotage_home
 
-        home_path = get_hermes_home()
+        home_path = get_pilotage_home()
     return home_path
 
 
@@ -94,7 +94,7 @@ K = TypeVar("K")
 class DiskCache(Generic[K]):
     """Best-effort, profile-aware on-disk cache for fetched secret values.
 
-    One JSON object per backend lives at ``<hermes_home>/cache/<basename>``::
+    One JSON object per backend lives at ``<pilotage_home>/cache/<basename>``::
 
         {"key": "<serialized cache key>", "secrets": {...}, "fetched_at": 1.0}
 
@@ -178,7 +178,7 @@ class DiskCache(Generic[K]):
             cache_dir = path.parent
             cache_dir.mkdir(parents=True, exist_ok=True)
             # mkdir's mode is umask-subject; chmod the dir to 0700 so cache
-            # metadata isn't exposed if HERMES_HOME is ever made traversable.
+            # metadata isn't exposed if PILOTAGE_HOME is ever made traversable.
             try:
                 os.chmod(cache_dir, 0o700)
             except OSError:

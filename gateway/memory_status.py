@@ -141,7 +141,7 @@ def collect_memory_status(
 ) -> Dict[str, Any]:
     """Build the ``memory`` block for ``/api/status``.
 
-    ``home`` scopes the read to a profile's HERMES_HOME (the status
+    ``home`` scopes the read to a profile's PILOTAGE_HOME (the status
     endpoint's ``?profile=`` handling passes it through); ``None`` means
     the active profile.  ``now`` is injectable for tests.
 

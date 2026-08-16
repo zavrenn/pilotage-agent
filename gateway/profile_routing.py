@@ -1,6 +1,6 @@
 """Profile-based routing for the gateway with hierarchical matching.
 
-Allows a single Hermes instance to route specific Discord guilds/channels/threads
+Allows a single Pilotage instance to route specific Discord guilds/channels/threads
 to different profiles — each with their own model, tools, memory, and persona.
 
 Matching priority (most specific first):
@@ -129,7 +129,7 @@ def parse_profile_routes(raw: Optional[List[Dict[str, Any]]]) -> List[ProfileRou
         # Validate profile name to prevent path traversal. Lazy import avoids a
         # circular dependency at module load time.
         try:
-            from hermes_cli.profiles import (
+            from pilotage_cli.profiles import (
                 normalize_profile_name,
                 validate_profile_name,
             )

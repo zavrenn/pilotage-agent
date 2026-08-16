@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 _UNSET: Any = object()
 
-_SESSION_CWD: ContextVar = ContextVar("HERMES_SESSION_CWD", default=_UNSET)
+_SESSION_CWD: ContextVar = ContextVar("PILOTAGE_SESSION_CWD", default=_UNSET)
 
 # The Python package/source root (this file lives at <root>/agent/runtime_cwd.py).
 # When a backend is launched from, or self-spawns into, this tree (the desktop
@@ -78,9 +78,9 @@ def resolve_context_cwd() -> Path | None:
     # to the launch dir (os.getcwd()), correct for a local CLI launched inside a
     # real project. A configured path is validated here (previously it was passed
     # through unchecked, diverging from resolve_agent_cwd). An explicitly
-    # configured path is otherwise honored verbatim — including the Hermes
+    # configured path is otherwise honored verbatim — including the Pilotage
     # source tree itself, which is a legitimate workspace when the user is
-    # developing Hermes (per-surface policy for fallback-picked directories
+    # developing Pilotage (per-surface policy for fallback-picked directories
     # lives in build_context_files_prompt; see #64590).
     override = _session_cwd_override()
     if override:

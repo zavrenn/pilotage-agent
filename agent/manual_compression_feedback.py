@@ -14,7 +14,7 @@ def describe_compression_lock_skip(lock_signal: Any) -> str:
     ``holder`` carried by the TUI's ``CompressionLockHeld``): a descriptive
     holder string when another compressor CONFIRMED holds the lock, or
     ``True``/``None`` when acquisition failed without a confirmed holder
-    (``hermes_state.try_acquire_compression_lock`` catches ``sqlite3.Error``
+    (``pilotage_state.try_acquire_compression_lock`` catches ``sqlite3.Error``
     internally and returns ``False``, so a failed acquire is NOT proof that
     another compression is running). The two cases must be worded
     differently: claiming "already in progress" on an unconfirmed failure
@@ -94,7 +94,7 @@ def summarize_manual_compression(
         if not isinstance(dropped_count, int) or isinstance(dropped_count, bool):
             dropped_count = max(before_count - after_count, 0)
         note = (
-            "Summary generation failed; Hermes used limited fallback context "
+            "Summary generation failed; Pilotage used limited fallback context "
             f"and removed {dropped_count} message(s)."
         )
     elif not noop and after_count < before_count and after_tokens > before_tokens:

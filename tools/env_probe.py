@@ -1,11 +1,11 @@
 """Local-environment toolchain probe for the system prompt.
 
 When the terminal backend is local (the agent's tools run on the same
-machine as Hermes itself), we surface a single deterministic line about
+machine as Pilotage itself), we surface a single deterministic line about
 Python tooling state so models don't have to discover it by hitting
 walls.  Common failure modes this addresses:
 
-* Hermes ships under one Python (e.g. 3.11 in a bundled venv) while the
+* Pilotage ships under one Python (e.g. 3.11 in a bundled venv) while the
   user's login shell has a different one (e.g. 3.12 system).  ``pip``
   resolved from PATH may not match ``python3 -m pip``.
 * The bundled-venv Python has no pip module installed → ``python3 -m
@@ -37,7 +37,7 @@ import tempfile
 import threading
 from typing import Optional
 
-from hermes_cli._subprocess_compat import windows_hide_flags
+from pilotage_cli._subprocess_compat import windows_hide_flags
 
 logger = logging.getLogger(__name__)
 
@@ -203,10 +203,10 @@ def _build_probe_line() -> str:
     py3_has_pip = _has_pip_module("python3") if py3_ver else False
     pip_bound_to = _pip_python_version()
     py3_pep668 = _detect_pep668("python3") if py3_ver else False
-    # Bare which() is correct here, unlike Hermes's own uv call sites: this
+    # Bare which() is correct here, unlike Pilotage's own uv call sites: this
     # reports the environment *the model will see* in the terminal tool, and
     # what the model can type is exactly what is on that subshell's PATH.
-    # local.py puts the Hermes-managed $HERMES_HOME/bin there, so a managed-only
+    # local.py puts the Pilotage-managed $PILOTAGE_HOME/bin there, so a managed-only
     # install answers yes — without that, claiming uv the model cannot invoke
     # would be worse than claiming none.
     has_uv = shutil.which("uv") is not None

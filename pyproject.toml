@@ -1,7 +1,7 @@
 
 
 [project]
-name = "hermes-agent"
+name = "pilotage-agent"
 version = "0.20.1"
 description = "The self-improving AI agent — creates skills from experience, improves them during use, and runs anywhere"
 readme = "README.md"
@@ -31,7 +31,7 @@ dependencies = [
   # `uv lock` so the transitive resolution stays consistent. Don't
   # introduce ranges back without a written justification.
   #
-  # Scope rule: only packages used by EVERY hermes session belong here.
+  # Scope rule: only packages used by EVERY pilotage session belong here.
   # Anything that's provider-specific (`anthropic`, `firecrawl-py`,
   # `exa-py`, `fal-client`, `edge-tts`, `parallel-web`) belongs in an
   # extra and gets lazy-installed via `tools/lazy_deps.py` when the
@@ -63,7 +63,7 @@ dependencies = [
   # try/except-ImportError fallbacks silently degrade: Hindsight's
   # ``_meets_minimum_version`` disables update_mode='append' (#40503),
   # tools/lazy_deps.py treats every version constraint as satisfied, and
-  # hermes_cli/main.py drops to naive requirement parsing. Pure-Python
+  # pilotage_cli/main.py drops to naive requirement parsing. Pure-Python
   # py3-none-any wheel, no compiled extensions — safe to ship everywhere.
   # Pinned to the version already resolved in uv.lock (no resolution churn).
   "packaging==26.0",
@@ -122,12 +122,12 @@ dependencies = [
   # Windows log rotation. Stdlib ``RotatingFileHandler.doRollover()`` uses
   # ``os.rename()`` which fails with ``PermissionError [WinError 32]`` on
   # Windows whenever any other process holds an append-mode handle on
-  # ``agent.log`` (always the case in Hermes — TUI, gateway, ``hy_memory``
+  # ``agent.log`` (always the case in Pilotage — TUI, gateway, ``hy_memory``
   # server, MCP servers, and on-demand CLI commands all log from separate
   # processes), pinning ``agent.log`` at the 5 MiB threshold and spamming
   # stderr on every emit (see #44873). ``concurrent-log-handler`` wraps the
   # rename in a cross-process file lock (via ``portalocker``: pywin32 on
-  # Windows) so only one process rotates at a time. ``hermes_logging.py``
+  # Windows) so only one process rotates at a time. ``pilotage_logging.py``
   # aliases it ONLY on Windows — POSIX renames an open file fine, so stdlib
   # already works there and managed-mode perms depend on its exact lifecycle.
   # Hence the ``sys_platform == 'win32'`` marker: the dep (and its portalocker
@@ -155,7 +155,7 @@ dependencies = [
 # OpenRouter or other aggregators).
 anthropic = ["anthropic==0.87.0"]  # CVE-2026-34450, CVE-2026-34452
 # Web search backends — each only loaded when the user picks it as their
-# search provider (configured via `hermes tools` or config.yaml).
+# search provider (configured via `pilotage tools` or config.yaml).
 exa = ["exa-py==2.10.2"]
 firecrawl = ["firecrawl-py==4.17.0"]
 parallel-web = ["parallel-web==0.4.2"]
@@ -176,7 +176,7 @@ voice = [
   "sounddevice==0.5.5",
   "numpy==2.4.3",
 ]
-# "Hey Hermes" wake word — on-device hotword detection. All engines are
+# "Hey Pilotage" wake word — on-device hotword detection. All engines are
 # optional; openWakeWord (ONNX) is the free default, sherpa-onnx adds
 # open-vocabulary phrases (any typed phrase, zero training), Porcupine is
 # the premium alternative. These dependencies are lazy-installed on first
@@ -247,19 +247,19 @@ azure-identity = ["azure-identity==1.25.3"]
 termux = [
   # Baseline Android / Termux path for reliable fresh installs.
   "python-telegram-bot[webhooks]==22.8",
-  "hermes-agent[cron]",
-  "hermes-agent[mcp]",
-  "hermes-agent[honcho]",
+  "pilotage-agent[cron]",
+  "pilotage-agent[mcp]",
+  "pilotage-agent[honcho]",
 ]
 termux-all = [
   # Best-effort "install all" profile for Termux. Same policy as [all]:
   # only includes extras that aren't covered by `tools/lazy_deps.py`.
   # Backends like telegram/whatsapp/honcho lazy-install at
   # first use, so they're no longer eager-installed here.
-  "hermes-agent[termux]",
-  "hermes-agent[google]",
-  "hermes-agent[homeassistant]",
-  "hermes-agent[pty]",
+  "pilotage-agent[termux]",
+  "pilotage-agent[google]",
+  "pilotage-agent[homeassistant]",
+  "pilotage-agent[pty]",
 ]
 google = [
   # Required by the google-workspace skill (Gmail, Calendar, Drive, Contacts,
@@ -303,12 +303,12 @@ all = [
   # Why: heavy extras with platform-specific build paths broke
   # `uv sync --locked` on hosts without a toolchain. Lazy-install routes
   # that build to first use, where the user is expected to have one.
-  "hermes-agent[cron]",
-  "hermes-agent[pty]",
-  "hermes-agent[mcp]",
-  "hermes-agent[homeassistant]",
-  "hermes-agent[google]",
-  "hermes-agent[youtube]",
+  "pilotage-agent[cron]",
+  "pilotage-agent[pty]",
+  "pilotage-agent[mcp]",
+  "pilotage-agent[homeassistant]",
+  "pilotage-agent[google]",
+  "pilotage-agent[youtube]",
 ]
 
 [build-system]
@@ -316,8 +316,8 @@ requires = ["setuptools==83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
-hermes = "hermes_cli.main:main"
-hermes-agent = "run_agent:main"
+pilotage = "pilotage_cli.main:main"
+pilotage-agent = "run_agent:main"
 
 [tool.uv]
 override-dependencies = [
@@ -358,30 +358,30 @@ exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = 
 
 [tool.setuptools]
 # Top-level single-file modules (not packages). Without this, uv2nix's
-# sealed venv is missing hermes_constants, run_agent, etc.
+# sealed venv is missing pilotage_constants, run_agent, etc.
 py-modules = [
   "run_agent",
   "registration_lifecycle",
   "model_tools",
   "toolsets",
   "cli",
-  "hermes_bootstrap",
-  "hermes_constants",
-  "hermes_state",
-  "hermes_state_common",
-  "hermes_state_portability",
-  "hermes_state_schema",
-  "hermes_state_search",
-  "hermes_time",
-  "hermes_logging",
+  "pilotage_bootstrap",
+  "pilotage_constants",
+  "pilotage_state",
+  "pilotage_state_common",
+  "pilotage_state_portability",
+  "pilotage_state_schema",
+  "pilotage_state_search",
+  "pilotage_time",
+  "pilotage_logging",
   "utils",
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
+include = ["agent", "agent.*", "tools", "tools.*", "pilotage_cli", "pilotage_cli.*", "gateway", "gateway.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
 
 [tool.setuptools.package-data]
-hermes_cli = ["observability/schemas/*.json", "data/*.json"]
+pilotage_cli = ["observability/schemas/*.json", "data/*.json"]
 # gateway/assets/ ships status_phrases.yaml and the Telegram BotFather
 # screenshot. Without this, sealed venvs (uv2nix) silently lose both —
 # status phrases fall back to the tiny hardcoded set and the Telegram
@@ -397,9 +397,9 @@ plugins = ["**/plugin.yaml", "**/plugin.yml"]
 testpaths = ["tests"]
 markers = [
     "integration: marks tests requiring external services (API keys, Modal, etc.)",
-    "real_concurrent_gate: opt out of the autouse stub that disables _detect_concurrent_hermes_instances",
+    "real_concurrent_gate: opt out of the autouse stub that disables _detect_concurrent_pilotage_instances",
     "real_agent_prewarm: opt out of the autouse stub that disables the tui_gateway deferred agent pre-warm timer",
-    "requires_wal: needs the runtime to actually enable SQLite WAL mode (skipped where Hermes falls back to journal_mode=DELETE)",
+    "requires_wal: needs the runtime to actually enable SQLite WAL mode (skipped where Pilotage falls back to journal_mode=DELETE)",
     "no_isolate: opt out of per-file subprocess isolation (tests share mutable module-level state)",
     "ssh: marks tests requiring a reachable SSH server (skipped in normal CI)",
     "linux_only: exercises Linux-specific behaviour; skipped on other hosts",

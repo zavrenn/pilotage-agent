@@ -26,7 +26,7 @@ import posixpath
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Dict, List, Optional
-from hermes_cli.config import cfg_get
+from pilotage_cli.config import cfg_get
 
 try:  # pragma: no cover - exercised via the fail-closed test below
     from agent.file_safety import get_read_block_error
@@ -54,26 +54,26 @@ def _get_registered() -> Dict[str, str]:
 _config_files: List[Dict[str, str]] | None = None
 
 
-def _resolve_hermes_home() -> Path:
-    from hermes_constants import get_hermes_home
-    return get_hermes_home()
+def _resolve_pilotage_home() -> Path:
+    from pilotage_constants import get_pilotage_home
+    return get_pilotage_home()
 
 
 def register_credential_file(
     relative_path: str,
-    container_base: str = "/root/.hermes",
+    container_base: str = "/root/.pilotage",
 ) -> bool:
     """Register a credential file for mounting into remote sandboxes.
 
-    *relative_path* is relative to ``HERMES_HOME`` (e.g. ``google_token.json``).
+    *relative_path* is relative to ``PILOTAGE_HOME`` (e.g. ``google_token.json``).
     Returns True if the file exists on the host and was registered.
 
     Security: rejects absolute paths and path traversal sequences (``..``).
-    The resolved host path must remain inside HERMES_HOME so that a malicious
+    The resolved host path must remain inside PILOTAGE_HOME so that a malicious
     skill cannot declare ``required_credential_files: ['../../.ssh/id_rsa']``
     and exfiltrate sensitive host files into a container sandbox.
 
-    Containment alone is not sufficient, because HERMES_HOME is exactly where
+    Containment alone is not sufficient, because PILOTAGE_HOME is exactly where
     the MASTER credential stores live. A skill legitimately needs its own
     service token (``google_token.json``); it never needs ``.env`` (every
     provider key), ``auth.json`` (all provider tokens and OAuth grants),
@@ -82,23 +82,23 @@ def register_credential_file(
     — the same guard that stops the agent reading them with ``read_file``, so
     the mount surface cannot hand a skill what the read surface denies it.
     """
-    hermes_home = _resolve_hermes_home()
+    pilotage_home = _resolve_pilotage_home()
 
-    # Reject absolute paths — they bypass the HERMES_HOME sandbox entirely.
+    # Reject absolute paths — they bypass the PILOTAGE_HOME sandbox entirely.
     if os.path.isabs(relative_path):
         logger.warning(
-            "credential_files: rejected absolute path %r (must be relative to HERMES_HOME)",
+            "credential_files: rejected absolute path %r (must be relative to PILOTAGE_HOME)",
             relative_path,
         )
         return False
 
-    host_path = hermes_home / relative_path
+    host_path = pilotage_home / relative_path
 
     # Resolve symlinks and normalise ``..`` before the containment check so
-    # that traversal like ``../. ssh/id_rsa`` cannot escape HERMES_HOME.
+    # that traversal like ``../. ssh/id_rsa`` cannot escape PILOTAGE_HOME.
     from tools.path_security import validate_within_dir
 
-    containment_error = validate_within_dir(host_path, hermes_home)
+    containment_error = validate_within_dir(host_path, pilotage_home)
     if containment_error:
         logger.warning(
             "credential_files: rejected path traversal %r (%s)",
@@ -113,7 +113,7 @@ def register_credential_file(
         return False
 
     # Master credential stores are never mountable, even though they sit
-    # inside HERMES_HOME and therefore pass the containment check above.
+    # inside PILOTAGE_HOME and therefore pass the containment check above.
     # Fails CLOSED: if the canonical guard can't be consulted we refuse the
     # mount rather than risk bind-mounting auth.json into a sandbox. The
     # import lives at module top (no circular-import concern — file_safety is
@@ -150,7 +150,7 @@ def register_credential_file(
 
 def register_credential_files(
     entries: list,
-    container_base: str = "/root/.hermes",
+    container_base: str = "/root/.pilotage",
 ) -> List[str]:
     """Register multiple credential files from skill frontmatter entries.
 
@@ -181,8 +181,8 @@ def _load_config_files() -> List[Dict[str, str]]:
 
     result: List[Dict[str, str]] = []
     try:
-        from hermes_cli.config import read_raw_config
-        hermes_home = _resolve_hermes_home()
+        from pilotage_cli.config import read_raw_config
+        pilotage_home = _resolve_pilotage_home()
         cfg = read_raw_config()
         cred_files = cfg_get(cfg, "terminal", "credential_files")
         if isinstance(cred_files, list):
@@ -196,8 +196,8 @@ def _load_config_files() -> List[Dict[str, str]]:
                             "credential_files: rejected absolute config path %r", rel,
                         )
                         continue
-                    host_path = hermes_home / rel
-                    containment_error = validate_within_dir(host_path, hermes_home)
+                    host_path = pilotage_home / rel
+                    containment_error = validate_within_dir(host_path, pilotage_home)
                     if containment_error:
                         logger.warning(
                             "credential_files: rejected config path traversal %r (%s)",
@@ -206,7 +206,7 @@ def _load_config_files() -> List[Dict[str, str]]:
                         continue
                     resolved_path = host_path.resolve()
                     if resolved_path.is_file():
-                        container_path = f"/root/.hermes/{rel}"
+                        container_path = f"/root/.pilotage/{rel}"
                         result.append({
                             "host_path": str(resolved_path),
                             "container_path": container_path,
@@ -245,7 +245,7 @@ def get_credential_file_mounts() -> List[Dict[str, str]]:
 
 
 def get_skills_directory_mount(
-    container_base: str = "/root/.hermes",
+    container_base: str = "/root/.pilotage",
 ) -> list[Dict[str, str]]:
     """Return mount info for all skill directories (local + external).
 
@@ -264,8 +264,8 @@ def get_skills_directory_mount(
     at ``<container_base>/external_skills/<index>``.
     """
     mounts = []
-    hermes_home = _resolve_hermes_home()
-    skills_dir = hermes_home / "skills"
+    pilotage_home = _resolve_pilotage_home()
+    skills_dir = pilotage_home / "skills"
     if skills_dir.is_dir():
         host_path = _safe_skills_path(skills_dir)
         mounts.append({
@@ -312,7 +312,7 @@ def _safe_skills_path(skills_dir: Path) -> str:
     if _safe_skills_tempdir and _safe_skills_tempdir.is_dir():
         shutil.rmtree(_safe_skills_tempdir, ignore_errors=True)
 
-    safe_dir = Path(tempfile.mkdtemp(prefix="hermes-skills-safe-"))
+    safe_dir = Path(tempfile.mkdtemp(prefix="pilotage-skills-safe-"))
     _safe_skills_tempdir = safe_dir
 
     for item in skills_dir.rglob("*"):
@@ -336,7 +336,7 @@ def _safe_skills_path(skills_dir: Path) -> str:
 
 
 def iter_skills_files(
-    container_base: str = "/root/.hermes",
+    container_base: str = "/root/.pilotage",
 ) -> List[Dict[str, str]]:
     """Yield individual (host_path, container_path) entries for skills files.
 
@@ -347,8 +347,8 @@ def iter_skills_files(
     """
     result: List[Dict[str, str]] = []
 
-    hermes_home = _resolve_hermes_home()
-    skills_dir = hermes_home / "skills"
+    pilotage_home = _resolve_pilotage_home()
+    skills_dir = pilotage_home / "skills"
     if skills_dir.is_dir():
         container_root = f"{container_base.rstrip('/')}/skills"
         for item in skills_dir.rglob("*"):
@@ -386,7 +386,7 @@ def iter_skills_files(
 # ---------------------------------------------------------------------------
 
 # The cache subdirectories that should be mirrored into remote backends.
-# Each tuple is (new_subpath, old_name) matching hermes_constants.get_hermes_dir().
+# Each tuple is (new_subpath, old_name) matching pilotage_constants.get_pilotage_dir().
 _CACHE_DIRS: list[tuple[str, str]] = [
     ("cache/documents", "document_cache"),
     ("cache/images", "image_cache"),
@@ -409,26 +409,26 @@ _CACHE_DIRS: list[tuple[str, str]] = [
 
 
 def get_cache_directory_mounts(
-    container_base: str = "/root/.hermes",
+    container_base: str = "/root/.pilotage",
 ) -> List[Dict[str, str]]:
     """Return mount entries for each cache directory that exists on disk.
 
     Used by Docker to create bind mounts.  Each entry has ``host_path`` and
     ``container_path`` keys.  The host path is resolved via
-    ``get_hermes_dir()`` for backward compatibility with old directory layouts.
+    ``get_pilotage_dir()`` for backward compatibility with old directory layouts.
     """
-    from hermes_constants import get_hermes_dir
+    from pilotage_constants import get_pilotage_dir
 
     mounts: List[Dict[str, str]] = []
     for new_subpath, old_name in _CACHE_DIRS:
-        host_dir = get_hermes_dir(new_subpath, old_name)
+        host_dir = get_pilotage_dir(new_subpath, old_name)
         if not host_dir.is_dir():
             # Create missing staging dirs instead of skipping them: Docker
             # snapshots this mount list at container CREATION, so a dir that
             # appears later (first desktop attachment, first clipboard image)
             # would dangle for the whole life of a persistent container
             # (#76577). An empty bind-mounted dir costs nothing; a missing
-            # mount costs the feature. get_hermes_dir() already resolved
+            # mount costs the feature. get_pilotage_dir() already resolved
             # new-vs-legacy layout, so creating its answer cannot shadow a
             # populated legacy dir.
             try:
@@ -446,14 +446,14 @@ def get_cache_directory_mounts(
 
 def map_cache_path_to_container(
     host_path: str,
-    container_base: str = "/root/.hermes",
+    container_base: str = "/root/.pilotage",
 ) -> Optional[str]:
     """Map a host cache path to its mounted path under *container_base*.
 
     Returns the POSIX container path when *host_path* lives under one of the
     auto-mounted cache directories, otherwise ``None``.  Backend-agnostic: the
-    caller decides which ``container_base`` applies (Docker ``/root/.hermes``,
-    SSH ``<remote_home>/.hermes``, etc.) and whether translation is wanted.
+    caller decides which ``container_base`` applies (Docker ``/root/.pilotage``,
+    SSH ``<remote_home>/.pilotage``, etc.) and whether translation is wanted.
     Always joins with ``posixpath`` because container/remote paths are POSIX
     regardless of the host OS.
     """
@@ -470,7 +470,7 @@ def map_cache_path_to_container(
 
 def from_agent_visible_cache_path(
     container_path: str,
-    container_base: str = "/root/.hermes",
+    container_base: str = "/root/.pilotage",
 ) -> str:
     """Translate a sandbox/container cache path back to its host path.
 
@@ -494,7 +494,7 @@ def from_agent_visible_cache_path(
 
 def to_agent_visible_cache_path(
     host_path: str,
-    container_base: str = "/root/.hermes",
+    container_base: str = "/root/.pilotage",
 ) -> str:
     """Translate a host cache path to its mounted path inside the sandbox.
 
@@ -504,12 +504,12 @@ def to_agent_visible_cache_path(
 
     Per-backend base (mirrors ``_agent_cache_base_for_env`` in
     tools/image_generation_tool.py, the proven heuristics for where each
-    backend's Hermes cache lands):
+    backend's Pilotage cache lands):
 
     * docker / modal — bind-mounted (docker) or per-file-synced (modal) at
-      ``/root/.hermes`` (the *container_base* default).
+      ``/root/.pilotage`` (the *container_base* default).
     * ssh / daytona / vercel_sandbox — file-synced under the remote user's
-      home; ``~/.hermes`` is shell-expanded by the remote shell, so tool
+      home; ``~/.pilotage`` is shell-expanded by the remote shell, so tool
       commands resolve it regardless of the actual remote home. Previously
       these backends synced the bytes but still rendered the dangling host
       path (#76577 gap).
@@ -522,9 +522,9 @@ def to_agent_visible_cache_path(
     """
     backend = (os.environ.get("TERMINAL_ENV") or "local").strip().lower()
     if backend in ("docker", "modal"):
-        pass  # /root/.hermes default
+        pass  # /root/.pilotage default
     elif backend in ("ssh", "daytona", "vercel_sandbox"):
-        container_base = "~/.hermes"
+        container_base = "~/.pilotage"
     else:
         return host_path  # local, singularity, unknown: host path is correct
 
@@ -533,18 +533,18 @@ def to_agent_visible_cache_path(
 
 
 def iter_cache_files(
-    container_base: str = "/root/.hermes",
+    container_base: str = "/root/.pilotage",
 ) -> List[Dict[str, str]]:
     """Return individual (host_path, container_path) entries for cache files.
 
     Used by Modal to upload files individually and resync before each command.
     Skips symlinks.  The container paths use the new ``cache/<subdir>`` layout.
     """
-    from hermes_constants import get_hermes_dir
+    from pilotage_constants import get_pilotage_dir
 
     result: List[Dict[str, str]] = []
     for new_subpath, old_name in _CACHE_DIRS:
-        host_dir = get_hermes_dir(new_subpath, old_name)
+        host_dir = get_pilotage_dir(new_subpath, old_name)
         if not host_dir.is_dir():
             continue
         container_root = f"{container_base.rstrip('/')}/{new_subpath}"

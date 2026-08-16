@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from tools.environments.base import BaseEnvironment, _pipe_stdin
-from hermes_cli._subprocess_compat import windows_hide_flags
+from pilotage_cli._subprocess_compat import windows_hide_flags
 
 _IS_WINDOWS = platform.system() == "Windows"
 
@@ -55,9 +55,9 @@ def _resolve_local_initial_cwd(cwd: str) -> str:
 
     ``TERMINAL_CWD`` can be populated from config.yaml before the terminal
     backend is created.  If that value is relative and happens to match the
-    directory Hermes was already launched from (for example ``hermes-agent``
-    while the process cwd is ``~/.hermes/hermes-agent``), passing it through
-    unchanged makes the wrapper run ``cd hermes-agent`` *inside* the project
+    directory Pilotage was already launched from (for example ``pilotage-agent``
+    while the process cwd is ``~/.pilotage/pilotage-agent``), passing it through
+    unchanged makes the wrapper run ``cd pilotage-agent`` *inside* the project
     and fail with a confusing nested-path error.  Anchor relative local cwd
     values once, up front, so both ``subprocess.Popen(cwd=...)`` and the
     in-shell ``cd`` use the same absolute directory.
@@ -77,9 +77,9 @@ def _resolve_local_initial_cwd(cwd: str) -> str:
     candidate = os.path.abspath(expanded)
     current = os.getcwd()
 
-    # Common recovery for config values like ``hermes-agent`` when Hermes was
+    # Common recovery for config values like ``pilotage-agent`` when Pilotage was
     # launched from that directory already.  ``os.path.abspath`` would point at
-    # a nonexistent nested ``./hermes-agent``; use the current directory instead.
+    # a nonexistent nested ``./pilotage-agent``; use the current directory instead.
     if not os.path.isdir(candidate):
         wanted_parts = Path(expanded).parts
         current_parts = Path(current).parts
@@ -197,12 +197,12 @@ def _resolve_safe_cwd(cwd: str) -> str:
     return tempfile.gettempdir()
 
 
-# Hermes-internal env vars that should NOT leak into terminal subprocesses.
-_HERMES_PROVIDER_ENV_FORCE_PREFIX = "_HERMES_FORCE_"
+# Pilotage-internal env vars that should NOT leak into terminal subprocesses.
+_PILOTAGE_PROVIDER_ENV_FORCE_PREFIX = "_PILOTAGE_FORCE_"
 
-# Hermes-managed AWS *inference* credentials for ``auth_type="aws_sdk"``
+# Pilotage-managed AWS *inference* credentials for ``auth_type="aws_sdk"``
 # providers (Bedrock).  Scoped DELIBERATELY NARROW: this lists only the
-# Bedrock-specific bearer token, which is a Hermes inference secret exactly
+# Bedrock-specific bearer token, which is a Pilotage inference secret exactly
 # analogous to ``OPENAI_API_KEY`` — nobody drives the ``aws``/``terraform``/
 # ``boto3`` toolchain off it, so stripping it from terminal/execute_code
 # subprocesses costs no user capability.
@@ -227,7 +227,7 @@ def _build_provider_env_blocklist() -> frozenset:
     blocked: set[str] = set()
 
     try:
-        from hermes_cli.auth import PROVIDER_REGISTRY
+        from pilotage_cli.auth import PROVIDER_REGISTRY
         for pconfig in PROVIDER_REGISTRY.values():
             blocked.update(pconfig.api_key_env_vars)
             if pconfig.auth_type == "aws_sdk":
@@ -238,7 +238,7 @@ def _build_provider_env_blocklist() -> frozenset:
         pass
 
     try:
-        from hermes_cli.config import OPTIONAL_ENV_VARS
+        from pilotage_cli.config import OPTIONAL_ENV_VARS
         for name, metadata in OPTIONAL_ENV_VARS.items():
             category = metadata.get("category")
             if category in {"tool", "messaging"}:
@@ -304,7 +304,7 @@ def _build_provider_env_blocklist() -> frozenset:
         "EMAIL_SMTP_HOST",
         "EMAIL_HOME_ADDRESS",
         "EMAIL_HOME_ADDRESS_NAME",
-        "HERMES_DASHBOARD_SESSION_TOKEN",
+        "PILOTAGE_DASHBOARD_SESSION_TOKEN",
         "GATEWAY_ALLOWED_USERS",
         "GH_TOKEN",
         "GITHUB_APP_ID",
@@ -323,8 +323,8 @@ def _build_provider_env_blocklist() -> frozenset:
     })
     # CLAUDE_CODE_OAUTH_TOKEN is deliberately NOT stripped.  It is set and
     # owned by the user's Claude Code install (subscription OAuth), not a
-    # Hermes-managed inference credential — Claude subscription auth is not a
-    # working Hermes provider path.  Stripping it broke agent-spawned
+    # Pilotage-managed inference credential — Claude subscription auth is not a
+    # working Pilotage provider path.  Stripping it broke agent-spawned
     # ``claude`` CLIs: the child fell through to the shared macOS Keychain /
     # ``~/.claude/.credentials.json`` store and, on auth failure, cleared it,
     # logging the user out of their interactive Claude sessions (#55878).
@@ -334,25 +334,25 @@ def _build_provider_env_blocklist() -> frozenset:
     return frozenset(blocked)
 
 
-_HERMES_PROVIDER_ENV_BLOCKLIST = _build_provider_env_blocklist()
+_PILOTAGE_PROVIDER_ENV_BLOCKLIST = _build_provider_env_blocklist()
 
 # Active-virtualenv markers that must NOT leak into terminal subprocesses.
 # The gateway runs inside its own venv, so its process environment carries
 # VIRTUAL_ENV (and possibly CONDA_PREFIX). If those leak into commands the
 # agent runs against OTHER Python projects, tools like ``uv``/``poetry`` treat
 # the inherited value as the active environment and build/sync that other
-# project's dependencies into the Hermes venv path instead of the project's own
-# ``.venv`` — silently clobbering the Hermes environment (e.g. a project pinned
+# project's dependencies into the Pilotage venv path instead of the project's own
+# ``.venv`` — silently clobbering the Pilotage environment (e.g. a project pinned
 # to a different Python version overwrites it and breaks the gateway). The
-# Hermes venv stays reachable via PATH (its bin dir is first), so stripping
+# Pilotage venv stays reachable via PATH (its bin dir is first), so stripping
 # these markers is safe and only prevents the cross-project clobber (#23473).
 _ACTIVE_VENV_MARKER_VARS = ("VIRTUAL_ENV", "CONDA_PREFIX")
 
 
-def _is_hermes_internal_secret(key: str) -> bool:
-    """Return True for Hermes-internal secrets injected under *dynamic* names.
+def _is_pilotage_internal_secret(key: str) -> bool:
+    """Return True for Pilotage-internal secrets injected under *dynamic* names.
 
-    ``_HERMES_PROVIDER_ENV_BLOCKLIST`` is name-based and derived from the
+    ``_PILOTAGE_PROVIDER_ENV_BLOCKLIST`` is name-based and derived from the
     provider/tool registries, but the gateway and CLI also inject secrets into
     ``os.environ`` at runtime under names no static registry knows about:
 
@@ -374,10 +374,10 @@ def _is_hermes_internal_secret(key: str) -> bool:
     ``KEY`` / ``SECRET`` / ``TOKEN``; the terminal backend's narrower name-based
     blocklist did not, which is the leak this predicate closes.
 
-    This is the single source of truth for "Hermes-internal dynamic secret"
+    This is the single source of truth for "Pilotage-internal dynamic secret"
     across every spawn path — the terminal ``_make_run_env`` /
     ``_sanitize_subprocess_env`` filters, the Docker passthrough filter, and the
-    non-terminal :func:`hermes_subprocess_env` helper all call it, so the
+    non-terminal :func:`pilotage_subprocess_env` helper all call it, so the
     dynamic patterns are stripped **unconditionally** regardless of
     ``env_passthrough`` skill registration or ``inherit_credentials``. Nothing
     a model-driving CLI legitimately needs matches these patterns.
@@ -394,14 +394,14 @@ def _is_hermes_internal_secret(key: str) -> bool:
     return False
 
 
-def _inject_context_hermes_home(env: dict) -> None:
-    """Bridge the context-local Hermes home override into subprocess env."""
+def _inject_context_pilotage_home(env: dict) -> None:
+    """Bridge the context-local Pilotage home override into subprocess env."""
     try:
-        from hermes_constants import get_hermes_home_override
+        from pilotage_constants import get_pilotage_home_override
 
-        value = get_hermes_home_override()
+        value = get_pilotage_home_override()
         if value:
-            env["HERMES_HOME"] = value
+            env["PILOTAGE_HOME"] = value
     except Exception:
         pass
 
@@ -410,7 +410,7 @@ def _inject_session_context_env(env: dict) -> None:
     """Bridge gateway session ContextVars into a subprocess environment dict.
 
     ContextVars don't propagate to child processes, so the live session vars
-    (HERMES_SESSION_*) are bridged onto the child env here.
+    (PILOTAGE_SESSION_*) are bridged onto the child env here.
 
     🔴 Cross-session leak guard. The session vars also have a process-global
     os.environ mirror (written last-writer-wins as a CLI/cron fallback, never
@@ -454,7 +454,7 @@ def _inject_session_context_env(env: dict) -> None:
 
 
 def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = None) -> dict:
-    """Filter Hermes-managed secrets from a subprocess environment."""
+    """Filter Pilotage-managed secrets from a subprocess environment."""
     try:
         from tools.env_passthrough import (
             is_env_passthrough as _is_passthrough,
@@ -467,36 +467,36 @@ def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = Non
     sanitized: dict[str, str] = {}
 
     for key, value in (base_env or {}).items():
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
+        if key.startswith(_PILOTAGE_PROVIDER_ENV_FORCE_PREFIX):
             continue
-        if _is_hermes_internal_secret(key):
+        if _is_pilotage_internal_secret(key):
             continue
         passthrough = _is_passthrough(key)
-        if key in _HERMES_PROVIDER_ENV_BLOCKLIST and not passthrough:
+        if key in _PILOTAGE_PROVIDER_ENV_BLOCKLIST and not passthrough:
             continue
         resolved = _resolve_passthrough_value(key, value) if passthrough else value
         if resolved is not None:
             sanitized[key] = resolved
 
     for key, value in (extra_env or {}).items():
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
-            real_key = key[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
-            if _is_hermes_internal_secret(real_key):
+        if key.startswith(_PILOTAGE_PROVIDER_ENV_FORCE_PREFIX):
+            real_key = key[len(_PILOTAGE_PROVIDER_ENV_FORCE_PREFIX):]
+            if _is_pilotage_internal_secret(real_key):
                 continue
             sanitized[real_key] = value
-        elif _is_hermes_internal_secret(key):
+        elif _is_pilotage_internal_secret(key):
             continue
         else:
             passthrough = _is_passthrough(key)
-            if key in _HERMES_PROVIDER_ENV_BLOCKLIST and not passthrough:
+            if key in _PILOTAGE_PROVIDER_ENV_BLOCKLIST and not passthrough:
                 continue
             resolved = _resolve_passthrough_value(key, value) if passthrough else value
             if resolved is not None:
                 sanitized[key] = resolved
 
-    _inject_context_hermes_home(sanitized)
+    _inject_context_pilotage_home(sanitized)
 
-    from hermes_constants import apply_subprocess_home_env
+    from pilotage_constants import apply_subprocess_home_env
     apply_subprocess_home_env(sanitized)
 
     # Same cross-session leak guard as _make_run_env, for the background/PTY
@@ -531,11 +531,11 @@ def _scrub_delegated_child_kanban_env(env: dict[str, str]) -> dict[str, str]:
 # Tier-1 secrets: stripped from EVERY spawned subprocess unconditionally —
 # even when the caller opts into credential inheritance for a model-driving
 # CLI (claude / codex / gemini).  These are not LLM provider credentials; no
-# legitimate child Hermes spawns needs them, and they are the highest-value
+# legitimate child Pilotage spawns needs them, and they are the highest-value
 # secrets to keep out of a compromised dependency's reach (gateway bot tokens,
 # GitHub auth, remote-compute tokens, dashboard session secret).  The set is a
-# narrow subset of _HERMES_PROVIDER_ENV_BLOCKLIST; provider keys are handled by
-# the conditional Tier-2 strip in hermes_subprocess_env().
+# narrow subset of _PILOTAGE_PROVIDER_ENV_BLOCKLIST; provider keys are handled by
+# the conditional Tier-2 strip in pilotage_subprocess_env().
 _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     # GitHub auth
     "GH_TOKEN",
@@ -555,7 +555,7 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     # provisions and persists to the 0600 .env. Stripped unconditionally on
     # EVERY spawn surface (terminal + model-driving CLIs) so it can't drift
     # between paths: _SECRET / _DELIVERY_KEY are also matched by
-    # _is_hermes_internal_secret, but _ID has no secret suffix, so it must be
+    # _is_pilotage_internal_secret, but _ID has no secret suffix, so it must be
     # enumerated here to stay stripped on the inherit_credentials=True path
     # (codex / copilot), which skips the Tier-2 blocklist.
     "GATEWAY_RELAY_ID",
@@ -563,7 +563,7 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     "GATEWAY_RELAY_DELIVERY_KEY",
     "HASS_TOKEN",
     "EMAIL_PASSWORD",
-    "HERMES_DASHBOARD_SESSION_TOKEN",
+    "PILOTAGE_DASHBOARD_SESSION_TOKEN",
     # Remote-compute / infrastructure secrets
     "MODAL_TOKEN_ID",
     "MODAL_TOKEN_SECRET",
@@ -571,14 +571,14 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
 })
 
 
-def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str]:
+def pilotage_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str]:
     """Build a sanitized environment dict for a spawned subprocess.
 
     Centralized helper for the **non-terminal** spawn surface (browser,
     ACP/CLI executors, computer-use driver, dep-ensure, TUI Node host,
     detached gateway).  Use this instead of copying ``os.environ`` directly
     so strip-by-default is the uniform policy across every spawn site, with a
-    single source of truth (``_HERMES_PROVIDER_ENV_BLOCKLIST``).  The terminal
+    single source of truth (``_PILOTAGE_PROVIDER_ENV_BLOCKLIST``).  The terminal
     / execute_code path keeps using :func:`_sanitize_subprocess_env`, which is
     skill-aware (``env_passthrough``); this helper is for spawns that have no
     skill-passthrough concept.
@@ -587,8 +587,8 @@ def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str
 
     * **Tier 1 (always):** ``_ALWAYS_STRIP_KEYS`` — gateway bot tokens, GitHub
       auth, and remote-compute secrets are removed regardless of
-      ``inherit_credentials``.  No child Hermes spawns legitimately needs them.
-    * **Tier 2 (conditional):** the rest of ``_HERMES_PROVIDER_ENV_BLOCKLIST``
+      ``inherit_credentials``.  No child Pilotage spawns legitimately needs them.
+    * **Tier 2 (conditional):** the rest of ``_PILOTAGE_PROVIDER_ENV_BLOCKLIST``
       (LLM provider API keys, tool secrets) is removed unless the caller passes
       ``inherit_credentials=True``.
 
@@ -608,27 +608,27 @@ def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str
     # Tier 1 — always strip.
     for key in _ALWAYS_STRIP_KEYS:
         env.pop(key, None)
-    # Internal routing hints and Hermes-internal dynamic secrets
+    # Internal routing hints and Pilotage-internal dynamic secrets
     # (``AUXILIARY_<TASK>_API_KEY`` / ``_BASE_URL`` side-LLM credentials,
     # ``GATEWAY_RELAY_*`` relay-auth material) must never reach a child,
     # regardless of ``inherit_credentials`` — a model-driving CLI has no
-    # legitimate use for them. See :func:`_is_hermes_internal_secret`.
+    # legitimate use for them. See :func:`_is_pilotage_internal_secret`.
     for key in list(env):
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
+        if key.startswith(_PILOTAGE_PROVIDER_ENV_FORCE_PREFIX):
             env.pop(key, None)
-        elif _is_hermes_internal_secret(key):
+        elif _is_pilotage_internal_secret(key):
             env.pop(key, None)
 
     if not inherit_credentials:
         # Tier 2 — strip provider/tool credentials unless explicitly inherited.
-        for key in _HERMES_PROVIDER_ENV_BLOCKLIST:
+        for key in _PILOTAGE_PROVIDER_ENV_BLOCKLIST:
             env.pop(key, None)
 
     # Windows UTF-8 safety for spawned processes (#31420).
     env.setdefault("PYTHONUTF8", "1")
 
-    _inject_context_hermes_home(env)
-    from hermes_constants import apply_subprocess_home_env
+    _inject_context_pilotage_home(env)
+    from pilotage_constants import apply_subprocess_home_env
     apply_subprocess_home_env(env)
 
     # Active-venv markers must not clobber another project's environment.
@@ -638,7 +638,7 @@ def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str
     _apply_windows_msys_bash_env_defaults(env)
 
     # Cross-session leak guard, same as the terminal spawn paths: this helper
-    # copies os.environ, whose HERMES_SESSION_* mirror is a last-writer-wins
+    # copies os.environ, whose PILOTAGE_SESSION_* mirror is a last-writer-wins
     # global under a concurrent multi-session host. A caller that re-binds the
     # session identity explicitly (slash_worker/ACP via --session-key argv) is
     # unaffected — bound ContextVars win here — but a caller that spawns without
@@ -650,7 +650,7 @@ def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str
     # Non-terminal subprocess helpers (browser, lazy-deps, TUI/ACP hosts, etc.)
     # also need the delegate_task child lineage marker.  Otherwise a child
     # context that later imports Kanban DB code in the spawned process would
-    # still see the parent's HERMES_HOME but lose the DB mutation guard.
+    # still see the parent's PILOTAGE_HOME but lose the DB mutation guard.
     env = _scrub_delegated_child_kanban_env(env)
 
     return env
@@ -666,10 +666,10 @@ def build_subprocess_env(
     """Single factory for building a child-process environment.
 
     Every spawn site in the codebase should build its env through this
-    function (or :func:`hermes_subprocess_env` for the model-driving-CLI
+    function (or :func:`pilotage_subprocess_env` for the model-driving-CLI
     surface) instead of copying ``os.environ`` directly, so profile-home
-    propagation (``HERMES_HOME`` / subprocess ``HOME`` contract) and the
-    Hermes secret-scrub policy have a single owner.  History: ~11 separate
+    propagation (``PILOTAGE_HOME`` / subprocess ``HOME`` contract) and the
+    Pilotage secret-scrub policy have a single owner.  History: ~11 separate
     commits each fixed one more spawn site that missed profile-HOME or
     secret-scrub propagation; this factory is the fix for the class.
 
@@ -680,9 +680,9 @@ def build_subprocess_env(
       env instead.
     * ``scrub_secrets=True`` (default) — delegate to
       :func:`_sanitize_subprocess_env`, the long-standing owner of the scrub
-      list (provider blocklist + ``_is_hermes_internal_secret`` dynamic
+      list (provider blocklist + ``_is_pilotage_internal_secret`` dynamic
       patterns + kanban/venv-marker/session-context guards) **and** of
-      ``HERMES_HOME`` / subprocess-HOME propagation.  On this path profile
+      ``PILOTAGE_HOME`` / subprocess-HOME propagation.  On this path profile
       home propagation is inherent — ``inherit_profile_home`` is ignored
       (always applied), exactly matching today's sanitize semantics.
     * ``scrub_secrets=False`` — preserve the base env content byte-for-byte
@@ -691,17 +691,17 @@ def build_subprocess_env(
       scrubbing could change behavior.  The site is still a win: it becomes
       grep-able and future-fixable.
     * ``inherit_profile_home`` — on the non-scrub path, when True, bridge the
-      context-local Hermes home override into ``HERMES_HOME`` and apply the
-      subprocess HOME contract (``hermes_constants.apply_subprocess_home_env``).
+      context-local Pilotage home override into ``PILOTAGE_HOME`` and apply the
+      subprocess HOME contract (``pilotage_constants.apply_subprocess_home_env``).
       Pass False to keep the inherited env untouched (exact legacy
       ``os.environ.copy()`` behavior).
     * ``extra`` — applied **last** on the non-scrub path so explicit caller
-      overrides (e.g. a session-scoped ``HERMES_HOME``) always win.  On the
+      overrides (e.g. a session-scoped ``PILOTAGE_HOME``) always win.  On the
       scrub path it is forwarded as ``_sanitize_subprocess_env``'s
       ``extra_env`` (same force-prefix / blocklist handling as today).
     """
     if scrub_secrets:
-        # _sanitize_subprocess_env already performs HERMES_HOME override
+        # _sanitize_subprocess_env already performs PILOTAGE_HOME override
         # bridging + apply_subprocess_home_env unconditionally; delegating
         # wholesale keeps one owner and zero drift.
         return _sanitize_subprocess_env(
@@ -711,8 +711,8 @@ def build_subprocess_env(
 
     env: dict[str, str] = dict(base) if base is not None else os.environ.copy()
     if inherit_profile_home:
-        _inject_context_hermes_home(env)
-        from hermes_constants import apply_subprocess_home_env
+        _inject_context_pilotage_home(env)
+        from pilotage_constants import apply_subprocess_home_env
         apply_subprocess_home_env(env)
     if extra:
         env.update(extra)
@@ -732,24 +732,24 @@ def _find_bash() -> str:
 
     candidates: list[str] = []
 
-    custom = os.environ.get("HERMES_GIT_BASH_PATH")
+    custom = os.environ.get("PILOTAGE_GIT_BASH_PATH")
     if custom and os.path.isfile(custom):
         candidates.append(custom)
 
     # Prefer our own portable Git install — a broken or partially-uninstalled
-    # system Git (or a stale HERMES_GIT_BASH_PATH pointing at one) must not
+    # system Git (or a stale PILOTAGE_GIT_BASH_PATH pointing at one) must not
     # brick the terminal.  install.ps1 drops PortableGit here when needed.
     #
     # Layouts (both checked so upgrades between MinGit and PortableGit
     # installs work transparently):
-    #   PortableGit: %LOCALAPPDATA%\hermes\git\bin\bash.exe   (primary)
-    #   MinGit:      %LOCALAPPDATA%\hermes\git\usr\bin\bash.exe (legacy/32-bit fallback)
+    #   PortableGit: %LOCALAPPDATA%\pilotage\git\bin\bash.exe   (primary)
+    #   MinGit:      %LOCALAPPDATA%\pilotage\git\usr\bin\bash.exe (legacy/32-bit fallback)
     _local_appdata = os.environ.get("LOCALAPPDATA", "")
-    _hermes_portable_git = os.path.join(_local_appdata, "hermes", "git") if _local_appdata else ""
-    if _hermes_portable_git:
+    _pilotage_portable_git = os.path.join(_local_appdata, "pilotage", "git") if _local_appdata else ""
+    if _pilotage_portable_git:
         for candidate in (
-            os.path.join(_hermes_portable_git, "bin", "bash.exe"),        # PortableGit (primary)
-            os.path.join(_hermes_portable_git, "usr", "bin", "bash.exe"), # MinGit fallback
+            os.path.join(_pilotage_portable_git, "bin", "bash.exe"),        # PortableGit (primary)
+            os.path.join(_pilotage_portable_git, "usr", "bin", "bash.exe"), # MinGit fallback
         ):
             if os.path.isfile(candidate) and candidate not in candidates:
                 candidates.append(candidate)
@@ -771,14 +771,14 @@ def _find_bash() -> str:
         candidates.append(found)
 
     # Prefer the first candidate that can actually start.  A stale
-    # HERMES_GIT_BASH_PATH pointing at a broken Git-for-Windows install
+    # PILOTAGE_GIT_BASH_PATH pointing at a broken Git-for-Windows install
     # (``Directory \\drivers\\etc does not exist``) must not win over a
-    # healthy portable Git under %LOCALAPPDATA%\\hermes\\git.
+    # healthy portable Git under %LOCALAPPDATA%\\pilotage\\git.
     for candidate in candidates:
         if _bash_starts(candidate):
             if candidate != custom and custom and os.path.isfile(custom):
                 logger.warning(
-                    "HERMES_GIT_BASH_PATH=%s fails to start; using %s instead",
+                    "PILOTAGE_GIT_BASH_PATH=%s fails to start; using %s instead",
                     custom,
                     candidate,
                 )
@@ -801,9 +801,9 @@ def _find_bash() -> str:
         return candidates[0]
 
     raise RuntimeError(
-        "Git Bash not found. Hermes Agent requires Git for Windows on Windows.\n"
+        "Git Bash not found. Pilotage Agent requires Git for Windows on Windows.\n"
         "Install it from: https://git-scm.com/download/win\n"
-        "Or set HERMES_GIT_BASH_PATH to your bash.exe location."
+        "Or set PILOTAGE_GIT_BASH_PATH to your bash.exe location."
     )
 
 
@@ -889,7 +889,7 @@ def _git_bash_aslr_help(bash: str, details: str = "") -> str:
         'Get-Item "$gitRoot\\bin\\bash.exe", "$gitRoot\\usr\\bin\\*.exe" '
         "-ErrorAction SilentlyContinue | ForEach-Object { "
         "Set-ProcessMitigation -Name $_.FullName -Disable ForceRelocateImages }\n"
-        "Then restart Hermes. If the override is blocked or later re-applied, "
+        "Then restart Pilotage. If the override is blocked or later re-applied, "
         "ask your Windows administrator to allow this per-program exception."
     )
 
@@ -1060,42 +1060,42 @@ _SANE_PATH = (
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
-# Cached directory containing the ``hermes`` console-script.
+# Cached directory containing the ``pilotage`` console-script.
 # ``_SENTINEL`` distinguishes "not resolved yet" from a resolved ``None``.
 _SENTINEL = object()
-_HERMES_BIN_DIR: "str | None | object" = _SENTINEL
+_PILOTAGE_BIN_DIR: "str | None | object" = _SENTINEL
 
 
-def _resolve_hermes_bin_dir() -> str | None:
-    """Return the directory holding the ``hermes`` console-script, or None.
+def _resolve_pilotage_bin_dir() -> str | None:
+    """Return the directory holding the ``pilotage`` console-script, or None.
 
     The terminal tool runs in a freshly-spawned subshell whose PATH is the
     agent process's PATH plus a static set of system dirs (``_SANE_PATH``).
     When the gateway is launched by something that does NOT source the user's
     shell rc — systemd, a service manager, a desktop launcher, cron — the
-    hermes install dir (``~/.local/bin``, the venv ``bin``/``Scripts``, pipx,
-    nix) is absent from that PATH, so plugins shelling out to bare ``hermes``
+    pilotage install dir (``~/.local/bin``, the venv ``bin``/``Scripts``, pipx,
+    nix) is absent from that PATH, so plugins shelling out to bare ``pilotage``
     via the terminal tool hit ``command not found`` (exit 127) even though
-    ``hermes`` works fine in the user's own interactive terminal.
+    ``pilotage`` works fine in the user's own interactive terminal.
 
     We resolve the install dir once (it never changes within a process) and
-    prepend-if-missing it to the subshell PATH so bare ``hermes`` resolves
+    prepend-if-missing it to the subshell PATH so bare ``pilotage`` resolves
     regardless of how the gateway was started.
 
     Resolution order (cheap, no heavy imports):
-      1. ``shutil.which("hermes")`` — normal PATH-installed shim.
+      1. ``shutil.which("pilotage")`` — normal PATH-installed shim.
       2. The directory of ``sys.argv[0]`` when it's an absolute path to a
-         real ``hermes`` executable (covers nix-store / venv wrappers).
+         real ``pilotage`` executable (covers nix-store / venv wrappers).
       3. The directory of ``sys.executable`` — the running interpreter's
          venv ``bin``/``Scripts`` is where its console-scripts live.
     """
-    global _HERMES_BIN_DIR
-    if _HERMES_BIN_DIR is not _SENTINEL:
-        return _HERMES_BIN_DIR  # type: ignore[return-value]
+    global _PILOTAGE_BIN_DIR
+    if _PILOTAGE_BIN_DIR is not _SENTINEL:
+        return _PILOTAGE_BIN_DIR  # type: ignore[return-value]
 
     candidate: str | None = None
 
-    which = shutil.which("hermes")
+    which = shutil.which("pilotage")
     if which:
         candidate = os.path.dirname(which)
 
@@ -1104,7 +1104,7 @@ def _resolve_hermes_bin_dir() -> str | None:
         base = os.path.basename(argv0).lower()
         if (
             os.path.isabs(argv0)
-            and (base == "hermes" or base.startswith("hermes."))
+            and (base == "pilotage" or base.startswith("pilotage."))
             and os.path.isfile(argv0)
         ):
             candidate = os.path.dirname(argv0)
@@ -1112,25 +1112,25 @@ def _resolve_hermes_bin_dir() -> str | None:
     if candidate is None:
         exe_dir = os.path.dirname(sys.executable) if sys.executable else ""
         if exe_dir:
-            shim = "hermes.exe" if _IS_WINDOWS else "hermes"
+            shim = "pilotage.exe" if _IS_WINDOWS else "pilotage"
             if os.path.isfile(os.path.join(exe_dir, shim)):
                 candidate = exe_dir
 
     if candidate and not os.path.isdir(candidate):
         candidate = None
 
-    _HERMES_BIN_DIR = candidate
+    _PILOTAGE_BIN_DIR = candidate
     return candidate
 
 
-def _prepend_hermes_bin_dir(existing_path: str) -> str:
-    """Prepend the hermes install dir to ``existing_path`` if it's missing.
+def _prepend_pilotage_bin_dir(existing_path: str) -> str:
+    """Prepend the pilotage install dir to ``existing_path`` if it's missing.
 
     Cross-platform (uses ``os.pathsep``). First-occurrence wins, so a PATH
     that already contains the dir is returned unchanged. Returns the input
     unchanged when the install dir can't be resolved.
     """
-    bin_dir = _resolve_hermes_bin_dir()
+    bin_dir = _resolve_pilotage_bin_dir()
     if not bin_dir:
         return existing_path
     sep = os.pathsep
@@ -1141,28 +1141,28 @@ def _prepend_hermes_bin_dir(existing_path: str) -> str:
 
 
 def _managed_runtime_path_entries() -> list[str]:
-    """Return existing Hermes-managed runtime dirs for the terminal subshell PATH.
+    """Return existing Pilotage-managed runtime dirs for the terminal subshell PATH.
 
     The terminal tool spawns a subshell whose PATH is the agent process's PATH
-    plus ``_SANE_PATH``. Neither carries the runtimes Hermes installs for
-    itself, so on a machine where Hermes provisioned its own toolchain a
+    plus ``_SANE_PATH``. Neither carries the runtimes Pilotage installs for
+    itself, so on a machine where Pilotage provisioned its own toolchain a
     command the agent runs resolves a system copy instead — or nothing at all:
 
-    - ``$HERMES_HOME/node`` (+ ``/bin``) — installed to satisfy the desktop and
+    - ``$PILOTAGE_HOME/node`` (+ ``/bin``) — installed to satisfy the desktop and
       browser toolchain. ``tools/browser_tool.py`` already does this for its own
       subprocesses; the agent's shell deserves the same.
-    - ``$HERMES_HOME/bin`` — the managed ``uv``. ``install.sh`` writes it there
+    - ``$PILOTAGE_HOME/bin`` — the managed ``uv``. ``install.sh`` writes it there
       and nothing has ever put that directory on PATH, so an install whose only
       uv is the managed one looks uv-less to both the agent and the model.
 
     Resolved per call rather than cached in a module constant because
-    ``get_hermes_home()`` is profile-scoped and a managed tree can appear
-    mid-process (``heal_hermes_managed_node``, a first browser install).
+    ``get_pilotage_home()`` is profile-scoped and a managed tree can appear
+    mid-process (``heal_pilotage_managed_node``, a first browser install).
     """
     try:
-        from hermes_constants import get_hermes_home, iter_hermes_node_dirs
+        from pilotage_constants import get_pilotage_home, iter_pilotage_node_dirs
 
-        candidates = [*iter_hermes_node_dirs(), get_hermes_home() / "bin"]
+        candidates = [*iter_pilotage_node_dirs(), get_pilotage_home() / "bin"]
         return [str(d) for d in candidates if d.is_dir()]
     except Exception:
         return []
@@ -1185,7 +1185,7 @@ def _append_missing_sane_path_entries(existing_path: str) -> str:
     - **Duplicates are collapsed** (first occurrence wins), so a caller PATH
       that already contains repeats is not propagated verbatim.
 
-    Hermes-managed runtime dirs are appended alongside the sane entries, not
+    Pilotage-managed runtime dirs are appended alongside the sane entries, not
     prepended: a tool the user deliberately put on their own PATH still wins,
     and the managed one only fills the gap where there would otherwise be
     nothing.
@@ -1229,7 +1229,7 @@ def _apply_windows_msys_bash_env_defaults(env: dict) -> None:
 
     Git Bash rewrites arguments that look like Unix paths (``/FO``, ``/TN``,
     ``/Create``) into ``C:/.../git/FO``-style paths, which breaks native
-    Windows commands such as ``tasklist``, ``schtasks``, and ``wmic``.  Hermes
+    Windows commands such as ``tasklist``, ``schtasks``, and ``wmic``.  Pilotage
     runs terminal commands through bash on Windows, so set the standard MSYS
     opt-out by default.  Users who need conversion can override in their env.
     Refs #56700.
@@ -1279,16 +1279,16 @@ def _make_run_env(env: dict) -> dict:
     merged = dict(os.environ | env)
     run_env = {}
     for k, v in merged.items():
-        if k.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
-            real_key = k[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
-            if _is_hermes_internal_secret(real_key):
+        if k.startswith(_PILOTAGE_PROVIDER_ENV_FORCE_PREFIX):
+            real_key = k[len(_PILOTAGE_PROVIDER_ENV_FORCE_PREFIX):]
+            if _is_pilotage_internal_secret(real_key):
                 continue
             run_env[real_key] = v
-        elif _is_hermes_internal_secret(k):
+        elif _is_pilotage_internal_secret(k):
             continue
         else:
             passthrough = _is_passthrough(k)
-            if k in _HERMES_PROVIDER_ENV_BLOCKLIST and not passthrough:
+            if k in _PILOTAGE_PROVIDER_ENV_BLOCKLIST and not passthrough:
                 continue
             value = _resolve_passthrough_value(k, v) if passthrough else v
             if value is not None:
@@ -1303,14 +1303,14 @@ def _make_run_env(env: dict) -> dict:
         # error / exit 127).  No-op off Windows and when a login snapshot is
         # healthy (the snapshot re-exports the full PATH inside the shell).
         new_path = _prepend_git_bash_dirs(new_path)
-        # Ensure the hermes install dir is reachable so plugins can shell out
-        # to bare ``hermes`` via the terminal tool even when the gateway was
+        # Ensure the pilotage install dir is reachable so plugins can shell out
+        # to bare ``pilotage`` via the terminal tool even when the gateway was
         # launched without it on PATH (systemd, service managers, cron, etc.).
-        run_env[path_key] = _prepend_hermes_bin_dir(new_path)
+        run_env[path_key] = _prepend_pilotage_bin_dir(new_path)
 
-    _inject_context_hermes_home(run_env)
+    _inject_context_pilotage_home(run_env)
 
-    from hermes_constants import apply_subprocess_home_env
+    from pilotage_constants import apply_subprocess_home_env
     apply_subprocess_home_env(run_env)
 
     # Bridge ContextVar-based session vars into the subprocess env (with the
@@ -1335,7 +1335,7 @@ def _read_terminal_shell_init_config() -> tuple[list[str], bool]:
     execution never breaks because the config file is unreadable.
     """
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
 
         cfg = load_config() or {}
         terminal_cfg = cfg.get("terminal") or {}
@@ -1354,7 +1354,7 @@ def _resolve_shell_init_files() -> list[str]:
     Expands ``~`` and ``${VAR}`` references and drops anything that doesn't
     exist on disk, so a missing ``~/.bashrc`` never breaks the snapshot.
     The ``auto_source_bashrc`` path runs only when the user hasn't supplied
-    an explicit list — once they have, Hermes trusts them.
+    an explicit list — once they have, Pilotage trusts them.
     """
     explicit, auto_bashrc = _read_terminal_shell_init_config()
 
@@ -1442,20 +1442,20 @@ class LocalEnvironment(BaseEnvironment):
         can't open the path, and the Windows default temp (``%TEMP%``) often
         contains spaces (``C:\\Users\\Some Name\\AppData\\Local\\Temp``) that
         break unquoted bash interpolations.  Use a dedicated cache dir under
-        ``HERMES_HOME`` instead — single-word path, guaranteed to exist, same
+        ``PILOTAGE_HOME`` instead — single-word path, guaranteed to exist, same
         string resolves in both Git Bash and native Python.
         """
         if _IS_WINDOWS:
-            # Derive a Windows-safe temp dir under HERMES_HOME.  Using
+            # Derive a Windows-safe temp dir under PILOTAGE_HOME.  Using
             # forward slashes makes the same string work unchanged in bash
             # command interpolations AND in Python ``open()`` — Windows
             # accepts forward slashes in filesystem paths, and we control
             # the path so we can guarantee no spaces.
             try:
-                from hermes_constants import get_hermes_home
-                cache_dir = get_hermes_home() / "cache" / "terminal"
+                from pilotage_constants import get_pilotage_home
+                cache_dir = get_pilotage_home() / "cache" / "terminal"
             except Exception:
-                cache_dir = Path(tempfile.gettempdir()) / "hermes_terminal"
+                cache_dir = Path(tempfile.gettempdir()) / "pilotage_terminal"
             cache_dir.mkdir(parents=True, exist_ok=True)
             # Force forward slashes so the same string serves both contexts.
             return str(cache_dir).replace("\\", "/")
@@ -1544,7 +1544,7 @@ class LocalEnvironment(BaseEnvironment):
         )
         if not _IS_WINDOWS:
             try:
-                proc._hermes_pgid = os.getpgid(proc.pid)
+                proc._pilotage_pgid = os.getpgid(proc.pid)
             except ProcessLookupError:
                 pass
 
@@ -1601,7 +1601,7 @@ class LocalEnvironment(BaseEnvironment):
                 try:
                     pgid = os.getpgid(proc.pid)
                 except ProcessLookupError:
-                    pgid = getattr(proc, "_hermes_pgid", None)
+                    pgid = getattr(proc, "_pilotage_pgid", None)
                     if pgid is None:
                         raise
 

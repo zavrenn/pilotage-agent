@@ -2,11 +2,11 @@
 
 Scans four sources for memory provider plugins:
 
-1. Bundled providers: ``plugins/memory/<name>/`` (shipped with hermes-agent)
-2. User-installed providers: ``$HERMES_HOME/plugins/<name>/``
-3. Project-local providers: ``./.hermes/plugins/<name>/``, opt-in via
-   ``HERMES_ENABLE_PROJECT_PLUGINS``
-4. Pip-installed providers: ``hermes_agent.memory_providers`` entry points
+1. Bundled providers: ``plugins/memory/<name>/`` (shipped with pilotage-agent)
+2. User-installed providers: ``$PILOTAGE_HOME/plugins/<name>/``
+3. Project-local providers: ``./.pilotage/plugins/<name>/``, opt-in via
+   ``PILOTAGE_ENABLE_PROJECT_PLUGINS``
+4. Pip-installed providers: ``pilotage_agent.memory_providers`` entry points
 
 Directory providers must contain ``__init__.py`` with a class implementing
 the MemoryProvider ABC. Pip packages expose a provider or ``register(ctx)``
@@ -39,7 +39,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple, TYPE_CHECKING
-from hermes_cli.config import cfg_get
+from pilotage_cli.config import cfg_get
 
 if TYPE_CHECKING:
     from agent.memory_provider import MemoryProvider
@@ -47,22 +47,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _MEMORY_PLUGINS_DIR = Path(__file__).parent
-ENTRY_POINTS_GROUP = "hermes_agent.memory_providers"
+ENTRY_POINTS_GROUP = "pilotage_agent.memory_providers"
 _REGISTERED_MEMORY_PROVIDER_SKILLS: dict[str, Path] = {}
 
 # Synthetic parent package for user-installed providers, so they don't
 # collide with bundled providers in sys.modules.
-_USER_NAMESPACE = "_hermes_user_memory"
+_USER_NAMESPACE = "_pilotage_user_memory"
 
 
 def _register_synthetic_package(name: str, search_locations: List[str]) -> None:
     """Register an empty package shell in sys.modules.
 
-    User-installed providers import as ``_hermes_user_memory.<name>``, a
+    User-installed providers import as ``_pilotage_user_memory.<name>``, a
     dotted name whose parents exist nowhere on disk.  Unless those parents
     are present in ``sys.modules``, any relative import inside the plugin
     (``from . import config``) fails with
-    ``ModuleNotFoundError: No module named '_hermes_user_memory'`` — the
+    ``ModuleNotFoundError: No module named '_pilotage_user_memory'`` — the
     same reason the loader already registers ``plugins`` and
     ``plugins.memory`` for bundled providers.
     """
@@ -78,28 +78,28 @@ def _register_synthetic_package(name: str, search_locations: List[str]) -> None:
 # ---------------------------------------------------------------------------
 
 def _get_user_plugins_dir() -> Optional[Path]:
-    """Return ``$HERMES_HOME/plugins/`` or None if unavailable."""
+    """Return ``$PILOTAGE_HOME/plugins/`` or None if unavailable."""
     try:
-        from hermes_constants import get_hermes_home
-        d = get_hermes_home() / "plugins"
+        from pilotage_constants import get_pilotage_home
+        d = get_pilotage_home() / "plugins"
         return d if d.is_dir() else None
     except Exception:
         return None
 
 
 def _get_project_plugins_dir() -> Optional[Path]:
-    """Return ``./.hermes/plugins/`` or None if unavailable or not opted in.
+    """Return ``./.pilotage/plugins/`` or None if unavailable or not opted in.
 
-    Gated on ``HERMES_ENABLE_PROJECT_PLUGINS`` exactly as the general
+    Gated on ``PILOTAGE_ENABLE_PROJECT_PLUGINS`` exactly as the general
     ``PluginManager`` gates its own project scan — a repository you merely
     ``cd`` into must not be able to offer the agent a memory backend.
     """
     try:
-        from hermes_cli.plugins import _env_enabled
+        from pilotage_cli.plugins import _env_enabled
 
-        if not _env_enabled("HERMES_ENABLE_PROJECT_PLUGINS"):
+        if not _env_enabled("PILOTAGE_ENABLE_PROJECT_PLUGINS"):
             return None
-        d = Path.cwd() / ".hermes" / "plugins"
+        d = Path.cwd() / ".pilotage" / "plugins"
         return d if d.is_dir() else None
     except Exception:
         return None
@@ -140,8 +140,8 @@ def _iter_provider_dirs() -> List[Tuple[str, Path]]:
             seen.add(child.name)
             dirs.append((child.name, child))
 
-    # 2. User-installed providers ($HERMES_HOME/plugins/<name>/)
-    # 3. Project-local providers (./.hermes/plugins/<name>/), opt-in
+    # 2. User-installed providers ($PILOTAGE_HOME/plugins/<name>/)
+    # 3. Project-local providers (./.pilotage/plugins/<name>/), opt-in
     for source_dir in (_get_user_plugins_dir(), _get_project_plugins_dir()):
         if not source_dir:
             continue
@@ -184,7 +184,7 @@ def find_provider_dir(name: str) -> Optional[Path]:
     ``plugins/memory/config_schema.py``) and ``cli.py`` (loaded by
     ``discover_plugin_cli_commands`` at argparse time). Without a directory, a
     pip-installed provider silently loses its dashboard config panel and its
-    ``hermes <provider>`` subcommands — working, but a second-class citizen next
+    ``pilotage <provider>`` subcommands — working, but a second-class citizen next
     to a directory install.
     """
     # Bundled
@@ -218,7 +218,7 @@ def _entry_point_package_dir(entry_point) -> Optional[Path]:
     if entry_point is None:
         return None
     try:
-        from hermes_cli.plugins import resolve_module_origin
+        from pilotage_cli.plugins import resolve_module_origin
 
         module_name = (entry_point.value or "").split(":")[0].strip()
         origin = resolve_module_origin(module_name)
@@ -327,7 +327,7 @@ def load_memory_provider(
     """Load and return a MemoryProvider instance by name.
 
     Checks bundled (``plugins/memory/<name>/``), user-installed
-    (``$HERMES_HOME/plugins/<name>/``), and pip entry-point providers.
+    (``$PILOTAGE_HOME/plugins/<name>/``), and pip entry-point providers.
     Bundled providers take precedence on name collisions.
 
     Skills register only when *name* is the configured active provider unless
@@ -569,7 +569,7 @@ class _ProviderCollector:
         and resolved path recorded here.
 
         Gated on ``register_skills`` so merely *inspecting* an inactive
-        provider — ``hermes memory status``, the setup picker — leaves no
+        provider — ``pilotage memory status``, the setup picker — leaves no
         registry side effects behind.
         """
         if not self._register_skills:
@@ -580,7 +580,7 @@ class _ProviderCollector:
             skill_name = args[0] if args else kwargs.get("name")
             qualified_name = f"{self.name}:{skill_name}"
 
-            from hermes_cli.plugins import get_plugin_manager
+            from pilotage_cli.plugins import get_plugin_manager
 
             registered_path = get_plugin_manager().find_plugin_skill(qualified_name)
             if registered_path is not None:
@@ -633,10 +633,10 @@ class _ProviderCollector:
 
         Lazy because the common case — a provider that only calls
         ``register_memory_provider`` — must not pay for importing the general
-        plugin manager, which discovery touches on every hermes startup.
+        plugin manager, which discovery touches on every pilotage startup.
         """
         if self._context is None:
-            from hermes_cli.plugins import PluginContext, PluginManifest, get_plugin_manager
+            from pilotage_cli.plugins import PluginContext, PluginManifest, get_plugin_manager
 
             manifest = PluginManifest(name=self.name, key=self.name)
             self._context = PluginContext(manifest, get_plugin_manager())
@@ -651,7 +651,7 @@ def _get_active_memory_provider() -> Optional[str]:
     no plugin loading.
     """
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
         config = load_config()
         return cfg_get(config, "memory", "provider") or None
     except Exception:
@@ -665,7 +665,7 @@ def _prune_inactive_memory_provider_skills(
     if active_provider is None:
         active_provider = _get_active_memory_provider()
 
-    from hermes_cli.plugins import get_plugin_manager
+    from pilotage_cli.plugins import get_plugin_manager
 
     manager = get_plugin_manager()
     for qualified_name, registered_path in list(
@@ -721,7 +721,7 @@ def discover_plugin_cli_commands() -> List[dict]:
             cli_mod = sys.modules[module_name]
         else:
             if not _is_bundled:
-                # cli.py imports as _hermes_user_memory.<name>.cli, usually
+                # cli.py imports as _pilotage_user_memory.<name>.cli, usually
                 # before the provider itself is loaded.  Register its parent
                 # packages so relative imports inside cli.py
                 # ("from . import config") resolve without executing the

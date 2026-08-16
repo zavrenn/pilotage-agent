@@ -41,7 +41,7 @@ import threading
 from typing import Dict, List, Optional
 
 from agent.browser_provider import BrowserProvider
-from hermes_constants import hermes_home_key
+from pilotage_constants import pilotage_home_key
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ def list_providers(*, scope: Optional[str] = None) -> List[BrowserProvider]:
     """Return all registered providers, sorted by name."""
     with _lock:
         merged = dict(_providers)
-        merged.update(_scoped_providers.get(scope or hermes_home_key(), {}))
+        merged.update(_scoped_providers.get(scope or pilotage_home_key(), {}))
         items = list(merged.values())
     return sorted(items, key=lambda p: p.name)
 
@@ -105,7 +105,7 @@ def get_provider(name: str, *, scope: Optional[str] = None) -> Optional[BrowserP
         return None
     with _lock:
         key = name.strip()
-        return _scoped_providers.get(scope or hermes_home_key(), {}).get(key) or _providers.get(key)
+        return _scoped_providers.get(scope or pilotage_home_key(), {}).get(key) or _providers.get(key)
 
 
 def snapshot_registration(
@@ -118,7 +118,7 @@ def snapshot_registration(
 
 def registry_generation(*, scope: Optional[str] = None) -> tuple[int, int]:
     """Return a cache fingerprint for the global base and one profile."""
-    active_scope = scope or hermes_home_key()
+    active_scope = scope or pilotage_home_key()
     with _lock:
         return _generation, _scoped_generations.get(active_scope, 0)
 
@@ -192,7 +192,7 @@ def _resolve(configured: Optional[str]) -> Optional[BrowserProvider]:
     the *web* extract plugin (``plugins/web/firecrawl/``), so users who set
     ``FIRECRAWL_API_KEY`` for web extract must NOT get silently routed to a
     paid cloud browser on a fresh install. Third-party browser-provider
-    plugins added under ``~/.hermes/plugins/browser/<vendor>/`` are subject
+    plugins added under ``~/.pilotage/plugins/browser/<vendor>/`` are subject
     to the same gate — they must be explicitly configured to take effect.
 
     Returns None when no provider is configured AND no available provider
@@ -201,7 +201,7 @@ def _resolve(configured: Optional[str]) -> Optional[BrowserProvider]:
     """
     with _lock:
         snapshot = dict(_providers)
-        snapshot.update(_scoped_providers.get(hermes_home_key(), {}))
+        snapshot.update(_scoped_providers.get(pilotage_home_key(), {}))
 
     def _is_available_safe(p: BrowserProvider) -> bool:
         """Wrap ``is_available()`` so a buggy provider doesn't kill resolution."""

@@ -1,6 +1,6 @@
 """Skill usage telemetry + provenance tracking for the Curator feature.
 
-Tracks per-skill usage metadata in a sidecar JSON file (~/.hermes/skills/.usage.json)
+Tracks per-skill usage metadata in a sidecar JSON file (~/.pilotage/skills/.usage.json)
 keyed by skill name. Counters are bumped by the existing skill tools (skill_view,
 skill_manage); the curator orchestrator reads the derived activity timestamp to
 decide lifecycle transitions.
@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from hermes_constants import get_hermes_home
+from pilotage_constants import get_pilotage_home
 from agent.skill_utils import is_excluded_skill_path, is_external_skill_path
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def is_protected_builtin(skill_name: str) -> bool:
 
 
 def _skills_dir() -> Path:
-    return get_hermes_home() / "skills"
+    return get_pilotage_home() / "skills"
 
 
 def _usage_file() -> Path:
@@ -181,7 +181,7 @@ def activity_count(record: Dict[str, Any]) -> int:
 def _read_bundled_manifest_names() -> Set[str]:
     """Return the set of skill names that were seeded from the bundled repo.
 
-    Reads ~/.hermes/skills/.bundled_manifest (format: "name:hash" per line).
+    Reads ~/.pilotage/skills/.bundled_manifest (format: "name:hash" per line).
     Returns empty set if the file is missing or unreadable.
     """
     manifest = _skills_dir() / ".bundled_manifest"
@@ -204,7 +204,7 @@ def _read_bundled_manifest_names() -> Set[str]:
 def _read_hub_installed_names() -> Set[str]:
     """Return the set of skill names installed via the Skills Hub.
 
-    Reads ~/.hermes/skills/.hub/lock.json (see tools/skills_hub.py :: HubLockFile).
+    Reads ~/.pilotage/skills/.hub/lock.json (see tools/skills_hub.py :: HubLockFile).
     """
     lock_path = _skills_dir() / ".hub" / "lock.json"
     if not lock_path.exists():
@@ -257,7 +257,7 @@ def _prune_builtins_enabled() -> bool:
     flag — built-ins only archive after a fresh inactivity window.
     """
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
 
         cfg = load_config()
         cur = cfg.get("curator") if isinstance(cfg, dict) else None
@@ -275,8 +275,8 @@ def _suppressed_file() -> Path:
 def read_suppressed_names() -> Set[str]:
     """Built-in skills the curator pruned — the re-seeder must leave archived.
 
-    One skill name per line in ``~/.hermes/skills/.curator_suppressed``. This is
-    what makes pruning a built-in durable: without it, ``hermes update`` would
+    One skill name per line in ``~/.pilotage/skills/.curator_suppressed``. This is
+    what makes pruning a built-in durable: without it, ``pilotage update`` would
     re-copy the bundled skill on the next sync.
     """
     path = _suppressed_file()
@@ -357,7 +357,7 @@ def list_agent_created_skill_names() -> List[str]:
     names: List[str] = []
     # Top-level SKILL.md files (flat layout) AND nested category/skill/SKILL.md
     for skill_md in base.rglob("SKILL.md"):
-        # Skip Hermes metadata, VCS, virtualenv/dependency, and cache dirs
+        # Skip Pilotage metadata, VCS, virtualenv/dependency, and cache dirs
         if is_excluded_skill_path(skill_md):
             continue
         # External skill dirs can be mounted below the local skills tree.
@@ -391,11 +391,11 @@ def list_agent_created_skill_names() -> List[str]:
 
 
 def list_archived_skill_names() -> List[str]:
-    """Enumerate skills in ``~/.hermes/skills/.archive/``.
+    """Enumerate skills in ``~/.pilotage/skills/.archive/``.
 
     Archive layout is flat (``.archive/<skill>/``) as set by ``archive_skill``,
-    so the directory name is the skill name. Used by ``hermes curator
-    list-archived`` to help users pass a name to ``hermes curator restore``.
+    so the directory name is the skill name. Used by ``pilotage curator
+    list-archived`` to help users pass a name to ``pilotage curator restore``.
     """
     archive_root = _archive_dir()
     if not archive_root.exists():
@@ -492,7 +492,7 @@ def _is_curator_managed_record(record: Any) -> bool:
     * provenance = "who authored this file" — historical fact, and for records
       written before the marker existed it is simply unrecoverable.
     * management = "may autonomous curation mutate/archive this" — a policy
-      decision the user can change at any time via ``hermes curator adopt``.
+      decision the user can change at any time via ``pilotage curator adopt``.
 
     ``created_by: "agent"`` therefore means "curator-managed", NOT "proof the
     agent wrote it". The field name is retained because it is already on disk
@@ -531,8 +531,8 @@ def list_unmanaged_skill_names() -> List[str]:
       belong to the user).
 
     Either way the skill is invisible to ``curated_report()`` and therefore to
-    every automatic transition. ``hermes curator status`` surfaces this count
-    so the blind spot is legible instead of silent, and ``hermes curator
+    every automatic transition. ``pilotage curator status`` surfaces this count
+    so the blind spot is legible instead of silent, and ``pilotage curator
     adopt`` lets the user hand specific skills over explicitly.
 
     Provenance is a DECLARATION, never an inference: this function only
@@ -615,7 +615,7 @@ def adopt_skill(skill_name: str) -> Tuple[bool, str]:
     if is_bundled(skill_name):
         # Bundled skills already fall under the curator via
         # ``curator.prune_builtins``; stamping created_by=agent on one would
-        # claim Hermes' own shipped skill was agent-authored and change nothing
+        # claim Pilotage' own shipped skill was agent-authored and change nothing
         # about its eligibility.
         return False, (
             f"'{skill_name}' is a bundled built-in — it is governed by "
@@ -789,7 +789,7 @@ def telemetry_provenance(
         return "installed"
     if ":" in skill_name:
         try:
-            from hermes_cli.plugins import get_plugin_manager
+            from pilotage_cli.plugins import get_plugin_manager
 
             if get_plugin_manager().find_plugin_skill(skill_name) is not None:
                 return "installed"
@@ -821,7 +821,7 @@ def _emit_skill_lifecycle(
 ) -> None:
     """Emit one best-effort lifecycle fact after authoritative state changes."""
     try:
-        from hermes_cli.lifecycle import has_hook, invoke_hook
+        from pilotage_cli.lifecycle import has_hook, invoke_hook
 
         if not has_hook("on_skill_lifecycle"):
             return
@@ -1069,7 +1069,7 @@ def forget(skill_name: str) -> None:
 # ---------------------------------------------------------------------------
 
 def archive_skill(skill_name: str) -> Tuple[bool, str]:
-    """Move a curator-eligible skill directory to ~/.hermes/skills/.archive/.
+    """Move a curator-eligible skill directory to ~/.pilotage/skills/.archive/.
 
     Returns (ok, message). Never archives hub-installed skills. Bundled
     built-ins are only archivable when ``curator.prune_builtins`` is enabled;
@@ -1130,7 +1130,7 @@ def archive_skill(skill_name: str) -> Tuple[bool, str]:
 
 
 def restore_skill(skill_name: str) -> Tuple[bool, str]:
-    """Move an archived skill back to ~/.hermes/skills/. Restores to the flat
+    """Move an archived skill back to ~/.pilotage/skills/. Restores to the flat
     top-level layout; original category nesting is NOT reconstructed.
 
     Refuses to restore under a name that now collides with a hub-installed
@@ -1207,8 +1207,8 @@ def restore_skill(skill_name: str) -> Tuple[bool, str]:
 def _find_skill_dir(skill_name: str) -> Optional[Path]:
     """Locate the directory for a skill by its frontmatter `name:` field.
 
-    Handles both flat (~/.hermes/skills/<skill>/SKILL.md) and category-nested
-    (~/.hermes/skills/<category>/<skill>/SKILL.md) layouts. Uses the gated
+    Handles both flat (~/.pilotage/skills/<skill>/SKILL.md) and category-nested
+    (~/.pilotage/skills/<category>/<skill>/SKILL.md) layouts. Uses the gated
     index iterator so M2 org mirrors resolve ONLY for the active org
     (stale ``_org/<other>/`` trees never match).
     """

@@ -23,7 +23,7 @@ so the whole trace renders as one unbroken, unspaced, half-bold paragraph.
 The AI SDK hit exactly this (vercel/ai#6742) and fixed it upstream by starting
 a new reasoning part per ``summary_index``. That route needs the index, which
 this wire does not give us, so we re-derive the boundary from the one signal it
-does carry: a delta opening a bold heading. Hermes' own Responses adapter
+does carry: a delta opening a bold heading. Pilotage' own Responses adapter
 already joins its summary parts with a blank line
 (``agent/codex_responses_adapter.py``), so this brings the chat-completions
 stream in line with the path that keeps the structure.

@@ -219,15 +219,15 @@ def _is_local_terminal_backend() -> bool:
 
 
 def _media_cache_roots() -> list:
-    """Agent-managed media cache directories under HERMES_HOME (host side).
+    """Agent-managed media cache directories under PILOTAGE_HOME (host side).
 
     The only host paths vision may read under a non-local backend: gateway-
     downloaded inbound media and the tools' own URL-download temp dirs. Covers
     the consolidated ``cache/`` layout and the legacy flat directories.
     """
-    from hermes_constants import get_hermes_home
+    from pilotage_constants import get_pilotage_home
 
-    home = get_hermes_home()
+    home = get_pilotage_home()
     return [
         home / "cache",  # cache/images, cache/vision, cache/video(s), cache/audio
         home / "images",  # desktop/clipboard/PDF uploads (tui_gateway) — #69575
@@ -244,7 +244,7 @@ def _permitted_host_read_target(p: Path, ctx: ResolveContext) -> Optional[Path]:
 
     - Local backend: any path is permitted (chosen posture). Returns ``p``.
     - Non-local backend: permitted only if the path resolves inside a media
-      cache root. A container-visible cache path (e.g. ``/root/.hermes/cache/
+      cache root. A container-visible cache path (e.g. ``/root/.pilotage/cache/
       images/x.png``) is first translated back to its host mount; anything that
       is not under a cache returns ``None`` so the caller routes it to the
       in-sandbox exec-read instead of reading the host filesystem.

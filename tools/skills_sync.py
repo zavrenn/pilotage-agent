@@ -2,7 +2,7 @@
 """
 Skills Sync -- Manifest-based seeding and updating of bundled skills.
 
-Copies bundled skills from the repo's skills/ directory into ~/.hermes/skills/
+Copies bundled skills from the repo's skills/ directory into ~/.pilotage/skills/
 and uses a manifest to track which skills have been synced and their origin hash.
 
 Manifest format (v2): each line is "skill_name:origin_hash" where origin_hash
@@ -19,7 +19,7 @@ Update logic:
   - DELETED by user (in manifest, absent from user dir): respected, not re-added.
   - REMOVED from bundled (in manifest, gone from repo): cleaned from manifest.
 
-The manifest lives at ~/.hermes/skills/.bundled_manifest.
+The manifest lives at ~/.pilotage/skills/.bundled_manifest.
 """
 
 import hashlib
@@ -45,7 +45,7 @@ for _stream in (sys.stdout, sys.stderr):
             _stream.reconfigure(encoding="utf-8", errors="replace")
         except (ValueError, TypeError):
             pass
-from hermes_constants import get_bundled_skills_dir, get_hermes_home, get_optional_skills_dir
+from pilotage_constants import get_bundled_skills_dir, get_pilotage_home, get_optional_skills_dir
 from agent.skill_utils import is_excluded_skill_path
 from typing import Dict, List, Optional, Set, Tuple
 from utils import atomic_replace
@@ -53,16 +53,16 @@ from utils import atomic_replace
 logger = logging.getLogger(__name__)
 
 
-HERMES_HOME = get_hermes_home()
-SKILLS_DIR = HERMES_HOME / "skills"
+PILOTAGE_HOME = get_pilotage_home()
+SKILLS_DIR = PILOTAGE_HOME / "skills"
 MANIFEST_FILE = SKILLS_DIR / ".bundled_manifest"
 
-# Marker file written by `hermes profile create --no-skills` (named profiles)
-# and by the installer's `--no-skills` flag (the default ~/.hermes profile).
-# When present in HERMES_HOME, sync_skills() is a no-op so neither the
-# installer, `hermes update`, nor a direct sync re-injects bundled skills.
+# Marker file written by `pilotage profile create --no-skills` (named profiles)
+# and by the installer's `--no-skills` flag (the default ~/.pilotage profile).
+# When present in PILOTAGE_HOME, sync_skills() is a no-op so neither the
+# installer, `pilotage update`, nor a direct sync re-injects bundled skills.
 # Delete the file to opt back in. Mirrors
-# hermes_cli.profiles.NO_BUNDLED_SKILLS_MARKER (kept as a literal here to
+# pilotage_cli.profiles.NO_BUNDLED_SKILLS_MARKER (kept as a literal here to
 # avoid importing the CLI layer into this low-level sync module).
 NO_BUNDLED_SKILLS_MARKER = ".no-bundled-skills"
 
@@ -70,7 +70,7 @@ NO_BUNDLED_SKILLS_MARKER = ".no-bundled-skills"
 def _get_bundled_dir() -> Path:
     """Locate the bundled skills/ directory.
 
-    Checks HERMES_BUNDLED_SKILLS env var first (set by Nix wrapper),
+    Checks PILOTAGE_BUNDLED_SKILLS env var first (set by Nix wrapper),
     then falls back to the relative path from this source file.
     """
     return get_bundled_skills_dir(Path(__file__).parent.parent / "skills")
@@ -141,7 +141,7 @@ def _read_suppressed_names() -> set:
     """Built-in skills the curator pruned — must NOT be re-seeded on sync.
 
     Delegates to ``tools.skill_usage`` (single source of truth) and falls back
-    to reading ``~/.hermes/skills/.curator_suppressed`` directly if that import
+    to reading ``~/.pilotage/skills/.curator_suppressed`` directly if that import
     is unavailable in a packaged/update context.
     """
     try:
@@ -245,7 +245,7 @@ def _discover_bundled_skills(bundled_dir: Path) -> List[Tuple[str, Path]]:
 def _compute_relative_dest(skill_dir: Path, bundled_dir: Path) -> Path:
     """
     Compute the destination path in SKILLS_DIR preserving the category structure.
-    e.g., bundled/skills/mlops/axolotl -> ~/.hermes/skills/mlops/axolotl
+    e.g., bundled/skills/mlops/axolotl -> ~/.pilotage/skills/mlops/axolotl
     """
     rel = skill_dir.relative_to(bundled_dir)
     return SKILLS_DIR / rel
@@ -567,7 +567,7 @@ def _backfill_optional_provenance(quiet: bool = False) -> List[str]:
 def _read_hub_install_paths() -> Set[str]:
     """Return install paths recorded in the skills-hub lock, as POSIX strings.
 
-    Hub-installed skills are owned by the hub (``hermes skills uninstall``),
+    Hub-installed skills are owned by the hub (``pilotage skills uninstall``),
     never by bundled sync. Rename recovery must not move them even when their
     content happens to match a bundled origin hash, or the lock's
     ``install_path`` would point at a directory that no longer exists.
@@ -652,7 +652,7 @@ def _recover_renamed_skill(
                     f"  ⚠ {skill_name}: upstream moved this skill to "
                     f"{dest.relative_to(SKILLS_DIR).as_posix()}, but your "
                     f"modified copy at {rel} was kept — it will not receive "
-                    f"updates. Run `hermes skills reset {skill_name} --restore` "
+                    f"updates. Run `pilotage skills reset {skill_name} --restore` "
                     f"to move to the new location."
                 )
             continue
@@ -674,18 +674,18 @@ def _recover_renamed_skill(
 
 def sync_skills(quiet: bool = False) -> dict:
     """
-    Sync bundled skills into ~/.hermes/skills/ using the manifest.
+    Sync bundled skills into ~/.pilotage/skills/ using the manifest.
 
     Returns:
         dict with keys: copied (list), updated (list), skipped (int),
                         user_modified (list), cleaned (list), total_bundled (int)
     """
-    # Opt-out: a profile (named or the default ~/.hermes) that wrote the
+    # Opt-out: a profile (named or the default ~/.pilotage) that wrote the
     # .no-bundled-skills marker gets zero bundled-skill seeding. Returning the
     # empty-result shape with skipped_opt_out lets callers report "opted out"
     # instead of "synced 0 / failed". This is the default-profile counterpart
     # to seed_profile_skills()'s marker check for named profiles.
-    if (HERMES_HOME / NO_BUNDLED_SKILLS_MARKER).exists():
+    if (PILOTAGE_HOME / NO_BUNDLED_SKILLS_MARKER).exists():
         if not quiet:
             print("  (skipped — profile opted out of bundled skills via .no-bundled-skills)")
         return {
@@ -724,9 +724,9 @@ def sync_skills(quiet: bool = False) -> dict:
 
     for skill_name, skill_src in bundled_skills:
         # Curator-pruned built-ins: do not re-seed. The suppression list
-        # (~/.hermes/skills/.curator_suppressed) is written when the curator
+        # (~/.pilotage/skills/.curator_suppressed) is written when the curator
         # archives a bundled skill with curator.prune_builtins enabled. Without
-        # this skip, every `hermes update` would resurrect a skill the user
+        # this skip, every `pilotage update` would resurrect a skill the user
         # deliberately pruned. Restoring the skill clears its suppression entry.
         if skill_name in suppressed:
             suppressed_skipped.append(skill_name)
@@ -818,7 +818,7 @@ def sync_skills(quiet: bool = False) -> dict:
                         print(
                             f"  ⚠ {skill_name}: bundled version shipped but you "
                             f"already have a local skill by this name — yours "
-                            f"was kept. Run `hermes skills reset {skill_name}` "
+                            f"was kept. Run `pilotage skills reset {skill_name}` "
                             f"to replace it with the bundled version."
                         )
                 else:
@@ -958,15 +958,15 @@ def _rmtree_writable(path: Path) -> None:
     parent** writable before re-attempting.  See #34860, #34972.
     """
     # Defense in depth (#48200): refuse to rmtree anything outside
-    # ``HERMES_HOME/skills/`` to prevent the catastrophic wipe of
-    # ``~/.hermes/`` (``.env``, ``MEMORY.md``, ``kanban.db``, custom
+    # ``PILOTAGE_HOME/skills/`` to prevent the catastrophic wipe of
+    # ``~/.pilotage/`` (``.env``, ``MEMORY.md``, ``kanban.db``, custom
     # skills, scripts, …) that an earlier incident observed. Five call
     # sites in this file invoke this helper; if any one of them ever
     # computes a destination outside the skills root — through a bad
-    # path join, a missing ``HERMES_HOME`` default, a malicious
+    # path join, a missing ``PILOTAGE_HOME`` default, a malicious
     # bundled-manifest entry, or a mid-flight exception that leaves a
     # stale path in scope — this guard turns the resulting
-    # ``shutil.rmtree(~/.hermes)`` into a loud, recoverable ``ValueError``
+    # ``shutil.rmtree(~/.pilotage)`` into a loud, recoverable ``ValueError``
     # instead of silently destroying the user's install.
     target = Path(path).resolve()
     skills_root = SKILLS_DIR.resolve()
@@ -975,7 +975,7 @@ def _rmtree_writable(path: Path) -> None:
     # itself must never be removed: a ``dest`` that collapses to
     # ``SKILLS_DIR`` (e.g. a relative path resolving to ``.``) would wipe
     # every installed skill, and its ``.bak`` sibling lands one level up in
-    # ``HERMES_HOME``. Require a strict-child relationship so both escape
+    # ``PILOTAGE_HOME``. Require a strict-child relationship so both escape
     # into the skills root and out of it are refused.
     if skills_root not in target.parents:
         raise ValueError(
@@ -1035,7 +1035,7 @@ def reset_bundled_skill(name: str, restore: bool = False) -> dict:
             "action": "not_in_manifest",
             "message": (
                 f"'{name}' is not a tracked bundled skill. Nothing to reset. "
-                f"(Hub-installed skills use `hermes skills uninstall`.)"
+                f"(Hub-installed skills use `pilotage skills uninstall`.)"
             ),
             "synced": None,
         }
@@ -1089,7 +1089,7 @@ def reset_bundled_skill(name: str, restore: bool = False) -> dict:
     else:
         action = "manifest_cleared"
         message = (
-            f"Cleared manifest entry for '{name}'. Future `hermes update` runs "
+            f"Cleared manifest entry for '{name}'. Future `pilotage update` runs "
             f"will re-baseline against your current copy and accept upstream changes."
         )
 
@@ -1097,7 +1097,7 @@ def reset_bundled_skill(name: str, restore: bool = False) -> dict:
 
 
 def _is_tracked_user_modification(origin_hash: str, user_hash: str) -> bool:
-    """Whether an on-disk skill counts as a user modification ``hermes update`` keeps.
+    """Whether an on-disk skill counts as a user modification ``pilotage update`` keeps.
 
     Shared by the sync loop (which decides what to skip) and
     ``list_user_modified_bundled_skills`` (which surfaces the names) so the two
@@ -1109,7 +1109,7 @@ def _is_tracked_user_modification(origin_hash: str, user_hash: str) -> bool:
 
 
 def list_user_modified_bundled_skills() -> List[dict]:
-    """Return the bundled skills that ``hermes update`` keeps because the user
+    """Return the bundled skills that ``pilotage update`` keeps because the user
     edited them locally.
 
     A skill counts as user-modified when its on-disk copy no longer matches the
@@ -1168,7 +1168,7 @@ def diff_bundled_skill(name: str) -> dict:
     """Diff a user's copy of a bundled skill against the current stock version.
 
     Lets a user see exactly what diverged before deciding whether to keep their
-    edits or ``hermes skills reset`` back to upstream.
+    edits or ``pilotage skills reset`` back to upstream.
 
     Returns a dict:
         ``ok`` (bool), ``name`` (str), ``found`` (bool — bundled source exists),
@@ -1191,7 +1191,7 @@ def diff_bundled_skill(name: str) -> dict:
             "diffs": [],
             "message": (
                 f"'{name}' is not a tracked bundled skill (no stock version to "
-                f"diff against). Hub-installed skills use `hermes skills inspect`."
+                f"diff against). Hub-installed skills use `pilotage skills inspect`."
             ),
         }
     dest = _compute_relative_dest(bundled_src, bundled_dir)
@@ -1266,10 +1266,10 @@ def diff_bundled_skill(name: str) -> dict:
 def set_bundled_skills_opt_out(enabled: bool) -> dict:
     """Toggle the .no-bundled-skills opt-out marker for the active profile.
 
-    When ``enabled`` is True, writes HERMES_HOME/.no-bundled-skills so the
-    installer, ``hermes update``, and any direct sync stop seeding bundled
+    When ``enabled`` is True, writes PILOTAGE_HOME/.no-bundled-skills so the
+    installer, ``pilotage update``, and any direct sync stop seeding bundled
     skills. When False, removes the marker so seeding resumes on the next
-    sync. This is the on-disk-state half of ``hermes skills opt-out`` /
+    sync. This is the on-disk-state half of ``pilotage skills opt-out`` /
     ``opt-in``; removal of already-present skills is a separate, explicit
     step (see ``remove_pristine_bundled_skills``).
 
@@ -1277,15 +1277,15 @@ def set_bundled_skills_opt_out(enabled: bool) -> dict:
         dict with keys: ok (bool), changed (bool), marker (str path),
                         message (str).
     """
-    marker = HERMES_HOME / NO_BUNDLED_SKILLS_MARKER
+    marker = PILOTAGE_HOME / NO_BUNDLED_SKILLS_MARKER
     existed = marker.exists()
     try:
         if enabled:
-            HERMES_HOME.mkdir(parents=True, exist_ok=True)
+            PILOTAGE_HOME.mkdir(parents=True, exist_ok=True)
             marker.write_text(
                 "This profile opted out of bundled-skill seeding "
-                "(`hermes skills opt-out`).\n"
-                "Delete this file to re-enable sync on the next `hermes update`.\n",
+                "(`pilotage skills opt-out`).\n"
+                "Delete this file to re-enable sync on the next `pilotage update`.\n",
                 encoding="utf-8",
             )
             changed = not existed
@@ -1300,7 +1300,7 @@ def set_bundled_skills_opt_out(enabled: bool) -> dict:
                 marker.unlink()
             changed = existed
             message = (
-                "Opted back in. The next `hermes update` (or `hermes skills "
+                "Opted back in. The next `pilotage update` (or `pilotage skills "
                 "opt-in --sync`) will re-seed bundled skills."
                 if changed
                 else "Not opted out — no marker to remove."
@@ -1315,7 +1315,7 @@ def set_bundled_skills_opt_out(enabled: bool) -> dict:
 
 def is_bundled_skills_opt_out() -> bool:
     """Return True if the active profile carries the opt-out marker."""
-    return (HERMES_HOME / NO_BUNDLED_SKILLS_MARKER).exists()
+    return (PILOTAGE_HOME / NO_BUNDLED_SKILLS_MARKER).exists()
 
 
 def remove_pristine_bundled_skills(dry_run: bool = False) -> dict:
@@ -1389,7 +1389,7 @@ def remove_pristine_bundled_skills(dry_run: bool = False) -> dict:
 
 
 if __name__ == "__main__":
-    print("Syncing bundled skills into ~/.hermes/skills/ ...")
+    print("Syncing bundled skills into ~/.pilotage/skills/ ...")
     result = sync_skills(quiet=False)
     parts = [
         f"{len(result['copied'])} new",

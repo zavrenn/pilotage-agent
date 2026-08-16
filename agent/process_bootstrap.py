@@ -63,7 +63,7 @@ class _OpenAIProxy:
 class _SafeWriter:
     """Transparent stdio wrapper that catches OSError/ValueError from broken pipes.
 
-    When hermes-agent runs as a systemd service, Docker container, or headless
+    When pilotage-agent runs as a systemd service, Docker container, or headless
     daemon, the stdout/stderr pipe can become unavailable (idle timeout, buffer
     exhaustion, socket reset). Any print() call then raises
     ``OSError: [Errno 5] Input/output error``, which can crash agent setup or
@@ -165,7 +165,7 @@ def build_keepalive_http_client(
 
     ``verify`` is forwarded to httpx so auxiliary-client calls (compression,
     vision, web_extract, title generation, etc.) honor the same per-provider
-    ``ssl_ca_cert`` / ``ssl_verify`` and ``HERMES_CA_BUNDLE`` settings the main
+    ``ssl_ca_cert`` / ``ssl_verify`` and ``PILOTAGE_CA_BUNDLE`` settings the main
     client uses. It is passed on the client AND on the plain no-proxy mounts
     (a mounted transport owns the SSL context for its scheme).
     """

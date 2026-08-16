@@ -2,7 +2,7 @@
 /venv/
 /venv.old/
 /venv.stale.runtime-*/
-/.hermes-runtime/
+/.pilotage-runtime/
 /_pycache/
 *.pyc*
 __pycache__/
@@ -19,13 +19,13 @@ act/
 .env.production.local
 .env.development
 .env.test
-.hermes-docker/
+.pilotage-docker/
 .notebooklm-home/
 .notebooklm-cli-venv/
 .notebooklm-playwright/
 .pip-cache/
 .uv-cache/
-compose.hermes.local.yml
+compose.pilotage.local.yml
 export*
 __pycache__/model_tools.cpython-310.pyc
 __pycache__/web_tools.cpython-310.pyc
@@ -33,14 +33,14 @@ logs/
 data/
 # Bundled community plugin index seed (shipped as package data) — the bare
 # `data/` pattern above would otherwise swallow it.
-!hermes_cli/data/
-!hermes_cli/data/plugin_index.json
+!pilotage_cli/data/
+!pilotage_cli/data/plugin_index.json
 .pytest_cache/
 test_durations.json
 .pytest-cache/
 tmp/
 temp_vision_images/
-hermes-*/*
+pilotage-*/*
 examples/
 tests/quick_test_dataset.jsonl
 tests/sample_dataset.jsonl
@@ -62,7 +62,7 @@ agent-browser/
 privvy*
 images/
 __pycache__/
-hermes_agent.egg-info/
+pilotage_agent.egg-info/
 wandb/
 testlogs
 playwright-report/
@@ -73,14 +73,14 @@ test-results/
 # CLI config (may contain sensitive SSH paths)
 cli-config.yaml
 
-# Skills Hub state (lives in ~/.hermes/skills/.hub/ at runtime, but just in case)
+# Skills Hub state (lives in ~/.pilotage/skills/.hub/ at runtime, but just in case)
 skills/.hub/
 ignored/
 .worktrees/
 environments/benchmarks/evals/
 
 # Web UI build output
-hermes_cli/web_dist/
+pilotage_cli/web_dist/
 # Cross-process web UI build lock (flock target, always empty)
 .web_ui_build.lock
 
@@ -125,27 +125,27 @@ models-dev-upstream/
 opencode.json
 config/mcporter.json
 
-hermes_cli/tui_dist/*
-hermes_cli/scripts/
+pilotage_cli/tui_dist/*
+pilotage_cli/scripts/
 docs/superpowers/*
-# Working directory for the Hermes Agent's session state (~/.hermes/ at runtime;
+# Working directory for the Pilotage Agent's session state (~/.pilotage/ at runtime;
 # also created in-repo when an agent operates in this checkout). Plans, audit
 # logs, and per-session caches are never artifacts of the codebase.
-.hermes/
+.pilotage/
 
 # Desktop/bootstrap install marker written into the managed checkout root by the
-# bootstrap installer. It is Hermes-managed runtime state, never a code change —
-# ignore it so `hermes update`'s `git stash push --include-untracked` does not
+# bootstrap installer. It is Pilotage-managed runtime state, never a code change —
+# ignore it so `pilotage update`'s `git stash push --include-untracked` does not
 # treat it as a local edit and autostash it on every run (#38529).
 
 # Persistent dev sandbox dir (scripts/dev-sandbox.sh --persistent)
-.hermes-sandbox/
+.pilotage-sandbox/
 # Sandbox dirs used by the install/update E2E (tests/install/). The suffix is
 # the route name, so each route gets its own tree and two can run at once.
-.hermes-sandbox-e2e*/
+.pilotage-sandbox-e2e*/
 
 # Interrupted-update breadcrumb + recovery lock written next to the shared venv
-# by `hermes update` / launch-time self-heal. Runtime state, never a code change
+# by `pilotage update` / launch-time self-heal. Runtime state, never a code change
 # — ignore so `git status` stays clean and update's autostash skips them.
 .update-incomplete
 .update-incomplete.lock
@@ -157,7 +157,7 @@ docs/superpowers/*
 
 # Installer-written method stamp in the managed checkout root (scripts/install.sh).
 # Runtime metadata only — never a code change. Ignore so `git status` stays clean
-# and `hermes update`'s untracked autostash does not treat it as a local edit (#66189 / #54855).
+# and `pilotage update`'s untracked autostash does not treat it as a local edit (#66189 / #54855).
 /.install_method
 
 # Tool Search live-test harness output — non-deterministic model transcripts,
@@ -167,12 +167,12 @@ scripts/out/
 # Per-release changelog drafts. These exist only transiently during a release
 # cut (passed to `gh release create --notes-file`); the GitHub Release itself
 # stores the published notes. They are not a build artifact and must never be
-# committed to the repo root. See the hermes-release skill.
+# committed to the repo root. See the pilotage-release skill.
 RELEASE_v*.md
 
 # PR infographics are rendered locally and embedded in PR descriptions via the
 # image-provider (fal.media) URL — they are NEVER committed to the repo. The
-# PR body is the archive. See the hermes-agent-dev skill's
+# PR body is the archive. See the pilotage-agent-dev skill's
 # pr-infographic-workflow reference (storage rule + lapse #8 / #COMMIT-1).
 #
 # Spelling variants are listed because a single `infographic/` pattern was
@@ -184,7 +184,7 @@ infographics/
 infograficos/
 infografico/
 native/fts5_cjk/*.so
-# Runtime marker written by hermes update when a lazy dependency refresh is
+# Runtime marker written by pilotage update when a lazy dependency refresh is
 # interrupted; consumed by launch-time recovery. Never commit it (was tracked
 # by accident via 3a69e34702, removed in the #72002 salvage).
 .lazy-refresh-incomplete

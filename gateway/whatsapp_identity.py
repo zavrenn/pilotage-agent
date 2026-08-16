@@ -25,7 +25,7 @@ Public helpers:
 Plugins that need per-sender behaviour on WhatsApp (role-based routing,
 per-contact authorisation, policy gating in a gateway hook) should use
 ``canonical_whatsapp_identifier`` so their bookkeeping lines up with
-Hermes' own session keys.
+Pilotage' own session keys.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # full-width digits / Unicode word chars can't sneak through.
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9@.+\-]+$")
 
-from hermes_constants import get_hermes_dir
+from pilotage_constants import get_pilotage_dir
 
 
 def normalize_whatsapp_identifier(value: str) -> str:
@@ -122,7 +122,7 @@ def expand_whatsapp_aliases(identifier: str) -> Set[str]:
     """Resolve WhatsApp phone/LID aliases via bridge session mapping files.
 
     Returns the set of all identifiers transitively reachable through the
-    bridge's ``$HERMES_HOME/whatsapp/session/lid-mapping-*.json`` files,
+    bridge's ``$PILOTAGE_HOME/whatsapp/session/lid-mapping-*.json`` files,
     starting from ``identifier``. The result always includes the
     normalized input itself, so callers can safely ``in`` check against
     the return value without a separate fallback branch.
@@ -133,7 +133,7 @@ def expand_whatsapp_aliases(identifier: str) -> Set[str]:
     if not normalized:
         return set()
 
-    session_dir = get_hermes_dir("platforms/whatsapp/session", "whatsapp/session")
+    session_dir = get_pilotage_dir("platforms/whatsapp/session", "whatsapp/session")
     resolved: Set[str] = set()
     queue = [normalized]
 
@@ -184,11 +184,11 @@ def canonical_whatsapp_identifier(identifier: str) -> str:
     (numeric-preferred) alias as the canonical identity.
     :func:`gateway.session.build_session_key` uses this for both WhatsApp
     DM chat_ids and WhatsApp group participant_ids, so callers get the
-    same session-key identity Hermes itself uses.
+    same session-key identity Pilotage itself uses.
 
     Plugins that need per-sender behaviour (role-based routing,
     authorisation, per-contact policy) should use this so their
-    bookkeeping lines up with Hermes' session bookkeeping even when
+    bookkeeping lines up with Pilotage' session bookkeeping even when
     the bridge reshuffles aliases.
 
     Returns an empty string if ``identifier`` normalizes to empty. If no

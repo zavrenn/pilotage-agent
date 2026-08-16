@@ -2,7 +2,7 @@
 
 Spill files (oversized terminal output, hook context, subagent summaries,
 web_extract full text) are written into predictable, world-discoverable
-directories under ``~/.hermes``. A plain ``open(path, "w")`` /
+directories under ``~/.pilotage``. A plain ``open(path, "w")`` /
 ``Path.write_text`` there follows a pre-planted symlink, letting any local
 process that can write to the spill directory redirect our write onto an
 arbitrary file owned by the user (``~/.bashrc``, ``authorized_keys``, ...).

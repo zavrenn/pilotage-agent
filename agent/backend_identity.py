@@ -1,6 +1,6 @@
 """Single owner for backend identity and failure-scoped skip decisions.
 
-Every fallback / dedup / skip / quarantine decision in Hermes ultimately asks
+Every fallback / dedup / skip / quarantine decision in Pilotage ultimately asks
 one question: **"is this candidate the same backend as the one that failed,
 along the axis that failure invalidated?"**  Before this module, that
 question was re-implemented inline at six call sites across four subsystems,
@@ -122,7 +122,7 @@ def _both_first_class(a: BackendIdentity, b: BackendIdentity) -> bool:
     if not a.provider or not b.provider or a.provider == b.provider:
         return False
     try:
-        from hermes_cli.auth import PROVIDER_REGISTRY
+        from pilotage_cli.auth import PROVIDER_REGISTRY
 
         return a.provider in PROVIDER_REGISTRY and b.provider in PROVIDER_REGISTRY
     except Exception:

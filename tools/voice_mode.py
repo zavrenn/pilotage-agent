@@ -118,14 +118,14 @@ def _default_input_samplerate(sd) -> int:
     return SAMPLE_RATE
 
 
-from hermes_constants import is_termux as _is_termux_environment
+from pilotage_constants import is_termux as _is_termux_environment
 
 
 def _voice_capture_install_hint() -> str:
     if _is_termux_environment():
         return "pkg install python-numpy portaudio && python -m pip install sounddevice"
-    # If we're running inside a venv (e.g. the bundled Hermes venv at
-    # ~/.hermes/profiles/<name>/hermes-agent/venv/), `pip install` on the
+    # If we're running inside a venv (e.g. the bundled Pilotage venv at
+    # ~/.pilotage/profiles/<name>/pilotage-agent/venv/), `pip install` on the
     # user's PATH won't reach the right site-packages — the bare hint sends
     # them off to whichever Python their shell resolves first, which on macOS
     # is often a system Python under Rosetta with a totally separate wheel
@@ -302,7 +302,7 @@ def detect_audio_environment() -> dict:
             warnings.append(
                 "Running over SSH -- no audio devices available.\n"
                 "  If a sound server (PulseAudio/PipeWire) is running on this host,\n"
-                "  point Hermes at it, e.g.:\n"
+                "  point Pilotage at it, e.g.:\n"
                 "    export XDG_RUNTIME_DIR=/run/user/$(id -u)\n"
                 "    # or: export PULSE_SERVER=unix:$XDG_RUNTIME_DIR/pulse/native"
             )
@@ -311,7 +311,7 @@ def detect_audio_environment() -> dict:
     # When the user mounts a PulseAudio/PipeWire socket into the container
     # and points PULSE_SERVER / PIPEWIRE_REMOTE at it, audio works fine
     # (issue #21203).  Only block when no forwarding is configured.
-    from hermes_constants import is_container
+    from pilotage_constants import is_container
     if is_container():
         if has_forwarded_audio:
             notices.append("Running inside container (Docker/Podman/LXC) with host audio forwarding")
@@ -434,7 +434,7 @@ SILENCE_RMS_THRESHOLD = 200  # RMS below this = silence (int16 range 0-32767)
 SILENCE_DURATION_SECONDS = 3.0  # Seconds of continuous silence before auto-stop
 
 # Temp directory for voice recordings
-_TEMP_DIR = os.path.join(tempfile.gettempdir(), "hermes_voice")
+_TEMP_DIR = os.path.join(tempfile.gettempdir(), "pilotage_voice")
 
 
 # ============================================================================
@@ -447,12 +447,12 @@ def _get_beep_volume() -> float:
     """Read ``voice.beep_volume`` from config.yaml; clamps to 0.0-1.0.
 
     Defaults to 0.3 when the key is missing, invalid, or when the config
-    system can't be imported (e.g. broken ~/.hermes/config.yaml during a
+    system can't be imported (e.g. broken ~/.pilotage/config.yaml during a
     partial install). Failures fall back silently so the audio cue never
     breaks the voice loop on a degenerate config.
     """
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
         voice_cfg = load_config().get("voice", {})
         if not isinstance(voice_cfg, dict):
             return _DEFAULT_BEEP_VOLUME
@@ -577,7 +577,7 @@ _thinking_stop: Optional[threading.Event] = None
 def thinking_sound_enabled() -> bool:
     """Config gate: ``voice.thinking_sound`` (default True)."""
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
         from utils import is_truthy_value
 
         voice_cfg = load_config().get("voice", {})
@@ -859,7 +859,7 @@ class AudioRecorder:
         """Whether the configured hard recording-length cap has elapsed.
 
         ``voice.max_recording_seconds`` is applied by the CLI before each
-        recording (see ``HermesCLI._voice_start_recording``). A value <= 0
+        recording (see ``PilotageCLI._voice_start_recording``). A value <= 0
         (or unset) disables the cap, preserving the previous unbounded
         behaviour.
         """
@@ -1274,7 +1274,7 @@ def _load_voice_stop_phrases() -> tuple:
     default rather than crashing the voice loop.
     """
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
         voice_cfg = load_config().get("voice", {})
         if isinstance(voice_cfg, dict):
             raw = voice_cfg.get("stop_phrases", DEFAULT_VOICE_STOP_PHRASES)
@@ -1312,7 +1312,7 @@ def is_voice_stop_phrase(transcript: str, stop_phrases: Optional[tuple] = None) 
 
 
 # Similarity ratio (difflib.SequenceMatcher, 0..1) above which a
-# playback-phase barge transcript is treated as a self-capture of Hermes'
+# playback-phase barge transcript is treated as a self-capture of Pilotage'
 # own just-spoken TTS rather than genuine user speech. See #75780: the
 # full-duplex listener has no acoustic echo cancellation, so speaker bleed
 # on the mic can trip the barge trigger and get transcribed nearly
@@ -1342,9 +1342,9 @@ def is_tts_echo(
     """Return True when *transcript* looks like a self-capture of *spoken_text*.
 
     Compares a playback-phase barge-in transcript against the TTS text
-    Hermes just spoke using a character-level similarity ratio, which works
+    Pilotage just spoke using a character-level similarity ratio, which works
     across languages without word-tokenization. A genuine user interjection
-    is very unlikely to closely match Hermes' own words, so a high ratio is
+    is very unlikely to closely match Pilotage' own words, so a high ratio is
     a strong signal of speaker-bleed self-capture (fail-closed guard for the
     playback-phase full-duplex listener, which has no acoustic echo
     cancellation; see #75780).
@@ -1707,7 +1707,7 @@ def _play_audio_file_impl(file_path: str) -> bool:
     # ffmpeg are available, convert the audio to a uniquely-named WAV in the
     # Windows %TEMP% directory and play it via Media.SoundPlayer -- which
     # always has a working audio device on the Windows host (#17608).
-    # A unique suffix prevents concurrent Hermes TTS calls from colliding on
+    # A unique suffix prevents concurrent Pilotage TTS calls from colliding on
     # the same filename. The WAV is deleted in the shell pipeline
     # unconditionally (success or failure), and the ORIGINAL ffmpeg/
     # powershell exit status is preserved past that cleanup so the player
@@ -1727,7 +1727,7 @@ def _play_audio_file_impl(file_path: str) -> bool:
                 if _win_tmp_wsl:
                     # Unique suffix prevents concurrent TTS playback collision.
                     _unique = uuid.uuid4().hex[:8]
-                    _wsl_wav = os.path.join(_win_tmp_wsl, f"hermes-tts-{_unique}.wav")
+                    _wsl_wav = os.path.join(_win_tmp_wsl, f"pilotage-tts-{_unique}.wav")
                     _win_wav = subprocess.check_output(
                         ["wslpath", "-w", _wsl_wav],
                         stderr=subprocess.DEVNULL, timeout=3,
@@ -1765,14 +1765,14 @@ def _play_audio_file_impl(file_path: str) -> bool:
             try:
                 # Sibling of TTS/STT credential scrub (#70342 / #56332): system
                 # audio players must not inherit gateway tokens / API keys.
-                from tools.environments.local import hermes_subprocess_env
+                from tools.environments.local import pilotage_subprocess_env
 
                 proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL,
-                    env=hermes_subprocess_env(inherit_credentials=False),
+                    env=pilotage_subprocess_env(inherit_credentials=False),
                 )
                 with _playback_lock:
                     _active_playback = proc
@@ -2004,12 +2004,12 @@ DEFAULT_BARGE_MULTIPLIER = 3.0
 
 
 def _voice_debug_enabled() -> bool:
-    return os.environ.get("HERMES_VOICE_DEBUG", "").strip() == "1"
+    return os.environ.get("PILOTAGE_VOICE_DEBUG", "").strip() == "1"
 
 
 def _vad_log(msg: str) -> None:
     """VAD decision-point diagnostic — always logger.debug, plus stderr when
-    HERMES_VOICE_DEBUG=1 so live hardware tuning doesn't need a log tail."""
+    PILOTAGE_VOICE_DEBUG=1 so live hardware tuning doesn't need a log tail."""
     logger.debug(msg)
     if _voice_debug_enabled():
         try:
@@ -2213,7 +2213,7 @@ def _check_plugin_stt_provider(provider: str) -> bool:
         return False
     try:
         from agent.transcription_registry import get_provider
-        from hermes_cli.plugins import _ensure_plugins_discovered
+        from pilotage_cli.plugins import _ensure_plugins_discovered
 
         _ensure_plugins_discovered()
         plugin_provider = get_provider(key)

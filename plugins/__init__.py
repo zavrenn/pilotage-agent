@@ -1,1 +1,1 @@
-# Hermes plugins package
+# Pilotage plugins package

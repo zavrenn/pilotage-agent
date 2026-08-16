@@ -8,7 +8,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from hermes_cli.middleware import OBSERVER_SCHEMA_VERSION
+from pilotage_cli.middleware import OBSERVER_SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def _worker(dispatcher: _ConsumerDispatcher) -> None:
 
 def _registered_callbacks(hook_name: str) -> tuple[Callable[..., Any], ...]:
     try:
-        from hermes_cli import plugins
+        from pilotage_cli import plugins
 
         return plugins.iter_hook_callbacks(hook_name)
     except Exception:
@@ -157,7 +157,7 @@ def has_reasoning_stream_observer_hooks() -> bool:
 def stream_reasoning_deltas_enabled() -> bool:
     """Return True only when the user opted plugins into reasoning deltas."""
     try:
-        from hermes_cli import config as config_mod
+        from pilotage_cli import config as config_mod
 
         config = config_mod.load_config()
         return bool(config_mod.cfg_get(config, "plugins", "stream_reasoning_deltas", default=False))

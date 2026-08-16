@@ -45,12 +45,12 @@ def _bounded_prompt_cache_key(value: Any) -> Optional[str]:
     return f"pck_{digest}"
 
 
-# Wire-name used when Hermes keeps client-side web_search on xAI Responses.
+# Wire-name used when Pilotage keeps client-side web_search on xAI Responses.
 # A function literally named ``web_search`` collides with Grok's native
 # server-side tool (incomplete hang or HTTP 400 duplicate names); this alias
-# avoids that while still dispatching through Hermes's configured provider
+# avoids that while still dispatching through Pilotage's configured provider
 # (Firecrawl / Tavily / …). Mapped back to ``web_search`` in normalize_response.
-_XAI_CLIENT_WEB_SEARCH_ALIAS = "hermes_web_search"
+_XAI_CLIENT_WEB_SEARCH_ALIAS = "pilotage_web_search"
 
 
 def _xai_prefers_native_web_search() -> bool:
@@ -434,7 +434,7 @@ class ResponsesApiTransport(ProviderTransport):
             from agent.model_metadata import is_grok_46_family
 
             # Grok 4.6 accepts xhigh as a wire value. Older Grok models top out
-            # at high, while max/ultra remain Hermes aliases for every xAI model.
+            # at high, while max/ultra remain Pilotage aliases for every xAI model.
             if not is_grok_46_family(model):
                 _effort_clamp["xhigh"] = "high"
             _effort_clamp.update({"max": "high", "ultra": "high"})
@@ -442,13 +442,13 @@ class ResponsesApiTransport(ProviderTransport):
             # Actual Computer relays to SGLang/vLLM backends that accept only
             # none/low/medium/high/max for reasoning effort — a forwarded
             # xhigh/ultra fails with a wrapped HTTP 400 ("Expecting value:
-            # line 1 column 1"). Clamp Hermes' wider set to the supported one.
+            # line 1 column 1"). Clamp Pilotage' wider set to the supported one.
             _effort_clamp.update({"xhigh": "high", "ultra": "max"})
         reasoning_effort = _effort_clamp.get(reasoning_effort, reasoning_effort)
 
         response_tools = _responses_tools(tools)
 
-        # xAI server-side web search vs Hermes web providers.
+        # xAI server-side web search vs Pilotage web providers.
         #
         # grok models on xAI's /v1/responses surface have a *native*,
         # server-executed web search.  A client-side function literally named
@@ -464,9 +464,9 @@ class ResponsesApiTransport(ProviderTransport):
         #    xAI's built-in instead. 1:1 swap only when client ``web_search``
         #    was already present — never an additive grant.
         # 2. **Client** (Firecrawl / Tavily / Exa / … configured or resolved):
-        #    keep Hermes dispatch so ``web.backend`` / ``web.search_backend``
+        #    keep Pilotage dispatch so ``web.backend`` / ``web.search_backend``
         #    is honored, but rename the wire tool to
-        #    ``hermes_web_search`` so Grok cannot hijack the name. The alias
+        #    ``pilotage_web_search`` so Grok cannot hijack the name. The alias
         #    is mapped back to ``web_search`` in ``normalize_response``.
         if is_xai_responses and response_tools:
             has_client_web_search = any(
@@ -711,7 +711,7 @@ class ResponsesApiTransport(ProviderTransport):
                 if hasattr(tc, "response_item_id") and tc.response_item_id:
                     provider_data["response_item_id"] = tc.response_item_id
                 name = tc.function.name if hasattr(tc, "function") else getattr(tc, "name", "")
-                # Undo the xAI client-path wire alias so Hermes dispatches
+                # Undo the xAI client-path wire alias so Pilotage dispatches
                 # the real ``web_search`` tool (Firecrawl / etc.).
                 if name == _XAI_CLIENT_WEB_SEARCH_ALIAS:
                     name = "web_search"

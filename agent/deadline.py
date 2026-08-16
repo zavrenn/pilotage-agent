@@ -12,7 +12,7 @@ migrate onto in later phases:
 
 * :func:`resolve_timeout` — one config-first resolution path for timeout
   values (``timeouts:`` section in config.yaml > legacy env var > default),
-  so new surfaces stop inventing ``HERMES_*_TIMEOUT`` env vars (".env is for
+  so new surfaces stop inventing ``PILOTAGE_*_TIMEOUT`` env vars (".env is for
   secrets only") and hardcoded literals stop ignoring user config
   (#63302, #53161, #43272 class).
 
@@ -57,7 +57,7 @@ Design invariants:
   (the #59549 / #80323 misattribution class).
 * ``None`` timeout means unbounded, and non-positive resolved values are
   normalized to ``None`` (matching the existing
-  ``HERMES_CONCURRENT_TOOL_TIMEOUT_S`` convention).
+  ``PILOTAGE_CONCURRENT_TOOL_TIMEOUT_S`` convention).
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ class DeadlineExpired(TimeoutError):
 
     Distinct from transport/provider timeout types on purpose: when this is
     raised (or a :class:`BoundedResult` reports ``timed_out``), the timeout
-    was Hermes's own bound — error classification must not attribute it to
+    was Pilotage's own bound — error classification must not attribute it to
     the provider (#59549 / #80323 misattribution class).
     """
 
@@ -143,7 +143,7 @@ def clamp_timeout(timeout: Optional[float]) -> Optional[float]:
 
     * ``None`` stays ``None`` (unbounded).
     * Non-positive values become ``None`` (unbounded) — matching the existing
-      ``HERMES_CONCURRENT_TOOL_TIMEOUT_S`` "0 disables the bound" convention.
+      ``PILOTAGE_CONCURRENT_TOOL_TIMEOUT_S`` "0 disables the bound" convention.
     * Values above :data:`MAX_SAFE_TIMEOUT_S` are capped so they can never
       overflow ``time_t`` inside ``Lock.acquire`` / ``Thread.join`` on macOS
       (#83220).
@@ -177,7 +177,7 @@ def _timeouts_section() -> dict:
     the call path the timeout was protecting.
     """
     try:
-        from hermes_cli.config import load_config_readonly
+        from pilotage_cli.config import load_config_readonly
 
         section = load_config_readonly().get("timeouts")
         return section if isinstance(section, dict) else {}
@@ -211,7 +211,7 @@ def resolve_timeout(
        ``tools.concurrent_batch`` reads ``timeouts: {tools: {concurrent_batch: ...}}``)
     2. ``env_var`` when set and non-empty (legacy bridge — internal mechanism
        and back-compat only; new surfaces must not grow new user-facing
-       ``HERMES_*`` timeout env vars)
+       ``PILOTAGE_*`` timeout env vars)
     3. ``default``
 
     The winning value is passed through :func:`clamp_timeout`, so ``0`` or a
@@ -473,7 +473,7 @@ def kill_process_tree(pid: int, *, sig: Optional[int] = None) -> bool:
     """
     if sys.platform == "win32":
         try:
-            from hermes_cli._subprocess_compat import windows_hide_flags
+            from pilotage_cli._subprocess_compat import windows_hide_flags
 
             creationflags = windows_hide_flags()
         except Exception:

@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from hermes_constants import display_hermes_home
+from pilotage_constants import display_pilotage_home
 from agent.prompt_cache_boundary import register_stable_prefix
 from agent.skill_preprocessing import (
     expand_inline_shell as _expand_inline_shell,
@@ -30,7 +30,7 @@ _SKILL_MULTI_HYPHEN = re.compile(r"-{2,}")
 # ---------------------------------------------------------------------------
 # Skill-scaffolding markers and the canonical extractor.
 #
-# When a user invokes a /skill (or /bundle), Hermes expands the turn into a
+# When a user invokes a /skill (or /bundle), Pilotage expands the turn into a
 # model-facing message that embeds the full skill body plus scaffolding. That
 # expanded text is what flows into the agent loop — and into memory providers
 # via MemoryManager. Providers that store or embed the raw user turn (mem0,
@@ -43,7 +43,7 @@ _SKILL_MULTI_HYPHEN = re.compile(r"-{2,}")
 # (``_build_skill_message`` here, ``build_bundle_invocation_message`` in
 # agent/skill_bundles.py). They are co-located with the single-skill builder
 # on purpose, and the bundle markers are asserted against the bundle builder in
-# tests/openviking_plugin/test_openviking.py::test_skill_markers_match_hermes_scaffolding.
+# tests/openviking_plugin/test_openviking.py::test_skill_markers_match_pilotage_scaffolding.
 # ---------------------------------------------------------------------------
 _SKILL_INVOCATION_PREFIX = "[IMPORTANT: The user has invoked the "
 _SINGLE_SKILL_MARKER = "The full skill content is loaded below.]"
@@ -191,8 +191,8 @@ def _resolve_skill_commands_platform() -> Optional[str]:
     :func:`get_skill_commands` can drop a stale cache that was populated
     for a different platform's ``skills.platform_disabled`` view (#14536).
 
-    Resolves from (in order) ``HERMES_PLATFORM`` env var and
-    ``HERMES_SESSION_PLATFORM`` from the gateway session context. Returns
+    Resolves from (in order) ``PILOTAGE_PLATFORM`` env var and
+    ``PILOTAGE_SESSION_PLATFORM`` from the gateway session context. Returns
     ``None`` when no platform scope is active (e.g. classic CLI, RL
     rollouts, standalone scripts).
     """
@@ -200,11 +200,11 @@ def _resolve_skill_commands_platform() -> Optional[str]:
         from gateway.session_context import get_session_env
 
         resolved_platform = (
-            os.getenv("HERMES_PLATFORM")
-            or get_session_env("HERMES_SESSION_PLATFORM")
+            os.getenv("PILOTAGE_PLATFORM")
+            or get_session_env("PILOTAGE_SESSION_PLATFORM")
         )
     except Exception:
-        resolved_platform = os.getenv("HERMES_PLATFORM")
+        resolved_platform = os.getenv("PILOTAGE_PLATFORM")
     return resolved_platform or None
 
 def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tuple[dict[str, Any], Path | None, str] | None:
@@ -250,7 +250,7 @@ def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tu
 def _inject_skill_config(loaded_skill: dict[str, Any], parts: list[str]) -> None:
     """Resolve and inject skill-declared config values into the message parts.
 
-    If the loaded skill's frontmatter declares ``metadata.hermes.config``
+    If the loaded skill's frontmatter declares ``metadata.pilotage.config``
     entries, their current values (from config.yaml or defaults) are appended
     as a ``[Skill config: ...]`` block so the agent knows the configured values
     without needing to read config.yaml itself.
@@ -276,7 +276,7 @@ def _inject_skill_config(loaded_skill: dict[str, Any], parts: list[str]) -> None
         if not resolved:
             return
 
-        lines = ["", f"[Skill config (from {display_hermes_home()}/config.yaml):"]
+        lines = ["", f"[Skill config (from {display_pilotage_home()}/config.yaml):"]
         for key, value in resolved.items():
             display_val = str(value) if value else "(not set)"
             lines.append(f"  {key} = {display_val}")
@@ -400,7 +400,7 @@ def _build_skill_message(
 
 
 def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
-    """Scan ~/.hermes/skills/ and return a mapping of /command -> skill info.
+    """Scan ~/.pilotage/skills/ and return a mapping of /command -> skill info.
 
     Returns:
         Dict mapping "/skill-name" to {name, description, skill_md_path, skill_dir}.
@@ -411,7 +411,7 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
     try:
         from tools.skills_tool import SKILLS_DIR, _parse_frontmatter, skill_matches_platform, skill_matches_environment, _get_disabled_skill_names
         from agent.skill_utils import get_external_skills_dirs, iter_skill_index_files
-        from hermes_cli.commands import resolve_command
+        from pilotage_cli.commands import resolve_command
         disabled = _get_disabled_skill_names()
         seen_names: set = set()
 
@@ -458,14 +458,14 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
                     if not cmd_name:
                         continue
                     # Skip if this skill's auto-generated /command collides
-                    # with a core Hermes slash command (name or alias). The
+                    # with a core Pilotage slash command (name or alias). The
                     # skill remains fully loadable via /skill <name>.
                     # Uses resolve_command() so aliases and case variants are
                     # covered without maintaining a separate cache.
                     if resolve_command(cmd_name) is not None:
                         logger.warning(
                             "Skill %r generates slash command '/%s' which "
-                            "collides with a core Hermes command; skipping "
+                            "collides with a core Pilotage command; skipping "
                             "auto-registration. Use '/skill %s' instead.",
                             name, cmd_name, name,
                         )
@@ -513,7 +513,7 @@ def get_skill_commands() -> Dict[str, Dict[str, Any]]:
 def reload_skills() -> Dict[str, Any]:
     """Re-scan the skills directory and return a diff of what changed.
 
-    Rescans ``~/.hermes/skills/`` and any ``skills.external_dirs`` so the
+    Rescans ``~/.pilotage/skills/`` and any ``skills.external_dirs`` so the
     slash-command map (``agent.skill_commands._skill_commands``) reflects
     skills added or removed on disk.
 
@@ -783,8 +783,8 @@ def build_preloaded_skills_prompt(
     Disabled skills are treated the same as missing ones: this loads via a
     raw identifier straight into ``_load_skill_payload``, bypassing
     ``get_skill_commands()``'s scan-time disabled filter — mirrors the
-    bundle-invocation gate (#59156). Without this, ``hermes -s <skill>`` or
-    a deployment's ``HERMES_TUI_SKILLS`` env var could force-load a skill an
+    bundle-invocation gate (#59156). Without this, ``pilotage -s <skill>`` or
+    a deployment's ``PILOTAGE_TUI_SKILLS`` env var could force-load a skill an
     operator disabled via ``skills.disabled``/``skills.platform_disabled``.
     """
     prompt_parts: list[str] = []

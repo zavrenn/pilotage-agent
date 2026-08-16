@@ -11,7 +11,7 @@ instead of native tools, a missing author/license/metadata block, a
 marketing words in the description, ``platforms:`` gating vs POSIX-only
 primitives, and forbidden scaffolding files.
 
-Design contract (matches the Hermes "no lazy-reading escape hatches / don't
+Design contract (matches the Pilotage "no lazy-reading escape hatches / don't
 destroy the feature" posture):
 
 * Findings are **advisory** by default. ``lint_skill`` returns a list of
@@ -196,31 +196,31 @@ def _check_metadata_block(frontmatter: Dict[str, Any]) -> List[LintFinding]:
                 )
             )
     meta = frontmatter.get("metadata")
-    hermes_meta = meta.get("hermes") if isinstance(meta, dict) else None
-    if not isinstance(hermes_meta, dict):
+    pilotage_meta = meta.get("pilotage") if isinstance(meta, dict) else None
+    if not isinstance(pilotage_meta, dict):
         findings.append(
             LintFinding(
                 WARNING,
                 "missing-metadata",
-                "frontmatter is missing metadata.hermes.{tags, related_skills}.",
+                "frontmatter is missing metadata.pilotage.{tags, related_skills}.",
             )
         )
     else:
-        if "tags" not in hermes_meta:
+        if "tags" not in pilotage_meta:
             findings.append(
                 LintFinding(
-                    WARNING, "missing-metadata", "metadata.hermes.tags is missing."
+                    WARNING, "missing-metadata", "metadata.pilotage.tags is missing."
                 )
             )
     author = str(frontmatter.get("author", ""))
-    if author and author.strip().lower() in ("hermes", "agent", "hermes agent") and (
-        author != "Hermes Agent"
+    if author and author.strip().lower() in ("pilotage", "agent", "pilotage agent") and (
+        author != "Pilotage Agent"
     ):
         findings.append(
             LintFinding(
                 WARNING,
                 "author-caps",
-                f"author '{author}' should be 'Hermes Agent' (proper caps) "
+                f"author '{author}' should be 'Pilotage Agent' (proper caps) "
                 f"or a real contributor name.",
             )
         )

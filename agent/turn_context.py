@@ -473,7 +473,7 @@ def build_turn_context(
     # null; rebuilding from scratch" warning and a needless first-turn prefix
     # cache miss. (Issue #45499.)
 
-    # Tag log records on this thread with the session ID for ``hermes logs``.
+    # Tag log records on this thread with the session ID for ``pilotage logs``.
     set_session_context(agent.session_id)
 
     # Bind the skill write-origin ContextVar for this thread.
@@ -891,7 +891,7 @@ def build_turn_context(
         )
         _preflight_deferred = _defer_preflight(_preflight_tokens)
         # Codex app-server threads are compacted by the codex agent itself;
-        # Hermes only initiates compaction in "hermes" mode (#36801).
+        # Pilotage only initiates compaction in "pilotage" mode (#36801).
         _codex_native_auto = (
             getattr(agent, "api_mode", None) == "codex_app_server"
             and str(
@@ -941,8 +941,8 @@ def build_turn_context(
                 _compress_block_reason = f"cooldown:{_cooldown_secs:.0f}"
         elif _codex_native_auto:
             logger.info(
-                "Skipping Hermes preflight compression for codex app-server "
-                "(mode=%s); Hermes will not start thread compaction here.",
+                "Skipping Pilotage preflight compression for codex app-server "
+                "(mode=%s); Pilotage will not start thread compaction here.",
                 getattr(agent, "codex_app_server_auto_compaction", "native"),
             )
         else:
@@ -1171,7 +1171,7 @@ def build_turn_context(
     # Plugin hook: pre_llm_call (context injected into user message, not system prompt).
     plugin_user_context = ""
     try:
-        from hermes_cli.lifecycle import invoke_hook as _invoke_hook
+        from pilotage_cli.lifecycle import invoke_hook as _invoke_hook
         _pre_results = _invoke_hook(
             "pre_llm_call",
             session_id=agent.session_id,
@@ -1286,7 +1286,7 @@ def build_turn_context(
             pass
         # Deterministic, model-independent recall indicator: when memory was
         # actually injected this turn, tell the user — don't rely on the model
-        # to surface it. Rendered by Hermes (via _emit_status), so it always
+        # to surface it. Rendered by Pilotage (via _emit_status), so it always
         # shows and can't be silently dropped by the model.
         if ext_prefetch_cache:
             try:

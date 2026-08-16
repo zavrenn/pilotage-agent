@@ -22,17 +22,17 @@ OMIT_TEMPERATURE = object()
 
 
 def _profile_user_agent() -> str:
-    """Return a ``hermes-cli/<version>`` UA string, with a stable fallback.
+    """Return a ``pilotage-cli/<version>`` UA string, with a stable fallback.
 
     Used by ``ProviderProfile.fetch_models`` so the catalog probe is not
     served the default ``Python-urllib/<ver>`` UA — some providers
     (OpenCode Zen, etc.) sit behind a WAF that returns 403 for that.
     """
     try:
-        from hermes_cli import __version__ as _ver  # lazy: avoid layer cycle at import time
-        return f"hermes-cli/{_ver}"
+        from pilotage_cli import __version__ as _ver  # lazy: avoid layer cycle at import time
+        return f"pilotage-cli/{_ver}"
     except Exception:
-        return "hermes-cli"
+        return "pilotage-cli"
 
 
 @dataclass
@@ -231,7 +231,7 @@ class ProviderProfile:
         import json
         import urllib.request
 
-        from hermes_cli.urllib_security import open_credentialed_url
+        from pilotage_cli.urllib_security import open_credentialed_url
 
         req = urllib.request.Request(url)
         if api_key:
@@ -239,7 +239,7 @@ class ProviderProfile:
         req.add_header("Accept", "application/json")
         # Some providers (e.g. OpenCode Zen) sit behind a WAF that blocks
         # the default ``Python-urllib/<ver>`` User-Agent.  Set a generic
-        # hermes-cli UA so the catalog endpoint is reachable.
+        # pilotage-cli UA so the catalog endpoint is reachable.
         req.add_header("User-Agent", _profile_user_agent())
         for k, v in self.default_headers.items():
             req.add_header(k, v)

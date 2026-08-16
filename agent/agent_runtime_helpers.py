@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from hermes_cli.timeouts import get_provider_request_timeout
+from pilotage_cli.timeouts import get_provider_request_timeout
 from agent.message_sanitization import _FULL_ARGS_LOG_BOUND
 from agent.prompt_builder import format_steer_marker
 from agent.tool_dispatch_helpers import _trajectory_normalize_msg, make_tool_result_message
@@ -1928,7 +1928,7 @@ def dump_api_request_debug(
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         # Sanitize the session ID into a traversal-free path segment — it can
-        # originate from untrusted input (X-Hermes-Session-Id header), and an
+        # originate from untrusted input (X-Pilotage-Session-Id header), and an
         # unsanitized "../"-shaped ID would write the dump outside logs_dir.
         safe_sid = _ra()._safe_session_filename_component(agent.session_id)
         dump_file = agent.logs_dir / f"request_dump_{safe_sid}_{timestamp}.json"
@@ -1947,7 +1947,7 @@ def dump_api_request_debug(
 
         agent._vprint(f"{agent.log_prefix}🧾 Request debug dump written to: {dump_file}")
 
-        if env_var_enabled("HERMES_DUMP_REQUEST_STDOUT"):
+        if env_var_enabled("PILOTAGE_DUMP_REQUEST_STDOUT"):
             print(json.dumps(_redacted_payload, ensure_ascii=False, indent=2, default=str))
 
         return dump_file
@@ -2001,7 +2001,7 @@ VALID_CACHE_TTLS = ("5m", "1h")
 
 def _raw_cache_ttl_from_config() -> Any:
     """Read the raw ``prompt_caching.cache_ttl`` config value (may raise)."""
-    from hermes_cli.config import load_config_readonly
+    from pilotage_cli.config import load_config_readonly
 
     pc_cfg = load_config_readonly().get("prompt_caching", {}) or {}
     return pc_cfg.get("cache_ttl", "5m")
@@ -2203,9 +2203,9 @@ def anthropic_prompt_cache_policy(
     # the policy from the preset's real aggregator slot instead.
     if eff_provider.strip().lower() == "moa":
         try:
-            from hermes_cli.config import load_config as _load_moa_cfg
-            from hermes_cli.moa_config import resolve_moa_preset
-            from hermes_cli.runtime_provider import resolve_runtime_provider
+            from pilotage_cli.config import load_config as _load_moa_cfg
+            from pilotage_cli.moa_config import resolve_moa_preset
+            from pilotage_cli.runtime_provider import resolve_runtime_provider
 
             _preset = resolve_moa_preset(
                 _load_moa_cfg().get("moa") or {}, eff_model or None
@@ -2264,7 +2264,7 @@ def anthropic_prompt_cache_policy(
     )
 
     # A custom Anthropic-compatible route may use a bare model alias that is
-    # canonicalized only after Hermes sends the request. In that case model
+    # canonicalized only after Pilotage sends the request. In that case model
     # spelling cannot prove cache support. Honor an exact route+model
     # capability declaration instead; explicit false is authoritative too.
     # This preserves the runtime model id (and therefore request/cache keys)
@@ -2272,7 +2272,7 @@ def anthropic_prompt_cache_policy(
     custom_prompt_caching = None
     if is_anthropic_wire:
         try:
-            from hermes_cli.config import get_custom_provider_model_capability
+            from pilotage_cli.config import get_custom_provider_model_capability
 
             custom_prompt_caching = get_custom_provider_model_capability(
                 model=eff_model,
@@ -2459,7 +2459,7 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
         )
         if keepalive_http is not None:
             client_kwargs["http_client"] = keepalive_http
-    # Delegate all rate-limit / 5xx retry to hermes's outer conversation loop,
+    # Delegate all rate-limit / 5xx retry to pilotage's outer conversation loop,
     # which honors Retry-After and applies adaptive/jittered backoff. The OpenAI
     # SDK default (max_retries=2) uses its own 1-2s backoff that ignores
     # Retry-After and double-retries inside our loop — the same deadlock the
@@ -2484,7 +2484,7 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # keys — never override headers a caller deliberately set.
     try:
         if base_url_host_matches(str(client_kwargs.get("base_url", "")), "githubcopilot.com"):
-            from hermes_cli.models import copilot_default_headers
+            from pilotage_cli.models import copilot_default_headers
             existing = dict(client_kwargs.get("default_headers") or {})
             existing_lower = {k.lower() for k in existing}
             for hk, hv in copilot_default_headers().items():
@@ -2519,7 +2519,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     change persists across turns (unlike fallback which is
     turn-scoped).
     """
-    from hermes_cli.providers import determine_api_mode
+    from pilotage_cli.providers import determine_api_mode
 
     # ── Determine api_mode if not provided ──
     # Pass model so dual-wire providers (Nous Portal anthropic/* → Messages)
@@ -2696,7 +2696,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
             # the matching block in agent_init.py for the full rationale.
             if new_provider == "minimax-oauth" and isinstance(effective_key, str) and effective_key:
                 try:
-                    from hermes_cli.auth import build_minimax_oauth_token_provider
+                    from pilotage_cli.auth import build_minimax_oauth_token_provider
                     effective_key = build_minimax_oauth_token_provider()
                 except Exception as _mm_exc:  # noqa: BLE001
                     import logging as _logging
@@ -2724,7 +2724,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
                 "base_url": effective_base,
             }
             try:
-                from hermes_cli.config import (
+                from pilotage_cli.config import (
                     apply_custom_provider_tls_to_client_kwargs,
                     get_compatible_custom_providers,
                     load_config_readonly,
@@ -2768,7 +2768,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     # ── LM Studio: preload before probing context length ──
     _sm_custom_providers = None
     try:
-        from hermes_cli.config import (
+        from pilotage_cli.config import (
             get_compatible_custom_providers,
             get_custom_provider_context_length,
             load_config,
@@ -2820,7 +2820,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         from agent.model_metadata import get_model_context_length
         if _sm_custom_providers is None:
             try:
-                from hermes_cli.config import get_compatible_custom_providers, load_config
+                from pilotage_cli.config import get_compatible_custom_providers, load_config
                 _sm_custom_providers = get_compatible_custom_providers(load_config())
             except Exception:
                 _sm_custom_providers = None
@@ -2853,8 +2853,8 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     # resolved through the shared chokepoint (per-model > global; YAML
     # boolean False = disabled).
     try:
-        from hermes_constants import resolve_reasoning_config
-        from hermes_cli.config import load_config as _sm_load_config
+        from pilotage_constants import resolve_reasoning_config
+        from pilotage_cli.config import load_config as _sm_load_config
 
         _reasoning_cfg = _sm_load_config() or {}
         agent.reasoning_config = resolve_reasoning_config(_reasoning_cfg, agent.model)
@@ -2971,7 +2971,7 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
 
     _tool_middleware_trace = list(tool_request_middleware_trace or [])
     try:
-        from hermes_cli.middleware import apply_tool_request_middleware
+        from pilotage_cli.middleware import apply_tool_request_middleware
 
         if not skip_tool_request_middleware:
             _tool_request_mw = apply_tool_request_middleware(
@@ -2992,7 +2992,7 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     block_message: Optional[str] = None
     if not pre_tool_block_checked:
         try:
-            from hermes_cli.plugins import resolve_pre_tool_block
+            from pilotage_cli.plugins import resolve_pre_tool_block
             block_message = resolve_pre_tool_block(
                 function_name,
                 function_args,
@@ -3064,7 +3064,7 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
         def _execute(next_args: dict) -> Any:
             session_db = agent._get_session_db_for_recall()
             if not session_db:
-                from hermes_state import format_session_db_unavailable
+                from pilotage_state import format_session_db_unavailable
                 return _finish_agent_tool(json.dumps({"success": False, "error": format_session_db_unavailable()}), next_args)
             from tools.session_search_tool import session_search as _session_search
             return _finish_agent_tool(
@@ -3152,7 +3152,7 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     if skip_tool_execution_middleware:
         return _execute(function_args)
 
-    from hermes_cli.middleware import run_tool_execution_middleware
+    from pilotage_cli.middleware import run_tool_execution_middleware
 
     return run_tool_execution_middleware(
         function_name,
@@ -3457,7 +3457,7 @@ def sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     # function_call_output, producing the gateway's HTTP 400
     # "No tool call found for function call output with call_id ...".
     #
-    # We do NOT drop the call: hermes' own dispatch loop intentionally keeps an
+    # We do NOT drop the call: pilotage' own dispatch loop intentionally keeps an
     # empty-name call paired with a synthesized anti-priming tool result
     # ("tool name was empty", see #47967) so weak models self-correct instead of
     # being fed the full tool catalog. Dropping the call here would (a) orphan
@@ -3793,7 +3793,7 @@ def reapply_reasoning_echo_for_provider(agent, api_messages: list) -> int:
 def _iter_httpx_pool_objects(http_client: Any):
     """Yield httpcore pool objects reachable from an httpx client.
 
-    Hermes' keepalive client (#10324 / ``_build_keepalive_http_client``) and
+    Pilotage' keepalive client (#10324 / ``_build_keepalive_http_client``) and
     any ``HTTP(S)_PROXY`` configuration put live connections on *mounted*
     transports (``client._mounts``), not only on the default
     ``client._transport``. Walking the default transport alone makes

@@ -2,7 +2,7 @@
 Channel directory -- cached map of reachable channels/contacts per platform.
 
 Built on gateway startup, refreshed periodically (every 5 min), and saved to
-~/.hermes/channel_directory.json.  The send_message tool reads this file for
+~/.pilotage/channel_directory.json.  The send_message tool reads this file for
 action="list" and for resolving human-friendly channel names to numeric IDs.
 """
 
@@ -13,19 +13,19 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from hermes_cli.config import get_hermes_home
+from pilotage_cli.config import get_pilotage_home
 from utils import atomic_json_write
 
 logger = logging.getLogger(__name__)
 
-DIRECTORY_PATH = get_hermes_home() / "channel_directory.json"
+DIRECTORY_PATH = get_pilotage_home() / "channel_directory.json"
 # User-maintained friendly-name overlay. The directory is fully regenerated
 # from live adapters + session data on a timer, so hand-edits to
 # channel_directory.json don't survive. Aliases declared here are re-applied
 # on every build AND every load, giving durable human-friendly names (and
 # letting you pre-name a chat before it has produced any traffic).
 # Format: {"<platform>": {"<chat_id>": "<friendly name>", ...}, ...}
-CHANNEL_ALIASES_PATH = get_hermes_home() / "channel_aliases.json"
+CHANNEL_ALIASES_PATH = get_pilotage_home() / "channel_aliases.json"
 
 
 def _load_channel_aliases() -> Dict[str, Dict[str, str]]:
@@ -218,7 +218,7 @@ def _build_from_sessions_db(platform_name: str) -> List[Dict[str, str]]:
     """Pull channels/contacts from state.db gateway session rows."""
     entries: List[Dict[str, str]] = []
     try:
-        from hermes_state import SessionDB
+        from pilotage_state import SessionDB
         db = SessionDB()
         try:
             lister = getattr(db, "list_gateway_sessions", None)
@@ -264,7 +264,7 @@ def _build_from_sessions_db(platform_name: str) -> List[Dict[str, str]]:
 
 def _build_from_sessions_json(platform_name: str) -> List[Dict[str, str]]:
     """Legacy fallback: pull channels/contacts from sessions.json origin data."""
-    sessions_path = get_hermes_home() / "sessions" / "sessions.json"
+    sessions_path = get_pilotage_home() / "sessions" / "sessions.json"
     if not sessions_path.exists():
         return []
 
@@ -372,7 +372,7 @@ def format_directory_for_display(platforms: Optional[Dict[str, Any]] = None) -> 
     """Format the channel directory as a human-readable list for the model.
 
     ``platforms`` overrides the on-disk directory when provided (used by
-    ``hermes send --list`` to merge in configured-but-undiscovered
+    ``pilotage send --list`` to merge in configured-but-undiscovered
     platforms). Platforms present with an empty channel list are rendered
     with a "(no channels discovered yet)" hint instead of being hidden —
     a configured platform is a valid send target even before discovery.

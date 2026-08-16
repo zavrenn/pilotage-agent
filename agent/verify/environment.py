@@ -1,7 +1,7 @@
 """Environment manifest for project verification.
 
 Ported from superagent-ai/grok-cli ``src/verify/environment.ts``.
-The manifest lives at ``<project>/.hermes/environment.json`` and is the
+The manifest lives at ``<project>/.pilotage/environment.json`` and is the
 user-editable source of truth: when present and valid it wins over fresh
 static detection.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 from agent.verify.recipes import Recipe, detect_recipe
 
 MANIFEST_VERSION = 1
-_MANIFEST_RELPATH = Path(".hermes") / "environment.json"
+_MANIFEST_RELPATH = Path(".pilotage") / "environment.json"
 
 
 def manifest_path(root: Path) -> Path:
@@ -28,7 +28,7 @@ def load_manifest(root: Path) -> Recipe | None:
 
     Mirrors grok's ``loadVerifyEnvironment``: any read/parse/shape problem
     returns ``None`` rather than raising, so a corrupt manifest degrades to
-    fresh detection instead of breaking ``hermes verify``.
+    fresh detection instead of breaking ``pilotage verify``.
     """
     path = manifest_path(root)
     try:

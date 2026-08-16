@@ -24,7 +24,7 @@ def ensure_install_id(config: Dict[str, Any]) -> str:
     (read-only home, managed scope), the ephemeral id is still returned and
     a new one is minted next start.
 
-    Clearing ``monitoring.install_id`` (e.g. ``hermes config set
+    Clearing ``monitoring.install_id`` (e.g. ``pilotage config set
     monitoring.install_id ""``) rotates the id on the next gateway start.
     """
     mon = config.get("monitoring") if isinstance(config, dict) else None
@@ -34,7 +34,7 @@ def ensure_install_id(config: Dict[str, Any]) -> str:
 
     minted = str(uuid.uuid4())
     try:
-        from hermes_cli.config import load_config, save_config
+        from pilotage_cli.config import load_config, save_config
 
         fresh = load_config()
         if isinstance(fresh, dict):

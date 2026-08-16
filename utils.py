@@ -1,4 +1,4 @@
-"""Shared utility functions for hermes-agent."""
+"""Shared utility functions for pilotage-agent."""
 
 import errno
 import json
@@ -198,7 +198,7 @@ def atomic_replace(tmp_path: Union[str, Path], target: Union[str, Path]) -> str:
     ``target``.  When ``target`` is a symlink, the symlink itself is
     replaced with a regular file — silently detaching managed deployments
     that symlink ``config.yaml`` / ``SOUL.md`` / ``auth.json`` etc. from
-    ``~/.hermes/`` to a git-tracked profile package or dotfiles repo
+    ``~/.pilotage/`` to a git-tracked profile package or dotfiles repo
     (GitHub #16743).
 
     This helper resolves the symlink first so ``os.replace`` writes to
@@ -423,7 +423,7 @@ def warn_if_credential_file_broadly_readable(
 ) -> bool:
     """Warn (once per call) when a credential file is group/world-readable.
 
-    Secret-bearing files that users create by hand (or that older Hermes
+    Secret-bearing files that users create by hand (or that older Pilotage
     versions wrote without an explicit mode) commonly end up 0o644 under the
     default umask. This helper is the shared read-time check for that class:
     call it before loading any token/credential file so the owner gets a
@@ -646,18 +646,18 @@ def atomic_roundtrip_yaml_save(
     callers that mutate a deep-loaded config dict and want to persist the
     whole thing.
 
-    Shares the fail-closed contract ``hermes_cli.config.atomic_config_write``
+    Shares the fail-closed contract ``pilotage_cli.config.atomic_config_write``
     enforces for plain (non-comment-preserving) full-document writes: an
     existing-but-unreadable ``config.yaml`` (permission error, broken mount,
     transient I/O) raises rather than being silently replaced with only
     ``new_state``. Imported lazily to avoid a module-level circular import —
-    ``hermes_cli.config`` itself imports from this module.
+    ``pilotage_cli.config`` itself imports from this module.
     """
     from ruamel.yaml import YAML
     from ruamel.yaml.comments import CommentedMap
     from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
-    from hermes_cli.config import require_readable_config_before_write
+    from pilotage_cli.config import require_readable_config_before_write
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,7 @@ from time import time as wall_time
 from typing import Any, MutableMapping, Optional, TypeVar
 
 
-# These fields describe Hermes' durable record, not provider-visible message
+# These fields describe Pilotage' durable record, not provider-visible message
 # content. They must not influence context-pressure decisions.
 PERSISTENCE_ONLY_MESSAGE_FIELDS = frozenset({"timestamp"})
 

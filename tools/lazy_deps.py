@@ -1,10 +1,10 @@
 """
-Lazy dependency installer for opt-in Hermes Agent backends.
+Lazy dependency installer for opt-in Pilotage Agent backends.
 
-Many Hermes features (Mistral TTS, ElevenLabs TTS, Honcho memory, Bedrock,
+Many Pilotage features (Mistral TTS, ElevenLabs TTS, Honcho memory, Bedrock,
 WhatsApp, etc.) require Python packages that not every user needs. The
 historical approach was to bundle them all under ``pyproject.toml`` extras
-(``hermes-agent[all]``) and install them eagerly at setup time. That has
+(``pilotage-agent[all]``) and install them eagerly at setup time. That has
 two problems:
 
 1. **Fragility.** When one extra's transitive dependency becomes
@@ -20,16 +20,16 @@ top of their first-import path. If the deps are missing, ``ensure`` checks
 the ``security.allow_lazy_installs`` config flag (default true) and runs
 a venv-scoped pip install. If the user has explicitly disabled lazy
 installs, ``ensure`` raises :class:`FeatureUnavailable` with a clear
-remediation hint pointing at ``hermes tools`` or the manual pip command.
+remediation hint pointing at ``pilotage tools`` or the manual pip command.
 
 Security model:
 
 * **Venv-scoped by default.** Installs target ``sys.executable`` in the
   active venv. We never touch the system Python.
 * **Durable-target mode (immutable images).** When the deployment seals the
-  agent's own venv (the Docker image sets ``HERMES_DISABLE_LAZY_INSTALLS=1``
-  and makes ``/opt/hermes`` read-only), setting
-  ``HERMES_LAZY_INSTALL_TARGET`` redirects lazy installs to a writable
+  agent's own venv (the Docker image sets ``PILOTAGE_DISABLE_LAZY_INSTALLS=1``
+  and makes ``/opt/pilotage`` read-only), setting
+  ``PILOTAGE_LAZY_INSTALL_TARGET`` redirects lazy installs to a writable
   directory on the durable data volume (e.g. ``/opt/data/lazy-packages``).
   That directory is **appended to the end of ``sys.path``** — never
   prepended, never exported via ``PYTHONPATH`` — so the agent's own
@@ -38,7 +38,7 @@ Security model:
   a module the core already ships. The worst a bad/incompatible backend
   package can do is fail to import and report itself unavailable — the agent
   core stays healthy. This is the structural guarantee that a lazily
-  installed package cannot brick Hermes, which is what made it safe to seal
+  installed package cannot brick Pilotage, which is what made it safe to seal
   the venv in the first place. Compiled-wheel safety across image rebuilds
   is handled by an ABI/Python-version stamp on the target subdir (see
   :func:`_ensure_target_ready`).
@@ -79,7 +79,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from hermes_cli._subprocess_compat import windows_hide_flags
+from pilotage_cli._subprocess_compat import windows_hide_flags
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # small silk-v3 codec binding; installed on first .silk transcription.
     "stt.silk": ("pilk==0.2.4",),
 
-    # ─── Wake word ("Hey Hermes") engines ──────────────────────────────────
+    # ─── Wake word ("Hey Pilotage") engines ──────────────────────────────────
     # Keep in sync with the `wake` extra in pyproject.toml. openWakeWord is the
     # free, local default (ONNX runtime); Porcupine is the premium engine.
     # openWakeWord's ONNX embedding model returns near-zero scores on macOS
@@ -221,11 +221,11 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # package clears the uv exclude-newer 14-day quarantine (first release
     # 2026-08-04); add the mirrored extra then.
     "tool.doc_extract": ("firecrawl-anydoc==0.1.6",),
-    # HF Agent Trace Viewer upload (hermes trace upload / /upload-trace).
+    # HF Agent Trace Viewer upload (pilotage trace upload / /upload-trace).
     #
     # huggingface-hub can also arrive transitively via tokenizers-based
     # tooling. Because active_features() marks a feature active from mere
-    # package presence, the `hermes update` lazy-refresh pass re-asserts
+    # package presence, the `pilotage update` lazy-refresh pass re-asserts
     # THIS pin on every install where hub is present. Policy: keep the
     # exact pin (no ranges — security posture) and keep it matching
     # uv.lock so the whole tree converges on ONE hub version. When
@@ -286,7 +286,7 @@ class _InstallResult:
 # not user-facing config: the user-facing knob remains
 # security.allow_lazy_installs in config.yaml. When unset, lazy installs go
 # into the active venv as before.
-_LAZY_TARGET_ENV = "HERMES_LAZY_INSTALL_TARGET"
+_LAZY_TARGET_ENV = "PILOTAGE_LAZY_INSTALL_TARGET"
 
 # Name of the stamp file written into the target dir recording the Python
 # X.Y + ABI it was populated for. If a container rebuild bumps the
@@ -417,7 +417,7 @@ def _allow_lazy_installs() -> bool:
     1. ``security.allow_lazy_installs: false`` in config.yaml is an absolute
        opt-out — it disables installs in BOTH venv-scoped and durable-target
        modes. This is the user-facing kill switch.
-    2. ``HERMES_DISABLE_LAZY_INSTALLS=1`` seals the *agent venv* (set by the
+    2. ``PILOTAGE_DISABLE_LAZY_INSTALLS=1`` seals the *agent venv* (set by the
        immutable Docker image). It blocks venv-scoped installs — UNLESS a
        durable install target is configured, in which case installs are
        redirected there (a path that structurally cannot break the sealed
@@ -429,7 +429,7 @@ def _allow_lazy_installs() -> bool:
     """
     # (1) Config kill switch wins in every mode.
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
         cfg = load_config()
     except Exception:
         cfg = None
@@ -441,7 +441,7 @@ def _allow_lazy_installs() -> bool:
     # (2) Sealed-venv env var: blocks ONLY when there is no safe durable
     # target to redirect into. With a target set, the install goes to the
     # data volume (append-only on sys.path), so the seal is preserved.
-    if os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") == "1":
+    if os.environ.get("PILOTAGE_DISABLE_LAZY_INSTALLS") == "1":
         return _lazy_install_target() is not None
 
     return True
@@ -452,7 +452,7 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
 
     This is a platform capability gate, not a security policy gate. It keeps
     known-impossible installs out of both first-use lazy installation and the
-    ``hermes update`` lazy-refresh pass.
+    ``pilotage update`` lazy-refresh pass.
     """
     return None
 
@@ -498,7 +498,7 @@ def _is_satisfied(spec: str) -> bool:
     Checks both presence AND version. If the package is installed at a
     version outside the spec's range, returns False so the caller will
     upgrade/downgrade to the pinned version. This is what makes
-    ``hermes update`` propagate pin bumps in :data:`LAZY_DEPS` to already-
+    ``pilotage update`` propagate pin bumps in :data:`LAZY_DEPS` to already-
     installed backends instead of silently leaving stale versions in place.
 
     If ``packaging`` is unavailable for any reason (it's a transitive of
@@ -595,7 +595,7 @@ def _core_constraints_file() -> Optional[Path]:
             lines.append(f"{name}=={ver}")
         if not lines:
             return None
-        fd, path = tempfile.mkstemp(prefix="hermes-core-constraints-", suffix=".txt")
+        fd, path = tempfile.mkstemp(prefix="pilotage-core-constraints-", suffix=".txt")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write("\n".join(sorted(lines)) + "\n")
         return Path(path)
@@ -617,7 +617,7 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
       is append-only on ``sys.path`` so it can never shadow core. Used by
       the immutable Docker image to keep lazy installs off the sealed venv.
 
-    Mirrors the strategy in ``hermes_cli.tools_config._pip_install`` but
+    Mirrors the strategy in ``pilotage_cli.tools_config._pip_install`` but
     kept independent here so this module has no CLI dependency.
     """
     if not specs:
@@ -642,19 +642,19 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
 
     try:
         venv_root = Path(sys.executable).parent.parent
-        from tools.environments.local import hermes_subprocess_env
-        uv_env = hermes_subprocess_env(inherit_credentials=False)
+        from tools.environments.local import pilotage_subprocess_env
+        uv_env = pilotage_subprocess_env(inherit_credentials=False)
         uv_env["VIRTUAL_ENV"] = str(venv_root)
 
         # Tier 1: uv (preferred — fast, doesn't need pip in the venv)
-        # Managed uv first: $HERMES_HOME/bin is never on PATH, so a bare
-        # which() misses the uv Hermes installed and falls through to the
+        # Managed uv first: $PILOTAGE_HOME/bin is never on PATH, so a bare
+        # which() misses the uv Pilotage installed and falls through to the
         # slower pip tier. Deliberately a lookup and not ensure_uv(): this runs
         # mid-turn to install an optional dependency, and downloading uv +
         # migrating the Python runtime as a side effect of that is a far bigger
         # action than the caller asked for. Tier 2 pip covers the no-uv case.
         try:
-            from hermes_cli.managed_uv import resolve_uv
+            from pilotage_cli.managed_uv import resolve_uv
 
             uv_bin = resolve_uv() or shutil.which("uv")
         except Exception:
@@ -772,14 +772,14 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
     if unsupported:
         raise FeatureUnavailable(feature, missing, unsupported)
 
-    # Package-manager installs (NixOS, and any other distro that ships Hermes
+    # Package-manager installs (NixOS, and any other distro that ships Pilotage
     # from a read-only store) cannot receive lazy pip installs: the venv's
     # site-packages lives in the store, so the uv -> pip -> ensurepip ladder
     # below burns ~15s bootstrapping ensurepip only to fail on a read-only
     # target. Fail fast with an actionable message instead.
     #
     # Skipped when a durable install target is configured: the container
-    # deployment sets HERMES_MANAGED=true *and* HERMES_LAZY_INSTALL_TARGET
+    # deployment sets PILOTAGE_MANAGED=true *and* PILOTAGE_LAZY_INSTALL_TARGET
     # (a writable volume), where lazy installs legitimately work.
     #
     # The reason string starts with "unsupported " on purpose:
@@ -787,7 +787,7 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
     # reports anything else as a hard failure rather than a skip.
     if _lazy_install_target() is None:
         try:
-            from hermes_cli.config import get_managed_system
+            from pilotage_cli.config import get_managed_system
 
             managed_by = get_managed_system()
         except Exception:
@@ -796,9 +796,9 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
             raise FeatureUnavailable(
                 feature, missing,
                 f"unsupported on {managed_by}-managed installs: this build's "
-                f"packages come from {managed_by}, so Hermes cannot install "
+                f"packages come from {managed_by}, so Pilotage cannot install "
                 f"them at runtime. Add the dependencies for {feature!r} via "
-                f"{managed_by} (or run a pip/uv install of Hermes instead)."
+                f"{managed_by} (or run a pip/uv install of Pilotage instead)."
             )
 
     # Validate every spec against the allowlist + safety regex. Belt and
@@ -892,7 +892,7 @@ def feature_install_command(feature: str, *, venv_pip: bool = False) -> Optional
 
     ``venv_pip=True`` targets the running interpreter's pip
     (``{sys.executable} -m pip install …``) — correct in every layout
-    (default install, ``HERMES_HOME`` overrides, profile installs) and
+    (default install, ``PILOTAGE_HOME`` overrides, profile installs) and
     immune to Ubuntu 24.04's PEP 668 ``externally-managed-environment``
     failure that a bare/system ``pip install`` hint invites.  The default
     ``uv pip install`` form is kept for contexts that document uv usage.
@@ -934,8 +934,8 @@ def install_specs(specs: list[str] | tuple[str, ...], *, timeout: int = 300) -> 
 
     * **Venv-scoped by default** — installs into ``sys.executable``'s venv.
     * **Durable-target on immutable images** — when the deployment seals the
-      agent venv (``HERMES_DISABLE_LAZY_INSTALLS=1``) and sets
-      ``HERMES_LAZY_INSTALL_TARGET``, installs are redirected to the writable
+      agent venv (``PILOTAGE_DISABLE_LAZY_INSTALLS=1``) and sets
+      ``PILOTAGE_LAZY_INSTALL_TARGET``, installs are redirected to the writable
       data-volume dir (``--target`` + core-venv constraints), then activated
       on ``sys.path`` so the packages import in this process immediately.
     * **Gated** — honors ``security.allow_lazy_installs`` and refuses to run
@@ -962,11 +962,11 @@ def install_specs(specs: list[str] | tuple[str, ...], *, timeout: int = 300) -> 
 
     if not _allow_lazy_installs():
         target = _lazy_install_target()
-        if os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") == "1" and target is None:
+        if os.environ.get("PILOTAGE_DISABLE_LAZY_INSTALLS") == "1" and target is None:
             reason = (
                 "runtime installs are disabled on this deployment: the agent "
                 "environment is immutable and no writable install target is "
-                "configured (HERMES_LAZY_INSTALL_TARGET)"
+                "configured (PILOTAGE_LAZY_INSTALL_TARGET)"
             )
         else:
             reason = "runtime installs disabled (security.allow_lazy_installs=false)"
@@ -1016,7 +1016,7 @@ def active_features() -> list[str]:
     unrelated reasons, while the actual Matrix adapter anchor is ``mautrix``.
     Features the user has never enabled stay quiet.
 
-    Used by ``hermes update`` to figure out which lazy backends need a
+    Used by ``pilotage update`` to figure out which lazy backends need a
     refresh pass when pins move in :data:`LAZY_DEPS`.
     """
     active = []
@@ -1036,7 +1036,7 @@ def refresh_active_features(*, prompt: bool = False) -> dict[str, str]:
                                   whether to surface it (we don't raise)
         ``"skipped: <reason>"`` — gated off (config flag, user decline)
 
-    Intended for ``hermes update``. Never raises; lazy-install failures
+    Intended for ``pilotage update``. Never raises; lazy-install failures
     here must not block the rest of the update flow.
     """
     return _refresh_features(active_features(), prompt=prompt, restoring=False)

@@ -27,11 +27,11 @@ _IS_WINDOWS = platform.system() == "Windows"
 from pathlib import Path
 from typing import Dict, Optional, Any
 
-from hermes_cli._subprocess_compat import windows_detach_popen_kwargs
-from hermes_constants import (
+from pilotage_cli._subprocess_compat import windows_detach_popen_kwargs
+from pilotage_constants import (
     find_node_executable,
-    get_hermes_dir,
-    with_hermes_node_path,
+    get_pilotage_dir,
+    with_pilotage_node_path,
 )
 
 def _wenv(name: str, default: str = "") -> str:
@@ -104,7 +104,7 @@ def _kill_port_process(port: int) -> None:
     """Kill any process *listening* on the given TCP port (a stale bridge)."""
     try:
         if _IS_WINDOWS:
-            from hermes_cli._subprocess_compat import windows_hide_flags
+            from pilotage_cli._subprocess_compat import windows_hide_flags
 
             # Use netstat to find the PID bound to this port, then taskkill
             result = subprocess.run(
@@ -302,7 +302,7 @@ from utils import env_int
 
 def _is_allowed_bridge_path(url: str) -> bool:
     """Return True only when an absolute path from the bridge resolves inside a
-    known Hermes media cache directory.
+    known Pilotage media cache directory.
 
     The Baileys bridge is a local subprocess that downloads inbound media and
     hands back absolute file paths. A compromised or buggy bridge could hand
@@ -310,7 +310,7 @@ def _is_allowed_bridge_path(url: str) -> bool:
     attached verbatim and sent to the model. Resolve the path (following any
     symlinks) and require it to live under one of the real cache roots — this
     covers both the canonical ``cache/<kind>`` layout and the legacy
-    ``<kind>_cache`` layout that ``get_hermes_dir`` may return.
+    ``<kind>_cache`` layout that ``get_pilotage_dir`` may return.
     """
     try:
         resolved = Path(url).resolve()
@@ -363,7 +363,7 @@ def check_whatsapp_requirements() -> bool:
     
     WhatsApp requires a Node.js bridge for most implementations.
     """
-    # Prefer Hermes-managed Node/npm so Windows installs are not broken by a
+    # Prefer Pilotage-managed Node/npm so Windows installs are not broken by a
     # bad or elevation-triggering system Node on PATH.
     _node = find_node_executable("node")
     if not _node:
@@ -467,7 +467,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         )
         self._session_path: Path = Path(config.extra.get(
             "session_path",
-            get_hermes_dir("platforms/whatsapp/session", "whatsapp/session")
+            get_pilotage_dir("platforms/whatsapp/session", "whatsapp/session")
         ))
         self._reply_prefix: Optional[str] = config.extra.get("reply_prefix")
         self._dm_policy = str(config.extra.get("dm_policy") or _wenv("WHATSAPP_DM_POLICY", "pairing")).strip().lower()
@@ -577,7 +577,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             logger.warning("[%s] Node.js not found. WhatsApp requires Node.js.", self.name)
             self._set_fatal_error(
                 "whatsapp_node_missing",
-                "Node.js is not installed — install Node.js and re-run `hermes gateway`.",
+                "Node.js is not installed — install Node.js and re-run `pilotage gateway`.",
                 retryable=False,
             )
             return False
@@ -586,7 +586,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             logger.warning("[%s] aiohttp is unavailable and could not be installed.", self.name)
             self._set_fatal_error(
                 "whatsapp_aiohttp_missing",
-                "aiohttp could not be installed — run `pip install 'hermes-agent[whatsapp]'`.",
+                "aiohttp could not be installed — run `pip install 'pilotage-agent[whatsapp]'`.",
                 retryable=False,
             )
             return False
@@ -612,13 +612,13 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         if not creds_path.exists():
             logger.warning(
                 "[%s] WhatsApp is enabled but not paired (no creds.json at %s). "
-                "Pair from the dashboard or run `hermes whatsapp`; remove "
+                "Pair from the dashboard or run `pilotage whatsapp`; remove "
                 "WHATSAPP_ENABLED from your .env to disable.",
                 self.name, creds_path,
             )
             self._set_fatal_error(
                 "whatsapp_not_paired",
-                "WhatsApp enabled but not paired — pair from the dashboard or run `hermes whatsapp`.",
+                "WhatsApp enabled but not paired — pair from the dashboard or run `pilotage whatsapp`.",
                 retryable=False,
             )
             return False
@@ -637,11 +637,11 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         try:
             # Auto-install npm dependencies when node_modules is missing OR
             # package.json changed since the last install (e.g. after
-            # `hermes update` bumps the Baileys pin).  The stamp file records
+            # `pilotage update` bumps the Baileys pin).  The stamp file records
             # the package.json hash of the last successful install.
             bridge_dir = bridge_path.parent
             _pkg_json = bridge_dir / "package.json"
-            _dep_stamp = bridge_dir / "node_modules" / ".hermes-pkg-hash"
+            _dep_stamp = bridge_dir / "node_modules" / ".pilotage-pkg-hash"
             _pkg_hash = _file_content_hash(_pkg_json)
             _deps_fresh = False
             if (bridge_dir / "node_modules").exists():
@@ -654,7 +654,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             if not _deps_fresh:
                 print(f"[{self.name}] Installing WhatsApp bridge dependencies...")
                 # Resolve npm path so Windows uses npm.cmd from the
-                # Hermes-managed portable Node before falling back to PATH.
+                # Pilotage-managed portable Node before falling back to PATH.
                 _npm_bin = find_node_executable("npm") or "npm"
                 try:
                     # Read timeout from environment variable, default to 300 seconds (5 minutes)
@@ -666,13 +666,13 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                         capture_output=True,
                         text=True, encoding='utf-8', errors='replace',
                         timeout=npm_install_timeout,
-                        env=with_hermes_node_path(),
+                        env=with_pilotage_node_path(),
                     )
                     if install_result.returncode != 0:
                         print(f"[{self.name}] npm install failed: {install_result.stderr}")
                         self._set_fatal_error(
                             "whatsapp_npm_install_failed",
-                            f"WhatsApp bridge npm install failed. Run `cd {bridge_dir} && {_npm_bin} install` manually, then restart `hermes gateway`.",
+                            f"WhatsApp bridge npm install failed. Run `cd {bridge_dir} && {_npm_bin} install` manually, then restart `pilotage gateway`.",
                             retryable=False,
                         )
                         return False
@@ -686,7 +686,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                     print(f"[{self.name}] Failed to install dependencies: {e}")
                     self._set_fatal_error(
                         "whatsapp_npm_install_failed",
-                        f"WhatsApp bridge npm install failed ({e}). Run `cd {bridge_dir} && {_npm_bin} install` manually, then restart `hermes gateway`.",
+                        f"WhatsApp bridge npm install failed ({e}). Run `cd {bridge_dir} && {_npm_bin} install` manually, then restart `pilotage gateway`.",
                         retryable=False,
                     )
                     return False
@@ -710,7 +710,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                                 # bridge if it is serving the same bridge.js
                                 # that is on disk right now.  A long-lived
                                 # bridge survives gateway restarts AND
-                                # `hermes update`, so without this check it
+                                # `pilotage update`, so without this check it
                                 # keeps serving pre-update code forever
                                 # (e.g. no inbound media download).  Old
                                 # bridges that don't report scriptHash are
@@ -758,8 +758,8 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             # Build bridge subprocess environment.
             # Pass WHATSAPP_REPLY_PREFIX from config.yaml so the Node bridge
             # can use it without the user needing to set a separate env var.
-            # with_hermes_node_path() copies os.environ when called with no arg.
-            bridge_env = with_hermes_node_path()
+            # with_pilotage_node_path() copies os.environ when called with no arg.
+            bridge_env = with_pilotage_node_path()
             if self._reply_prefix is not None:
                 bridge_env["WHATSAPP_REPLY_PREFIX"] = self._reply_prefix
             bridge_env["WHATSAPP_SEND_READ_RECEIPTS"] = (
@@ -791,16 +791,16 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                     bridge_env[_key] = _v
             # Pass the profile-aware cache directories so the bridge writes
             # media where the Python side reads it.  Without these the bridge
-            # hardcodes ~/.hermes/{image,audio,document}_cache, which diverges
-            # under HERMES_HOME overrides, profiles, and the new cache/ layout.
+            # hardcodes ~/.pilotage/{image,audio,document}_cache, which diverges
+            # under PILOTAGE_HOME overrides, profiles, and the new cache/ layout.
             from gateway.platforms.base import (
                 get_audio_cache_dir as _get_audio_dir,
                 get_document_cache_dir as _get_doc_dir,
                 get_image_cache_dir as _get_img_dir,
             )
-            bridge_env["HERMES_IMAGE_CACHE_DIR"] = str(_get_img_dir())
-            bridge_env["HERMES_AUDIO_CACHE_DIR"] = str(_get_audio_dir())
-            bridge_env["HERMES_DOCUMENT_CACHE_DIR"] = str(_get_doc_dir())
+            bridge_env["PILOTAGE_IMAGE_CACHE_DIR"] = str(_get_img_dir())
+            bridge_env["PILOTAGE_AUDIO_CACHE_DIR"] = str(_get_audio_dir())
+            bridge_env["PILOTAGE_DOCUMENT_CACHE_DIR"] = str(_get_doc_dir())
 
             self._bridge_process = subprocess.Popen(
                 [
@@ -880,7 +880,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                     # auto-reconnect later, e.g. after a code 515 restart).
                     print(f"[{self.name}] ⚠ WhatsApp not connected after 30s")
                     print(f"[{self.name}]   Bridge log: {self._bridge_log}")
-                    print(f"[{self.name}]   If session expired, re-pair: hermes whatsapp")
+                    print(f"[{self.name}]   If session expired, re-pair: pilotage whatsapp")
             
             # Create a persistent HTTP session for all bridge communication
             self._http_session = aiohttp.ClientSession()
@@ -1780,7 +1780,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
 # per-platform core touchpoints (the Platform.WHATSAPP elif in gateway/run.py,
 # the whatsapp_cfg YAML→env block + _PLATFORM_CONNECTED_CHECKERS entry in
 # gateway/config.py, the _setup_whatsapp wizard + _PLATFORMS["whatsapp"] static
-# dict in hermes_cli/gateway.py, and the _send_whatsapp dispatch in
+# dict in pilotage_cli/gateway.py, and the _send_whatsapp dispatch in
 # tools/send_message_tool.py).  WhatsApp auth is handled by the Node.js bridge,
 # so is_connected is always True (matches the legacy checker).
 # ──────────────────────────────────────────────────────────────────────────
@@ -1917,12 +1917,12 @@ async def _standalone_send(
 def interactive_setup() -> None:
     """Guide the user through WhatsApp setup.
 
-    Replaces the central _setup_whatsapp in hermes_cli/gateway.py and the
+    Replaces the central _setup_whatsapp in pilotage_cli/gateway.py and the
     static _PLATFORMS["whatsapp"] dict. CLI helpers are lazy-imported so the
     plugin's module-load surface stays minimal.
     """
-    from hermes_cli.config import get_env_value, remove_env_value, save_env_value
-    from hermes_cli.cli_output import (
+    from pilotage_cli.config import get_env_value, remove_env_value, save_env_value
+    from pilotage_cli.cli_output import (
         prompt,
         prompt_yes_no,
         print_header,
@@ -2004,7 +2004,7 @@ def _is_connected(config) -> bool:
     bridge token here — so the opt-in flag is the connection signal. The legacy
     built-in path keyed off ``WHATSAPP_ENABLED`` in both the connected-platforms
     check and the setup-status display; returning an unconditional True here
-    would make WhatsApp always show as "configured" in ``hermes setup`` even
+    would make WhatsApp always show as "configured" in ``pilotage setup`` even
     when the user never enabled it. #41112.
     """
     extra = getattr(config, "extra", {}) or {}
@@ -2012,10 +2012,10 @@ def _is_connected(config) -> bool:
         # An explicitly-enabled PlatformConfig with seeded extras (e.g. from
         # YAML) counts as configured.
         return True
-    # Read via hermes_cli.gateway.get_env_value (not os.getenv) so setup-status
+    # Read via pilotage_cli.gateway.get_env_value (not os.getenv) so setup-status
     # callers that patch get_env_value — and the gateway connected-platforms
     # check — observe the same value. Matches the discord/slack plugin pattern.
-    import hermes_cli.gateway as gateway_mod
+    import pilotage_cli.gateway as gateway_mod
     val = (gateway_mod.get_env_value("WHATSAPP_ENABLED") or "").strip().lower()
     return val in {"true", "1", "yes"}
 
@@ -2026,7 +2026,7 @@ def _build_adapter(config):
 
 
 def register(ctx) -> None:
-    """Plugin entry point — called by the Hermes plugin system."""
+    """Plugin entry point — called by the Pilotage plugin system."""
     ctx.register_platform(
         name="whatsapp",
         label="WhatsApp",

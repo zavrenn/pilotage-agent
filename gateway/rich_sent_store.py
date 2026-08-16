@@ -25,10 +25,10 @@ _MAX_TEXT_CHARS = 2000
 
 
 def _store_path() -> str:
-    # Resolve via get_hermes_home() so the active profile override is honored.
-    from hermes_constants import get_hermes_home
+    # Resolve via get_pilotage_home() so the active profile override is honored.
+    from pilotage_constants import get_pilotage_home
 
-    home = get_hermes_home()
+    home = get_pilotage_home()
     return os.path.join(str(home), "state", "rich_sent_index.json")
 
 

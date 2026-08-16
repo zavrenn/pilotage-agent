@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from hermes_constants import get_hermes_home
+from pilotage_constants import get_pilotage_home
 
 
 @dataclass
@@ -48,16 +48,16 @@ def _frontmatter(text: str) -> dict[str, Any]:
         return {}
 
 
-def _hermes_meta(fm: dict[str, Any]) -> dict[str, Any]:
-    """``metadata.hermes`` as a dict, tolerant of the string-valued frontmatter
+def _pilotage_meta(fm: dict[str, Any]) -> dict[str, Any]:
+    """``metadata.pilotage`` as a dict, tolerant of the string-valued frontmatter
     that ``parse_frontmatter``'s malformed-YAML fallback produces."""
     meta = fm.get("metadata")
-    hermes = meta.get("hermes") if isinstance(meta, dict) else None
-    return hermes if isinstance(hermes, dict) else {}
+    pilotage = meta.get("pilotage") if isinstance(meta, dict) else None
+    return pilotage if isinstance(pilotage, dict) else {}
 
 
 def _related(fm: dict[str, Any]) -> list[str]:
-    raw = fm.get("related_skills") or _hermes_meta(fm).get("related_skills")
+    raw = fm.get("related_skills") or _pilotage_meta(fm).get("related_skills")
     if isinstance(raw, list):
         return [str(r).strip() for r in raw if str(r).strip()]
     if isinstance(raw, str):
@@ -66,7 +66,7 @@ def _related(fm: dict[str, Any]) -> list[str]:
 
 
 def _category(fm: dict[str, Any], skill_md: Path) -> str:
-    cat = fm.get("category") or _hermes_meta(fm).get("category")
+    cat = fm.get("category") or _pilotage_meta(fm).get("category")
     if cat:
         return str(cat)
     # …/skills/<category>/<skill>/SKILL.md
@@ -87,7 +87,7 @@ def _load_usage() -> dict[str, dict[str, Any]]:
 
         return load_usage()
     except Exception:
-        path = get_hermes_home() / "skills" / ".usage.json"
+        path = get_pilotage_home() / "skills" / ".usage.json"
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -196,7 +196,7 @@ def _memory_cards() -> list[dict[str, Any]]:
     ``MEMORY.md`` / ``USER.md`` are prose split on bare ``§`` separators; each
     chunk becomes one card. Every chunk is surfaced — the graph shows everything.
     """
-    base = get_hermes_home() / "memories"
+    base = get_pilotage_home() / "memories"
     cards: list[dict[str, Any]] = []
     for fname, source in (("MEMORY.md", "memory"), ("USER.md", "profile")):
         path = base / fname
@@ -247,7 +247,7 @@ def _memory_skill_edges(memory_cards: list[dict[str, Any]], skills: list[SkillNo
 
 def _skill_roots() -> list[tuple[str, Path]]:
     repo = Path(__file__).resolve().parent.parent
-    home_skills = get_hermes_home() / "skills"
+    home_skills = get_pilotage_home() / "skills"
     return [("base", repo / "skills"), ("profile", home_skills)]
 
 

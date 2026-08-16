@@ -694,7 +694,7 @@ def _find_pses_bundle(ctx: ServerContext) -> Optional[str]:
        directory.  This is the documented config knob.
     2. ``init_overrides["powershell"]["bundlePath"]``.
     3. ``PSES_BUNDLE_PATH`` env var.
-    4. ``<HERMES_HOME>/lsp/PowerShellEditorServices`` staging dir (where a
+    4. ``<PILOTAGE_HOME>/lsp/PowerShellEditorServices`` staging dir (where a
        user-run unzip would naturally land).
 
     Returns the bundle directory containing ``PowerShellEditorServices/``,
@@ -710,9 +710,9 @@ def _find_pses_bundle(ctx: ServerContext) -> Optional[str]:
     env_path = os.environ.get("PSES_BUNDLE_PATH")
     if env_path:
         candidates.append(env_path)
-    from hermes_constants import get_hermes_home
+    from pilotage_constants import get_pilotage_home
 
-    home = str(get_hermes_home())
+    home = str(get_pilotage_home())
     candidates.append(os.path.join(home, "lsp", "PowerShellEditorServices"))
 
     for cand in candidates:
@@ -752,7 +752,7 @@ def _spawn_powershell_es(root: str, ctx: ServerContext) -> Optional[SpawnSpec]:
                 "https://github.com/PowerShell/PowerShellEditorServices/releases, "
                 "extract it, and either set lsp.servers.powershell.command "
                 "to the bundle path or unzip it to "
-                "<HERMES_HOME>/lsp/PowerShellEditorServices."
+                "<PILOTAGE_HOME>/lsp/PowerShellEditorServices."
             )
         return None
     start_script = os.path.join(
@@ -760,16 +760,16 @@ def _spawn_powershell_es(root: str, ctx: ServerContext) -> Optional[SpawnSpec]:
     )
     # Session details file: PSES writes connection info here on startup.
     session_path = os.path.join(
-        hermes_lsp_session_dir(), f"pses-session-{os.getpid()}.json"
+        pilotage_lsp_session_dir(), f"pses-session-{os.getpid()}.json"
     )
-    log_path = os.path.join(hermes_lsp_session_dir(), "pses.log")
+    log_path = os.path.join(pilotage_lsp_session_dir(), "pses.log")
     inner = (
         f"& '{start_script}' "
         f"-BundledModulesPath '{bundle}' "
         f"-LogPath '{log_path}' "
         f"-SessionDetailsPath '{session_path}' "
         f"-FeatureFlags @() -AdditionalModules @() "
-        f"-HostName Hermes -HostProfileId hermes -HostVersion 1.0.0 "
+        f"-HostName Pilotage -HostProfileId pilotage -HostVersion 1.0.0 "
         f"-Stdio -LogLevel Normal"
     )
     return SpawnSpec(
@@ -794,11 +794,11 @@ def _spawn_powershell_es(root: str, ctx: ServerContext) -> Optional[SpawnSpec]:
     )
 
 
-def hermes_lsp_session_dir() -> str:
+def pilotage_lsp_session_dir() -> str:
     """Return (and create) the dir for PSES session/log scratch files."""
-    from hermes_constants import get_hermes_home
+    from pilotage_constants import get_pilotage_home
 
-    home = str(get_hermes_home())
+    home = str(get_pilotage_home())
     d = os.path.join(home, "lsp", "pses")
     os.makedirs(d, exist_ok=True)
     return d

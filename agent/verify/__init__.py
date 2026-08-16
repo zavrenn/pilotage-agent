@@ -2,7 +2,7 @@
 
 Ported from superagent-ai/grok-cli's verify subsystem (scoped):
 static run-recipe detection, a persisted environment manifest, and a
-smoke-test runner used by the ``hermes verify`` CLI command.
+smoke-test runner used by the ``pilotage verify`` CLI command.
 
 Sources:
 - https://github.com/superagent-ai/grok-cli/blob/main/src/verify/recipes.ts

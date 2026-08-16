@@ -2,16 +2,16 @@
 
 The journey graph (``agent.learning_graph``) gives every node a stable id:
 
-- **skills** → the skill name (e.g. ``"debugging-hermes-desktop"``)
+- **skills** → the skill name (e.g. ``"debugging-pilotage-desktop"``)
 - **memories** → ``memory:<source>:<index>`` where ``source`` is ``memory``
   (``MEMORY.md``) or ``profile`` (``USER.md``) and ``index`` is the node's
   position in the combined card list (``MEMORY.md`` cards first, then
   ``USER.md``).
 
 This module maps a node id back to its on-disk home and performs the mutation,
-shared by the CLI (``hermes journey delete|edit``), the TUI ``/journey`` overlay
+shared by the CLI (``pilotage journey delete|edit``), the TUI ``/journey`` overlay
 (gateway RPCs), and the desktop GUI (REST). Deleting a skill *archives* it
-(recoverable via ``hermes curator restore``); deleting a memory rewrites its
+(recoverable via ``pilotage curator restore``); deleting a memory rewrites its
 file. Pure stdlib + existing skill/memory helpers.
 """
 
@@ -28,9 +28,9 @@ def parse_node_kind(node_id: str) -> str:
 
 
 def _memories_dir() -> Path:
-    from hermes_constants import get_hermes_home
+    from pilotage_constants import get_pilotage_home
 
-    return get_hermes_home() / "memories"
+    return get_pilotage_home() / "memories"
 
 
 def _parse_memory_id(node_id: str) -> tuple[str, int]:
@@ -132,13 +132,13 @@ def _delete_skill(name: str) -> dict[str, Any]:
     from tools import skill_usage
 
     if skill_usage.get_record(name).get("pinned"):
-        return {"ok": False, "message": f"'{name}' is pinned — unpin it first (hermes curator unpin {name})"}
+        return {"ok": False, "message": f"'{name}' is pinned — unpin it first (pilotage curator unpin {name})"}
 
     ok, message = skill_usage.archive_skill(name)
     if ok:
         _clear_skill_cache()
 
-    return {"ok": ok, "message": f"archived '{name}' — restore with: hermes curator restore {name}" if ok else message}
+    return {"ok": ok, "message": f"archived '{name}' — restore with: pilotage curator restore {name}" if ok else message}
 
 
 def _delete_memory(node_id: str) -> dict[str, Any]:

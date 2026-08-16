@@ -190,13 +190,13 @@ def _bytes_to_tokens(size: Optional[int]) -> Optional[int]:
 def compute_context_details(agent: Any) -> Dict[str, Any]:
     """Expanded per-skill / per-toolset cost listing for ``/context all``.
 
-    Reuses the ``hermes prompt-size`` attribution mechanism (PR #66656):
+    Reuses the ``pilotage prompt-size`` attribution mechanism (PR #66656):
     per-skill index-line bytes parsed from the live ``<available_skills>``
     block, and per-toolset schema bytes attributed via the tool registry's
     canonical tool→toolset map. Byte figures are converted to the same
     chars/4 token heuristic the categories above use.
     """
-    from hermes_cli.prompt_size import (
+    from pilotage_cli.prompt_size import (
         _compute_skills_breakdown,
         _compute_toolsets_breakdown,
     )

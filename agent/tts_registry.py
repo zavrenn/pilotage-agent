@@ -33,7 +33,7 @@ import threading
 from typing import Dict, List, Optional
 
 from agent.tts_provider import TTSProvider
-from hermes_constants import hermes_home_key
+from pilotage_constants import pilotage_home_key
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +116,7 @@ def list_providers(*, scope: Optional[str] = None) -> List[TTSProvider]:
     """Return all registered providers, sorted by name."""
     with _lock:
         merged = dict(_providers)
-        merged.update(_scoped_providers.get(scope or hermes_home_key(), {}))
+        merged.update(_scoped_providers.get(scope or pilotage_home_key(), {}))
         items = list(merged.values())
     return sorted(items, key=lambda p: p.name)
 
@@ -132,7 +132,7 @@ def get_provider(name: str, *, scope: Optional[str] = None) -> Optional[TTSProvi
         return None
     key = name.strip().lower()
     with _lock:
-        return _scoped_providers.get(scope or hermes_home_key(), {}).get(key) or _providers.get(key)
+        return _scoped_providers.get(scope or pilotage_home_key(), {}).get(key) or _providers.get(key)
 
 
 def snapshot_registration(

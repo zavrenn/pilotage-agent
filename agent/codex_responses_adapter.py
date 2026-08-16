@@ -271,7 +271,7 @@ def _clamp_responses_call_id(call_id: str) -> str:
 
     The codex app-server namespaces MCP tool call ids as
     ``codex_mcp__<server>__<tool>_<codex_call_id>``; with an ``exec-<uuid>``
-    component the built-in ``hermes-tools`` server already overflows 64 chars,
+    component the built-in ``pilotage-tools`` server already overflows 64 chars,
     and the Responses API rejects the whole payload with a non-retryable HTTP
     400 that then replays every turn — permanently bricking the session.
 
@@ -363,7 +363,7 @@ def _responses_tools(tools: Optional[List[Dict[str, Any]]] = None) -> Optional[L
 # Responses ``tools`` array.  These are declared by ``type`` alone (no
 # client-side name/parameters schema) and run server-side — the provider
 # owns the implementation and reports progress via the matching ``*_call``
-# output items.  Hermes injects xAI's native ``web_search`` for the xAI
+# output items.  Pilotage injects xAI's native ``web_search`` for the xAI
 # transport (see agent/transports/codex.py); the rest are listed so the
 # preflight validator passes them through rather than rejecting them as
 # "unsupported type".  Mirrors the ``*_call`` item-type set used in
@@ -387,7 +387,7 @@ _RESPONSE_MESSAGE_STATUSES = {"completed", "incomplete", "in_progress"}
 
 # The Responses API rejects input[].id longer than this with a non-retryable
 # HTTP 400 ("string too long"). Codex-issued assistant message ids are
-# server-assigned base64 blobs that can run 400+ chars, while Hermes-minted
+# server-assigned base64 blobs that can run 400+ chars, while Pilotage-minted
 # ids (msg_...) stay well under this cap and are worth keeping for
 # prefix-cache hits. Drop only the oversized ones on replay.
 _MAX_RESPONSES_ITEM_ID_LENGTH = 64
@@ -423,7 +423,7 @@ def _chat_messages_to_responses_input(
     May 2026) we believed xAI's OAuth/SuperGrok ``/v1/responses`` surface
     rejected replayed ``encrypted_content`` reasoning items minted by
     prior turns, and we stripped them.  That decision was wrong — xAI
-    explicitly relies on Hermes threading encrypted reasoning back across
+    explicitly relies on Pilotage threading encrypted reasoning back across
     turns for cross-turn coherence (the whole point of their partnership
     integration).  We now replay encrypted reasoning on every Responses
     transport (xAI, native Codex, custom relays) and let xAI tell us
@@ -474,7 +474,7 @@ def _chat_messages_to_responses_input(
     model that cannot decrypt the blob (#85914). Default False = pre-feature
     wire, which is also correct for every caller that never sends
     ``context_management`` (auxiliary/compression client, ad-hoc
-    ``convert_messages``). Dropping the checkpoint costs nothing: Hermes'
+    ``convert_messages``). Dropping the checkpoint costs nothing: Pilotage'
     local history is never truncated by native compaction, so the full
     conversation is still on the wire.
     """
@@ -560,7 +560,7 @@ def _chat_messages_to_responses_input(
                             # returns 404.  The encrypted_content blob is
                             # self-contained for reasoning chain continuity.
                             # Also strip the internal "_issuer_kind" stamp;
-                            # it is a Hermes-side metadata key and not part
+                            # it is a Pilotage-side metadata key and not part
                             # of the Responses API schema.
                             replay_item = {
                                 k: v for k, v in ri.items()

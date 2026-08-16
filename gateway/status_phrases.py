@@ -1,21 +1,21 @@
 """Human-friendly generic gateway status phrases.
 
 These helpers deliberately avoid relaying raw model scratch text.  They turn
-Hermes' long-running gateway status surface into short status lines suitable
+Pilotage' long-running gateway status surface into short status lines suitable
 for chat surfaces.
 
 Built-in defaults live in ``gateway/assets/status_phrases.yaml``. Users can add
-portable, profile-relative phrase catalogs under ``HERMES_HOME`` either by using
+portable, profile-relative phrase catalogs under ``PILOTAGE_HOME`` either by using
 conventional paths::
 
-    ~/.hermes/status_phrases.yaml
-    ~/.hermes/status_phrases/*.yaml
+    ~/.pilotage/status_phrases.yaml
+    ~/.pilotage/status_phrases/*.yaml
 
 or by pointing config at a relative file/directory::
 
     display:
       status_phrases:
-        path: status_phrases/whatsapp.yaml  # relative to HERMES_HOME
+        path: status_phrases/whatsapp.yaml  # relative to PILOTAGE_HOME
         mode: append                        # append (default) or replace
 
 Absolute paths and ``..`` escapes are ignored on purpose so config stays
@@ -34,9 +34,9 @@ from typing import Any
 
 import yaml
 
-from hermes_constants import get_hermes_home
+from pilotage_constants import get_pilotage_home
 
-# These are Hermes UI surfaces, not app/vendor/domain buckets.  Keep this
+# These are Pilotage UI surfaces, not app/vendor/domain buckets.  Keep this
 # long-running-only: regular tool/thinking/interim chatter is intentionally not
 # rewritten into generic placeholders because that gets noisy fast in chat.
 _STATUS_SURFACES = ("status", "generic")
@@ -163,22 +163,22 @@ def resolve_status_phrase_catalog(user_config: Mapping[str, Any] | None, platfor
     ``display.platforms.<platform>.status_phrases``.
     """
     catalog = _copy_default_catalog()
-    hermes_home = get_hermes_home()
-    _merge_phrase_paths(catalog, list(_CONVENTIONAL_RELATIVE_PATHS), base_dir=hermes_home)
+    pilotage_home = get_pilotage_home()
+    _merge_phrase_paths(catalog, list(_CONVENTIONAL_RELATIVE_PATHS), base_dir=pilotage_home)
 
     display = (user_config or {}).get("display") if isinstance(user_config, Mapping) else None
     if not isinstance(display, Mapping):
         return catalog
 
-    _merge_phrase_config(catalog, display.get("generic_status_phrases"), base_dir=hermes_home)
-    _merge_phrase_config(catalog, display.get("status_phrases"), base_dir=hermes_home)
+    _merge_phrase_config(catalog, display.get("generic_status_phrases"), base_dir=pilotage_home)
+    _merge_phrase_config(catalog, display.get("status_phrases"), base_dir=pilotage_home)
 
     platforms = display.get("platforms")
     if platform_key and isinstance(platforms, Mapping):
         platform_display = platforms.get(platform_key)
         if isinstance(platform_display, Mapping):
-            _merge_phrase_config(catalog, platform_display.get("generic_status_phrases"), base_dir=hermes_home)
-            _merge_phrase_config(catalog, platform_display.get("status_phrases"), base_dir=hermes_home)
+            _merge_phrase_config(catalog, platform_display.get("generic_status_phrases"), base_dir=pilotage_home)
+            _merge_phrase_config(catalog, platform_display.get("status_phrases"), base_dir=pilotage_home)
     return catalog
 
 
@@ -189,7 +189,7 @@ def classify_status_context(
     preview: str | None = None,
     args: Any = None,
 ) -> str:
-    """Classify an internal gateway event into a Hermes UI-surface bucket."""
+    """Classify an internal gateway event into a Pilotage UI-surface bucket."""
     normalized = str(kind or "").strip().lower()
     if normalized in {"heartbeat", "waiting", "long_running", "status"}:
         return "status"

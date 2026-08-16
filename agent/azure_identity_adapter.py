@@ -20,7 +20,7 @@ Architecture mirrors `agent/bedrock_adapter.py`:
   purpose prevents accidental token-minting in logging paths or token
   leakage into cache keys / dashboard JSON.
 * No persisted JWT. ``azure-identity`` caches in-process and (where
-  available) in the OS keychain or ``~/.IdentityService``. Hermes does
+  available) in the OS keychain or ``~/.IdentityService``. Pilotage does
   not duplicate that storage in ``auth.json``.
 
 Reference: https://learn.microsoft.com/azure/ai-foundry/foundry-models/how-to/configure-entra-id
@@ -123,12 +123,12 @@ def reset_credential_cache() -> None:
 class EntraIdentityConfig:
     """Serializable Entra ID config.
 
-    Captures the Hermes-managed Entra knobs we need outside Azure SDK
+    Captures the Pilotage-managed Entra knobs we need outside Azure SDK
     environment configuration. Everything else
     (tenant ID, service principal secret, federated token file, sovereign
     cloud authority, etc.) flows through azure-identity's standard
     ``AZURE_*`` env vars — see the Bedrock pattern in
-    ``hermes_cli/runtime_provider.py:1310-1377`` for the analogous
+    ``pilotage_cli/runtime_provider.py:1310-1377`` for the analogous
     "let the SDK read env" approach.
 
     ``scope`` is Microsoft's documented Foundry inference audience. Almost
@@ -174,12 +174,12 @@ class EntraIdentityConfig:
 def _build_default_credential(config: EntraIdentityConfig) -> Any:
     """Construct a ``DefaultAzureCredential`` for ``config``.
 
-    Only Hermes-selected knobs are passed as kwargs. Everything else
+    Only Pilotage-selected knobs are passed as kwargs. Everything else
     (tenant, service principal secret, federated token file, sovereign
     cloud authority, etc.) is read by ``azure-identity`` from the
     standard ``AZURE_*`` environment variables — see Microsoft's
     documented credential resolution chain. Users configure those in
-    ``~/.hermes/.env`` or the deployment environment.
+    ``~/.pilotage/.env`` or the deployment environment.
     """
     ai = _require_azure_identity()
     kwargs: Dict[str, Any] = {}
@@ -194,7 +194,7 @@ def _build_default_credential(config: EntraIdentityConfig) -> Any:
 def build_credential(config: EntraIdentityConfig) -> Any:
     """Return the cached ``DefaultAzureCredential`` for ``config``.
 
-    Hermes processes use exactly one Entra config at a time (the
+    Pilotage processes use exactly one Entra config at a time (the
     ``model.entra.*`` block in config.yaml drives every aux task,
     subagent, and credential probe in the session). ``maxsize=1`` is
     intentional: it reflects the actual usage pattern and keeps the
@@ -268,8 +268,8 @@ def has_azure_identity_credentials(scope: Optional[str] = None,
 
     Runs ``credential.get_token(scope)`` under a thread-based timeout so
     a slow token service can't hang the caller. Returns False on any
-    error — never raises. Use for ``hermes doctor`` /
-    ``hermes auth status`` / wizard preflight.
+    error — never raises. Use for ``pilotage doctor`` /
+    ``pilotage auth status`` / wizard preflight.
 
     ``allow_install``: when True (default) and ``azure-identity`` is not
     importable, the adapter triggers the standard lazy-install path
@@ -321,7 +321,7 @@ def describe_active_credential(config: Optional[EntraIdentityConfig] = None,
     """Return diagnostic info about the active credential chain.
 
     Best-effort: runs ``get_token()`` and inspects what came back.
-    Designed for ``hermes doctor`` and the wizard preflight — never
+    Designed for ``pilotage doctor`` and the wizard preflight — never
     raises, returns ``{"ok": False, "error": ...}`` on failure.
 
     ``allow_install``: when True (default) and ``azure-identity`` is not
@@ -450,7 +450,7 @@ def materialize_bearer_for_http(value: Any) -> str:
     """Return a fresh Bearer JWT for a manual HTTP request.
 
     Only call this at sites that must construct an ``Authorization``
-    header outside the OpenAI SDK (e.g. ``hermes_cli/azure_detect.py``).
+    header outside the OpenAI SDK (e.g. ``pilotage_cli/azure_detect.py``).
     Calls the callable exactly once and returns the resulting token.
 
     **Anthropic SDK integration:** the Anthropic Python SDK does not
@@ -540,7 +540,7 @@ def build_bearer_http_client(token_provider: Callable[[], str], **httpx_kwargs: 
             logger.warning(
                 "Bearer hook: Entra ID token provider returned empty (%s) "
                 "— stripping Authorization headers. Azure will respond 401. "
-                "Run `hermes doctor` or `az login` to recover.",
+                "Run `pilotage doctor` or `az login` to recover.",
                 exc,
             )
             for header_name in ("Authorization", "authorization", "Api-Key", "api-key", "X-Api-Key", "x-api-key"):

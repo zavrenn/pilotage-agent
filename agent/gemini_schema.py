@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 # Gemini's ``FunctionDeclaration.parameters`` field accepts the ``Schema``
 # object, which is only a subset of OpenAPI 3.0 / JSON Schema.  Strip fields
-# outside that subset before sending Hermes tool schemas to Google.
+# outside that subset before sending Pilotage tool schemas to Google.
 _GEMINI_SCHEMA_ALLOWED_KEYS = {
     "type",
     "format",
@@ -37,7 +37,7 @@ _GEMINI_SCHEMA_ALLOWED_KEYS = {
 def sanitize_gemini_schema(schema: Any) -> Dict[str, Any]:
     """Return a Gemini-compatible copy of a tool parameter schema.
 
-    Hermes tool schemas are OpenAI-flavored JSON Schema and may contain keys
+    Pilotage tool schemas are OpenAI-flavored JSON Schema and may contain keys
     such as ``$schema`` or ``additionalProperties`` that Google's Gemini
     ``Schema`` object rejects.  This helper preserves the documented Gemini
     subset and recursively sanitizes nested ``properties`` / ``items`` /

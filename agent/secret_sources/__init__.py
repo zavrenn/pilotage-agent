@@ -1,7 +1,7 @@
 """External secret source integrations.
 
 A secret source is anything that can supply environment-variable-shaped
-credentials at process startup, _after_ ~/.hermes/.env has loaded.
+credentials at process startup, _after_ ~/.pilotage/.env has loaded.
 
 The contract every source implements is
 :class:`agent.secret_sources.base.SecretSource`; the orchestrator that
@@ -17,10 +17,10 @@ Currently bundled:
 
   - ``bitwarden`` — Bitwarden Secrets Manager (`bws` CLI).  See
     ``agent.secret_sources.bitwarden`` for the integration and
-    ``hermes_cli.secrets_cli`` for the user-facing setup wizard.
+    ``pilotage_cli.secrets_cli`` for the user-facing setup wizard.
   - ``onepassword`` — 1Password ``op://`` secret references (`op` CLI).
     See ``agent.secret_sources.onepassword`` for the integration and
-    ``hermes_cli.onepassword_secrets_cli`` for the user-facing commands.
+    ``pilotage_cli.onepassword_secrets_cli`` for the user-facing commands.
 
 The bundled set is deliberately closed (policy mirrors memory
 providers): new third-party secret managers ship as standalone plugin

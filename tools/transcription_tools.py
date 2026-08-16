@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from urllib.parse import urljoin
 
-from hermes_cli._subprocess_compat import windows_hide_flags
+from pilotage_cli._subprocess_compat import windows_hide_flags
 from utils import is_truthy_value
 from tools.managed_tool_gateway import resolve_managed_tool_gateway
 from tools.tool_backend_helpers import (
@@ -49,12 +49,12 @@ logger = logging.getLogger(__name__)
 def get_env_value(name, default=None):
     """Read env values through the live config module.
 
-    Tests may monkeypatch and later restore ``hermes_cli.config.get_env_value``
+    Tests may monkeypatch and later restore ``pilotage_cli.config.get_env_value``
     before this module is imported. Resolve the helper at call time so STT does
     not keep a stale imported function for the rest of the test process.
     """
     try:
-        from hermes_cli.config import get_env_value as _get_env_value
+        from pilotage_cli.config import get_env_value as _get_env_value
     except ImportError:
         return os.getenv(name, default)
     value = _get_env_value(name)
@@ -66,7 +66,7 @@ def _resolve_provider_key(env_var: str, provider_id: str) -> str:
 
     Delegates to ``tools.tool_backend_helpers.resolve_provider_secret`` —
     the single owner of STT/TTS key resolution (config > env/.env > the
-    credential pool populated by ``hermes auth add <provider_id>``).
+    credential pool populated by ``pilotage auth add <provider_id>``).
     Resolved at call time so tests that reload the helpers module see the
     live function.
     """
@@ -119,7 +119,7 @@ OPENAI_MODELS = {"whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "gp
 def _load_stt_config() -> dict:
     """Load the ``stt`` section from user config, falling back to defaults."""
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
         return load_config().get("stt") or {}
     except Exception:
         return {}
@@ -264,7 +264,7 @@ BUILTIN_STT_PROVIDERS = frozenset({"openai"})
 #   3. Plugin-registered TranscriptionProvider  → plugin dispatch.
 #   4. No match                                 → "No STT provider available".
 #
-# The single-env-var ``HERMES_LOCAL_STT_COMMAND`` escape hatch is preserved
+# The single-env-var ``PILOTAGE_LOCAL_STT_COMMAND`` escape hatch is preserved
 # untouched via the built-in ``local_command`` path. Use the command-provider
 # registry when you want MULTIPLE shell-driven STT engines, or you want a
 # named provider you can pick via ``stt.provider`` in config.yaml.
@@ -319,7 +319,7 @@ def _unregistered_stt_provider_error(provider: str) -> Dict[str, Any]:
         "error_type": "provider_not_registered",
         "error": (
             f"stt.provider='{key}' is set but no built-in, command, or plugin "
-            "provider registered that name. Run `hermes plugins list` to see "
+            "provider registered that name. Run `pilotage plugins list` to see "
             "installed STT plugins, or configure a command provider under "
             f"`stt.providers.{key}.command`."
         ),
@@ -383,7 +383,7 @@ def _dispatch_to_plugin_provider(
         return None
     try:
         from agent.transcription_registry import get_provider
-        from hermes_cli.plugins import _ensure_plugins_discovered
+        from pilotage_cli.plugins import _ensure_plugins_discovered
 
         _ensure_plugins_discovered()
         plugin_provider = get_provider(key)
@@ -554,7 +554,7 @@ def _apply_pre_transcription_hook(
     it.
     """
     try:
-        from hermes_cli.plugins import has_hook, invoke_hook
+        from pilotage_cli.plugins import has_hook, invoke_hook
 
         # No-hook short-circuit: keep the no-plugin dispatch path
         # byte-identical (no kwargs built, no invoke_hook call).
@@ -696,7 +696,7 @@ def _prepare_audio_for_transcription(
                 "error": "Unsupported format: .silk. Install the optional 'pilk' dependency to enable WeChat voice transcription.",
             }
 
-    temp_dir = tempfile.mkdtemp(prefix="hermes-silk-")
+    temp_dir = tempfile.mkdtemp(prefix="pilotage-silk-")
     converted_path = os.path.join(temp_dir, f"{audio_path.stem}.wav")
     try:
         import pilk
@@ -785,7 +785,7 @@ def _transcribe_openai(
                 return client.audio.transcriptions.create(**create_kwargs)
 
         try:
-            with tempfile.TemporaryDirectory(prefix="hermes-stt-") as work_dir:
+            with tempfile.TemporaryDirectory(prefix="pilotage-stt-") as work_dir:
                 try:
                     transcription = _create_transcription(file_path)
                 except BadRequestError as exc:
@@ -979,7 +979,7 @@ def _trim_silence_for_cloud_stt(
         f"start_periods=1:start_threshold={threshold_db}dB:start_silence={keep_seconds}:"
         f"stop_periods=-1:stop_threshold={threshold_db}dB:stop_silence={keep_seconds}"
     )
-    work_dir = tempfile.mkdtemp(prefix="hermes-stt-trim-")
+    work_dir = tempfile.mkdtemp(prefix="pilotage-stt-trim-")
     trimmed_path = os.path.join(work_dir, f"{Path(file_path).stem or 'audio'}-trimmed.m4a")
     # Scale the all-silence guard with keep_ms: an output consisting solely
     # of kept pause must never be uploaded as "speech".

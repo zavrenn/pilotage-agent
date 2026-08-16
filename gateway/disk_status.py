@@ -83,7 +83,7 @@ def classify_disk_pressure(free_mb: Any, total_mb: Any) -> str:
 def collect_disk_status(home: Optional[Path] = None) -> Dict[str, Any]:
     """Build the ``disk`` block for ``/api/status``.
 
-    ``home`` scopes the sample to a profile's HERMES_HOME (the status
+    ``home`` scopes the sample to a profile's PILOTAGE_HOME (the status
     endpoint's ``?profile=`` handling passes it through); on hosted
     images every profile shares the ``/opt/data`` volume, so the answer
     is the same — but scoping keeps the contract identical to the
@@ -100,9 +100,9 @@ def collect_disk_status(home: Optional[Path] = None) -> Dict[str, Any]:
     }
     try:
         if home is None:
-            from hermes_constants import get_hermes_home
+            from pilotage_constants import get_pilotage_home
 
-            home = get_hermes_home()
+            home = get_pilotage_home()
         usage = shutil.disk_usage(home)
     except Exception:
         return status

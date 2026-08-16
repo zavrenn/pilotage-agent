@@ -115,7 +115,7 @@ def _fetch_monitor_url(url: str) -> tuple[bool, str]:
     if not str(url).lower().startswith(("http://", "https://")):
         return False, f"monitor_url must be http(s): {url!r}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "hermes-cron-monitor"})
+        req = urllib.request.Request(url, headers={"User-Agent": "pilotage-cron-monitor"})
         with urllib.request.urlopen(req, timeout=URL_TIMEOUT_SECONDS) as resp:  # nosec B310 — scheme checked above
             body = resp.read(MAX_URL_BYTES + 1)
         if len(body) > MAX_URL_BYTES:
@@ -195,7 +195,7 @@ def check_monitor(job: dict) -> MonitorOutcome:
 
 
 def _persist_monitor_state(job_id: str, new_hash: str, output: str) -> None:
-    from cron.jobs import _hermes_now, update_job
+    from cron.jobs import _pilotage_now, update_job
 
     _write_last_output(job_id, output)
     try:
@@ -204,7 +204,7 @@ def _persist_monitor_state(job_id: str, new_hash: str, output: str) -> None:
             {
                 "monitor_state": {
                     "last_output_hash": new_hash,
-                    "last_changed_at": _hermes_now().isoformat(),
+                    "last_changed_at": _pilotage_now().isoformat(),
                 }
             },
         )

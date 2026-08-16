@@ -526,7 +526,7 @@ _PRUNE_MIN_CHARS = 200
 # the user never actually answered (timeout / no-user contexts). These must
 # not be quoted as a user answer during compaction. Sources:
 #   cli.py timeout callback, gateway/run.py timeout + delivery-failure paths,
-#   hermes_cli/oneshot.py no-user callback.
+#   pilotage_cli/oneshot.py no-user callback.
 _CLARIFY_NON_RESPONSE_PREFIXES = (
     "The user did not provide a response",
     "[user did not respond",
@@ -1260,7 +1260,7 @@ def _strip_historical_media(messages: List[Dict[str, Any]]) -> List[Dict[str, An
 
     Shallow copies of touched messages only; input is never mutated.
     Port of Kilo-Org/kilocode#9434 (adapted for the OpenAI-style message
-    shape the hermes compressor emits).
+    shape the pilotage compressor emits).
     """
     if not messages:
         return messages
@@ -2838,7 +2838,7 @@ class ContextCompressor(ContextEngine):
         """Return True when a high rough preflight estimate is known-noisy.
 
         ``estimate_request_tokens_rough(..., tools=...)`` intentionally
-        overestimates so Hermes compresses before a provider rejects the
+        overestimates so Pilotage compresses before a provider rejects the
         payload — but the margin is not a fixed percentage: CJK text is
         counted at ~1.7x its o200k cost and Responses-mode reasoning replay
         blobs at several times their billed cost, so heavy sessions can show
@@ -3969,14 +3969,14 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
 
         # Current date for temporal anchoring (see ## Temporal Anchoring below).
         # Date-only granularity matches system_prompt.py:337 (PR #20451) and the
-        # user's configured timezone via hermes_time.now(). The compaction summary
+        # user's configured timezone via pilotage_time.now(). The compaction summary
         # is a mid-conversation message that is NOT part of the cached prefix, so a
         # date here never affects prompt-cache stability. Resolved defensively —
         # a clock failure must never block compaction.
         try:
-            from hermes_time import now as _hermes_now
+            from pilotage_time import now as _pilotage_now
 
-            _today_str = _hermes_now().strftime("%Y-%m-%d")
+            _today_str = _pilotage_now().strftime("%Y-%m-%d")
         except Exception:  # pragma: no cover - clock resolution is best-effort
             _today_str = ""
 
@@ -7019,7 +7019,7 @@ This compaction should PRIORITISE preserving all information related to the focu
         # request-build time), so ``last_head_role`` defaults to "user" and
         # the summary is emitted as role="assistant". On a session whose only
         # genuine user turn falls into the compressed middle — e.g. a
-        # ``hermes kanban`` worker seeded with a single short
+        # ``pilotage kanban`` worker seeded with a single short
         # ``"work kanban task <id>"`` prompt followed by nothing but
         # assistant/tool turns — that leaves the compressed transcript with
         # ZERO user-role messages. OpenAI-compatible backends (vLLM/Qwen)
@@ -7245,7 +7245,7 @@ This compaction should PRIORITISE preserving all information related to the focu
         # high-water mark until exit. The helper is glibc-gated, config-gated
         # and rate-limited, so this is a safe no-op elsewhere. (#70782)
         try:
-            from hermes_cli.mem_trim import trim_memory
+            from pilotage_cli.mem_trim import trim_memory
 
             trim_memory(reason="post-compression")
         except Exception as exc:

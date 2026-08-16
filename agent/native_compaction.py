@@ -9,7 +9,7 @@ as an input item on later requests stands in for the pruned history, so the
 model keeps long-horizon recall without the client ever seeing a summary.
 Docs: https://developers.openai.com/api/docs/guides/compaction
 
-Hermes' support is deliberately narrow (live verification, Aug 2026):
+Pilotage' support is deliberately narrow (live verification, Aug 2026):
 
 * **gpt-5.6 family only.** gpt-5.6 and its variants compact correctly.
   Sending the field to gpt-5.1 / gpt-5.2 reliably fails server-side —
@@ -23,7 +23,7 @@ Hermes' support is deliberately narrow (live verification, Aug 2026):
   most would 400 on the unknown parameter, and none can mint or decrypt
   the compaction blob.
 
-Ownership model: Hermes' local compression stays fully armed as the
+Ownership model: Pilotage' local compression stays fully armed as the
 fallback owner. The native threshold is clamped safely below the local
 compressor's trigger so the server compacts first; if it doesn't (native
 disabled mid-session, provider hiccup, non-eligible route), the local

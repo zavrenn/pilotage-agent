@@ -1,7 +1,7 @@
 """``command`` secret source — resolve secrets via a user-configured helper.
 
 Ports the security semantics of the desktop app's TypeScript
-``CommandSecretsProvider`` (hermes-desktop ``src/main/secrets/commandProvider.ts``)
+``CommandSecretsProvider`` (pilotage-desktop ``src/main/secrets/commandProvider.ts``)
 to the Python agent.  The helper command (e.g. ``keepassxc-cli``,
 ``secret-tool``, or a script that cats a tmpfs env file) comes from
 ``secrets.command`` in ``config.yaml`` — NEVER from ``.env``, which holds
@@ -11,7 +11,7 @@ Security model (mirrors the TS provider line-for-line where it matters):
 
 * The command string is the USER'S OWN configuration (same trust level as
   the ``.env`` file they control), so it is run via ``/bin/sh -c <command>``.
-* The requested key is passed to the child ONLY via the ``HERMES_SECRET_KEY``
+* The requested key is passed to the child ONLY via the ``PILOTAGE_SECRET_KEY``
   environment variable — it is NEVER interpolated into the shell string, so
   a hostile key name (e.g. ``"; rm -rf ~``) is inert data, not code.
 * Hard timeout (default 3s) + output cap (default 1 MiB); any failure
@@ -22,7 +22,7 @@ Security model (mirrors the TS provider line-for-line where it matters):
   value.  The helper's stderr is captured via a pipe and DISCARDED so its
   diagnostics (which can carry secret material) never reach our stderr.
 * The startup/apply path runs the helper exactly ONCE (with an empty
-  ``HERMES_SECRET_KEY``) — it is never called per-key in a loop, so a
+  ``PILOTAGE_SECRET_KEY``) — it is never called per-key in a loop, so a
   helper that blocks (e.g. on a vault unlock prompt) can't be spawned
   dozens of times.
 * PLATFORM: the provider is POSIX-only (needs ``/bin/sh``).  On Windows it
@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 # Reuse the exact result shape the bitwarden source returns so
-# hermes_cli.env_loader can consume both providers identically.
+# pilotage_cli.env_loader can consume both providers identically.
 from agent.secret_sources.base import ErrorKind, SecretSource
 from agent.secret_sources.base import get_source_environment
 from agent.secret_sources.bitwarden import FetchResult
@@ -167,7 +167,7 @@ def _run_helper(
 ) -> Optional[str]:
     """Run the helper via ``/bin/sh -c`` and return its stdout, or None.
 
-    The key is passed as DATA via ``HERMES_SECRET_KEY`` — never interpolated
+    The key is passed as DATA via ``PILOTAGE_SECRET_KEY`` — never interpolated
     into the command string.  Both stdout and stderr are captured via pipes
     (never inherited); stderr is discarded.  Any failure logs structured
     fields only and returns None — never raises.
@@ -193,7 +193,7 @@ def _run_helper(
         # process-global environment.  hydrate_profile_secret_sources seeds
         # only global-safe values plus this profile's own .env.
         env = dict(source_env)
-    env["HERMES_SECRET_KEY"] = secret_key
+    env["PILOTAGE_SECRET_KEY"] = secret_key
 
     try:
         proc = subprocess.Popen(  # noqa: S602 — command is the user's own config
@@ -290,7 +290,7 @@ def get_command_secret(
     max_output_bytes: int = _MAX_OUTPUT_BYTES,
 ) -> Optional[str]:
     """Resolve a single secret by running the helper with the key in
-    ``HERMES_SECRET_KEY``.  Returns None on any failure — never raises."""
+    ``PILOTAGE_SECRET_KEY``.  Returns None on any failure — never raises."""
     command = (command or "").strip()
     if not command:
         return None
@@ -321,7 +321,7 @@ def list_command_secrets(
 
 
 # ---------------------------------------------------------------------------
-# Public entry point — called from hermes_cli.env_loader
+# Public entry point — called from pilotage_cli.env_loader
 # ---------------------------------------------------------------------------
 
 
@@ -358,7 +358,7 @@ def apply_command_secrets(
         return result
 
     # The list/enumerate path: run the helper exactly ONCE with an empty
-    # HERMES_SECRET_KEY and parse its stdout as a dotenv blob.
+    # PILOTAGE_SECRET_KEY and parse its stdout as a dotenv blob.
     stdout = _run_helper(command, "", timeout_seconds, max_output_bytes)
     if stdout is None:
         # _run_helper already logged structured fields to stderr.
@@ -412,7 +412,7 @@ class CommandSource(SecretSource):
         secrets:
           command:
             enabled: true
-            command: "cat /run/user/1000/hermes-secrets.env"
+            command: "cat /run/user/1000/pilotage-secrets.env"
             # or per-vault CLIs: keepassxc-cli / secret-tool / pass / gpg —
             # anything fast and NON-interactive.
     """
@@ -495,7 +495,7 @@ class CommandSource(SecretSource):
         if kind == ErrorKind.INTERNAL:
             return (
                 "Run the helper manually in a shell to see its real error — "
-                "Hermes discards helper stderr so diagnostics can't leak "
+                "Pilotage discards helper stderr so diagnostics can't leak "
                 "secret material."
             )
         return super().remediation(kind, cfg)

@@ -22,7 +22,7 @@ The active provider is chosen by configuration with this precedence:
    candidate order so installs that never set a config key keep landing
    on the same provider they did before the plugin migration.
 5. Otherwise ``None`` — the tool surfaces a helpful error pointing at
-   ``hermes tools``.
+   ``pilotage tools``.
 
 The capability filter (``supports_search`` / ``supports_extract``) is
 applied at every step so a search-only provider (``brave-free``)
@@ -37,7 +37,7 @@ import threading
 from typing import Dict, List, Optional
 
 from agent.web_search_provider import WebSearchProvider
-from hermes_constants import hermes_home_key
+from pilotage_constants import pilotage_home_key
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ def list_providers(*, scope: Optional[str] = None) -> List[WebSearchProvider]:
     """Return all registered providers, sorted by name."""
     with _lock:
         merged = dict(_providers)
-        merged.update(_scoped_providers.get(scope or hermes_home_key(), {}))
+        merged.update(_scoped_providers.get(scope or pilotage_home_key(), {}))
         items = list(merged.values())
     return sorted(items, key=lambda p: p.name)
 
@@ -94,7 +94,7 @@ def get_provider(name: str, *, scope: Optional[str] = None) -> Optional[WebSearc
         return None
     with _lock:
         key = name.strip()
-        return _scoped_providers.get(scope or hermes_home_key(), {}).get(key) or _providers.get(key)
+        return _scoped_providers.get(scope or pilotage_home_key(), {}).get(key) or _providers.get(key)
 
 
 def snapshot_registration(
@@ -135,7 +135,7 @@ def restore_registration(
 def _read_config_key(*path: str) -> Optional[str]:
     """Resolve a dotted config key from ``config.yaml``. Returns None on miss."""
     try:
-        from hermes_cli.config import load_config_readonly
+        from pilotage_cli.config import load_config_readonly
 
         cfg = load_config_readonly()
         cur = cfg
@@ -199,7 +199,7 @@ def _resolve(configured: Optional[str], *, capability: str) -> Optional[WebSearc
     """
     with _lock:
         snapshot = dict(_providers)
-        snapshot.update(_scoped_providers.get(hermes_home_key(), {}))
+        snapshot.update(_scoped_providers.get(pilotage_home_key(), {}))
 
     def _capable(p: WebSearchProvider) -> bool:
         if capability == "search":
@@ -298,7 +298,7 @@ def _disabled_web_plugin_for(configured: Optional[str] = None, *, capability: Op
 
     want = _norm(configured)
     try:
-        from hermes_cli.plugins import get_plugin_manager
+        from pilotage_cli.plugins import get_plugin_manager
 
         pm = get_plugin_manager()
         for key, loaded in pm._plugins.items():

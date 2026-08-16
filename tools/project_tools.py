@@ -6,7 +6,7 @@ sidebar groups sessions into. Creating / switching a project is a deliberate act
 expressed as explicit tools — never a side effect of a terminal ``cd``.
 
 Exposed only on GUI sessions: the tools live in the `project` toolset (kept off
-``_HERMES_CORE_TOOLS``) which the desktop/TUI gateway folds into its resolved
+``_PILOTAGE_CORE_TOOLS``) which the desktop/TUI gateway folds into its resolved
 toolsets, so no CLI/messaging/cron schema carries them. The GUI also wires
 ``set_project_workspace_callback`` so a create/switch re-anchors the live
 session's cwd and the sidebar follows the move; the DB write is the durable part.
@@ -49,7 +49,7 @@ def _apply_workspace(task_id: Optional[str], path: Optional[str], name: str) -> 
 
 
 def _resolve(conn, token: str):
-    from hermes_cli import projects_db as pdb
+    from pilotage_cli import projects_db as pdb
 
     token = (token or "").strip()
     if not token:
@@ -67,7 +67,7 @@ def _resolve(conn, token: str):
 
 
 def project_list(task_id: Optional[str] = None) -> str:
-    from hermes_cli import projects_db as pdb
+    from pilotage_cli import projects_db as pdb
 
     with pdb.connect_closing() as conn:
         active = pdb.get_active_id(conn)
@@ -93,7 +93,7 @@ def project_create(name: str, path: Optional[str] = None, task_id: Optional[str]
     if not name:
         return json.dumps({"success": False, "error": "name is required"})
 
-    from hermes_cli import projects_db as pdb
+    from pilotage_cli import projects_db as pdb
 
     folder = (path or "").strip()
     if folder:
@@ -125,7 +125,7 @@ def project_create(name: str, path: Optional[str] = None, task_id: Optional[str]
 
 
 def project_switch(project: str, task_id: Optional[str] = None) -> str:
-    from hermes_cli import projects_db as pdb
+    from pilotage_cli import projects_db as pdb
 
     with pdb.connect_closing() as conn:
         proj = _resolve(conn, project)

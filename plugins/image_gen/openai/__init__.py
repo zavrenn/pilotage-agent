@@ -2,7 +2,7 @@
 
 Exposes OpenAI's ``gpt-image-2`` model at three quality tiers as an
 :class:`ImageGenProvider` implementation. The tiers are implemented as
-three virtual model IDs so the ``hermes tools`` model picker and the
+three virtual model IDs so the ``pilotage tools`` model picker and the
 ``image_gen.model`` config key behave like any other multi-model backend:
 
     gpt-image-2-low     ~15s   fastest, good for iteration
@@ -11,7 +11,7 @@ three virtual model IDs so the ``hermes tools`` model picker and the
 
 All three hit the same underlying API model (``gpt-image-2``) with a
 different ``quality`` parameter. Output is base64 JSON → saved under
-``$HERMES_HOME/cache/images/``.
+``$PILOTAGE_HOME/cache/images/``.
 
 Selection precedence (first hit wins):
 
@@ -85,7 +85,7 @@ _SIZES = {
 def _load_openai_config() -> Dict[str, Any]:
     """Read ``image_gen`` from config.yaml (returns {} on any failure)."""
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
 
         cfg = load_config()
         section = cfg.get("image_gen") if isinstance(cfg, dict) else None
@@ -240,8 +240,8 @@ class OpenAIImageGenProvider(ImageGenProvider):
         if not api_key:
             return error_response(
                 error=(
-                    "OPENAI_API_KEY not set. Run `hermes tools` → Image "
-                    "Generation → OpenAI to configure, or `hermes setup` "
+                    "OPENAI_API_KEY not set. Run `pilotage tools` → Image "
+                    "Generation → OpenAI to configure, or `pilotage setup` "
                     "to add the key."
                 ),
                 error_type="auth_required",

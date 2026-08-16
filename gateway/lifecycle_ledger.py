@@ -11,7 +11,7 @@ cross-correlating four log files and two external APIs to answer "what
 killed the gateway?".
 
 This module closes that gap with a tiny state machine persisted to
-``<HERMES_HOME>/state/gateway.lifecycle.json``:
+``<PILOTAGE_HOME>/state/gateway.lifecycle.json``:
 
 * On startup, :func:`record_startup` reads the sentinel left by the
   previous life.  ``phase == "running"`` means that life never reached any
@@ -58,19 +58,19 @@ _LOW_MEM_AVAILABLE_KIB = 64 * 1024  # < 64 MiB available
 _LOW_MEM_AVAILABLE_FRACTION = 0.05  # < 5% of MemTotal available
 
 
-def _process_hermes_home() -> Path:
-    """HERMES_HOME for process-level identity files (ignore task overrides)."""
-    val = os.environ.get("HERMES_HOME", "").strip()
+def _process_pilotage_home() -> Path:
+    """PILOTAGE_HOME for process-level identity files (ignore task overrides)."""
+    val = os.environ.get("PILOTAGE_HOME", "").strip()
     if val:
         return Path(val)
-    from hermes_constants import get_hermes_home
+    from pilotage_constants import get_pilotage_home
 
-    return get_hermes_home()
+    return get_pilotage_home()
 
 
 def get_lifecycle_sentinel_path(home: Optional[Path] = None) -> Path:
-    """Return ``<HERMES_HOME>/state/gateway.lifecycle.json``."""
-    base = home if home is not None else _process_hermes_home()
+    """Return ``<PILOTAGE_HOME>/state/gateway.lifecycle.json``."""
+    base = home if home is not None else _process_pilotage_home()
     return base.joinpath(*_LIFECYCLE_RELATIVE)
 
 
@@ -132,7 +132,7 @@ def _write_sentinel(payload: Dict[str, Any], home: Optional[Path]) -> None:
 def _append_exit_diag(record: Dict[str, Any], home: Optional[Path]) -> None:
     """Append a JSON line to gateway-exit-diag.log (same format as the CLI's
     ``_exit_diag`` records so existing tooling greps both)."""
-    base = home if home is not None else _process_hermes_home()
+    base = home if home is not None else _process_pilotage_home()
     path = base.joinpath(*_EXIT_DIAG_RELATIVE)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -314,7 +314,7 @@ def read_prior_exit_label(profile_home: Path) -> str:
     """Container-boot helper: one-word summary of how the profile's last
     gateway life ended.  ``clean`` / ``unclean`` / ``unknown`` (no sentinel
     or never ran).  Read-only and exception-free — used by
-    ``hermes_cli.container_boot`` to annotate ``container-boot.log``.
+    ``pilotage_cli.container_boot`` to annotate ``container-boot.log``.
     """
     try:
         sentinel = _read_json(get_lifecycle_sentinel_path(profile_home))

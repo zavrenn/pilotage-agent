@@ -1,6 +1,6 @@
 """On-disk pet store — install / list / resolve pets.
 
-Pets live under ``get_hermes_home()/pets/<slug>/`` so every profile gets its
+Pets live under ``get_pilotage_home()/pets/<slug>/`` so every profile gets its
 own set (we deliberately do **not** reuse petdex's ``~/.codex/pets`` default —
 that's owned by the petdex npm CLI and isn't profile-aware).  Each installed
 pet directory holds:
@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from hermes_constants import get_hermes_home
+from pilotage_constants import get_pilotage_home
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class InstalledPet:
 
 def pets_dir() -> Path:
     """Return the profile-scoped pets directory (created on demand)."""
-    path = get_hermes_home() / "pets"
+    path = get_pilotage_home() / "pets"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -361,7 +361,7 @@ def thumbnail_png(slug: str, *, source_url: str = "", timeout: float = 30.0) -> 
                 source_url,
                 timeout=timeout,
                 follow_redirects=True,
-                headers={"User-Agent": "hermes-agent-petdex"},
+                headers={"User-Agent": "pilotage-agent-petdex"},
             )
             resp.raise_for_status()
             sheet_bytes = resp.content
@@ -477,7 +477,7 @@ def _download(url: str, dest: Path, *, timeout: float) -> None:
             url,
             timeout=timeout,
             follow_redirects=True,
-            headers={"User-Agent": "hermes-agent-petdex"},
+            headers={"User-Agent": "pilotage-agent-petdex"},
         ) as resp:
             resp.raise_for_status()
             tmp = dest.with_suffix(dest.suffix + ".part")
@@ -496,7 +496,7 @@ def _download_json(url: str, *, timeout: float) -> dict:
         url,
         timeout=timeout,
         follow_redirects=True,
-        headers={"User-Agent": "hermes-agent-petdex"},
+        headers={"User-Agent": "pilotage-agent-petdex"},
     )
     resp.raise_for_status()
     data = resp.json()

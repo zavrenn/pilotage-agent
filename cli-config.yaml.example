@@ -1,17 +1,17 @@
-# Hermes Agent CLI Configuration
-# Copy settings from this example into ~/.hermes/config.yaml, or use
-# `hermes config set <section.key> <value>` to update the active profile.
+# Pilotage Agent CLI Configuration
+# Copy settings from this example into ~/.pilotage/config.yaml, or use
+# `pilotage config set <section.key> <value>` to update the active profile.
 # This file configures CLI behavior; only documented secret environment
 # variables in .env take precedence over their corresponding settings.
 
 # =============================================================================
 # Database Configuration
 # =============================================================================
-# WAL is the normal default. Hermes automatically falls back to DELETE when
+# WAL is the normal default. Pilotage automatically falls back to DELETE when
 # SQLite reports that WAL is incompatible with the filesystem. Set this to
 # "delete" explicitly for deployments whose backing filesystem is not WAL
 # crash-safe, such as Linux containers bind-mounted through macOS virtiofs,
-# NFS, or SMB. Hermes will not live-downgrade a database already open in WAL.
+# NFS, or SMB. Pilotage will not live-downgrade a database already open in WAL.
 database:
   journal_mode: "wal"  # Supported values: "wal", "delete"
   # Optional WAL sizing pragmas (integers). Unset = SQLite defaults.
@@ -21,7 +21,7 @@ database:
 # =============================================================================
 # Runtime Limits
 # =============================================================================
-# Long-running Hermes server processes raise their RLIMIT_NOFILE soft limit to
+# Long-running Pilotage server processes raise their RLIMIT_NOFILE soft limit to
 # this value when the operating system permits it. The value is clamped to the
 # hard limit and never lowers an already higher soft limit. Set to 0, false, or
 # null to disable the adjustment. Default: 4096.
@@ -39,10 +39,10 @@ model:
   # Inference provider selection:
   #   "auto"         - Auto-detect from credentials (default)
   #   "openrouter"   - OpenRouter (requires: OPENROUTER_API_KEY or OPENAI_API_KEY)
-  #   "nous"         - Nous Portal OAuth (requires: hermes auth add nous)
+  #   "nous"         - Nous Portal OAuth (requires: pilotage auth add nous)
   #   "nous-api"     - Nous Portal API key (requires: NOUS_API_KEY)
   #   "anthropic"    - Direct Anthropic API (requires: ANTHROPIC_API_KEY)
-  #   "openai-codex" - OpenAI Codex (requires: hermes auth)
+  #   "openai-codex" - OpenAI Codex (requires: pilotage auth)
   #   "copilot"      - GitHub Copilot / GitHub Models (requires: GITHUB_TOKEN)
   #   "zai"         - Use z.ai / ZhipuAI GLM models (requires: GLM_API_KEY)
   #   "kimi-coding"  - Kimi / Moonshot AI (requires: KIMI_API_KEY)
@@ -81,8 +81,8 @@ model:
   # ── Token limits — two settings, easy to confuse ──────────────────────────
   #
   # context_length: TOTAL context window (input + output tokens combined).
-  #   Controls when Hermes compresses history and validates requests.
-  #   Leave unset — Hermes auto-detects the correct value from the provider.
+  #   Controls when Pilotage compresses history and validates requests.
+  #   Leave unset — Pilotage auto-detects the correct value from the provider.
   #   Set manually only when auto-detection is wrong (e.g. a local server with
   #   a custom num_ctx, or a proxy that doesn't expose /v1/models).
   #
@@ -128,7 +128,7 @@ model:
   #     extra_headers:
   #       CF-Access-Client-Id: "xxxx.access"
   #       CF-Access-Client-Secret: "${CF_ACCESS_SECRET}"
-  #       X-Client-Name: "hermes-agent"
+  #       X-Client-Name: "pilotage-agent"
 
 # Named provider overrides (optional)
 # Use this for per-provider request timeouts, non-stream stale timeouts,
@@ -138,11 +138,11 @@ model:
 # client rebuilds during credential rotation.  For OpenAI-wire chat
 # completions (streaming and non-streaming) the configured value is also
 # used as the per-request ``timeout=`` kwarg so it wins over the legacy
-# HERMES_API_TIMEOUT env var (which still applies when no config is set).
+# PILOTAGE_API_TIMEOUT env var (which still applies when no config is set).
 # ``stale_timeout_seconds`` controls the non-streaming stale-call detector and
-# wins over the legacy HERMES_API_CALL_STALE_TIMEOUT env var. Leaving these
-# unset keeps the legacy defaults (HERMES_API_TIMEOUT=1800s,
-# HERMES_API_CALL_STALE_TIMEOUT=90s, native Anthropic 900s). The
+# wins over the legacy PILOTAGE_API_CALL_STALE_TIMEOUT env var. Leaving these
+# unset keeps the legacy defaults (PILOTAGE_API_TIMEOUT=1800s,
+# PILOTAGE_API_CALL_STALE_TIMEOUT=90s, native Anthropic 900s). The
 # implicit non-stream stale detector is auto-disabled for local endpoints
 # and can scale upward for very large contexts.
 #
@@ -166,9 +166,9 @@ model:
 # =============================================================================
 # Unified Timeouts (operation deadlines)
 # =============================================================================
-# One place to override Hermes's internal operation deadlines (seconds).
+# One place to override Pilotage's internal operation deadlines (seconds).
 # Keys are dotted paths resolved by agent/deadline.py:resolve_timeout().
-# Precedence: this section > legacy HERMES_* env var (back-compat) > built-in
+# Precedence: this section > legacy PILOTAGE_* env var (back-compat) > built-in
 # default. 0 or a negative value disables the bound (unbounded); very large
 # values are clamped to a platform-safe maximum automatically.
 #
@@ -177,7 +177,7 @@ model:
 # timeouts:
 #   tools:
 #     concurrent_batch: 420   # Deadline for a parallel tool-call batch
-#                             # (legacy env: HERMES_CONCURRENT_TOOL_TIMEOUT_S)
+#                             # (legacy env: PILOTAGE_CONCURRENT_TOOL_TIMEOUT_S)
 #     sequential_call: 420    # Deadline for one sequentially-executed tool call.
 #                             # Defaults to concurrent_batch's value so the two
 #                             # executor paths stay in sync; human waits
@@ -262,7 +262,7 @@ kanban:
 # Commands run directly on your machine in the current directory
 # -----------------------------------------------------------------------------
 # Working directory behavior:
-#   - CLI (`hermes` command): Uses "." (current directory where you run hermes)
+#   - CLI (`pilotage` command): Uses "." (current directory where you run pilotage)
 #   - Gateway/messaging/cron: Uses terminal.cwd here; legacy .env cwd values are deprecated
 terminal:
   backend: "local"
@@ -271,9 +271,9 @@ terminal:
   # font_family: "MesloLGS NF"  # Also accepts a CSS stack; blank uses bundled JetBrains Mono.
   timeout: 180
   # HOME policy for tool subprocesses:
-  #   auto    - default: host uses your real HOME; containers use HERMES_HOME/home
+  #   auto    - default: host uses your real HOME; containers use PILOTAGE_HOME/home
   #   real    - force your real OS-user HOME
-  #   profile - force HERMES_HOME/home for strict per-profile CLI config isolation
+  #   profile - force PILOTAGE_HOME/home for strict per-profile CLI config isolation
   home_mode: "auto"
   docker_mount_cwd_to_workspace: false  # SECURITY: off by default. Opt in to mount the launch cwd into Docker /workspace.
   lifetime_seconds: 300
@@ -313,7 +313,7 @@ terminal:
 #   # chosen docker_image expects to start as root.
 #   docker_run_as_host_user: true
 #   # Optional: explicitly forward selected env vars into Docker.
-#   # These values come from your current shell first, then ~/.hermes/.env.
+#   # These values come from your current shell first, then ~/.pilotage/.env.
 #   # Warning: anything forwarded here is visible to commands run in the container.
 #   docker_forward_env:
 #     - "GITHUB_TOKEN"
@@ -388,7 +388,7 @@ terminal:
 # - Password is cached for the session
 #
 # EMPTY PASSWORDS: Setting sudo_password to an explicit empty string is different
-# from leaving it unset. Hermes will try an empty password via `sudo -S` and
+# from leaving it unset. Pilotage will try an empty password via `sudo -S` and
 # will not open the interactive prompt. This is useful for passwordless sudo,
 # Touch ID sudo setups, and environments where prompting is just noise.
 #
@@ -504,7 +504,7 @@ compression:
   # Survives model switches and fallback activations.
   # threshold_tokens: 200000
 
-  # Existing Codex gpt-5.5 behavior: raise Hermes' compaction trigger to 85%
+  # Existing Codex gpt-5.5 behavior: raise Pilotage' compaction trigger to 85%
   # for the ChatGPT Codex OAuth route. Set false to opt back down to threshold.
   codex_gpt55_autoraise: true
 
@@ -535,18 +535,18 @@ compression:
   max_attempts: 3
 
   # Codex app-server (codex CLI runtime) thread-compaction mode. The codex
-  # agent owns the real thread context on this runtime, so Hermes' summarizer
+  # agent owns the real thread context on this runtime, so Pilotage' summarizer
   # cannot shrink it — compaction goes through the app server instead.
   #   native = let Codex decide when to compact its own thread (default)
-  #   hermes = let Hermes threshold trigger Codex thread/compact/start
-  #   off    = Hermes will not auto-trigger compaction; Codex may still compact natively
+  #   pilotage = let Pilotage threshold trigger Codex thread/compact/start
+  #   off    = Pilotage will not auto-trigger compaction; Codex may still compact natively
   codex_app_server_auto: native
 
   # Native OpenAI Responses server-side compaction (default: false). When true,
   # gpt-5.6-family models on the DIRECT OpenAI API (api.openai.com) or a ChatGPT
   # Codex subscription compact server-side: OpenAI prunes older context into an
-  # encrypted checkpoint that Hermes replays on later turns. No other provider,
-  # route, or model is affected. Hermes' local compression stays armed as the
+  # encrypted checkpoint that Pilotage replays on later turns. No other provider,
+  # route, or model is affected. Pilotage' local compression stays armed as the
   # fallback and still handles every non-eligible session.
   codex_responses_native: false
 
@@ -620,7 +620,7 @@ prompt_caching:
 # =============================================================================
 # Auxiliary Models (Advanced — Experimental)
 # =============================================================================
-# Hermes uses lightweight "auxiliary" models for side tasks: image analysis,
+# Pilotage uses lightweight "auxiliary" models for side tasks: image analysis,
 # browser screenshot analysis, web page summarization, TTS audio-tag insertion,
 # and context compression.
 #
@@ -640,10 +640,10 @@ prompt_caching:
 # Provider options:
 #   "auto"       - Best available: OpenRouter → Nous Portal → main endpoint (default)
 #   "openrouter" - Force OpenRouter (requires OPENROUTER_API_KEY)
-#   "nous"       - Force Nous Portal (requires: hermes auth add nous)
+#   "nous"       - Force Nous Portal (requires: pilotage auth add nous)
 #   "gemini"      - Force Google AI Studio direct (requires: GOOGLE_API_KEY or GEMINI_API_KEY)
 #   "ollama-cloud" - Ollama Cloud (requires: OLLAMA_API_KEY)
-#   "codex"       - Force Codex OAuth (requires: hermes model → Codex).
+#   "codex"       - Force Codex OAuth (requires: pilotage model → Codex).
 #                  Uses gpt-5.3-codex which supports vision.
 #   "main"       - Use your custom endpoint (OPENAI_BASE_URL + OPENAI_API_KEY).
 #                  Works with OpenAI API, local models, or any OpenAI-compatible
@@ -784,7 +784,7 @@ session_reset:
 # unlimited concurrent sessions. When the limit is reached, new sessions get a
 # clean error while existing active sessions keep their normal behavior. This
 # top-level key takes precedence over gateway.max_concurrent_sessions. The cap
-# is a best-effort single-host/profile runtime guard; Hermes fails open if the
+# is a best-effort single-host/profile runtime guard; Pilotage fails open if the
 # local runtime lease registry cannot be read or locked.
 max_concurrent_sessions: null
 
@@ -798,7 +798,7 @@ group_sessions_per_user: true
 # API Server — per-client model routing
 # ─────────────────────────────────────────────────────────────────────────────
 # Route different API clients to different models/providers on a single
-# Hermes deployment.  Clients choose a backend by sending a specific string
+# Pilotage deployment.  Clients choose a backend by sending a specific string
 # as the OpenAI ``model`` field.  Unmapped model values fall back to the
 # global model configured in the ``model:`` section above, and an explicit
 # session /model override always wins over a route.
@@ -856,9 +856,9 @@ skills:
   creation_nudge_interval: 15
 
   # External skill directories — share skills across tools/agents without
-  # copying them into ~/.hermes/skills/.  Each path is expanded (~ and ${VAR})
+  # copying them into ~/.pilotage/skills/.  Each path is expanded (~ and ${VAR})
   # and resolved to an absolute path.  External dirs are read-only: skill
-  # creation always writes to ~/.hermes/skills/.  Local skills take precedence
+  # creation always writes to ~/.pilotage/skills/.  Local skills take precedence
   # when names collide.
   # external_dirs:
   #   - ~/.agents/skills
@@ -879,7 +879,7 @@ agent:
   # gateway_timeout: 1800
 
   # Maximum time an alias routing key waits for an active turn holding the same
-  # resolved session lease. On expiry Hermes rejects this inbound message and
+  # resolved session lease. On expiry Pilotage rejects this inbound message and
   # asks the user to resend rather than running it without serialization.
   # Non-positive values fall back to the 1800-second default.
   # gateway_turn_lease_timeout: 1800
@@ -935,7 +935,7 @@ agent:
   # timeouts, 5xx, etc.) before the agent surfaces the failure. Lower this
   # to 1 if you use fallback providers and want fast failover on flaky
   # primaries (default 3). The OpenAI SDK does its own low-level retries
-  # underneath this wrapper — this is the Hermes-level loop.
+  # underneath this wrapper — this is the Pilotage-level loop.
   # api_max_retries: 3
 
   # After the agent edits code without fresh passing verification, nudge it to
@@ -943,10 +943,10 @@ agent:
   # coding surfaces (CLI, TUI, desktop) and programmatic callers, and disables
   # it on conversational messaging surfaces (Telegram, WhatsApp, etc.) where the
   # verification summary would reach a human as chat noise. Set true or false to
-  # force it on or off; the HERMES_VERIFY_ON_STOP env var (1/0) takes precedence.
+  # force it on or off; the PILOTAGE_VERIFY_ON_STOP env var (1/0) takes precedence.
   # verify_on_stop: auto
 
-  # Standing operator instructions for the coding posture (when Hermes is in a
+  # Standing operator instructions for the coding posture (when Pilotage is in a
   # code workspace). Appended to the coding brief as an extra system block, so
   # you can pin project-wide workflow rules without editing the shipped brief.
   # Accepts a string or a list of strings. Takes effect next session.
@@ -978,7 +978,7 @@ agent:
   #      provider prefix optional). First match wins.
   # Value: reasoning effort level (same options as reasoning_effort)
   # Override the global reasoning_effort for that specific model.
-  # NOTE: no `hermes config set` support for this key -- edit YAML directly.
+  # NOTE: no `pilotage config set` support for this key -- edit YAML directly.
   # reasoning_overrides:
   #   "openrouter/anthropic/claude-opus-4.5": "xhigh"
   #   "openai/gpt-5": "low"
@@ -989,7 +989,7 @@ agent:
   # Custom personalities (use with /personality command).
   # Built-ins (helpful, concise, technical, creative, teacher, kawaii, catgirl,
   # pirate, shakespeare, surfer, noir, uwu, philosopher, hype) are always
-  # available on every surface — defined once in hermes_cli/personality.py.
+  # available on every surface — defined once in pilotage_cli/personality.py.
   # Entries here ADD new personalities or OVERRIDE a built-in by name.
   # The active selection is stored in display.personality (never here, and
   # never in agent.system_prompt — that field is your manual system prompt).
@@ -1004,7 +1004,7 @@ agent:
 # Toolsets
 # =============================================================================
 # Control which tools the agent has access to.
-# Use `hermes tools` to interactively enable/disable tools per platform.
+# Use `pilotage tools` to interactively enable/disable tools per platform.
 
 # =============================================================================
 # Platform Toolsets (per-platform tool configuration)
@@ -1013,7 +1013,7 @@ agent:
 # If a platform isn't listed here, its built-in default is used.
 #
 # You can use EITHER:
-#   - A preset like "hermes-cli" or "hermes-telegram" (curated tool set)
+#   - A preset like "pilotage-cli" or "pilotage-telegram" (curated tool set)
 #   - A list of individual toolsets to compose your own (see list below)
 #
 # Supported platform keys: cli, telegram, whatsapp, whatsapp_cloud, api_server, webhook
@@ -1022,8 +1022,8 @@ agent:
 #
 #   # Use presets (same as defaults):
 #   platform_toolsets:
-#     cli: [hermes-cli]
-#     telegram: [hermes-telegram]
+#     cli: [pilotage-cli]
+#     telegram: [pilotage-telegram]
 #
 #   # Custom: give Telegram only web + terminal + file + planning:
 #   platform_toolsets:
@@ -1038,14 +1038,14 @@ agent:
 #     whatsapp: [web, vision, skills, todo]
 #
 # If not set, defaults are:
-#   cli:           hermes-cli            (everything + cronjob management)
-#   telegram:      hermes-telegram       (terminal, file, web, vision, image, tts, browser, skills, todo, cronjob, messaging)
-#   whatsapp:      hermes-whatsapp       (same as telegram)
+#   cli:           pilotage-cli            (everything + cronjob management)
+#   telegram:      pilotage-telegram       (terminal, file, web, vision, image, tts, browser, skills, todo, cronjob, messaging)
+#   whatsapp:      pilotage-whatsapp       (same as telegram)
 #
 platform_toolsets:
-  cli: [hermes-cli]
-  telegram: [hermes-telegram]
-  whatsapp: [hermes-whatsapp]
+  cli: [pilotage-cli]
+  telegram: [pilotage-telegram]
+  whatsapp: [pilotage-whatsapp]
 
 # =============================================================================
 # Gateway Platform Settings
@@ -1065,12 +1065,12 @@ platform_toolsets:
 #       rich_messages: false          # Bot API 10.1 rich messages (tables/task lists/details/math); default false for copyable legacy MarkdownV2, set true to opt in
 #       rich_drafts: false            # Experimental rich draft previews during Telegram DM streaming; default false because Telegram Desktop/macOS can visually overlay draft frames
 #       command_menu:
-#         # Telegram allows up to 100 BotCommands; Hermes defaults to 60 so
+#         # Telegram allows up to 100 BotCommands; Pilotage defaults to 60 so
 #         # all built-in commands plus common skill commands stay visible
 #         # while remaining under Telegram's payload-size limit. Clamped 1..100.
 #         max_commands: 60
-#         # prepend = user priority first, then Hermes defaults
-#         # append  = Hermes defaults first, then user priority
+#         # prepend = user priority first, then Pilotage defaults
+#         # append  = Pilotage defaults first, then user priority
 #         # replace = only the list below defines priority
 #         priority_mode: prepend
 #         priority:
@@ -1099,8 +1099,8 @@ platform_toolsets:
 # ─────────────────────────────────────────────────────────────────────────────
 # Available toolsets (use these names in platform_toolsets or the toolsets list)
 #
-# Run `hermes chat --list-toolsets` to see all toolsets and their tools.
-# Run `hermes chat --list-tools` to see every individual tool with descriptions.
+# Run `pilotage chat --list-toolsets` to see all toolsets and their tools.
+# Run `pilotage chat --list-tools` to see every individual tool with descriptions.
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # INDIVIDUAL TOOLSETS (compose your own):
@@ -1120,12 +1120,12 @@ platform_toolsets:
 #   cronjob      - cronjob (create/list/update/pause/resume/run/remove scheduled tasks)
 #
 # PRESETS (curated bundles):
-#   hermes-cli       - All of the above except send_message
-#   hermes-telegram  - terminal, file, web, vision, image_gen, tts, browser,
+#   pilotage-cli       - All of the above except send_message
+#   pilotage-telegram  - terminal, file, web, vision, image_gen, tts, browser,
 #                      skills, todo, cronjob, send_message
-#   hermes-discord   - Same as hermes-telegram
-#   hermes-whatsapp  - Same as hermes-telegram
-#   hermes-slack     - Same as hermes-telegram
+#   pilotage-discord   - Same as pilotage-telegram
+#   pilotage-whatsapp  - Same as pilotage-telegram
+#   pilotage-slack     - Same as pilotage-telegram
 #
 # COMPOSITE:
 #   debugging    - terminal + web + file
@@ -1152,9 +1152,9 @@ platform_toolsets:
 
 # NOTE: The top-level "toolsets" key is deprecated and ignored.
 # Tool configuration is managed per-platform via platform_toolsets above.
-# Use `hermes tools` to configure interactively, or edit platform_toolsets directly.
+# Use `pilotage tools` to configure interactively, or edit platform_toolsets directly.
 #
-# CLI override: hermes chat --toolsets terminal,web,file
+# CLI override: pilotage chat --toolsets terminal,web,file
 
 # =============================================================================
 # MCP (Model Context Protocol) Servers
@@ -1213,7 +1213,7 @@ platform_toolsets:
 # =============================================================================
 # Text-to-Speech
 # =============================================================================
-# TTS defaults to Edge TTS unless changed in ~/.hermes/config.yaml.
+# TTS defaults to Edge TTS unless changed in ~/.pilotage/config.yaml.
 # Gemini TTS supports persona/director prompt files, and Gemini 3.1 Flash TTS
 # can use a hidden auxiliary rewrite pass to insert expressive square-bracket
 # audio tags into the TTS script without showing tags in chat.
@@ -1225,7 +1225,7 @@ platform_toolsets:
 #     model: "gemini-3.1-flash-tts-preview"
 #     voice: "Kore"
 #     audio_tags: false
-#     persona_prompt_file: ""  # e.g. ~/.hermes/tts/radio-host.md
+#     persona_prompt_file: ""  # e.g. ~/.pilotage/tts/radio-host.md
 #   xai:
 #     voice_id: "eve"       # built-in or custom voice ID from xAI Console
 #     language: "en"        # BCP-47 code ("en", "pt-BR") or "auto"
@@ -1263,14 +1263,14 @@ stt:
   # that provider.
   #
   # Length / truncation contract: Whisper-family backends (openai) only use
-  # the final ~224 prompt tokens, so Hermes truncates longer prompts
+  # the final ~224 prompt tokens, so Pilotage truncates longer prompts
   # client-side (keeping the tail) with a WARNING log — never an error.
   # Other backends own their own validation.
   #
   # Provider behavior:
   #   openai                 -> `prompt`, forwarded unchanged
   #   plugin providers       -> `prompt` in `**extra`; plugin owns limits
-  # prompt: "Hermes, Teknium, Nous Research, kanban"
+  # prompt: "Pilotage, Teknium, Nous Research, kanban"
   language: "en"               # GLOBAL language hint for every STT provider (per-provider language wins). Set "" for auto-detect.
   openai:
     model: "whisper-1"         # whisper-1 | gpt-4o-mini-transcribe | gpt-4o-transcribe | gpt-transcribe
@@ -1279,7 +1279,7 @@ stt:
 # Text-to-speech. Only the deepinfra block is documented here — the
 # remaining providers (edge, openai, xai, minimax, mistral, gemini,
 # elevenlabs, neutts, kittentts, piper) inherit sensible defaults from
-# DEFAULT_CONFIG in hermes_cli/config.py.
+# DEFAULT_CONFIG in pilotage_cli/config.py.
 # tts:
 #   provider: "deepinfra"
 #   deepinfra:
@@ -1289,9 +1289,9 @@ stt:
 #     model: ""
 #     voice: "default"
 
-# "Hey Hermes" hands-free wake word (off by default; toggle with /wake).
+# "Hey Pilotage" hands-free wake word (off by default; toggle with /wake).
 # Full engine/provider options inherit from DEFAULT_CONFIG in
-# hermes_cli/config_defaults.py — only capture placement is documented here.
+# pilotage_cli/config_defaults.py — only capture placement is documented here.
 # wake_word:
 #   enabled: false
 #   capture: "auto"    # auto | local | client
@@ -1337,7 +1337,7 @@ stt:
 # =============================================================================
 # Code Execution Sandbox (Programmatic Tool Calling)
 # =============================================================================
-# The execute_code tool runs Python scripts that call Hermes tools via RPC.
+# The execute_code tool runs Python scripts that call Pilotage tools via RPC.
 # Intermediate tool results stay out of the LLM's context window.
 code_execution:
   timeout: 300         # Max seconds per script before kill (default: 300 = 5 min)
@@ -1379,9 +1379,9 @@ delegation:
 #
 # Requires: pip install honcho-ai
 # Config: ~/.honcho/config.json (shared with Claude Code, Cursor, etc.)
-# API key: HONCHO_API_KEY in ~/.hermes/.env or ~/.honcho/config.json
+# API key: HONCHO_API_KEY in ~/.pilotage/.env or ~/.honcho/config.json
 #
-# Hermes-specific overrides (optional — most config comes from ~/.honcho/config.json):
+# Pilotage-specific overrides (optional — most config comes from ~/.honcho/config.json):
 # honcho: {}
 
 # =============================================================================
@@ -1398,7 +1398,7 @@ display:
   #   new:     Show a tool indicator only when the tool changes (skip repeats)
   #   all:     Show every tool call with a short preview (default)
   #   verbose: Full args, results, and debug logs (same as /verbose)
-  #   log:     Silent in chat; append every tool call to ~/.hermes/logs/tool_calls.log (gateway only)
+  #   log:     Silent in chat; append every tool call to ~/.pilotage/logs/tool_calls.log (gateway only)
   # Toggle at runtime with /verbose in the CLI
   tool_progress: all
 
@@ -1453,8 +1453,8 @@ display:
   # terse: "Interrupting current task" and "⏳ Working — 12 min, terminal".
   busy_ack_detail: true
 
-  # What Enter does when Hermes is already busy (CLI and gateway platforms).
-  #   interrupt: Interrupt the current run and redirect Hermes (default)
+  # What Enter does when Pilotage is already busy (CLI and gateway platforms).
+  #   interrupt: Interrupt the current run and redirect Pilotage (default)
   #   queue:     Queue your message for the next turn
   #   steer:     Inject your message mid-run via /steer, arriving at the agent
   #              after the next tool call — no interrupt, no role violation.
@@ -1507,7 +1507,7 @@ display:
   # response box label, and branding text. Change at runtime with /skin <name>.
   #
   # Built-in skins:
-  #   default        — Classic Hermes gold/kawaii
+  #   default        — Classic Pilotage gold/kawaii
   #   ares           — Crimson/bronze war-god theme with spinner wings
   #   mono           — Clean grayscale monochrome
   #   slate          — Cool blue developer-focused
@@ -1517,7 +1517,7 @@ display:
   #   sisyphus       — Earthy stone-and-moss theme
   #   charizard      — Fiery orange dragon theme
   #
-  # Custom skins: drop a YAML file in ~/.hermes/skins/<name>.yaml
+  # Custom skins: drop a YAML file in ~/.pilotage/skins/<name>.yaml
   # Schema (all fields optional, missing values inherit from default):
   #
   #   name: my-theme
@@ -1586,14 +1586,14 @@ display:
 # stdout the script may return JSON that either blocks the tool call or
 # injects context into the next LLM call.
 #
-# Valid events (mirror hermes_cli.plugins.VALID_HOOKS):
+# Valid events (mirror pilotage_cli.plugins.VALID_HOOKS):
 #   pre_tool_call, post_tool_call, pre_llm_call, post_llm_call,
 #   pre_api_request, post_api_request, on_session_start, on_session_end,
 #   on_session_finalize, on_session_reset, subagent_stop
 #
 # First-use consent: each (event, command) pair prompts once on a TTY, then
-# is persisted to ~/.hermes/shell-hooks-allowlist.json.  Non-interactive
-# runs (gateway, cron) need --accept-hooks, HERMES_ACCEPT_HOOKS=1, or the
+# is persisted to ~/.pilotage/shell-hooks-allowlist.json.  Non-interactive
+# runs (gateway, cron) need --accept-hooks, PILOTAGE_ACCEPT_HOOKS=1, or the
 # hooks_auto_accept key below.
 #
 # See website/docs/user-guide/features/hooks.md for the full JSON wire
@@ -1602,15 +1602,15 @@ display:
 # hooks:
 #   pre_tool_call:
 #     - matcher: "terminal"
-#       command: "~/.hermes/agent-hooks/block-rm-rf.sh"
+#       command: "~/.pilotage/agent-hooks/block-rm-rf.sh"
 #       timeout: 10
 #   post_tool_call:
 #     - matcher: "write_file|patch"
-#       command: "~/.hermes/agent-hooks/auto-format.sh"
+#       command: "~/.pilotage/agent-hooks/auto-format.sh"
 #   pre_llm_call:
-#     - command: "~/.hermes/agent-hooks/inject-cwd-context.sh"
+#     - command: "~/.pilotage/agent-hooks/inject-cwd-context.sh"
 #   subagent_stop:
-#     - command: "~/.hermes/agent-hooks/log-orchestration.sh"
+#     - command: "~/.pilotage/agent-hooks/log-orchestration.sh"
 #
 # hooks_auto_accept: false
 
@@ -1618,9 +1618,9 @@ display:
 # =============================================================================
 # Telemetry
 # =============================================================================
-# Shared metrics are disabled by default. When enabled, Hermes writes only
+# Shared metrics are disabled by default. When enabled, Pilotage writes only
 # allowlisted aggregate counters and immutable JSON
-# packages under $HERMES_HOME/telemetry/shared_metrics; it does not upload them.
+# packages under $PILOTAGE_HOME/telemetry/shared_metrics; it does not upload them.
 # Packages include a random profile-scoped ID that stays stable until this
 # directory is deleted. It is not derived from hardware, account, or host data.
 # Successfully exported local history is retained for 30 days; pending deltas
@@ -1635,15 +1635,15 @@ telemetry:
 # Update Behavior
 # =============================================================================
 updates:
-  # Create a full HERMES_HOME zip before every `hermes update`.
-  # Backups land in ~/.hermes/backups/ and can be restored with `hermes import`.
+  # Create a full PILOTAGE_HOME zip before every `pilotage update`.
+  # Backups land in ~/.pilotage/backups/ and can be restored with `pilotage import`.
   # Off by default because large homes can add minutes to every update.
   pre_update_backup: false
 
   # Number of pre-update backup zips to retain.
   backup_keep: 5
 
-  # What non-interactive updates do with local source edits in the Hermes repo.
+  # What non-interactive updates do with local source edits in the Pilotage repo.
   # Interactive terminal updates always prompt before restoring the autostash.
   #
   #   stash   - auto-stash before pull, then auto-restore after success (default)
@@ -1655,13 +1655,13 @@ updates:
 # =============================================================================
 # Web Dashboard
 # =============================================================================
-# OAuth gate configuration for `hermes dashboard --host <non-loopback>`.
+# OAuth gate configuration for `pilotage dashboard --host <non-loopback>`.
 # The bundled Nous Portal plugin reads these on startup; settings here are
 # the canonical surface. Each can be overridden by an environment variable:
 #
-#   dashboard.oauth.client_id   <-  HERMES_DASHBOARD_OAUTH_CLIENT_ID
-#   dashboard.oauth.portal_url  <-  HERMES_DASHBOARD_PORTAL_URL
-#   dashboard.public_url        <-  HERMES_DASHBOARD_PUBLIC_URL
+#   dashboard.oauth.client_id   <-  PILOTAGE_DASHBOARD_OAUTH_CLIENT_ID
+#   dashboard.oauth.portal_url  <-  PILOTAGE_DASHBOARD_PORTAL_URL
+#   dashboard.public_url        <-  PILOTAGE_DASHBOARD_PUBLIC_URL
 #
 # Env wins when set to a non-empty value. This is what Fly.io's platform-
 # secret injection uses to push per-deploy client_ids without needing to
@@ -1669,7 +1669,7 @@ updates:
 # so a provisioned-but-not-populated secret can't shadow a valid entry here.
 #
 # Local dev / on-prem deploys should typically set these via config.yaml
-# (the ~/.hermes/.env file is reserved for API keys and secrets).
+# (the ~/.pilotage/.env file is reserved for API keys and secrets).
 #
 # dashboard:
 #   oauth:
@@ -1684,7 +1684,7 @@ updates:
 #   # full proxy header chains).
 #   #
 #   # When set, the value is the complete authority: scheme + host +
-#   # optional path prefix (e.g. "https://example.com/hermes"). The OAuth
+#   # optional path prefix (e.g. "https://example.com/pilotage"). The OAuth
 #   # callback URL becomes "<public_url>/auth/callback" — X-Forwarded-Prefix
 #   # is IGNORED on this code path because the operator has explicitly
 #   # declared the public URL and we no longer need to guess.
@@ -1692,7 +1692,7 @@ updates:
 #   # Leave empty to use the existing proxy-header reconstruction (the
 #   # default — works on Fly.io out of the box).
 #   #
-#   #   public_url: "https://example.com/hermes"
+#   #   public_url: "https://example.com/pilotage"
 #
 # -----------------------------------------------------------------------------
 # Self-hosted OIDC dashboard auth (generic OpenID Connect — Authentik,
@@ -1700,38 +1700,38 @@ updates:
 # nous block above when gating the dashboard with your own identity provider.
 # Each setting can be overridden by an environment variable:
 #
-#   dashboard.oauth.self_hosted.issuer         <-  HERMES_DASHBOARD_OIDC_ISSUER
-#   dashboard.oauth.self_hosted.client_id      <-  HERMES_DASHBOARD_OIDC_CLIENT_ID
-#   dashboard.oauth.self_hosted.scopes         <-  HERMES_DASHBOARD_OIDC_SCOPES
-#   dashboard.oauth.self_hosted.client_secret  <-  HERMES_DASHBOARD_OIDC_CLIENT_SECRET
+#   dashboard.oauth.self_hosted.issuer         <-  PILOTAGE_DASHBOARD_OIDC_ISSUER
+#   dashboard.oauth.self_hosted.client_id      <-  PILOTAGE_DASHBOARD_OIDC_CLIENT_ID
+#   dashboard.oauth.self_hosted.scopes         <-  PILOTAGE_DASHBOARD_OIDC_SCOPES
+#   dashboard.oauth.self_hosted.client_secret  <-  PILOTAGE_DASHBOARD_OIDC_CLIENT_SECRET
 #
 # dashboard:
 #   oauth:
 #     provider: self-hosted
 #     self_hosted:
-#       issuer: "https://auth.example.com/application/o/hermes/"  # required
-#       client_id: "hermes-dashboard"                             # required
+#       issuer: "https://auth.example.com/application/o/pilotage/"  # required
+#       client_id: "pilotage-dashboard"                             # required
 #       scopes: "openid profile email"                            # optional
 #
 #       # OPTIONAL — set ONLY if your IDP registered the client as
 #       # *confidential* (Authentik / Keycloak often default to this). When
-#       # set, Hermes authenticates the client at the token endpoint
+#       # set, Pilotage authenticates the client at the token endpoint
 #       # (client_secret_basic or client_secret_post, auto-selected from the
 #       # IDP's discovery doc) IN ADDITION to PKCE. Leave unset for a public
 #       # (PKCE-only) client — the common case.
 #       #
-#       # This is a CREDENTIAL: prefer setting HERMES_DASHBOARD_OIDC_CLIENT_SECRET
-#       # in ~/.hermes/.env over putting it here in config.yaml.
+#       # This is a CREDENTIAL: prefer setting PILOTAGE_DASHBOARD_OIDC_CLIENT_SECRET
+#       # in ~/.pilotage/.env over putting it here in config.yaml.
 #       #   client_secret: ""
 
 # =============================================================================
 # External secret sources
 # =============================================================================
 # Pull provider credentials from external secret managers at process startup
-# instead of storing them in ~/.hermes/.env. Only the manager's bootstrap
+# instead of storing them in ~/.pilotage/.env. Only the manager's bootstrap
 # credential (e.g. BWS_ACCESS_TOKEN / OP_SERVICE_ACCOUNT_TOKEN) lives in .env
 # (or your shell / desktop session); everything else rotates centrally.
-# Failures never block startup — Hermes warns once and continues with
+# Failures never block startup — Pilotage warns once and continues with
 # whatever .env already had.
 #
 # Multiple sources can be enabled at once:
@@ -1758,7 +1758,7 @@ updates:
 #       enabled: false
 #       max_stale_seconds: 0               # 0 disables stale fallback
 #     override_existing: true              # BSM values win over existing env
-#     auto_install: true                   # lazy-download bws into ~/.hermes/bin
+#     auto_install: true                   # lazy-download bws into ~/.pilotage/bin
 #
 #   # ---- 1Password (op CLI) -------------------------------------------------
 #   onepassword:
@@ -1783,6 +1783,6 @@ updates:
 #   # its stderr is discarded so diagnostics can't leak secret material.
 #   command:
 #     enabled: false
-#     command: "cat /run/user/1000/hermes-secrets.env"
+#     command: "cat /run/user/1000/pilotage-secrets.env"
 #     helper_timeout_seconds: 3
 #     override_existing: false             # .env/shell win by default

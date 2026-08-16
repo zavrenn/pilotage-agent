@@ -5,7 +5,7 @@ When users send stickers, we describe them via the vision tool and cache
 the descriptions keyed by file_unique_id so we don't re-analyze the same
 sticker image on every send. Descriptions are concise (1-2 sentences).
 
-Cache location: ~/.hermes/sticker_cache.json
+Cache location: ~/.pilotage/sticker_cache.json
 """
 
 import json
@@ -14,10 +14,10 @@ import tempfile
 import time
 from typing import Optional
 
-from hermes_cli.config import get_hermes_home
+from pilotage_cli.config import get_pilotage_home
 
 
-CACHE_PATH = get_hermes_home() / "sticker_cache.json"
+CACHE_PATH = get_pilotage_home() / "sticker_cache.json"
 
 # Vision prompt for describing stickers -- kept concise to save tokens
 STICKER_VISION_PROMPT = (

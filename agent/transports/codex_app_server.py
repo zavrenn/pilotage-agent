@@ -6,11 +6,11 @@ do an `initialize` handshake, then drive `thread/start` + `turn/start` and
 consume streaming `item/*` notifications until `turn/completed`.
 
 This module is the wire-level speaker only. Higher-level concerns (event
-projection into Hermes' display, approval bridging, transcript projection into
+projection into Pilotage' display, approval bridging, transcript projection into
 AIAgent.messages, plugin migration) live in sibling modules.
 
 Status: optional opt-in runtime gated behind `model.openai_runtime ==
-"codex_app_server"`. Hermes' default tool dispatch is unchanged when this
+"codex_app_server"`. Pilotage' default tool dispatch is unchanged when this
 runtime is not selected.
 """
 
@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from tools.environments.local import hermes_subprocess_env
+from tools.environments.local import pilotage_subprocess_env
 
 # Default minimum codex version we test against. The PR sets this from the
 # `codex --version` parsed at install time; bumping is a one-line change here.
@@ -80,14 +80,14 @@ class CodexAppServerClient:
         # model-chosen agentic loop that executes shell commands, so it
         # legitimately needs LLM provider credentials (inherit_credentials=True)
         # to authenticate against the model endpoint. But the previous
-        # `os.environ.copy()` also handed it every Tier-1 Hermes secret — gateway
+        # `os.environ.copy()` also handed it every Tier-1 Pilotage secret — gateway
         # bot tokens, GitHub auth, Modal/Daytona infra tokens, the dashboard
         # session token, AUXILIARY_* side-LLM keys, GATEWAY_RELAY_* auth — none
         # of which a coding subprocess has any use for. Route through the
         # centralized helper so Tier-1 + dynamic-internal secrets are always
         # stripped while provider creds still flow, matching copilot_acp_client
         # (#29157 sibling spawn-site gap).
-        spawn_env = hermes_subprocess_env(inherit_credentials=True)
+        spawn_env = pilotage_subprocess_env(inherit_credentials=True)
         if env:
             spawn_env.update(env)
         if codex_home:
@@ -99,15 +99,15 @@ class CodexAppServerClient:
         # Codex sandbox on, but add the Kanban root as the only extra writable
         # root. Without this, codex-runtime workers finish their actual work
         # but crash/block when kanban_complete/kanban_block writes SQLite.
-        if spawn_env.get("HERMES_KANBAN_TASK"):
-            kanban_db = spawn_env.get("HERMES_KANBAN_DB")
+        if spawn_env.get("PILOTAGE_KANBAN_TASK"):
+            kanban_db = spawn_env.get("PILOTAGE_KANBAN_DB")
             kanban_root = (
                 os.path.dirname(kanban_db)
                 if kanban_db
                 else spawn_env.get(
-                    "HERMES_KANBAN_ROOT",
+                    "PILOTAGE_KANBAN_ROOT",
                     os.path.join(
-                        spawn_env.get("HERMES_HOME", os.path.expanduser("~/.hermes")),
+                        spawn_env.get("PILOTAGE_HOME", os.path.expanduser("~/.pilotage")),
                         "kanban",
                     ),
                 )
@@ -129,7 +129,7 @@ class CodexAppServerClient:
 
         # Hide the console the codex child would otherwise flash on Windows
         # (#56747). Hide-only — stdio pipes stay intact for the app-server wire.
-        from hermes_cli._subprocess_compat import windows_hide_flags
+        from pilotage_cli._subprocess_compat import windows_hide_flags
 
         self._proc = subprocess.Popen(
             cmd,
@@ -159,8 +159,8 @@ class CodexAppServerClient:
 
     def initialize(
         self,
-        client_name: str = "hermes",
-        client_title: str = "Hermes Agent",
+        client_name: str = "pilotage",
+        client_title: str = "Pilotage Agent",
         client_version: str = "0.1",
         capabilities: Optional[dict] = None,
         timeout: float = 10.0,

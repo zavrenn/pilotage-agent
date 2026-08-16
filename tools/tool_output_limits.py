@@ -4,7 +4,7 @@ Ported from anomalyco/opencode PR #23770 (``feat(truncate): allow
 configuring tool output truncation limits``).
 
 OpenCode hardcoded ``MAX_LINES = 2000`` and ``MAX_BYTES = 50 * 1024``
-as tool-output truncation thresholds. Hermes-agent had the same
+as tool-output truncation thresholds. Pilotage-agent had the same
 hardcoded constants in two places:
 
 * ``tools/terminal_tool.py`` — ``MAX_OUTPUT_CHARS = 50000`` (terminal
@@ -71,7 +71,7 @@ def get_tool_output_limits() -> Dict[str, int]:
     if _cached_limits is not None:
         return _cached_limits
     try:
-        from hermes_cli.config import load_config
+        from pilotage_cli.config import load_config
         cfg = load_config() or {}
         section = cfg.get("tool_output") if isinstance(cfg, dict) else None
         if not isinstance(section, dict):
