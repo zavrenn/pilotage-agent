@@ -950,7 +950,7 @@ def resolve_fast_mode_overrides(model_id: Optional[str]) -> dict[str, Any] | Non
 #   - "openrouter": curated list is already a hand-picked agentic subset of
 #     OpenRouter's 400+ catalog. Blindly merging would dump everything.
 # Also excluded: providers that already have dedicated live-endpoint
-# branches below (ai-gateway, ollama-cloud, custom, stepfun, openai-codex) —
+# branches below (ai-gateway, ollama-cloud, custom, openai-codex) —
 # those paths handle freshness themselves.
 _MODELS_DEV_PREFERRED: frozenset[str] = frozenset({
     "opencode-go",
@@ -975,8 +975,7 @@ def _model_dedup_key(model_id: str) -> str:
     """Case-insensitive dedup key that also folds picker-search aliases.
 
     Some providers serve the same model under both a curated public slug and
-    a bare live wire id (Kimi Coding Plan lists its flagship as ``k3`` while
-    the curated catalog carries ``kimi-k3``). Folding through the search-alias
+    a bare live wire id. Folding through the search-alias
     table keeps the curated-first merge from emitting both as separate rows.
     The row that survives is the primary list's entry; selection still sends
     whichever id the surviving row carries.
@@ -1077,19 +1076,6 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
         except Exception:
             access_token = None
         return get_codex_model_ids(access_token=access_token)
-    if normalized == "stepfun":
-        try:
-            from pilotage_cli.auth import resolve_api_key_provider_credentials
-
-            creds = resolve_api_key_provider_credentials("stepfun")
-            api_key = str(creds.get("api_key") or "").strip()
-            base_url = str(creds.get("base_url") or "").strip()
-            if api_key and base_url:
-                live = fetch_api_models(api_key, base_url)
-                if live:
-                    return live
-        except Exception:
-            pass
     if normalized == "deepinfra":
         # DeepInfra's generic /models endpoint mixes chat, image, video,
         # speech, and embedding models. The tagged catalog helper is the only
@@ -1159,7 +1145,7 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                 return live
     # ── Profile-based generic live fetch (all simple api-key providers) ──
     # Handles any provider registered in providers/ with auth_type="api_key".
-    # Replaces per-provider copy-paste blocks (stepfun, gmi, zai, etc.).
+    # Replaces per-provider copy-paste blocks (gmi, zai, etc.).
     try:
         from providers import get_provider_profile
         from pilotage_cli.auth import resolve_api_key_provider_credentials
@@ -1181,7 +1167,7 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                     # models that the live endpoint omits (stale cache,
                     # partial rollout) still appear in the picker.
                     #
-                    # Single providers (kimi, zai) use curated-first
+                    # Single providers (e.g. zai) use curated-first
                     # (commit 658ac1d86) to surface newest models even when live
                     # API lags. OpenCode Zen / Go are different: their
                     # live API is the authoritative catalog, so they merge

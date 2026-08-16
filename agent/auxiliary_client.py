@@ -11,7 +11,7 @@ Resolution order for text tasks (auto mode):
   3. Nous Portal (~/.pilotage/auth.json active provider)
   4. Custom endpoint (config.yaml model.base_url + OPENAI_API_KEY)
   5. Native Anthropic
-  6. Direct API-key providers (z.ai/GLM, Kimi/Moonshot, MiniMax, MiniMax-CN)
+  6. Direct API-key providers (z.ai/GLM, MiniMax, MiniMax-CN)
   7. None
 
 OpenRouter fallback cost guard: ``auxiliary.free_only: true`` restricts the
@@ -553,10 +553,6 @@ _PROVIDER_ALIASES = {
     "z-ai": "zai",
     "z.ai": "zai",
     "zhipu": "zai",
-    "kimi": "kimi-coding",
-    "moonshot": "kimi-coding",
-    "kimi-cn": "kimi-coding-cn",
-    "moonshot-cn": "kimi-coding-cn",
     "gmi-cloud": "gmi",
     "gmicloud": "gmi",
     "actual-computer": "actual",
@@ -924,9 +920,6 @@ def _get_aux_model_for_provider(provider_id: str, *, prefer_fast: bool = False) 
 _API_KEY_PROVIDER_AUX_MODELS_FALLBACK: Dict[str, str] = {
     "gemini": "gemini-3.6-flash",
     "zai": "glm-4.5-flash",
-    "kimi-coding": "kimi-k2-turbo-preview",
-    "stepfun": "step-3.5-flash",
-    "kimi-coding-cn": "kimi-k2-turbo-preview",
     "gmi": "google/gemini-3.1-flash-lite-preview",
     "anthropic": "claude-haiku-4-5-20251001",
     "ai-gateway": "google/gemini-3-flash",
@@ -1001,15 +994,7 @@ def _resolve_provider_vision_default(provider: str) -> Optional[str]:
 # `auxiliary.vision.provider: auto` sees one of these as the main provider,
 # it must skip straight to the aggregator chain instead of returning a client
 # that will 404 on every vision request.
-#
-# kimi-coding / kimi-coding-cn: the Kimi Coding Plan routes through
-# api.kimi.com/coding (Anthropic Messages wire) which Kimi's own docs
-# describe as having no image_in capability. Vision lives on the separate
-# Kimi Platform (api.moonshot.ai, OpenAI-wire, pay-as-you-go). See.
-_PROVIDERS_WITHOUT_VISION: frozenset = frozenset({
-    "kimi-coding",
-    "kimi-coding-cn",
-})
+_PROVIDERS_WITHOUT_VISION: frozenset = frozenset()
 
 # OpenRouter app attribution headers (base — always sent).
 # `X-Title` is the canonical attribution header OpenRouter's dashboard
@@ -1264,13 +1249,6 @@ def _to_openai_base_url(base_url: str) -> str:
             url,
         )
         return url
-    if base_url_host_matches(url, "api.kimi.com") and url.endswith("/coding"):
-        # Kimi Code uses /coding/v1/messages for Anthropic SDK (appends /v1/messages)
-        # but /coding/v1/chat/completions for OpenAI SDK (appends /chat/completions)
-        # Without /v1 here, OpenAI SDK hits /coding/chat/completions — a 404.
-        rewritten = url + "/v1"
-        logger.debug("Auxiliary client: rewrote Kimi base URL %s → %s", url, rewritten)
-        return rewritten
     return url
 
 
@@ -3262,8 +3240,6 @@ def _recoverable_pool_provider(
         return "anthropic"
     if base_url_host_matches(base, "githubcopilot.com"):
         return "copilot"
-    if base_url_host_matches(base, "api.kimi.com"):
-        return "kimi-coding"
     # For api_key providers not in the hardcoded list (e.g. opencode-go), match
     # the client base URL against all registered api_key providers so that
     # credential-pool rotation works for any provider the user configured.
@@ -4627,9 +4603,7 @@ def _to_async_client(sync_client, model: str, is_vision: bool = False):
         "base_url": str(sync_client.base_url),
     }
     sync_base_url = str(sync_client.base_url)
-    if base_url_host_matches(sync_base_url, "api.kimi.com"):
-        async_kwargs["default_headers"] = {"User-Agent": "claude-code/0.1.0"}
-    elif base_url_host_matches(sync_base_url, "integrate.api.nvidia.com"):
+    if base_url_host_matches(sync_base_url, "integrate.api.nvidia.com"):
         async_kwargs["default_headers"] = build_nvidia_nim_headers(sync_base_url)
     else:
         # Fall back to profile.default_headers for providers that declare
@@ -4692,7 +4666,7 @@ def resolve_provider_client(
     Args:
         provider: Provider identifier.  One of:
             "openrouter", "nous", "openai-codex" (or "codex"),
-            "zai", "kimi-coding", "minimax", "minimax-cn",
+            "zai", "minimax", "minimax-cn",
             "custom" (OPENAI_BASE_URL + OPENAI_API_KEY),
             "auto" (full auto-detection chain).
         model: Model slug override.  If None, uses the provider's default
@@ -4715,8 +4689,7 @@ def resolve_provider_client(
     _validate_proxy_env_urls()
     # Preserve the original provider name before alias normalization so a
     # user-declared ``custom_providers`` entry whose name coincidentally
-    # matches a built-in alias (e.g. user names their custom provider "kimi"
-    # which aliases to "kimi-coding") is still reachable via the named-custom
+    # matches a built-in alias is still reachable via the named-custom
     # branch below.
     original_provider = (provider or "").strip().lower()
     # Normalise aliases
@@ -4962,7 +4935,7 @@ def resolve_provider_client(
     # ── Named custom providers (config.yaml providers dict / custom_providers list) ───
     try:
         from pilotage_cli.runtime_provider import _get_named_custom_provider
-        # When the raw requested name is an alias (``kimi`` → ``kimi-coding``)
+        # When the raw requested name is an alias of a built-in provider
         # and the user defined a ``custom_providers`` entry under that alias
         # name, the custom entry is the intended target — the built-in alias
         # rewriting would otherwise hijack the request.  Only preferred when
@@ -5146,9 +5119,9 @@ def resolve_provider_client(
         # Honor api_mode for any API-key provider (e.g. direct OpenAI with
         # codex-family models).  The copilot-specific wrapping above handles
         # copilot; this covers the general case. Also rewraps
-        # Anthropic-wire endpoints (Kimi Coding Plan api.kimi.com/coding,
-        # /anthropic-suffixed gateways) so named providers like kimi-coding
-        # land on the right transport without needing per-provider branches.
+        # Anthropic-wire endpoints (/anthropic-suffixed gateways) so named
+        # providers land on the right transport without needing per-provider
+        # branches.
         client = _wrap_if_needed(client, final_model, raw_base_url, api_key)
 
         logger.debug("resolve_provider_client: %s (%s)", provider, final_model)

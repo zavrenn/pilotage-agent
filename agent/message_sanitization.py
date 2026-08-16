@@ -640,9 +640,9 @@ def uniquify_tool_call_ids(tool_calls: list) -> list:
 #
 # Direction table:
 #   require-side (echo-back enforced; replays 400 without the field):
-#     kimi     — provider kimi-coding/kimi-coding-cn, or host api.kimi.com /
-#                moonshot.ai / moonshot.cn.  Host-driven on purpose:
-#                aggregators re-exporting kimi models reject the echo.
+#     kimi     — host api.kimi.com / moonshot.ai / moonshot.cn.
+#                Host-driven on purpose: aggregators re-exporting kimi
+#                models reject the echo.
 #     deepseek — provider "deepseek", model contains "deepseek", or host
 # api.deepseek.com (; V4 rejects empty-string pads,
 # hence the " " single-space pad,).
@@ -655,7 +655,7 @@ def uniquify_tool_call_ids(tool_calls: list) -> list:
 _REASONING_ECHO_RULES: tuple = (
     # (family, exact providers (raw), exact providers (lowered),
     #  model substrings (lowered), base_url hosts)
-    ("kimi", frozenset({"kimi-coding", "kimi-coding-cn"}), frozenset(), (),
+    ("kimi", frozenset(), frozenset(), (),
      ("api.kimi.com", "moonshot.ai", "moonshot.cn")),
     ("deepseek", frozenset(), frozenset({"deepseek"}), ("deepseek",),
      ("api.deepseek.com",)),

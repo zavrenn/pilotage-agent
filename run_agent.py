@@ -5163,13 +5163,7 @@ class AIAgent:
                 env_url = get_env_prefer_dotenv(pconfig.base_url_env_var).strip().rstrip("/")
             default_base = (pconfig.inference_base_url or "").strip().rstrip("/")
             base_url = env_url or default_base
-            if self.provider == "kimi-coding":
-                from pilotage_cli.auth import _resolve_kimi_base_url
-
-                base_url = _resolve_kimi_base_url(
-                    api_key, pconfig.inference_base_url, env_url
-                ).rstrip("/")
-            elif self.provider == "zai":
+            if self.provider == "zai":
                 from pilotage_cli.auth import _resolve_zai_base_url
 
                 base_url = _resolve_zai_base_url(
@@ -5314,9 +5308,6 @@ class AIAgent:
             self._client_kwargs["default_headers"] = build_nvidia_nim_headers(base_url)
         elif base_url_host_matches(base_url, "api.routermint.com"):
             self._client_kwargs["default_headers"] = _routermint_headers()
-        elif base_url_host_matches(base_url, "api.kimi.com"):
-            from agent.auxiliary_client import _AI_GATEWAY_HEADERS
-            self._client_kwargs["default_headers"] = dict(_AI_GATEWAY_HEADERS)
         elif base_url_host_matches(base_url, "portal.qwen.ai"):
             self._client_kwargs["default_headers"] = _qwen_portal_headers()
         elif base_url_host_matches(base_url, "chatgpt.com"):
@@ -6574,7 +6565,7 @@ class AIAgent:
         OpenRouter that re-export Kimi/Moonshot models speak their own
         protocol and reject ``reasoning_content`` echoes. We only enable the
         kimi-reasoning replay when the request actually targets a
-        kimi/moonshot endpoint or the dedicated kimi-coding provider.
+        kimi/moonshot endpoint.
 
         Rule table owner: ``agent.message_sanitization.reasoning_echo_family``.
         """

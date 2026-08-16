@@ -32,7 +32,6 @@ from pilotage_cli.auth import (
     _load_auth_store,
     _load_provider_state,
     _load_provider_state_with_source,
-    _resolve_kimi_base_url,
     _resolve_zai_base_url,
     _same_path,
     _save_auth_store,
@@ -2092,9 +2091,7 @@ def _seed_from_env(provider: str, entries: List[PooledCredential]) -> Tuple[bool
             continue
         active_sources.add(source)
         base_url = env_url or pconfig.inference_base_url
-        if provider == "kimi-coding":
-            base_url = _resolve_kimi_base_url(token, pconfig.inference_base_url, env_url)
-        elif provider == "zai":
+        if provider == "zai":
             base_url = _resolve_zai_base_url(token, pconfig.inference_base_url, env_url)
         changed |= _upsert_entry(
             entries,

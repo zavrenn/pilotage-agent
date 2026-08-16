@@ -112,9 +112,6 @@ def _detect_api_mode_for_url(base_url: str) -> Optional[str]:
       protocol under a ``/anthropic`` suffix — treat those as
       ``anthropic_messages`` transport instead of the default
       ``chat_completions``.
-    - Kimi Code's ``api.kimi.com/coding`` endpoint also speaks the
-      Anthropic Messages protocol (the /coding route accepts Claude
-      Code's native request shape).
     """
     normalized = (base_url or "").strip().lower().rstrip("/")
     hostname = base_url_hostname(base_url)
@@ -134,8 +131,6 @@ def _detect_api_mode_for_url(base_url: str) -> Optional[str]:
         return "anthropic_messages"
     path = urlparse(normalized).path.rstrip("/")
     if path.endswith("/anthropic") or path.endswith("/anthropic/v1"):
-        return "anthropic_messages"
-    if hostname == "api.kimi.com" and "/coding" in normalized:
         return "anthropic_messages"
     return None
 
@@ -249,8 +244,7 @@ def _anthropic_base_url_override_ok(base_url: str) -> bool:
 
     Native ``provider: anthropic`` resolution honors ``model.base_url`` so users
     can point at Anthropic-compatible endpoints (official Anthropic/Claude hosts,
-    Azure Foundry, MiniMax/Zhipu/LiteLLM-style ``/anthropic`` proxies, Kimi's
-    ``/coding`` route). But a config can carry a *stale* non-Anthropic URL — e.g.
+    Azure Foundry, MiniMax/Zhipu/LiteLLM-style ``/anthropic`` proxies). But a config can carry a *stale* non-Anthropic URL — e.g.
     ``provider: anthropic`` left with ``base_url: https://openrouter.ai/api/v1``
     after a provider switch — which would route Anthropic OAuth/setup-token
     traffic to an OpenAI-compatible aggregator and 404. Ignore those.
@@ -273,11 +267,10 @@ def _anthropic_base_url_override_ok(base_url: str) -> bool:
     if hostname.endswith(".azure.com"):
         return True
     # Anthropic-compatible proxies conventionally expose the native Messages
-    # protocol under a ``/anthropic`` suffix, and Kimi under ``/coding`` — same
+    # protocol under a ``/anthropic`` suffix — same
     # signal _detect_api_mode_for_url() uses to pick anthropic_messages.
     if _detect_api_mode_for_url(candidate) == "anthropic_messages":
         return True
-    # Bare api.kimi.com without the /coding path is not an Anthropic endpoint.
     return False
 
 
@@ -459,7 +452,7 @@ def _resolve_runtime_from_pool_entry(
         if configured_mode and _provider_supports_explicit_api_mode(provider, configured_provider):
             api_mode = configured_mode
         else:
-            # URL detection first (Anthropic /anthropic suffix, Kimi /coding,
+            # URL detection first (Anthropic /anthropic suffix,
             # official OpenAI hosts → codex_responses), then the provider's
             # own declared transport.
             api_mode = _fallback_api_mode(provider, base_url, effective_model)
@@ -587,7 +580,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
             pass
         else:
             # A user-declared ``custom_providers`` entry whose name matches
-            # only an *alias* (``kimi`` → built-in ``kimi-coding``) is the
+            # only an *alias* of a built-in provider is the
             # user's intended target — alias rewriting would otherwise hijack
             # the request.  We only defer to the built-in when the raw name is
             # the canonical provider itself (``nous``, ``openrouter``, …) so
@@ -1351,11 +1344,7 @@ def _resolve_explicit_runtime(
 
         base_url = explicit_base_url
         if not base_url:
-            if provider in {"kimi-coding", "kimi-coding-cn"}:
-                creds = resolve_api_key_provider_credentials(provider)
-                base_url = creds.get("base_url", "").rstrip("/")
-            else:
-                base_url = env_url or pconfig.inference_base_url
+            base_url = env_url or pconfig.inference_base_url
 
         if provider == "actual":
             base_url = normalize_actual_base_url(base_url)
@@ -1613,7 +1602,7 @@ def resolve_runtime_provider(
 
 
     # Anthropic (native Messages API)
-    # API-key providers (z.ai/GLM, Kimi, MiniMax, MiniMax-CN)
+    # API-key providers (z.ai/GLM, MiniMax, MiniMax-CN)
     pconfig = PROVIDER_REGISTRY.get(provider)
     if pconfig and pconfig.auth_type == "api_key":
         creds = resolve_api_key_provider_credentials(provider)

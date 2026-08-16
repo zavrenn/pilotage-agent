@@ -1034,10 +1034,6 @@ def init_agent(
             client_kwargs["default_headers"] = build_nvidia_nim_headers(effective_base)
         elif base_url_host_matches(effective_base, "api.routermint.com"):
             client_kwargs["default_headers"] = _ra()._routermint_headers()
-        elif base_url_host_matches(effective_base, "api.kimi.com"):
-            client_kwargs["default_headers"] = {
-                "User-Agent": "claude-code/0.1.0",
-            }
         elif base_url_host_matches(effective_base, "portal.qwen.ai"):
             client_kwargs["default_headers"] = _ra()._qwen_portal_headers()
         elif base_url_host_matches(effective_base, "chatgpt.com"):
@@ -1045,8 +1041,7 @@ def init_agent(
             client_kwargs["default_headers"] = _codex_cloudflare_headers(api_key)
         elif "default_headers" not in client_kwargs:
             # Fall back to profile.default_headers for providers that
-            # declare custom headers (e.g. Vercel AI Gateway attribution,
-            # Kimi User-Agent on non-kimi.com endpoints).
+            # declare custom headers (e.g. Vercel AI Gateway attribution).
             try:
                 from providers import get_provider_profile as _gpf
                 _ph = _gpf(agent.provider)

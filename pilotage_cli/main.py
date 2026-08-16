@@ -682,8 +682,6 @@ from pilotage_cli.model_setup_flows import (
     _model_flow_openai_codex,
     _model_flow_custom,
     _model_flow_named_custom,
-    _model_flow_kimi,
-    _model_flow_stepfun,
     _model_flow_api_key_provider,
 )
 logger = logging.getLogger(__name__)
@@ -2285,7 +2283,7 @@ def select_provider_and_model(args=None):
     #
     # Canonical providers are folded into top-level groups (display only — see
     # PROVIDER_GROUPS in pilotage_cli/models.py). A multi-member group shows one
-    # row ("Kimi / Moonshot ▸"); picking it opens a member sub-picker that
+    # row; picking it opens a member sub-picker that
     # resolves back to a concrete slug, so the dispatch chain below is
     # unchanged. Custom providers and the trailing actions stay flat.
     canonical_descs = {p.slug: p.tui_desc for p in CANONICAL_PROVIDERS}
@@ -2422,16 +2420,11 @@ def select_provider_and_model(args=None):
         _model_flow_named_custom(config, provider_info)
     elif selected_provider == "remove-custom":
         _remove_custom_provider(config)
-    elif selected_provider == "kimi-coding":
-        _model_flow_kimi(config, current_model)
-    elif selected_provider == "stepfun":
-        _model_flow_stepfun(config, current_model)
     elif selected_provider in {
         "openai-api",
         "gemini",
         "deepseek",
         "zai",
-        "kimi-coding-cn",
         "minimax",
         "minimax-cn",
         "kilocode",
@@ -3521,36 +3514,6 @@ def _prompt_api_key(
     # Keep (default, or any other input)
     print()
     return existing_key, False
-
-
-
-
-def _infer_stepfun_region(base_url: str) -> str:
-    """Infer the current StepFun region from the configured endpoint."""
-    normalized = (base_url or "").strip().lower()
-    if "api.stepfun.com" in normalized:
-        return "china"
-    return "international"
-
-
-def _stepfun_base_url_for_region(region: str) -> str:
-    from pilotage_cli.auth import (
-        STEPFUN_STEP_PLAN_CN_BASE_URL,
-        STEPFUN_STEP_PLAN_INTL_BASE_URL,
-    )
-
-    return (
-        STEPFUN_STEP_PLAN_CN_BASE_URL
-        if region == "china"
-        else STEPFUN_STEP_PLAN_INTL_BASE_URL
-    )
-
-
-
-
-
-
-
 
 
 
@@ -6134,8 +6097,8 @@ def _build_provider_choices() -> list[str]:
         return [
             "auto", "openrouter", "nous", "openai-codex", "copilot-acp", "copilot",
             "anthropic", "gemini", "vertex", "azure-foundry",
-            "ollama-cloud", "huggingface", "zai", "kimi-coding", "kimi-coding-cn",
-            "stepfun", "minimax", "minimax-cn", "kilocode", "novita", "xiaomi", "arcee",
+            "ollama-cloud", "huggingface", "zai",
+            "minimax", "minimax-cn", "kilocode", "novita", "xiaomi", "arcee",
             "nvidia", "deepseek", "alibaba", "qwen-oauth", "opencode-zen", "opencode-go",
         ]
 

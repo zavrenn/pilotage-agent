@@ -46,8 +46,6 @@ _PROVIDER_ENV_HINTS = (
     "GLM_API_KEY",
     "ZAI_API_KEY",
     "Z_AI_API_KEY",
-    "KIMI_API_KEY",
-    "KIMI_CN_API_KEY",
     "GMI_API_KEY",
     "FIREWORKS_API_KEY",
     "ACTUAL_API_KEY",
@@ -767,9 +765,6 @@ def _build_apikey_providers_list() -> list:
     """
     _static = [
         ("Z.AI / GLM",      ("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"), "https://api.z.ai/api/paas/v4/models", "GLM_BASE_URL", True),
-        ("Kimi / Moonshot",  ("KIMI_API_KEY",),                              "https://api.moonshot.ai/v1/models",   "KIMI_BASE_URL", True),
-        ("StepFun Step Plan", ("STEPFUN_API_KEY",),                          "https://api.stepfun.ai/step_plan/v1/models", "STEPFUN_BASE_URL", True),
-        ("Kimi / Moonshot (China)", ("KIMI_CN_API_KEY",),                    "https://api.moonshot.cn/v1/models",   None, True),
         ("Arcee AI",         ("ARCEEAI_API_KEY",),                           "https://api.arcee.ai/api/v1/models",  "ARCEE_BASE_URL", True),
         ("GMI Cloud",        ("GMI_API_KEY",),                               "https://api.gmi-serving.com/v1/models", "GMI_BASE_URL", True),
         ("DeepSeek",         ("DEEPSEEK_API_KEY",),                          "https://api.deepseek.com/v1/models",  "DEEPSEEK_BASE_URL", True),
@@ -791,8 +786,7 @@ def _build_apikey_providers_list() -> list:
     # don't create duplicate entries for providers already in the static list.
     _known_canonical: set[str] = set()
     _name_to_canonical = {
-        "Z.AI / GLM": "zai", "Kimi / Moonshot": "kimi-coding",
-        "StepFun Step Plan": "stepfun", "Kimi / Moonshot (China)": "kimi-coding-cn",
+        "Z.AI / GLM": "zai",
         "Arcee AI": "arcee", "GMI Cloud": "gmi", "DeepSeek": "deepseek",
         "Hugging Face": "huggingface", "NVIDIA NIM": "nvidia",
         "Alibaba/DashScope": "alibaba", "MiniMax": "minimax",
@@ -2321,25 +2315,16 @@ def run_doctor(args):
         try:
             import httpx
             base = os.getenv(base_env, "") if base_env else ""
-            # Auto-detect Kimi Code keys (sk-kimi-) → api.kimi.com/coding/v1
-            # (OpenAI-compat surface, which exposes /models for health check).
-            if not base and key.startswith("sk-kimi-"):
-                base = "https://api.kimi.com/coding/v1"
-            # Anthropic-compat endpoints (/anthropic, api.kimi.com/coding
-            # with no /v1) don't support /models. Rewrite to OpenAI-compat
-            # /v1 surface for health checks.
+            # Anthropic-compat endpoints (/anthropic) don't support /models.
+            # Rewrite to OpenAI-compat /v1 surface for health checks.
             if base and base.rstrip("/").endswith("/anthropic"):
                 from agent.auxiliary_client import _to_openai_base_url
                 base = _to_openai_base_url(base)
-            if base_url_host_matches(base, "api.kimi.com") and base.rstrip("/").endswith("/coding"):
-                base = base.rstrip("/") + "/v1"
             url = (base.rstrip("/") + "/models") if base else default_url
             headers = {
                 "Authorization": f"Bearer {key}",
                 "User-Agent": _PILOTAGE_USER_AGENT,
             }
-            if base_url_host_matches(base, "api.kimi.com"):
-                headers["User-Agent"] = "claude-code/0.1.0"
             # Google's Generative Language API (generativelanguage.googleapis.com)
             # rejects ``Authorization: Bearer <api-key>`` with 401
             # ``ACCESS_TOKEN_TYPE_UNSUPPORTED`` — that header is reserved for

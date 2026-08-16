@@ -3629,8 +3629,6 @@ _FALLBACK_COMMENT = """
 #   openai-codex (OAuth — pilotage auth) — OpenAI Codex
 #   nous         (OAuth — pilotage auth) — Nous Portal
 #   zai          (ZAI_API_KEY)         — Z.AI / GLM
-#   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
-#   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
 #   minimax      (MINIMAX_API_KEY)     — MiniMax
 #   minimax-cn   (MINIMAX_CN_API_KEY)  — MiniMax (China)
 #
@@ -3660,8 +3658,6 @@ _COMMENTED_SECTIONS = """
 #   openai-codex (OAuth — pilotage auth) — OpenAI Codex
 #   nous         (OAuth — pilotage auth) — Nous Portal
 #   zai          (ZAI_API_KEY)         — Z.AI / GLM
-#   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
-#   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
 #   minimax      (MINIMAX_API_KEY)     — MiniMax
 #   minimax-cn   (MINIMAX_CN_API_KEY)  — MiniMax (China)
 #

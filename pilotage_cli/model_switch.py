@@ -290,14 +290,8 @@ MODEL_ALIASES: dict[str, ModelIdentity] = {
     # Nvidia
     "nemotron":  ModelIdentity("nvidia", "nemotron"),
 
-    # Moonshot / Kimi
-    "kimi":      ModelIdentity("moonshotai", "kimi"),
-
     # Z.AI / GLM
     "glm":       ModelIdentity("z-ai", "glm"),
-
-    # Step Plan (StepFun)
-    "step":      ModelIdentity("stepfun", "step"),
 
     # Xiaomi
     "mimo":      ModelIdentity("xiaomi", "mimo"),
@@ -926,8 +920,8 @@ def resolve_alias(
     if direct is not None:
         return (direct.provider, direct.model, key)
 
-    # Reverse lookup: match by model ID so full names (e.g. "kimi-k2.5",
-    # "glm-4.7") route through direct aliases instead of falling through
+    # Reverse lookup: match by model ID so full names (e.g. "glm-4.7")
+    # route through direct aliases instead of falling through
     # to the catalog/OpenRouter.
     for alias_name, da in DIRECT_ALIASES.items():
         if da.model.lower() == key:
@@ -2355,11 +2349,9 @@ def list_authenticated_providers(
         ):
             continue
         # Resolve the canonical provider profile name.  Skip pilotage_ids
-        # that are mere aliases resolving to a different canonical profile
-        # (e.g. "kimi" and "moonshot" both → "kimi-coding").  Only process
-        # entries whose pilotage_id matches the canonical profile name so
-        # distinct profiles (e.g. kimi-coding, kimi-coding-cn) each get
-        # their own picker row.
+        # that are mere aliases resolving to a different canonical profile.
+        # Only process entries whose pilotage_id matches the canonical
+        # profile name so distinct profiles each get their own picker row.
         _canonical = pilotage_id
         try:
             from providers import get_provider_profile as _gpp
@@ -2374,8 +2366,7 @@ def list_authenticated_providers(
         # Skip duplicates: another entry with the same slug was already
         # emitted (e.g. two PROVIDER_TO_MODELS_DEV entries routing to the
         # same pilotage_id).  Distinct canonical profiles that share a
-        # models.dev ID (e.g. kimi-coding and kimi-coding-cn → kimi-for-coding)
-        # are both allowed through since they have different slugs.
+        # models.dev ID are both allowed through since they have different slugs.
         slug = pilotage_id
         if slug.lower() in seen_slugs:
             continue

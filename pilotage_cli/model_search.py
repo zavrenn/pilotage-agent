@@ -1,8 +1,8 @@
 """Picker-only search aliases for model ids.
 
 Wire IDs stay unchanged. Some providers report short or brand-less ids
-(Kimi Coding's flagship is literally ``k3``) that users still search for by
-the familiar ``kimi-…`` naming of sibling models.
+that users still search for by the familiar branded naming of sibling
+models.
 
 Keep in sync with ``ui-tui/src/lib/model-search-text.ts`` and
 ``web/src/lib/model-search-text.ts``.
@@ -11,13 +11,11 @@ Keep in sync with ``ui-tui/src/lib/model-search-text.ts`` and
 from __future__ import annotations
 
 # Lowercased wire id → extra tokens appended to the search haystack only.
-_MODEL_SEARCH_ALIASES: dict[str, tuple[str, ...]] = {
-    "k3": ("kimi-k3", "kimi"),
-}
+_MODEL_SEARCH_ALIASES: dict[str, tuple[str, ...]] = {}
 
 # Lowercased wire id → canonical public slug it aliases. Used by picker
-# dedup so a live bare id and its curated public slug (``k3`` / ``kimi-k3``)
-# don't render as two rows for the same model. Derived from the FIRST alias
+# dedup so a live bare id and its curated public slug don't render as
+# two rows for the same model. Derived from the FIRST alias
 # entry, which by convention is the full public slug.
 _MODEL_ALIAS_CANONICAL: dict[str, str] = {
     wire_id: aliases[0].lower()

@@ -280,7 +280,6 @@ def host_mandated_api_mode(base_url: str = "") -> Optional[str]:
       - api.openai.com only accepts the Responses API for its (reasoning)
         models when tools + reasoning are in play (chat/completions 400s).
       - api.anthropic.com / ``…/anthropic`` suffixes speak native Messages.
-      - Kimi's ``/coding`` endpoint speaks native Messages.
 
     These are *mandatory* — a session carrying a stale api_mode (e.g. a
     /model switch that kept the previous provider's ``chat_completions``)
@@ -295,8 +294,6 @@ def host_mandated_api_mode(base_url: str = "") -> Optional[str]:
     # Exact-hostname matching only — never bare substring — so lookalike hosts
     # (api.openai.com.attacker.test) and path-segment spoofs
     # (proxy.test/api.openai.com/v1) are NOT treated as the real endpoint.
-    if hostname == "api.kimi.com" and "/coding" in url_lower:
-        return "anthropic_messages"
     if hostname == "api.anthropic.com" or url_lower.endswith("/anthropic"):
         return "anthropic_messages"
     # Official OpenAI host family: canonical + data-residency regional hosts
@@ -513,8 +510,6 @@ def resolve_provider_full(
             return user_pdef
 
     # 0.5 Exact Pilotage provider IDs must win over LOSSY alias collapsing.
-    # Example: kimi-coding-cn should stay distinct from kimi-coding instead of
-    # normalizing through the shared models.dev alias "kimi-for-coding".
     # A collapse is lossy only when MULTIPLE distinct registry providers
     # normalize to the same canonical name — resolving through the alias
     # would then lose which one the caller meant. Single-entry rewrites
