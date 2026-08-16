@@ -36,7 +36,7 @@ can tell a real citation-backed answer from an unsourced one:
   ``answer`` came from the model's own knowledge rather than the X index,
   and the caller should treat the result as unsourced.
 
-Salvaged from PR #10786 (originally by @Jaaneek); credential resolution
+Salvaged from (originally by @Jaaneek); credential resolution
 reworked to honor both auth modes per Teknium's design.
 """
 

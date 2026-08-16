@@ -32,7 +32,7 @@ a real background operator or lifecycle command from a guard.
 Masked bodies are replaced by an equivalent number of newlines so line
 structure — and any ``re.MULTILINE`` scanning downstream — is preserved.
 
-Adapted from Wolfram Ravenwolf's security-hardened rework of PR #63788
+Adapted from Wolfram Ravenwolf's security-hardened rework of
 (commit 69c7663c6de6b6cb05bf99203fa39673efe01ccf).
 """
 

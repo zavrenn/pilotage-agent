@@ -161,7 +161,7 @@ XAI_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 3600
 QWEN_OAUTH_CLIENT_ID = "f0304373b74a44d2b584a3fb70ca9e56"
 QWEN_OAUTH_TOKEN_URL = "https://chat.qwen.ai/api/v1/oauth2/token"
 QWEN_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
-OAUTH_OVER_SSH_DOCS_URL = "https://hermes-agent.nousresearch.com/docs/guides/oauth-over-ssh"
+OAUTH_OVER_SSH_DOCS_URL = ""
 SERVICE_PROVIDER_NAMES: Dict[str, str] = {}
 
 # LM Studio's default no-auth mode still requires *some* non-empty bearer for
@@ -375,7 +375,7 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         auth_type="api_key",
         inference_base_url="https://api.anthropic.com",
         # CLAUDE_CODE_OAUTH_TOKEN is NOT an API key, despite auth_type="api_key"
-        # and its place in this tuple (#82154). `claude setup-token` yields an
+        # and its place in this tuple. `claude setup-token` yields an
         # `sk-ant-oat01…` OAuth token: sent as `x-api-key` it 401s, and sent as a
         # bare Bearer it 429s. It is listed here because this tuple doubles as the
         # credential-DISCOVERY list (agent/credential_pool.py builds its env scan
@@ -576,7 +576,7 @@ def get_anthropic_key() -> str:
 
     Checks both the ``.env`` file and the process environment, preferring
     ``~/.pilotage/.env`` so a deliberate key rotation isn't shadowed by a stale
-    shell export (matches the api-key resolution path — see #20591).  The
+    shell export (matches the api-key resolution path — see). The
     order mirrors the ``PROVIDER_REGISTRY["anthropic"].api_key_env_vars``
     tuple:
 
@@ -1053,7 +1053,7 @@ def _global_auth_file_path() -> Optional[Path]:
     Used by read-only fallback paths so providers authed at the root are
     visible to profile processes that haven't configured them locally.
 
-    See issue #18594 follow-up (credential_pool shadowing).
+    See follow-up (credential_pool shadowing).
     """
     try:
         from pilotage_constants import get_default_pilotage_root
@@ -1329,13 +1329,13 @@ def _save_auth_store(auth_store: Dict[str, Any], target_path: Optional[Path] = N
     # target_path=None preserves the existing contract (write the active
     # store at _auth_file_path()). An explicit path lets callers persist a
     # specific store — e.g. the global-root write-through for rotating xAI
-    # OAuth grants (#43589) — reusing this function's atomic O_EXCL + 0o600
+    # OAuth grants — reusing this function's atomic O_EXCL + 0o600
     # write so the root auth.json gets the same TOCTOU-safe treatment.
     auth_file = target_path if target_path is not None else _auth_file_path()
     auth_file.parent.mkdir(parents=True, exist_ok=True)
     # Tighten parent dir to 0o700 so siblings can't traverse to creds.
     # No-op on Windows (POSIX mode bits not enforced); ignore failures.
-    # secure_parent_dir refuses to chmod / or top-level dirs (#25821).
+    # secure_parent_dir refuses to chmod / or top-level dirs.
     secure_parent_dir(auth_file)
     auth_store["version"] = AUTH_STORE_VERSION
     auth_store["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -1345,7 +1345,7 @@ def _save_auth_store(auth_store: Dict[str, Any], target_path: Optional[Path] = N
         # Create with 0o600 atomically via os.open(O_EXCL) + fdopen to close
         # the TOCTOU window where default umask (often 0o644) briefly exposed
         # OAuth tokens to other local users between open() and chmod().
-        # Mirrors agent/google_oauth.py (#19673) and tools/mcp_oauth.py (#21148).
+        # Mirrors agent/google_oauth.py and tools/mcp_oauth.py.
         fd = os.open(
             str(tmp_path),
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -1449,7 +1449,7 @@ def _load_provider_state(auth_store: Dict[str, Any], provider_id: str) -> Option
     profile can see providers (e.g. ``nous``) that were only authenticated at
     global scope. Once the user runs ``pilotage auth login <provider>`` inside
     the profile, the profile state fully shadows the global state on the next
-    read. See issue #18594 follow-up.
+    read. See follow-up.
     """
     state, _source_path = _load_provider_state_with_source(auth_store, provider_id)
     return state
@@ -1591,7 +1591,7 @@ def read_credential_pool(provider_id: Optional[str] = None) -> Dict[str, Any]:
     fully shadow global for that provider on the next read.
 
     Writes always go to the profile (``write_credential_pool`` is unchanged).
-    See issue #18594 follow-up.
+    See follow-up.
     """
     auth_store = _load_auth_store()
     pool = auth_store.get("credential_pool")
@@ -1837,7 +1837,7 @@ def get_provider_auth_state(provider_id: str) -> Optional[Dict[str, Any]]:
     ``read_credential_pool``'s per-provider shadowing semantics so that
     ``_seed_from_singletons`` can reseed a profile's credential pool from
     global-scope provider state (e.g. a globally-authenticated Anthropic
-    OAuth or Nous device-code session). See issue #18594 follow-up.
+    OAuth or Nous device-code session). See follow-up.
     """
     auth_store = _load_auth_store()
     return _load_provider_state(auth_store, provider_id)
@@ -1859,7 +1859,7 @@ def is_provider_explicitly_configured(provider_id: str) -> bool:
 
     This is used to gate auto-discovery of external credentials (e.g.
     Claude Code's ~/.claude/.credentials.json) so they are never used
-    without the user's explicit choice.  See PR #4210 for the same
+    without the user's explicit choice. See for the same
     pattern applied to the setup wizard gate.
     """
     normalized = (provider_id or "").strip().lower()
@@ -1947,7 +1947,7 @@ def is_provider_explicitly_configured(provider_id: str) -> bool:
                 continue
             if source.startswith("env:"):
                 # A stale env-seeded pool entry survives in auth.json after
-                # the user deletes the env var (#55790) — only count it when
+                # the user deletes the env var — only count it when
                 # the referenced var still resolves to a usable secret NOW.
                 env_var = entry.get("source", "").split(":", 1)[1].strip()
                 if env_var and has_usable_secret(os.getenv(env_var, "")):
@@ -2056,7 +2056,7 @@ def resolve_provider(
     Determine which inference provider to use.
 
     Priority (when requested="auto" or None) — explicit user intent wins over a
-    stale logged-in OAuth provider (#29285):
+    stale logged-in OAuth provider:
     1. Explicit CLI api_key/base_url -> "openrouter"
     2. config.yaml `model.provider`
     3. OPENAI_API_KEY / OPENROUTER_API_KEY env vars -> "openrouter"
@@ -2138,7 +2138,7 @@ def resolve_provider(
     if explicit_api_key or explicit_base_url:
         return "openrouter"
 
-    # Provider precedence for the auto-path (#29285): explicit user intent must
+    # Provider precedence for the auto-path: explicit user intent must
     # win over a stale logged-in OAuth `active_provider`. Order matches the
     # docstring: 1. explicit CLI creds  2. config.yaml `model.provider`
     # 3. OPENAI/OPENROUTER env keys  4. OpenRouter pool  5. provider-specific
@@ -2168,7 +2168,7 @@ def resolve_provider(
     # `pilotage auth list` showing the credential while requests go out with no
     # Authorization header ("HTTP 401: Missing Authentication header"). The
     # env-var check above only covers keys exported as OPENROUTER_API_KEY /
-    # OPENAI_API_KEY. See issue #42130.
+    # OPENAI_API_KEY. See.
     try:
         from agent.credential_pool import load_pool as _load_pool
 
@@ -2178,7 +2178,7 @@ def resolve_provider(
         logger.debug("Could not check OpenRouter credential pool: %s", e)
 
     # Determine the logged-in OAuth provider up front so the env-key loop below
-    # can WARN when an exported API key preempts it (#29285 transparency). The
+    # can WARN when an exported API key preempts it transparency). The
     # actual OAuth fallback (tier 6) still happens later if nothing else matches.
     _oauth_active: Optional[str] = None
     try:
@@ -2204,7 +2204,7 @@ def resolve_provider(
         for env_var in pconfig.api_key_env_vars:
             if has_usable_secret(os.getenv(env_var, "")):
                 # An exported API key now wins over a logged-in OAuth provider
-                # (the #29285 fix). Surface that so a user who deliberately uses
+                # (the fix). Surface that so a user who deliberately uses
                 # OAuth but has a stale key in ~/.pilotage/.env isn't silently
                 # switched without knowing why.
                 if _oauth_active and _oauth_active != pid:
@@ -2221,7 +2221,7 @@ def resolve_provider(
     # fallback, chosen only when the user expressed no other preference above.
     # Previously this sat ABOVE the env-var/config checks, so a stale OAuth
     # login silently overrode an explicit `model.provider` or an exported API
-    # key (#29285). Demoted here so explicit intent always wins.
+    # key. Demoted here so explicit intent always wins.
     if _oauth_active:
         # Surface the silent-override case the issue reported: a populated
         # `model` config that lacks a `provider` key falls through to OAuth.
@@ -2650,14 +2650,14 @@ def _read_qwen_cli_tokens() -> Dict[str, Any]:
 def _save_qwen_cli_tokens(tokens: Dict[str, Any]) -> Path:
     auth_path = _qwen_cli_auth_path()
     auth_path.parent.mkdir(parents=True, exist_ok=True)
-    # secure_parent_dir refuses to chmod / or top-level dirs (#25821).
+    # secure_parent_dir refuses to chmod / or top-level dirs.
     secure_parent_dir(auth_path)
     # Per-process random temp suffix avoids collisions between concurrent
     # writers and stale leftovers from a crashed prior write.
     tmp_path = auth_path.with_name(f"{auth_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     # Create with 0o600 atomically via os.open(O_EXCL) — closes the TOCTOU
     # window where write_text() + post-write chmod briefly exposed tokens
-    # at process umask (typically 0o644). See #19673, #21148.
+    # at process umask (typically 0o644). See,.
     fd = os.open(
         str(tmp_path),
         os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -2838,7 +2838,7 @@ def get_qwen_auth_status() -> Dict[str, Any]:
 def _is_remote_session() -> bool:
     """Detect environments where loopback OAuth can't reach the local browser.
 
-    Historically only SSH was checked, but #26923 surfaced that
+    Historically only SSH was checked, but surfaced that
     **browser-only remote consoles** (GCP Cloud Shell, GitHub
     Codespaces, AWS EC2 Instance Connect, Gitpod, Replit, etc.) hit
     the exact same problem — the user has a browser on their laptop
@@ -3079,12 +3079,12 @@ def _sync_codex_pool_entries(
       that use the same device-code OAuth mechanism.  ONLY synced if the
       entry's existing access_token matches the *previous* singleton
       access_token (i.e. the entry is a legacy singleton-alias from the
-      #33000 workaround era).  Manual entries whose tokens never matched the
+      workaround era). Manual entries whose tokens never matched the
       singleton represent INDEPENDENT accounts added via
       ``pilotage auth add openai-codex`` and must not be overwritten by a
-      re-auth that targeted a different account (regression for #39236).
+      re-auth that targeted a different account (regression for).
 
-      The original #33538 fix refreshed every ``manual:device_code`` entry
+      The original fix refreshed every ``manual:device_code`` entry
       unconditionally.  That worked when ``manual:device_code`` only meant
       "legacy alias of the singleton", but the same source string is now
       also produced by independent-account additions, and the broad sync
@@ -3133,9 +3133,9 @@ def _sync_codex_pool_entries(
         elif source == "manual:device_code":
             # Refresh only if this entry's existing access_token matches the
             # previous singleton access_token (i.e. it is a true alias of the
-            # singleton from the #33000 workaround era).  An entry with its
+            # singleton from the workaround era). An entry with its
             # own distinct token material is an independent account and must
-            # be left alone (#39236).
+            # be left alone.
             refresh_this_entry = bool(
                 prev_at and entry.get("access_token") == prev_at
             )
@@ -3168,7 +3168,7 @@ def _save_codex_tokens(tokens: Dict[str, str], last_refresh: str = None, label: 
         # pool-sync step uses this to distinguish legacy singleton-aliases
         # (which should be refreshed) from independent accounts that
         # ``pilotage auth add openai-codex`` created (which must not be
-        # overwritten — see #39236).
+        # overwritten — see).
         previous_singleton_tokens = state.get("tokens") if isinstance(state.get("tokens"), dict) else None
         state["tokens"] = tokens
         state["last_refresh"] = last_refresh
@@ -3240,7 +3240,7 @@ def refresh_codex_oauth_pure(
         # The stored refresh token is still valid here — re-authenticating
         # cannot lift a quota cap. Classify distinctly from auth failures so
         # callers surface a "retry later" notice instead of a misleading
-        # "run pilotage auth" prompt (see issue #32790).
+        # "run pilotage auth" prompt (see).
         retry_after = _parse_retry_after_seconds(getattr(response, "headers", None))
         if retry_after is not None:
             message = (
@@ -3428,7 +3428,7 @@ def resolve_codex_runtime_credentials(
     fallback, a user whose tokens live only in the pool — for example after a manual
     pool seed, a partial re-auth, or pool-only restoration from a backup — gets a bare
     HTTP 401 ``Missing Authentication header`` from the wire instead of a usable
-    credential. See issue #32992.
+    credential. See.
     """
     read_error: Optional[AuthError] = None
     try:
@@ -3469,7 +3469,7 @@ def resolve_codex_runtime_credentials(
             # endpoint whether the quota actually reset early (banked reset
             # redeemed, plan upgraded, window reset upstream).  The persisted
             # ``last_error_reset_at`` can be days in the future while the
-            # account is already usable again — see issue #43747.
+            # account is already usable again — see.
             stale_token = str(pool_rate_limit.get("access_token") or "").strip()
             if stale_token and _probe_codex_quota_restored(
                 stale_token,
@@ -3971,7 +3971,7 @@ def _profile_has_own_xai_oauth_state(auth_store: Dict[str, Any]) -> bool:
 def _write_through_xai_oauth_to_global_root(state: Dict[str, Any]) -> None:
     """Persist a rotated xAI OAuth ``state`` into the global-root auth.json.
 
-    Best-effort write-through for the multi-profile rotation hazard (#43589):
+    Best-effort write-through for the multi-profile rotation hazard:
     xAI rotates the refresh_token on every refresh, so when a profile session
     refreshes a grant it resolved from the root fallback, the rotated chain
     must land back in root. Otherwise root keeps a now-revoked refresh token
@@ -4035,8 +4035,8 @@ def _save_xai_oauth_tokens(
         # A profile that lacks its own xai-oauth block is reading the root
         # grant through _load_provider_state's fallback. When such a profile
         # refreshes the (rotating) grant, we must write the rotated chain back
-        # to root too, or root is left holding a revoked refresh token (#43589).
-        # #74339: the old key-presence check (_profile_has_own_xai_oauth_state)
+        # to root too, or root is left holding a revoked refresh token.
+        #: the old key-presence check (_profile_has_own_xai_oauth_state)
         # decided write-through based on whether the profile had a
         # providers.xai-oauth key BEFORE the save — but _store_provider_state
         # unconditionally creates that key below. Use
@@ -4064,7 +4064,7 @@ def _save_xai_oauth_tokens(
             # Grant was resolved from root — write back to root only.
             # Do NOT call _store_provider_state on the profile auth_store
             # (it would create a shadowing providers.xai-oauth key that
-            # disables write-through on the next refresh — #74339).
+            # disables write-through on the next refresh).
             _write_through_xai_oauth_to_global_root(state)
         else:
             # Profile genuinely owns this — write to profile store.
@@ -4313,7 +4313,7 @@ def refresh_xai_oauth_pure(
         # won't fix that — surface a separate error code so
         # ``format_auth_error`` doesn't append a misleading
         # re-authenticate hint, and point users at the ``XAI_API_KEY``
-        # fallback.  See #26847.
+        # fallback. See.
         if response.status_code == 403:
             raise AuthError(
                 "xAI token refresh failed with HTTP 403."
@@ -4602,7 +4602,7 @@ def _nous_device_auth_timeout_message(portal_base_url: str) -> str:
     A bare "Timed out waiting for device authorization" gives the user
     nothing to act on. The most common cause is Portal sign-in failing in
     the opened browser tab (including the server-side CAPTCHA loop from
-    #20605), so point at the Portal login page and the retry command.
+   ), so point at the Portal login page and the retry command.
     """
     portal = (portal_base_url or DEFAULT_NOUS_PORTAL_URL).rstrip("/")
     return (
@@ -4837,12 +4837,12 @@ def _write_shared_nous_state(state: Dict[str, Any]) -> None:
         with _nous_shared_store_lock():
             path = _nous_shared_store_path()
             path.parent.mkdir(parents=True, exist_ok=True)
-            # secure_parent_dir refuses to chmod / or top-level dirs (#25821).
+            # secure_parent_dir refuses to chmod / or top-level dirs.
             secure_parent_dir(path)
             tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
             # Create with 0o600 atomically via os.open(O_EXCL) — closes the TOCTOU
             # window where write_text() + post-write chmod briefly exposed Nous
-            # refresh_token at process umask. See #19673, #21148.
+            # refresh_token at process umask. See,.
             fd = os.open(
                 str(tmp),
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -5191,7 +5191,7 @@ def _refresh_access_token(
     # called POST /api/oauth/token with Pilotage's refresh_token without
     # persisting the rotated token back to auth.json — the server then
     # retires the original RT, Pilotage's next refresh uses it, and the whole
-    # session chain gets revoked as a token-theft signal (#15099).
+    # session chain gets revoked as a token-theft signal.
     lowered = description.lower()
     if code == "refresh_token_reused" or "reuse" in lowered or "reuse detected" in lowered:
         description = (
@@ -6621,7 +6621,7 @@ def resolve_api_key_provider_credentials(provider_id: str) -> Dict[str, Any]:
         # (endpoints.api, with a proxy-ep fallback), which is authoritative
         # for Enterprise / proxied accounts. Falls back to the registry
         # default and is guarded non-empty below so chat inference never
-        # resolves an empty base URL (#50252).
+        # resolves an empty base URL.
         base_url = env_url.rstrip("/") if env_url else pconfig.inference_base_url
         try:
             from pilotage_cli.copilot_auth import (
@@ -6649,7 +6649,7 @@ def resolve_api_key_provider_credentials(provider_id: str) -> Dict[str, Any]:
 
     # Last-resort guard: an API-key provider must never hand back an empty
     # base URL (a set-but-empty COPILOT_API_BASE_URL or similar env override
-    # otherwise wedges chat inference — #50252).
+    # otherwise wedges chat inference).
     if not (isinstance(base_url, str) and base_url.strip()):
         base_url = pconfig.inference_base_url
 
@@ -7004,7 +7004,7 @@ def _prompt_model_selection(
             cache_col = max(cache_col, 5)  # minimum: "Cache" header
 
     def _label_segments(mid):
-        """Build a rich radiolist row: yellow ★/% , dim was, plain prices."""
+        """Build a rich radiolist row: yellow ★/%, dim was, plain prices."""
         if not has_pricing:
             segs: list[tuple[str, str | None]] = [(mid, None)]
             if mid == current_model:

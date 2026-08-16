@@ -61,7 +61,7 @@ def normalize_tool_schema(schema: Any) -> Optional[Dict[str, Any]]:
     "function", "function": {...}}}`` whose ``function`` has no top-level
     ``name``. Strict providers (e.g. DeepSeek) reject the *entire* request
     with ``tools[N].function: missing field name`` (HTTP 400), so one bad
-    schema disables the whole toolset and breaks every turn (#47707).
+    schema disables the whole toolset and breaks every turn.
 
     This helper normalizes both shapes to the bare function schema and
     returns ``None`` for anything without a resolvable name, so callers can
@@ -431,7 +431,7 @@ class MemoryManager:
         # a tool that shadows a built-in (e.g. ``clarify``, ``delegate_task``).
         # Built-ins always win, so such a tool is dropped at agent init and
         # would otherwise linger in ``_tool_to_provider`` and hijack dispatch
-        # (#40466). Reject it here, at the door, so it never enters the routing
+        # Reject it here, at the door, so it never enters the routing
         # table at all — matching the built-ins-always-win invariant used by
         # the TTS/browser/search provider registries.
         from toolsets import _PILOTAGE_CORE_TOOLS
@@ -837,7 +837,7 @@ class MemoryManager:
         Reserved core tool names (``clarify``, ``delegate_task``, etc.) are
         skipped — they are rejected from the routing table in
         :meth:`add_provider`, so the manager must not advertise a schema it
-        will never route. Built-ins always win (#40466).
+        will never route. Built-ins always win.
         """
         from toolsets import _PILOTAGE_CORE_TOOLS
 
@@ -938,7 +938,7 @@ class MemoryManager:
         extraction — an LLM-bound call that can take seconds) strictly BEFORE
         ``on_session_switch`` (which rebinds provider-internal ``_session_id`` /
         turn buffers to the new session). Running extraction inline blocked the
-        /new command for the whole LLM round-trip (#16454); running it on an
+        /new command for the whole LLM round-trip; running it on an
         ad-hoc thread raced the inline switch — providers key off internal
         state, so a late ``on_session_end`` ran against post-switch bindings
         (transcript misattributed to the new session id, double-ingest of the
@@ -949,7 +949,7 @@ class MemoryManager:
         immediately, and the worker's FIFO order serializes end→switch against
         every other provider write (per-turn ``sync_all``, prefetches), which
         already share the same worker. If the executor is unavailable,
-        ``_submit_background`` degrades to inline execution — the pre-#16454
+        ``_submit_background`` degrades to inline execution — the pre-
         synchronous behavior, slow but correct.
         """
         if not self._providers:

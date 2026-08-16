@@ -138,7 +138,7 @@ _UPDATE_CHECK_CACHE_SECONDS = 6 * 3600
 # (e.g. nix-built pilotage — no local git history to count against).
 UPDATE_AVAILABLE_NO_COUNT = -1
 
-_UPSTREAM_REPO_URL = "https://github.com/NousResearch/hermes-agent.git"
+_UPSTREAM_REPO_URL = ""
 _OFFICIAL_REPO_CANONICAL = "github.com/nousresearch/pilotage-agent"
 
 
@@ -180,7 +180,7 @@ def _git_stdout(args: list[str], *, cwd: Path, timeout: int = 5) -> Optional[str
             text=True,
             # git output is UTF-8; on Windows text=True defaults to the ANSI
             # code page and bytes like 0x90 (3rd byte of 🐛 in a commit
-            # subject) crash the stdlib reader thread (#52649).
+            # subject) crash the stdlib reader thread.
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
@@ -556,7 +556,7 @@ def _compute_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]
     return {"upstream": upstream, "local": local, "ahead": max(ahead, 0)}
 
 
-_RELEASE_URL_BASE = "https://github.com/NousResearch/hermes-agent/releases/tag"
+_RELEASE_URL_BASE = ""
 _latest_release_cache: Optional[tuple] = None  # (tag, url) once resolved
 
 
@@ -564,8 +564,7 @@ def get_latest_release_tag(repo_dir: Optional[Path] = None) -> Optional[tuple]:
     """Return ``(tag, release_url)`` for the latest git tag, or None.
 
     Local-only — runs ``git describe --tags --abbrev=0`` against the
-    Pilotage checkout. Cached per-process. Release URL always points at the
-    canonical NousResearch/hermes-agent repo (forks don't get a link).
+    Pilotage checkout. Cached per-process. Forks don't get a release link.
     """
     global _latest_release_cache
     if _latest_release_cache is not None:

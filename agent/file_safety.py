@@ -49,7 +49,7 @@ def build_write_denied_paths(home: str) -> set[str]:
             # Active profile .env (or top-level .env when not in profile mode).
             str(pilotage_home / ".env"),
             # Top-level .env, even when running under a profile — overwriting it
-            # leaks credentials across every profile that inherits from root (#15981).
+            # leaks credentials across every profile that inherits from root.
             str(pilotage_root / ".env"),
             # Active profile Anthropic PKCE credential store.
             str(pilotage_home / ".anthropic_oauth.json"),
@@ -295,7 +295,7 @@ def get_read_block_error(path: str) -> Optional[str]:
     # Pilotage root so credential stores at <root>/auth.json etc. are also
     # blocked when running under a profile (PILOTAGE_HOME points at
     # <root>/profiles/<name> in profile mode). Same shape as the write
-    # deny widening (#15981, #14157).
+    # deny widening.
     pilotage_dirs: list[Path] = []
     for base in (_pilotage_home_path(), _pilotage_root_path()):
         try:
@@ -333,7 +333,7 @@ def get_read_block_error(path: str) -> Optional[str]:
         os.path.join("auth", "google_oauth.json"),
         # Bitwarden Secrets Manager disk cache: stores plaintext secret values
         # to avoid re-fetching across back-to-back CLI invocations. The file
-        # was introduced by #31968 but not added to this guard.
+        # was introduced by but not added to this guard.
         os.path.join("cache", "bws_cache.json"),
     )
     for hd in pilotage_dirs:
@@ -398,7 +398,7 @@ def raise_if_read_blocked(path: str) -> None:
     file the model/tool supplied (e.g. image-gen ``image_url`` /
     ``reference_image_urls`` paths). Centralizes the guard so every provider
     enforces the same read boundary with identical semantics instead of each
-    open-coding the try/except block (#57698).
+    open-coding the try/except block.
 
     Best-effort by design: if ``agent.file_safety`` machinery is somehow
     unavailable at the call site the guard no-ops rather than breaking local
@@ -560,7 +560,7 @@ def get_cross_profile_warning(path: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Sandbox-mirror write guard (#32049)
+# Sandbox-mirror write guard
 #
 # Non-local terminal backends (Docker, Daytona, etc.) bind a sandbox-local
 # directory to the container's ``$HOME``. The on-disk layout looks like
@@ -571,7 +571,7 @@ def get_cross_profile_warning(path: str) -> Optional[str]:
 # state lives at one of those sandbox-mirror paths, the write lands on the
 # mirror — never read by the host process — while the host file is left
 # untouched. The agent reports success, the user sees no change, and on
-# disk two divergent copies accumulate. See #32049 for evidence.
+# disk two divergent copies accumulate. See for evidence.
 #
 # This guard is path-shape-only: it detects the
 # ``…/sandboxes/<backend>/<task>/home/.pilotage/…`` segment and warns
@@ -649,7 +649,7 @@ def get_sandbox_mirror_warning(path: str) -> Optional[str]:
     Defense-in-depth, NOT a security boundary: the terminal tool runs as
     the same OS user and can write the mirror path directly. The guard
     exists to surface the misclassification before the silent-success +
-    divergent-copy footgun in #32049 fires.
+    divergent-copy footgun in fires.
     """
     info = classify_sandbox_mirror_target(path)
     if info is None:
@@ -670,13 +670,13 @@ def get_sandbox_mirror_warning(path: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Container-context mirror guard (inner-container case — #32049 follow-up)
+# Container-context mirror guard (inner-container case — follow-up)
 #
-# Brian's shape-based detector (#32213) catches paths that still carry the
+# Brian's shape-based detector catches paths that still carry the
 # full ``…/sandboxes/<backend>/<task>/home/.pilotage/…`` prefix on the host.
 # But when file tools execute *inside* the container the bind-mount strips
 # that prefix: the agent sees plain ``/root/.pilotage/…``.  The root:root
-# ownership on the divergent SOUL.md in #32049 confirms this is the primary
+# ownership on the divergent SOUL.md in confirms this is the primary
 # failure mode.
 #
 # Fix: file_tools passes the active Docker mirror prefix when the terminal

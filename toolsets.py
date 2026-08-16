@@ -416,7 +416,7 @@ def get_toolset(name: str, *, include_registry: bool = True) -> Optional[Dict[st
             composite-authored view). Platform reverse-mapping in
             ``_get_platform_tools`` uses False so that a tool registered into a
             toolset but absent from a platform's static composite does not drop
-            the whole toolset from inference. See issue #49622.
+            the whole toolset from inference. See.
 
     Returns:
         Dict: Toolset definition with description, tools, and includes
@@ -483,7 +483,7 @@ def bundle_non_core_tools(toolset_name: str) -> Set[str]:
     Platform bundles are defined as ``_PILOTAGE_CORE_TOOLS + [platform extras]``.
     When a bundle name appears in ``disabled_toolsets``, subtracting the whole
     bundle would strip core tools (terminal, read_file, …) shared by every
-    other enabled toolset, emptying the model's tool list (#33924). This
+    other enabled toolset, emptying the model's tool list. This
     returns only the bundle's non-core delta (its own extras plus those of any
     one-level ``includes``), so disabling a bundle removes its platform tools
     while leaving core intact.
@@ -532,7 +532,7 @@ def resolve_toolset(name: str, visited: Set[str] = None, *, include_registry: bo
             plugins/overlays registered into a toolset. When False, resolve only
             the static ``TOOLSETS`` definition (includes are still resolved, but
             statically). Platform reverse-mapping uses False so a registry-added
-            tool cannot drop the whole toolset from inference (see #49622 and
+            tool cannot drop the whole toolset from inference (see and
             ``_get_platform_tools``).
 
     Returns:

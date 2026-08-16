@@ -45,7 +45,7 @@ _AUTOSTART_STATES = frozenset({"running"})
 #                   path when an in-flight quiesce begins (gateway/run.py).
 #   - `degraded`  — written when the gateway comes up with some platforms
 #                   queued for retry, then "falls through to the normal
-#                   running state" (gateway/run.py #5196): the process is up,
+# running state" (gateway/run.py): the process is up,
 #                   serving cron + whatever platforms connected, and the
 #                   reconnect watcher takes the rest from there.
 #
@@ -58,7 +58,7 @@ _AUTOSTART_STATES = frozenset({"running"})
 # (observed on a relay-opted-in staging instance stranded at `draining`,
 # 2026-06; `degraded` is the same wedge class). Map these transient sub-states
 # to `running` so a stranded marker reads as the run-intent it actually
-# represents. This mirrors gateway/run.py's #42675 handling, which persists
+# represents. This mirrors gateway/run.py's handling, which persists
 # `running` (not the mid-shutdown `draining`) when an unexpected signal tears
 # the gateway down — extended here to the case where the gateway died before it
 # could persist anything at all.
@@ -108,7 +108,7 @@ def reconcile_profile_gateways(
     is what ``pilotage gateway start`` (no ``-p``) targets. Without it,
     bare ``pilotage gateway start`` inside the container would land on
     ``s6-svc -u /run/service/gateway-default`` → uncaught
-    ``CalledProcessError`` → traceback to the user (PR #30136 review).
+    ``CalledProcessError`` → traceback to the user ( review).
 
     The default slot's prior state is read from
     ``$PILOTAGE_HOME/gateway_state.json`` (sibling to the profile root,
@@ -444,7 +444,7 @@ def _register_service(scandir: Path, profile: str, *, start: bool) -> None:
 
     Atomicity: build the new layout in a sibling temp directory and
     rename it into place via :meth:`Path.replace`. This matches
-    :meth:`S6ServiceManager.register_profile_gateway` (PR #30136
+    :meth:`S6ServiceManager.register_profile_gateway` (
     review item O4) — even though cont-init.d runs before s6-svscan
     starts scanning, an atomic publication keeps the contract uniform
     between the two registration paths and protects against a
@@ -546,7 +546,7 @@ def _write_reconcile_log(
     rotation) before the new entries are appended. This gives long-
     lived containers a soft cap of ~512 KiB across the two files
     without pulling in logrotate or s6-log machinery just for this
-    one append-only file (PR #30136 review item O3).
+    one append-only file ( review item O3).
     """
     import time
     log_dir = pilotage_home / "logs"

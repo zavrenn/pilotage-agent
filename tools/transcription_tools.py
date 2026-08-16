@@ -242,7 +242,7 @@ def _transcode_audio_for_stt(file_path: str, work_dir: str) -> tuple[Optional[st
 # Names of the STT providers with native handlers in this module.
 # Kept in sync with ``agent.transcription_registry._BUILTIN_NAMES`` —
 # a regression test fails if they drift. The plugin hook from
-# issue #30398-style follow-up rejects plugins registering under any
+#-style follow-up rejects plugins registering under any
 # of these names; the dispatcher in ``transcribe_audio`` short-circuits
 # them defensively as well.
 BUILTIN_STT_PROVIDERS = frozenset({"openai"})
@@ -252,7 +252,7 @@ BUILTIN_STT_PROVIDERS = frozenset({"openai"})
 # Command-provider registry (``stt.providers.<name>: type: command``)
 # ---------------------------------------------------------------------------
 #
-# Mirrors the TTS command-provider registry shipped in PR #17843 — same
+# Mirrors the TTS command-provider registry shipped in — same
 # placeholder grammar, same shell-quote-aware rendering, same process-tree
 # termination on timeout. Lets any whisper CLI / ASR CLI / curl pipeline
 # become an STT backend with zero Python.
@@ -327,7 +327,7 @@ def _unregistered_stt_provider_error(provider: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Plugin provider dispatch (issue follow-up to #30398 — STT pluggability)
+# Plugin provider dispatch (issue follow-up to — STT pluggability)
 # ---------------------------------------------------------------------------
 
 
@@ -358,7 +358,7 @@ def _dispatch_to_plugin_provider(
        ``stt.providers.<name>: type: command`` wins over a plugin. The
        caller short-circuits to the command runner before reaching us,
        but we re-verify here so a refactor of the caller can't silently
-       break the invariant (matches TTS PR #17843 precedence rule).
+       break the invariant (matches TTS precedence rule).
     3. Plugin dispatch fires only when ``provider`` matches a
        registered :class:`TranscriptionProvider` whose ``name`` equals
        the configured value. Unknown names with no plugin registered
@@ -477,7 +477,7 @@ def _dispatch_to_plugin_provider(
 
 
 # ---------------------------------------------------------------------------
-# pre_transcription plugin hook (issue #64168 — STT prompt/vocab threading)
+# pre_transcription plugin hook ( — STT prompt/vocab threading)
 # ---------------------------------------------------------------------------
 
 
@@ -1275,7 +1275,7 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
         return cfg_api_key, (cfg_base_url or OPENAI_BASE_URL)
 
     # A local OpenAI-compatible server needs no key — send a placeholder so
-    # the SDK doesn't refuse to construct a client (#25193, credit @nnnet).
+    # the SDK doesn't refuse to construct a client (, credit @nnnet).
     if cfg_base_url and _is_local_or_private_url(cfg_base_url):
         return "not-needed", cfg_base_url
 

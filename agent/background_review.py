@@ -417,7 +417,7 @@ def summarize_background_review_actions(
     Walks the review agent's session messages and collects successful memory
     and skill-management actions to surface to the user. Tool messages already
     present in ``prior_snapshot`` are skipped so stale inherited results are
-    not re-surfaced as fresh background work (issue #14944).
+    not re-surfaced as fresh background work.
 
     ``notification_mode`` controls display detail:
     - ``off``: return no actions.
@@ -504,7 +504,7 @@ def summarize_background_review_actions(
         # hand back a list and break ``change.get("description", "")``.
         # Defensively normalize everything through a dict-typed alias so
         # the rest of the function can stay terse without per-call
-        # ``isinstance`` guards (#59437).
+        # ``isinstance`` guards.
         if not isinstance(data, dict) or not data.get("success"):
             continue
         message = data.get("message", "")
@@ -551,7 +551,7 @@ def summarize_background_review_actions(
                 # the response.  Older / wrapper MCP backends return it
                 # as a list, an int, or a JSON-shaped scalar — normalize
                 # to a dict so the .get() calls downstream don't
-                # AttributeError (#59437).
+                # AttributeError.
                 change_raw = data.get("_change")
                 change: dict = (
                     change_raw if isinstance(change_raw, dict) else {}
@@ -586,7 +586,7 @@ def summarize_background_review_actions(
                     # legacy codepaths serialize the entry as a bare
                     # string and the message dict doesn't exist.  Skip
                     # non-dict items defensively — they have no
-                    # actionable fields anyway (#59437).
+                    # actionable fields anyway.
                     if not isinstance(op, dict):
                         continue
                     op_act = op.get("action", "")
@@ -669,7 +669,7 @@ def _run_review_in_thread(
     # Install a non-interactive approval callback on this worker
     # thread so any dangerous-command guard the review agent trips
     # resolves to "deny" instead of falling back to input() -- which
-    # deadlocks against the parent's prompt_toolkit TUI (#15216).
+    # deadlocks against the parent's prompt_toolkit TUI.
     # Same pattern as _subagent_auto_deny in tools/delegate_tool.py.
     def _bg_review_auto_deny(command, description, **kwargs):
         logger.warning(
@@ -716,7 +716,7 @@ def _run_review_in_thread(
         # ``sys.stdout``/``sys.stderr`` for every other thread — including a
         # gateway event-loop thread driving a Telegram long-poll — for the full
         # duration of the review (tens of seconds), swallowing their console
-        # output (#55769 / #55925).  ``thread_scoped_silence`` routes only this
+        # output / ). ``thread_scoped_silence`` routes only this
         # thread's writes to devnull and leaves all other threads on the real
         # streams.
         with thread_scoped_silence():
@@ -869,7 +869,7 @@ def _run_review_in_thread(
             # scratch (fresh _pilotage_now() timestamp, fresh
             # session_id, narrower toolset → different skills_prompt)
             # and the byte-exact prefix-cache key misses. See
-            # issue #25322 and PR #17276 for the full analysis +
+            # and for the full analysis +
             # measured impact (~26% end-to-end cost reduction on
             # Sonnet 4.5).
             # Share the parent's warm cached system prompt ONLY when the review
@@ -900,7 +900,7 @@ def _run_review_in_thread(
             # is single-lifecycle and dies right after this run_conversation).
             # The foreground turn would then start from the stale parent and
             # compress it again, leaving the same parent with two sibling
-            # children (issue #38727). Review also needs full context to
+            # children. Review also needs full context to
             # produce a good memory/skill summary — compressing would strip
             # detail. Both compression triggers in conversation_loop.py gate on
             # agent.compression_enabled, so this short-circuits both paths.
@@ -939,7 +939,7 @@ def _run_review_in_thread(
             # Gate the built-in memory tool on the profile's memory_enabled flag.
             # Hardcoding ["memory", "skills"] granted the review LLM the MEMORY.md
             # read/write tool even when a profile set memory_enabled: false,
-            # contaminating a memory-disabled profile (#54937 layer 2).
+            # contaminating a memory-disabled profile layer 2).
             review_toolsets = ["skills"]
             if review_agent._memory_enabled or review_agent._user_profile_enabled:
                 review_toolsets.insert(0, "memory")
@@ -1014,10 +1014,10 @@ def _run_review_in_thread(
         # already present in messages_snapshot must be skipped, since
         # the review agent inherits that history and would otherwise
         # re-surface stale "created"/"updated" messages from the prior
-        # conversation as if they just happened (issue #14944).
+        # conversation as if they just happened.
         #
         # Wrapped in try/except: a buggy/legacy tool response shape
-        # (e.g. ``_change`` returned as a list instead of a dict, #59437)
+        # (e.g. ``_change`` returned as a list instead of a dict,)
         # must NOT take down the whole review with an AttributeError,
         # since the caller's outer except logs only "Background
         # memory/skill review failed" and discards every successful
@@ -1034,7 +1034,7 @@ def _run_review_in_thread(
             logger.warning(
                 "summarize_background_review_actions returned partial results "
                 "after exception (treating as empty); suppressing AttributeError "
-                "that previously aborted the entire review (#59437): %s",
+                "that previously aborted the entire review: %s",
                 e,
             )
             actions = []

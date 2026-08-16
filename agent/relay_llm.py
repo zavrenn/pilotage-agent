@@ -58,7 +58,7 @@ def execute(
 
         def guarded(final: dict[str, Any]) -> Any:
             # Nested relay calls inside a managed provider callback must run
-            # unmanaged (#77244) — see relay_runtime.managed_callback_guard.
+            # unmanaged — see relay_runtime.managed_callback_guard.
             with relay_runtime.managed_callback_guard():
                 return callback(final)
 
@@ -157,7 +157,7 @@ async def execute_async(
             )
             async def call_provider() -> Any:
                 # Nested relay calls inside a managed provider callback must
-                # run unmanaged (#77244).
+                # run unmanaged.
                 with relay_runtime.managed_callback_guard():
                     return await callback(final_request)
 
@@ -283,7 +283,7 @@ def stream_current(
     and other shims that ignore ``stream=True``), unwrap and return the
     completed response directly. This mirrors the pre-Relay behavior where
     ``call_llm(stream=True)`` returned the raw response and the consumer's
-    own ``hasattr(stream, "choices")`` check handled it (#11732, #55933) —
+    own ``hasattr(stream, "choices")`` check handled it (,) —
     without the unwrap the response stays trapped as ``final_response`` on the
     inner ManagedLlmStream and the outer consumer sees an empty stream.
     """
@@ -409,7 +409,7 @@ class ManagedLlmStream(Iterator[Any]):
             def guarded() -> Any:
                 # Pilotage-side callbacks run while the native pipeline drives
                 # this stream; nested relay calls they make must bypass
-                # managed execution (#77244).
+                # managed execution.
                 with relay_runtime.managed_callback_guard():
                     return callback(*args)
 

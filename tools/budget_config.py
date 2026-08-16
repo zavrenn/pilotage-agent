@@ -44,7 +44,7 @@ class BudgetConfig:
         register a large fixed ``max_result_size_chars`` (web/terminal/x_search
         all register 100K). For the default budget this is a no-op because both
         equal 100K; for a scaled-down budget it prevents a per-tool registry
-        value from re-inflating the cap past the model's window (#23767).
+        value from re-inflating the cap past the model's window.
         """
         if tool_name in PINNED_THRESHOLDS:
             return PINNED_THRESHOLDS[tool_name]
@@ -88,7 +88,7 @@ def budget_for_context_window(context_length: int | None) -> BudgetConfig:
     (200K+ token) models but blind to small ones: on a 65K-token model a single
     tool result persisted at the 100K-char threshold, or a 200K-char turn
     budget (~50K tokens), can by itself approach or exceed the whole window and
-    force an oversized request (#23767).
+    force an oversized request.
 
     Scaling keeps large models byte-identical to today (the proportional value
     is clamped to the existing defaults as a CAP) while shrinking the budget for

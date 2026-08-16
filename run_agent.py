@@ -240,7 +240,7 @@ _EPHEMERAL_SCAFFOLDING_FLAGS = (
     # The nudge exists only to drive the verification loop; persisting it
     # poisons the resumed transcript and breaks prompt-prefix cache reuse
     # on later turns. The assistant candidate is NOT synthetic — it is
-    # persisted and emitted as an interim message (#65919).
+    # persisted and emitted as an interim message.
     "_verification_stop_synthetic",
     "_pre_verify_synthetic",
     # kanban worker stop-guard: narrated exit without kanban_complete/block
@@ -323,7 +323,7 @@ def _pool_may_recover_from_rate_limit(pool) -> bool:
     In that case we must fall back to the configured ``fallback_model``
     instead.  Returns True only when rotation has somewhere to go.
 
-    See issues #11314 and #13636.
+    See issues and.
     """
     if pool is None:
         return False
@@ -419,7 +419,7 @@ class AIAgent:
 
     _TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER = (
         "[pilotage-agent: tool call arguments were corrupted in this session and "
-        "have been dropped to keep the conversation alive. See issue #15236.]"
+        "have been dropped to keep the conversation alive. See.]"
     )
 
     @property
@@ -775,11 +775,11 @@ class AIAgent:
         self.session_cost_status = "unknown"
         self.session_cost_source = "none"
         
-        # Turn counter (added after reset_session_state was first written — #2635)
+        # Turn counter (added after reset_session_state was first written)
         self._user_turn_count = 0
 
         # Copilot x-initiator: True for the first API call of a user turn,
-        # False for tool-loop follow-ups (#3040).
+        # False for tool-loop follow-ups.
         self._is_user_initiated_turn = False
 
         # Context engine reset/transition (works for built-in compressor and plugins)
@@ -1460,7 +1460,7 @@ class AIAgent:
         This helper substitutes an actionable hint into the stale-timeout
         warning when the request matches a known silent-reject pattern.
         Currently flagged: ``gpt-5.5`` family on the Codex backend.  See
-        pilotage-agent #21444 for the symptom history.  The upstream backend
+        pilotage-agent for the symptom history. The upstream backend
         behavior has historically come and gone with ChatGPT entitlement
         changes — the heuristic stays in place as future-proofing even when
         the symptom is dormant.
@@ -1496,7 +1496,7 @@ class AIAgent:
             "Workaround: try `gpt-5.4` on the same OAuth profile, or `gpt-5.3-codex`, "
             "or switch to a different model/provider in your fallback chain. "
             "Some ChatGPT Codex accounts do not support `gpt-5.4-codex`. "
-            "See hermes-agent#21444 for symptom history."
+            " for symptom history."
         )
 
     def _is_openrouter_url(self) -> bool:
@@ -1704,7 +1704,7 @@ class AIAgent:
 
         Crucially it does NOT match arbitrary local/private endpoints
         (LiteLLM/sglang/vLLM/LM Studio proxies, Tailscale boxes), which
-        report finish_reason correctly and were the source of #13971's
+        report finish_reason correctly and were the source of's
         false-positive truncation continuations.
         """
         model_lower = (self.model or "").lower()
@@ -1817,7 +1817,7 @@ class AIAgent:
         # are spawned with ``skip_memory=True``, so a review here has little to
         # persist — yet it inherits the subagent's (often premium) delegation
         # model and replays the whole conversation at premium rates, silently
-        # inflating token cost (#85859). An explicit ``/refine`` (``focus`` set)
+        # inflating token cost. An explicit ``/refine`` (``focus`` set)
         # is a deliberate user request and still runs.
         if focus is None and getattr(self, "_delegate_depth", 0) > 0:
             return
@@ -1831,7 +1831,7 @@ class AIAgent:
             focus=focus,
         )
         # Carry the active profile into the review thread so MEMORY.md / skill
-        # review writes land in the right profile (#54937).
+        # review writes land in the right profile.
         t = threading.Thread(
             target=propagate_context_to_thread(target), daemon=True, name="bg-review"
         )
@@ -1910,7 +1910,7 @@ class AIAgent:
         place (it is ephemeral junk the real transcript should shed). The
         persist user-message *override* is NOT applied here — it is resolved
         inside ``_flush_messages_to_session_db`` and written only to the DB row,
-        never mutating the live message list used by the API call (#48677 is
+        never mutating the live message list used by the API call is
         thus closed for every persist caller, not just this one).
         """
         # Scaffolding removal mutates the live list (desired — ephemeral
@@ -2021,10 +2021,10 @@ class AIAgent:
 
         Deduplicates via an intrinsic ``_DB_PERSISTED_MARKER`` stamped on each
         written message dict, so repeated calls (from multiple exit paths) only
-        write truly new messages — preventing the duplicate-write bug (#860)
+        write truly new messages — preventing the duplicate-write bug
         without relying on positional slices that can drift after
         message-sequence repair, and without a retained ``id(msg)`` set that
-        CPython could alias onto a freed-then-reused address (#50372). The
+        CPython could alias onto a freed-then-reused address. The
         ``_flushed_db_message_ids`` attribute is now only a one-shot seed
         (translated to markers, then cleared each flush), not a persisted set.
 
@@ -2044,7 +2044,7 @@ class AIAgent:
             return None
         if not self._session_db:
             return None
-        # Persist user-message override (#48677 chokepoint): historically this
+        # Persist user-message override chokepoint): historically this
         # mutated the live `messages` list in place, which — on the early
         # crash-resilience persist that runs BEFORE the API call is built —
         # stripped observed group-chat context off the live user message and
@@ -2066,7 +2066,7 @@ class AIAgent:
             # new tail. repair_message_sequence can shrink/merge the history
             # copy before the final flush, making len(conversation_history)
             # larger than len(messages); the slice is then empty and delivered
-            # assistant responses never reach state.db (#46053).
+            # assistant responses never reach state.db.
             #
             # Track persistence with an intrinsic per-message marker rather than
             # id(msg). `messages` is a shallow copy of `conversation_history`, so
@@ -2183,7 +2183,7 @@ class AIAgent:
                         # override is the cleaned transcript value. If they
                         # differ and no injection already stamped the sidecar,
                         # keep the sent bytes in api_content so replay matches
-                        # the wire (#48677 divergence, closed for the cache
+                        # the wire divergence, closed for the cache
                         # prefix too).
                         if (
                             _row_api_content is None
@@ -2257,7 +2257,7 @@ class AIAgent:
                     # Standalone reference handoffs are always hidden, even
                     # when the summarized transcript contained a user turn —
                     # otherwise they occupy the active user slot in
-                    # retry/undo/session dispatch (#80622). Merge-into-tail
+                    # retry/undo/session dispatch. Merge-into-tail
                     # carriers keep prior visibility rules so preserved tail
                     # content stays readable.
                     "display_kind": (
@@ -2453,7 +2453,7 @@ class AIAgent:
           * xAI OAuth: "do not have an active Grok subscription" /
             "out of available resources" / "does not have permission" + "grok"
 
-        Disambiguator for xAI (#29344): the same ``code`` text ("The caller
+        Disambiguator for xAI: the same ``code`` text ("The caller
         does not have permission to execute the specified operation") is
         returned for BOTH an unsubscribed account AND a stale OAuth access
         token.  xAI ships an explicit signal in the ``error`` field that
@@ -2491,7 +2491,7 @@ class AIAgent:
         # permission-denied ``code`` text; only one carries this suffix.
         # Bail out before the entitlement keyword checks so a stale OAuth
         # token routes through the credential-refresh path instead of the
-        # surface-error-as-entitlement path.  See #29344 for the long-
+        # surface-error-as-entitlement path. See for the long-
         # running TUI failure mode this closes.
         if "[wke=unauthenticated:" in haystack:
             return False
@@ -2667,7 +2667,7 @@ class AIAgent:
                 msg = AIAgent._coerce_api_error_detail(msg)
                 return AIAgent._decorate_xai_entitlement_error(f"{prefix}{msg[:300]}")
 
-        # SDK may leave body empty while httpx still has the payload (#36109).
+        # SDK may leave body empty while httpx still has the payload.
         # Redact before returning: the raw provider/proxy error body is
         # attacker-influenced and may echo Authorization / x-api-key / request
         # JSON, which would otherwise leak into final_response + logs (this path
@@ -3108,7 +3108,7 @@ class AIAgent:
                 # content before persistence. Catches PATs / API keys / Bearer
                 # tokens that may have leaked into assistant responses, tool
                 # output, or user paste. Respects PILOTAGE_REDACT_SECRETS via
-                # redact_sensitive_text — no-op when disabled. (#19798, #19845)
+                # redact_sensitive_text — no-op when disabled.
                 if "content" in msg:
                     msg = dict(msg)
                     msg["content"] = self._redact_message_content(msg.get("content"))
@@ -3610,7 +3610,7 @@ class AIAgent:
     # `code` spans).  Defense-in-depth: even if a future error message
     # echoes a credential path (config.yaml, .env, auth.json) into the
     # user-facing footer, it can never be matched as a deliverable bare
-    # path and silently uploaded to a messaging channel (#35584).
+    # path and silently uploaded to a messaging channel.
     _FOOTER_PATH_RE = re.compile(
         r"(?<![/:\w.`])(?:~/|/|[A-Za-z]:[/\\])(?:[\w.\-]+[/\\])*[\w.\-]+\.[\w]+",
     )
@@ -3644,7 +3644,7 @@ class AIAgent:
         path and any path echoed inside the tool's error preview — is
         backtick-wrapped via ``_neutralize_footer_paths`` so the gateway's
         bare-path media extractor can never auto-attach a protected file
-        (e.g. ``~/.pilotage/config.yaml``) to a messaging channel (#35584).
+        (e.g. ``~/.pilotage/config.yaml``) to a messaging channel.
         """
         if not failed:
             return ""
@@ -3723,7 +3723,7 @@ class AIAgent:
         message so a turn that produced no usable assistant reply (empty
         content after retries, a partial/truncated stream, a still-pending
         tool result, or an iteration/budget limit) is never silent from
-        the UI's perspective — the symptom users report in #34452.
+        the UI's perspective — the symptom users report in.
 
         ``persistence_cause`` refines the ``session_persistence_failed``
         wording (see ``classify_persistence_error``): lock contention gets
@@ -3882,12 +3882,12 @@ class AIAgent:
         Also bridges to the kanban board's heartbeat fields when this
         process is a dispatcher-spawned worker (PILOTAGE_KANBAN_TASK set),
         so the dispatcher watchdog doesn't reclaim an actively-running
-        worker as stale (#31752). Bridge is rate-limited (60s) and
+        worker as stale. Bridge is rate-limited (60s) and
         best-effort — it never raises into the agent loop.
 
         Separately, rate-limits a durable SessionDB activity projection
         (``last_activity_at`` + bounded description/provenance) so
-        CLI/Gateway consumers share one observation source (#72016 / #72039).
+        CLI/Gateway consumers share one observation source / ).
 
         ``provenance`` defaults to ``unknown`` (the ordinary agent activity
         clock). Named values are for special writers (e.g. compression);
@@ -3973,10 +3973,10 @@ class AIAgent:
         """Drop mid-turn activity labels once the turn is no longer running.
 
         Keeps ``_last_activity_ts`` so idle/watchdog clocks stay continuous
-        across interrupt-recursive turns (#15654) and between turns. Clears
+        across interrupt-recursive turns and between turns. Clears
         description + provenance so idle cached agents / SessionDB listings
         do not keep advertising the last mid-turn stamp (e.g. compression
-        or tool execution) after the turn ended (#72039).
+        or tool execution) after the turn ended.
         """
         from agent.session_activity import ActivityProvenance
 
@@ -4278,7 +4278,7 @@ class AIAgent:
         # accumulate per-session state (DAGs, summaries) leak that state from
         # the rotated-out session into whatever comes next under the same
         # compressor instance. Mirrors the call in shutdown_memory_provider().
-        # See issue #22394.
+        # See.
         if hasattr(self, "context_compressor") and self.context_compressor:
             try:
                 self.context_compressor.on_session_end(
@@ -4308,7 +4308,7 @@ class AIAgent:
         because the latter may carry injected skill content that bloats
         or breaks provider queries.
 
-        Interrupted turns are skipped entirely (#15218).  A partial
+        Interrupted turns are skipped entirely. A partial
         assistant output, an aborted tool chain, or a mid-stream reset
         is not durable conversational truth — mirroring it into an
         external memory backend pollutes future recall with state the
@@ -4394,7 +4394,7 @@ class AIAgent:
             pass
 
         # Retire the OpenAI/httpx client to release sockets immediately.
-        # #70773: eviction runs on the gateway's memory-manager thread — a
+        #: eviction runs on the gateway's memory-manager thread — a
         # cross-thread hard close of the shared client can release TLS FDs
         # under a still-unwinding worker (FD-recycle → SQLite corruption).
         # Retirement shuts the pooled sockets down (the memory/socket win we
@@ -4785,7 +4785,7 @@ class AIAgent:
         # surfaces commentary text via msg["reasoning"], so the string branch
         # below would otherwise drop a carrier before the sidecar is ever
         # inspected. Checked here — above every reasoning branch — so no
-        # carrier shape can fall into a drop path (#82108 review finding).
+        # carrier shape can fall into a drop path review finding).
         from agent.native_compaction import has_compaction_checkpoint
 
         if has_compaction_checkpoint(msg.get("codex_reasoning_items")):
@@ -4972,12 +4972,12 @@ class AIAgent:
 
         Previously this method injected a custom ``httpx.HTTPTransport``
         with ``socket_options`` (``SO_KEEPALIVE``, ``TCP_KEEPIDLE``, …) to
-        prevent CLOSE-WAIT accumulation on long-lived connections (#10324).
+        prevent CLOSE-WAIT accumulation on long-lived connections.
 
         That approach broke streaming for providers behind reverse proxies
         (OpenResty, Cloudflare, etc.) because the custom socket options
-        conflict with the proxy's chunked-transfer handling (#54049,
-        #12952).  It also stripped ``TCP_NODELAY``, stalling TLS handshakes
+        conflict with the proxy's chunked-transfer handling,
+       ). It also stripped ``TCP_NODELAY``, stalling TLS handshakes
         and SSE encoding.
 
         The fix moves connection lifecycle management from the socket layer
@@ -5074,7 +5074,7 @@ class AIAgent:
     def _retire_shared_openai_client(self, client: Any, *, reason: str) -> None:
         """Ownership-safe retirement of a replaced shared OpenAI client.
 
-        #70773 / #67142 / #29507: ``client.close()`` releases the pool's raw
+        / /: ``client.close`` releases the pool's raw
         FDs from the *calling* thread. The shared primary client has no single
         owning thread — worker threads from stale-killed attempts may still be
         unwinding their SSL BIOs, and the codex-direct / MoA paths stream on
@@ -5082,7 +5082,7 @@ class AIAgent:
         SSL layer still caches the raw integer fd, the kernel can recycle it
         into an unrelated ``open()`` (e.g. ``kanban.db``) and the unwinding
         TLS flush then writes an application-data record into that file — the
-        SQLite-header corruption documented in #29507/#70773.
+        SQLite-header corruption documented in/.
 
         Only an owner may release FDs, and a replaced shared client has none.
         So nobody calls ``close()``: we ``shutdown()`` the pooled sockets
@@ -5146,7 +5146,7 @@ class AIAgent:
                 )
                 return False
             self.client = new_client
-        # #70773: never hard-close the replaced shared client from here — the
+        #: never hard-close the replaced shared client from here — the
         # caller may not be the thread whose request is still unwinding on the
         # old pool (credential rotation and dead-connection cleanup run on the
         # turn thread while stale-killed workers unwind; the codex-direct path
@@ -5224,7 +5224,7 @@ class AIAgent:
     # a request that produced a response — the only closes that both come
     # from the thread that owns the pool's FDs AND attest a healthy pool.
     # Only these may keep the wire client for the next call, and poisoning
-    # still wins: a cross-thread abort (#29507) marks the slot so even a
+    # still wins: a cross-thread abort marks the slot so even a
     # worker-finally close discards it. Every other reason (error cleanups,
     # stale/interrupt kills, retry cleanups) gets a real close, so a retry
     # after a request error always builds a fresh pool.
@@ -5287,7 +5287,7 @@ class AIAgent:
                     cache["in_use"] = True
                     return cached
                 # kwargs changed (credential rotation, provider failover),
-                # poisoned by a cross-thread abort (#29507), or externally
+                # poisoned by a cross-thread abort, or externally
                 # closed — never reuse; discard and rebuild below.
                 stale = cached
                 cache["client"] = None
@@ -5295,7 +5295,7 @@ class AIAgent:
                 cache["poisoned"] = False
         if stale is not None:
             # Safe to close from this thread: in_use was False, so no
-            # worker thread owns the pool's FDs (#29507 concerns clients
+            # worker thread owns the pool's FDs concerns clients
             # with an in-flight request on another thread).
             self._close_openai_client(stale, reason=f"reuse_evict:{reason}", shared=False)
         client = self._create_openai_client(request_kwargs, reason=reason, shared=False)
@@ -5328,7 +5328,7 @@ class AIAgent:
                     return
                 # Failure / kill / abort outcome: drop the slot and fall
                 # through to a real close. This runs on the owning worker
-                # thread, which is where the FD release belongs (#29507).
+                # thread, which is where the FD release belongs.
                 cache["client"] = None
                 cache["kwargs"] = None
                 cache["poisoned"] = False
@@ -5352,7 +5352,7 @@ class AIAgent:
             # A worker thread has this client checked out for an in-flight
             # request (workers can outlive turns — see interruptible_api_call).
             # client.close() here would release its FDs from a stranger thread,
-            # the #29507 race teardown must not reintroduce. Abort the sockets
+            # the race teardown must not reintroduce. Abort the sockets
             # instead; the slot is already cleared, so the worker's own finally
             # sees an untracked client and does the real close on its thread.
             self._abort_request_openai_client(client, reason=f"{reason}_in_flight")
@@ -5366,7 +5366,7 @@ class AIAgent:
         callers (interrupt-check loop, stale-call detector). Calling
         ``client.close()`` from a thread that does not own the active httpx
         connection raced the still-live SSL BIO and corrupted unrelated file
-        descriptors when the kernel recycled the just-freed TCP FD (#29507).
+        descriptors when the kernel recycled the just-freed TCP FD.
 
         Here we only ``shutdown(SHUT_RDWR)`` the pool's sockets. That unblocks
         the owning worker thread's pending ``recv``/``send`` with an EOF or
@@ -5386,7 +5386,7 @@ class AIAgent:
             shutdown_count = self._force_close_tcp_sockets(client)
             # tcp_force_closed=0 means the stranger-thread abort found no
             # sockets to shut down — the worker stays blocked in recv and the
-            # provider keeps the slot (#72975). Surface that as WARNING so it
+            # provider keeps the slot. Surface that as WARNING so it
             # cannot be mistaken for a successful abort in the logs.
             _log = logger.warning if shutdown_count == 0 else logger.info
             _log(
@@ -5441,7 +5441,7 @@ class AIAgent:
         ``close()`` on the client whose TLS socket a worker thread is still
         reading: releasing that FD from a stranger thread lets the kernel
         recycle it under a still-live SSL BIO, which then writes a TLS record
-        into an unrelated SQLite header (#29507 / #67142). A per-request client
+        into an unrelated SQLite header / ). A per-request client
         lets the stranger thread ``shutdown()`` the socket while the owning
         worker performs the SDK-level close from its own context — the same
         ownership contract the OpenAI-wire path already uses.
@@ -5483,7 +5483,7 @@ class AIAgent:
                 cache["poisoned"] = False
         if stale is not None:
             # Safe to close from this thread: in_use was False, so no worker
-            # thread owns the pool's FDs (same #29507 reasoning as OpenAI).
+            # thread owns the pool's FDs (same reasoning as OpenAI).
             self._close_request_anthropic_client(stale, reason=f"reuse_evict:{reason}")
 
         if key[0] == "bedrock":
@@ -5571,7 +5571,7 @@ class AIAgent:
             return
         if in_use:
             # A worker thread has this client checked out for an in-flight
-            # request — same #29507 reasoning as the OpenAI teardown hook.
+            # request — same reasoning as the OpenAI teardown hook.
             self._abort_request_anthropic_client(client, reason=f"{reason}_in_flight")
             return
         try:
@@ -5585,8 +5585,8 @@ class AIAgent:
 
         Stranger threads (the interrupt-check / stale-stream detector loop)
         must not call the SDK ``close()`` — that races the owning worker's live
-        SSL BIO and can recycle a TLS FD into a SQLite header (#29507 /
-        #67142). Only ``shutdown(SHUT_RDWR)`` the pool's sockets so the worker
+        SSL BIO and can recycle a TLS FD into a SQLite header /
+       ). Only ``shutdown(SHUT_RDWR)`` the pool's sockets so the worker
         unblocks and releases the FD from its own thread.
         """
         if client is None:
@@ -5600,7 +5600,7 @@ class AIAgent:
                 cache["poisoned"] = True
         try:
             shutdown_count = self._force_close_tcp_sockets(client)
-            # Same visibility contract as the OpenAI abort path (#72975):
+            # Same visibility contract as the OpenAI abort path:
             # zero sockets shut down means the abort did not unblock the
             # worker — log WARNING, not a success-shaped INFO.
             _log = logger.warning if shutdown_count == 0 else logger.info
@@ -5783,7 +5783,7 @@ class AIAgent:
         ``.env`` and the *saving* process's os.environ, but a live session
         worker keeps the base_url/api_key captured at agent init until it
         restarts — so an open chat silently keeps calling the old endpoint
-        (#67821). Called at the start of each conversation turn, this
+. Called at the start of each conversation turn, this
         re-resolves the provider's env-sourced credentials (load_env() is
         mtime-memoized, so an unchanged file costs one stat()) and rebuilds
         the client when the user edited them.
@@ -5798,7 +5798,7 @@ class AIAgent:
         previously-seen env value.
 
         Covers api-key registry providers and named custom providers with a
-        ``key_env`` (#67935) — the latter resolve to ``provider="custom"``
+        ``key_env`` — the latter resolve to ``provider="custom"``
         with no registry entry, so they are matched through the runtime
         provider's config lookup instead.
         """
@@ -5844,7 +5844,7 @@ class AIAgent:
                     api_key, pconfig.inference_base_url, env_url
                 ).rstrip("/")
         elif self.provider == "custom":
-            # Named custom provider (#67935): identity lives in config
+            # Named custom provider: identity lives in config
             # (``providers.<name>`` / ``custom_providers``), the credential in
             # the env var it names via ``key_env``. Re-resolve through the
             # same config lookup the runtime resolver uses; entries without
@@ -5887,7 +5887,7 @@ class AIAgent:
             adopt = current_base == default_base and not (
                 base_url == current_base and api_key == self.api_key
             )
-            # #79156: if the session already holds a pool-rotated key, do
+            #: if the session already holds a pool-rotated key, do
             # not treat that divergence as a boot-time env adoption. First
             # look would otherwise stomp the rotated key with the env value
             # while leaving ``_credential_pool_entry_id`` on the fallback.
@@ -5943,7 +5943,7 @@ class AIAgent:
 
         # Rebind the pool entry id to the key we just adopted. Leaving a
         # stale id after a key rewrite makes mark_exhausted_and_rotate
-        # quarantine the wrong credential on the next 429 (#79156).
+        # quarantine the wrong credential on the next 429.
         try:
             from agent.agent_runtime_helpers import sync_credential_pool_entry_id
 
@@ -6172,7 +6172,7 @@ class AIAgent:
         self._anthropic_api_key = new_token
         # Update OAuth flag — token type may have changed (API key ↔ OAuth).
         # Only treat as OAuth on native Anthropic; third-party endpoints using
-        # the Anthropic protocol must not trip OAuth paths (#1739 & third-party
+        # the Anthropic protocol must not trip OAuth paths & third-party
         # identity-injection guard).
         from agent.anthropic_adapter import _is_oauth_token
         self._is_anthropic_oauth = _is_oauth_token(new_token) if self.provider == "anthropic" else False
@@ -6265,7 +6265,7 @@ class AIAgent:
         (``User-Agent: OpenAI/Python ...``, ``X-Stainless-*``). Setting e.g.
         ``model.default_headers: {User-Agent: curl/8.7.1}`` lets the request
         reach such an upstream instead of failing with an opaque 4xx/502 even
-        though the same body works under ``curl``. (#40033)
+        though the same body works under ``curl``.
 
         Delegates the config read + merge to
         ``agent.auxiliary_client._apply_user_default_headers`` so the main and
@@ -6381,7 +6381,7 @@ class AIAgent:
             self._try_refresh_anthropic_client_credentials()
         # Defensive: strip Responses-only kwargs that can leak in under an
         # api_mode-flip race (the Anthropic SDK raises a non-retryable
-        # TypeError on them). See #31673.
+        # TypeError on them). See.
         from agent.anthropic_adapter import create_anthropic_message
         return create_anthropic_message(
             client or self._anthropic_client,
@@ -6430,7 +6430,7 @@ class AIAgent:
     def _reset_stream_delivery_tracking(self) -> None:
         """Reset tracking for text delivered during the current model response."""
         # Flush any benign partial-tag tail held by the think scrubber
-        # first (#17924): an innocent '<' at the end of the stream that
+        # first: an innocent '<' at the end of the stream that
         # turned out not to be a tag prefix should reach the UI.  Then
         # flush the context scrubber.  Order matters — the think
         # scrubber's output feeds into the context scrubber's state.
@@ -6470,7 +6470,7 @@ class AIAgent:
 
     def _record_streamed_assistant_text(self, text: str) -> None:
         """Accumulate visible assistant text emitted through stream callbacks."""
-        # Single-writer guard (#65991): a superseded stream must not pollute the
+        # Single-writer guard: a superseded stream must not pollute the
         # turn's accumulated text (which also feeds the interim-visible-text
         # de-dup comparison), even when a caller reaches this directly (the
         # tool-suppressed content path) rather than through _fire_stream_delta.
@@ -6504,7 +6504,7 @@ class AIAgent:
         # The reverse direction (streamed longer than final) is NOT matched:
         # that could suppress a needed resend in the gateway path where
         # already_streamed=True calls on_segment_break() instead of
-        # on_commentary() (#65919 review).
+        # on_commentary review).
         return bool(streamed) and visible_content.startswith(streamed)
 
     def _extract_codex_interim_visible_parts(
@@ -6620,7 +6620,7 @@ class AIAgent:
         ordinary tool-call narration, intermediate acknowledgements, and
         verification candidates alike. Setting it here would cause the CLI to
         suppress a *different* final summary (e.g. from ``_handle_max_iterations``)
-        when the only streamed text was unrelated mid-turn commentary. (#65919
+        when the only streamed text was unrelated mid-turn commentary. (
         review: response-loss blocker)
         """
         if not isinstance(assistant_msg, dict):
@@ -6680,7 +6680,7 @@ class AIAgent:
             logger.debug("interim_assistant_callback error", exc_info=True)
 
     def _ensure_stream_writer_state(self) -> None:
-        """Lazily create the single-writer guard fields (#65991).
+        """Lazily create the single-writer guard fields.
 
         The fields are normally set in ``agent_init``, but agents constructed
         via ``AIAgent.__new__`` (test doubles, legacy/partially-initialized
@@ -6698,7 +6698,7 @@ class AIAgent:
 
     def _claim_stream_writer(self) -> int:
         """Claim exclusive ownership of the streaming delta sink for the calling
-        stream attempt and return its monotonic writer token (#65991).
+        stream attempt and return its monotonic writer token.
 
         Every streaming attempt (each provider path, each retry) calls this
         right before it begins consuming its stream. Claiming bumps the shared
@@ -6718,13 +6718,13 @@ class AIAgent:
     def _stream_writer_is_current(self, token: int) -> bool:
         """True when ``token`` (from a prior _claim_stream_writer) is still the
         active writer — i.e. no newer stream attempt has claimed the sink since
-        (#65991). Lets a stream loop bail out the instant it is superseded."""
+. Lets a stream loop bail out the instant it is superseded."""
         return token == getattr(self, "_stream_writer_token", token)
 
     def _stream_writer_superseded(self) -> bool:
         """True when the calling thread claimed the delta sink but a newer
         stream attempt has since claimed it — i.e. this thread is a stale
-        writer whose chunks must be dropped (#65991).
+        writer whose chunks must be dropped.
 
         A thread that never claimed (``token is None``) is not a writer and is
         never reported as superseded, so non-streaming delta callers are
@@ -6788,7 +6788,7 @@ class AIAgent:
 
     def _fire_stream_delta(self, text: str) -> None:
         """Fire all registered stream delta callbacks (display + TTS)."""
-        # Single-writer guard (#65991): a superseded stream must not interleave
+        # Single-writer guard: a superseded stream must not interleave
         # its tokens into the turn alongside the retry that replaced it.
         if self._stream_writer_superseded():
             self._note_dropped_stream_writer("_fire_stream_delta")
@@ -6805,7 +6805,7 @@ class AIAgent:
             prepended_break = False
         if isinstance(text, str):
             # Suppress reasoning/thinking blocks via the stateful
-            # scrubber (#17924).  Earlier versions ran _strip_think_blocks
+            # scrubber. Earlier versions ran _strip_think_blocks
             # per-delta here, which destroyed downstream state machines
             # when a tag was split across deltas (e.g. MiniMax-M2.7
             # sends '<think>' and its content as separate deltas —
@@ -6819,7 +6819,7 @@ class AIAgent:
                 # Defensive: legacy callers without the scrubber attribute.
                 text = self._strip_think_blocks(text or "")
             # Then feed through the stateful context scrubber so memory-context
-            # spans split across chunks cannot leak to the UI (#5719).
+            # spans split across chunks cannot leak to the UI.
             scrubber = getattr(self, "_stream_context_scrubber", None)
             if scrubber is not None:
                 text = scrubber.feed(text)
@@ -6857,7 +6857,7 @@ class AIAgent:
 
     def _fire_reasoning_delta(self, text: str) -> None:
         """Fire reasoning callback if registered."""
-        # Single-writer guard (#65991): fence out a superseded stream's
+        # Single-writer guard: fence out a superseded stream's
         # reasoning deltas the same way as content deltas.
         if self._stream_writer_superseded():
             self._note_dropped_stream_writer("_fire_reasoning_delta")
@@ -6928,7 +6928,7 @@ class AIAgent:
         Used to gate user-facing "trying fallback..." status so we don't
         announce a fallback that will never be attempted (the user has no
         fallback chain configured).  Mirrors the early-return guard in
-        ``try_activate_fallback`` (#35314, #17446).
+        ``try_activate_fallback``.
         """
         chain = getattr(self, "_fallback_chain", None) or []
         index = getattr(self, "_fallback_index", 0)
@@ -7285,7 +7285,7 @@ class AIAgent:
         """Downgrade list-type tool messages to text summaries in-place.
 
         Recovery path for providers that reject list-type tool message content
-        (e.g. Xiaomi MiMo's 400 "text is not set"; see issue #27344).  Walks
+        (e.g. Xiaomi MiMo's 400 "text is not set"; see). Walks
         ``api_messages`` for any ``role: "tool"`` message whose ``content`` is
         a list containing image parts, replaces the content with the existing
         text part(s) (or a minimal placeholder if none survive), and by default
@@ -7373,7 +7373,7 @@ class AIAgent:
         ``us.anthropic.claude-sonnet-4-5-20250929-v1:0``) and rejects
         the hyphenated form with
         ``HTTP 400 The provided model identifier is invalid``.
-        Regression for #11976; mirrors the opencode-go fix for #5211
+        Regression for; mirrors the opencode-go fix for
         (commit f77be22c), which extended this same allowlist."""
         if (getattr(self, "provider", "") or "").lower() in {
             "alibaba", "minimax", "minimax-cn",
@@ -7507,11 +7507,11 @@ class AIAgent:
 
         model = (self.model or "").lower()
         # Live-catalog metadata first (ported from
-        # PrimeIntellect-ai/prime-agent#1258): OpenRouter's /v1/models entries
+        # PrimeIntellect-ai/prime-agent): OpenRouter's /v1/models entries
         # advertise reasoning support via supported_parameters + a reasoning
         # object, which covers every routed vendor without a hand-maintained
         # prefix list. The static prefix allowlist below repeatedly went
-        # stale one vendor at a time (nvidia/ missing → #75386; same class
+        # stale one vendor at a time (nvidia/ missing →; same class
         # as tencent/, xiaomi/ additions before it) — metadata makes new
         # vendors work without a code change. One catalog fetch per process,
         # cached; unknown (catalog unreachable / unlisted model) falls back
@@ -7664,7 +7664,7 @@ class AIAgent:
 
         DeepSeek v4 thinking and Kimi / Moonshot thinking both reject replays
         of assistant tool-call messages that omit ``reasoning_content`` (refs
-        #15250, #17400). Xiaomi MiMo thinking mode has the same requirement.
+,). Xiaomi MiMo thinking mode has the same requirement.
 
         Result cached on the AIAgent instance keyed by (provider, model,
         base_url); invalidated whenever ``switch_model()`` /
@@ -7711,7 +7711,7 @@ class AIAgent:
 
         DeepSeek V4 thinking mode requires ``reasoning_content`` on every
         assistant tool-call turn; omitting it causes HTTP 400 when the
-        message is replayed in a subsequent API request (#15250).
+        message is replayed in a subsequent API request.
 
         Rule table owner: ``agent.message_sanitization.reasoning_echo_family``.
         """
@@ -7898,7 +7898,7 @@ class AIAgent:
                 return _run(active_fence)
 
             def _snapshot_worker(fence=None):
-                # #76354 review F3: the pooled worker must NEVER share the
+                # review F3: the pooled worker must NEVER share the
                 # caller's live transcript. Plugin/legacy context engines are
                 # allowed to mutate their input list in place; after a host
                 # timeout the worker stays alive, so a shared list would let
@@ -7962,7 +7962,7 @@ class AIAgent:
                             exc_info=True,
                         )
                 # Same timeout cooldown ladder as summary-LLM timeouts
-                # (#62452): avoid re-burning the full idle budget every turn.
+                #: avoid re-burning the full idle budget every turn.
                 compressor = getattr(self, "context_compressor", None)
                 if compressor is not None:
                     record = getattr(compressor, "record_timeout_failure", None)
@@ -8017,13 +8017,13 @@ class AIAgent:
             # id rotation updated pilotage_logging._session_context (a
             # threading.local) on the WORKER thread, not this one. Propagate
             # the current session_id back so subsequent log lines on this
-            # thread carry the rotated id (#34089).
+            # thread carry the rotated id.
             try:
                 from pilotage_logging import set_session_context
                 set_session_context(self.session_id)
             except Exception:
                 pass
-            # #76354 review F5: the worker thread also rebound the session
+            # review F5: the worker thread also rebound the session
             # ContextVar inside its own (copied) context, which the caller
             # never sees — and get_session_env() prefers an already-bound
             # ContextVar over os.environ. Rebind in the CALLER's context so
@@ -8351,7 +8351,7 @@ class AIAgent:
             # Serialize the full load -> run -> flush region across Pilotage
             # processes. Gateway's asyncio lease closes alias routing inside one
             # process; this durable lease covers Desktop, CLI resume, gateway,
-            # and background delivery processes sharing state.db (#84234).
+            # and background delivery processes sharing state.db.
             _turn_db = getattr(self, "_session_db", None)
             _durable_session_exists = False
             if _turn_db is not None and session_id:
@@ -8361,7 +8361,7 @@ class AIAgent:
                     # A locked / non-WAL read is not proof the row is absent.
                     # Treating probe failure as "fresh session" skipped the
                     # lease this block exists to take and ran fail-open on
-                    # the exact contention point (#84234). Acquire (or fail
+                    # the exact contention point. Acquire (or fail
                     # closed if acquire itself cannot) rather than start
                     # load/run/flush unsynchronized. get_session returns
                     # None — it does not raise — when the row is missing.
@@ -8605,7 +8605,7 @@ class AIAgent:
             # Publish the session accounting handles the same way so auxiliary
             # calls record their token usage into session_model_usage (task
             # dimension) — the fix for aux spend being invisible in analytics
-            # (issue #23270).
+            #.
             acct_token = set_accounting_context(
                 getattr(self, "_session_db", None),
                 getattr(self, "session_id", None),

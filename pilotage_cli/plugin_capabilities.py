@@ -1,4 +1,4 @@
-"""Plugin capability declarations + consent state (#64228).
+"""Plugin capability declarations + consent state.
 
 Unifies the scattered per-plugin trust gates (``plugins.entries.<id>.allow_*``)
 into one declared, diffable **capability model** with install/update-time

@@ -172,7 +172,7 @@ model:
 # default. 0 or a negative value disables the bound (unbounded); very large
 # values are clamped to a platform-safe maximum automatically.
 #
-# Currently resolved keys (more paths migrate here over time — see issue #85125):
+# Currently resolved keys (more paths migrate here over time — see):
 #
 # timeouts:
 #   tools:
@@ -476,7 +476,7 @@ compression:
   # chat platforms. Unrelated operational noise (auxiliary model failures,
   # provider retry chatter) stays suppressed either way, and compression
   # FAILURE notices + manual /compress feedback are always visible
-  # regardless of this setting. (#52995)
+  # regardless of this setting.
   progress_notices: false
   
   # Trigger compression at this % of model's context limit (default: 0.50 = 50%)
@@ -1741,7 +1741,7 @@ updates:
 #     are skipped with a startup warning (never a silent clobber)
 #   - a source's override_existing lets it beat .env/shell values, but
 #     never another secret source's claim
-# Docs: https://hermes-agent.nousresearch.com/docs/user-guide/secrets/
+# Docs:
 #
 # secrets:
 #   # Optional explicit ordering of enabled sources.

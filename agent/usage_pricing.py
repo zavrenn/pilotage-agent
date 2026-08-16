@@ -19,7 +19,7 @@ _ONE_MILLION = Decimal("1000000")
 _NOUS_DEFAULT_BASE_URL = "https://inference-api.nousresearch.com/v1"
 
 # Sub-cent cost threshold: below $0.01, render at 4 decimal places so
-# the display is non-zero (e.g. $0.0046 instead of $0.00). See #79220.
+# the display is non-zero (e.g. $0.0046 instead of $0.00). See.
 _SUBCENT_THRESHOLD = Decimal("0.01")
 
 # Attached to every CostResult with status="included" so consumers can
@@ -38,7 +38,7 @@ def format_cost_label(amount: Decimal) -> str:
       as zero)
     - Normal → "~$1.23" (2 dp)
 
-    This fixes #79220 where sub-cent per-turn costs on cheap models
+    This fixes where sub-cent per-turn costs on cheap models
     (DeepSeek, etc.) rendered as "$0.00" despite amount_usd carrying
     full Decimal precision.
 
@@ -51,7 +51,7 @@ def format_cost_label(amount: Decimal) -> str:
     if amount < _SUBCENT_THRESHOLD:
         label = f"~${amount:.4f}"
         # A positive amount that rounds to 0.0000 at 4 dp would render
-        # "~$0.0000" — a zero-looking label, the exact #79220 dishonesty.
+        # "~$0.0000" — a zero-looking label, the exact dishonesty.
         # Comparing the rendered label checks the truth directly (a naive
         # `< 0.00005` threshold misses the exact boundary under
         # ROUND_HALF_EVEN).
@@ -1047,7 +1047,7 @@ def _usage_count(value: Any) -> int:
     """Coerce a usage counter to a non-negative integer.
 
     Providers occasionally emit malformed negative counters; clamp them to 0
-    so a bad field cannot corrupt session accounting (#85706).
+    so a bad field cannot corrupt session accounting.
     """
     return max(0, _to_int(value))
 
@@ -1308,7 +1308,7 @@ def normalize_usage(
         # OpenAI's documented field for GPT-5.6+ explicit cache writes is
         # `cache_write_tokens` (billed at 1.25x); `cache_creation_tokens` is
         # kept as a fallback for older/alternate Responses-compatible
-        # endpoints (#70543).
+        # endpoints.
         cache_write_tokens = _usage_count(
             _usage_get(details, "cache_write_tokens", 0) if details else 0
         )
@@ -1334,7 +1334,7 @@ def normalize_usage(
         # AI Gateway, Cline) expose when routing Claude models — without this
         # fallback, cache writes are undercounted as 0 and cache reads can be
         # missed when the proxy only surfaces them at the top level.
-        # Port of cline/cline#10266.
+        # Port of cline/cline.
         cache_read_tokens = _usage_count(
             _usage_get(details, "cached_tokens", 0) if details else 0
         )
@@ -1347,7 +1347,7 @@ def normalize_usage(
             # hits as top-level prompt_cache_hit_tokens (+ the complementary
             # prompt_cache_miss_tokens; prompt_tokens = hit + miss), not the
             # OpenAI nested shape. Without this, direct DeepSeek sessions
-            # always showed 0 cache-hit tokens (#61871).
+            # always showed 0 cache-hit tokens.
             cache_read_tokens = _usage_count(
                 _usage_get(response_usage, "prompt_cache_hit_tokens", 0)
             )
@@ -1356,7 +1356,7 @@ def normalize_usage(
             # context-cache hits as a top-level usage.cached_tokens, not the
             # OpenAI nested prompt_tokens_details.cached_tokens shape. Without
             # this, direct Kimi sessions always showed 0 cache-hit tokens and
-            # the hits were billed at the full input rate (#65722).
+            # the hits were billed at the full input rate.
             cache_read_tokens = _usage_count(
                 _usage_get(response_usage, "cached_tokens", 0)
             )

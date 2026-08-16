@@ -400,7 +400,7 @@ def _check_task(
     silently downgraded to ``auto``: silent fallback masks the
     misconfiguration and could route the call to the main model the user
     may have steered elsewhere on purpose (round-2 design correction,
-    tracked in #64182 / #64174).
+    tracked in / ).
     """
     if not requested_task:
         return None

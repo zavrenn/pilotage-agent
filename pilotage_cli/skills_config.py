@@ -29,7 +29,7 @@ def _normalize_skill_names(values) -> Set[str]:
 
     Mirrors ``agent.skill_utils._normalize_string_set``: ``None`` (YAML null)
     means empty, a bare scalar (``disabled: my-skill``) means a single-item
-    list — NOT a set of its characters (#13026).
+    list — NOT a set of its characters.
     """
     if values is None:
         return set()

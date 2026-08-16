@@ -65,7 +65,7 @@ def _prune_never_active_keyed(db, args):
     """`pilotage sessions prune --never-active` — drop leaked/dead keyed rows.
 
     Targets keyed gateway rows that were opened and never used at all.  The
-    population is dominated by escaped test fixtures (#82770), which the
+    population is dominated by escaped test fixtures, which the
     hermetic-isolation guard can only stop from being *created* — rows already
     written to a developer's state.db need a sweep to leave.
     """
@@ -1124,9 +1124,9 @@ def cmd_sessions(args, sessions_parser=None):
 
     elif action == "clean-markers":
         if args.dry_run:
-            print("Dry run — scanning for stale tool-call marker rows (#78148)…")
+            print("Dry run — scanning for stale tool-call marker rows…")
         else:
-            print("Scanning for stale tool-call marker rows (#78148)…")
+            print("Scanning for stale tool-call marker rows…")
         report = db.purge_stale_tool_call_markers(
             dry_run=args.dry_run, backup=not args.no_backup
         )

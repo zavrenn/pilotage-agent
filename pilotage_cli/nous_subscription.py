@@ -156,7 +156,7 @@ def _has_agent_browser() -> bool:
 
     from pilotage_constants import agent_browser_runnable
 
-    # agent-browser is no longer a root package.json dependency (#43564) — it
+    # agent-browser is no longer a root package.json dependency — it
     # resolves lazily via npx for most installs, which a bare PATH +
     # node_modules probe can't see. Mirror the local-CLI tail of
     # :func:`tools.browser_tool.check_browser_requirements` (same cascade, same
@@ -172,7 +172,7 @@ def _has_agent_browser() -> bool:
         # If the runtime probe can't be imported, fall back to binary presence
         # (prior behaviour) rather than crashing the setup/status surface.
         # Validate the resolved binary actually runs — a dangling global
-        # symlink (issue #48521) is reported by ``which`` but fails at exec.
+        # symlink  is reported by ``which`` but fails at exec.
         if agent_browser_runnable(shutil.which("agent-browser")):
             return True
 
@@ -510,7 +510,7 @@ def get_nous_subscription_features(
             or (web_backend == "tavily" and direct_tavily)
             or (web_backend == "searxng" and direct_searxng)
             # Per-capability overrides: search_backend or extract_backend may be set
-            # without web.backend (using the new split config from #20061)
+            # without web.backend (using the new split config from)
             or (web_search_backend == "searxng" and direct_searxng)
             or (web_search_backend == "exa" and direct_exa)
             or (web_search_backend == "firecrawl" and direct_firecrawl)

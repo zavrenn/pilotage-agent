@@ -188,7 +188,7 @@ class StreamingTTSConsumer:
             pass
         # Guarantee the _DONE sentinel reaches the queue.  If the bounded
         # queue is full, drain one item to make room — the sentinel is
-        # load-bearing and must not be lost (#60671 hardening).
+        # load-bearing and must not be lost hardening).
         self._enqueue_done()
 
     def _enqueue_done(self) -> None:
@@ -389,7 +389,7 @@ class StreamingTTSConsumer:
             self._aborted = True
         # Guarantee the _ABORT sentinel reaches the queue.  If the bounded
         # queue is full, drain one item to make room — the sentinel must
-        # not be lost (#60671 hardening).
+        # not be lost hardening).
         for _attempt in range(3):
             try:
                 self._queue.put_nowait(_ABORT)

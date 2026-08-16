@@ -4,7 +4,7 @@ MCP stdio transports intentionally support arbitrary local commands so users can
 run custom servers. This module does not try to sandbox that capability. It
 blocks two high-signal abuse shapes seen in the wild:
 
-1. The exfiltration shape from #45620: a shell interpreter whose inline script
+1. The exfiltration shape from: a shell interpreter whose inline script
    invokes network egress tooling.
 2. The persistence shape from the June 2026 ``hermes-0day`` campaign: a shell
    interpreter whose inline script writes to OS persistence surfaces
@@ -126,7 +126,7 @@ def validate_mcp_server_entry(name: str, entry: dict[str, Any]) -> list[str]:
     scripts, npx, uvx, etc. We block three narrow shapes only:
 
     * a known hermes-0day IOC anywhere in command/args/env (hardcoded blocklist);
-    * a shell interpreter whose inline script invokes network egress (#45620);
+    * a shell interpreter whose inline script invokes network egress;
     * a shell interpreter whose inline script writes to an OS persistence
       surface (June 2026 hermes-0day SSH/PAM/sudoers/cron shape).
     """

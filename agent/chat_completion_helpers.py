@@ -62,7 +62,7 @@ _PROVIDER_STREAM_ERROR_TEXT_LIMIT = 4096
 # the full (potentially 80k-token) context once per provider every turn and
 # can drive a constrained host into memory/swap exhaustion.  Rate-limit /
 # billing reasons keep their own 60s cooldown (set above); this is the
-# narrower non-rate-limit case.  See issue #24996.
+# narrower non-rate-limit case. See.
 _FALLBACK_EXHAUSTED_COOLDOWN_S = 5.0
 
 
@@ -73,7 +73,7 @@ def _context_thread_target(callback):
 
 
 def _join_worker_for_relay_teardown(worker, *, label: str) -> None:
-    """Bounded worker join before raising InterruptedError (#81521).
+    """Bounded worker join before raising InterruptedError.
 
     Raising immediately lets turn teardown (finish_logical_calls /
     end_turn / close_session) race a still-open Relay physical LLM scope
@@ -96,7 +96,7 @@ def _join_worker_for_relay_teardown(worker, *, label: str) -> None:
         logger.warning(
             "%s worker still alive after interrupt abort (2.0s join "
             "timeout); Relay teardown will best-effort drain orphaned "
-            "scopes (#81521).",
+            "scopes.",
             label,
         )
 
@@ -585,7 +585,7 @@ def _prompt_cache_scope_for_agent(agent) -> "str | None":
     Guarded-import wrapper over the never-raising
     ``agent.prompt_cache_scope.resolve_prompt_cache_scope_safe`` — the
     transports treat a None/empty value as "fall back to the physical
-    session_id", so any resolution failure degrades to pre-#79017 behavior
+    session_id", so any resolution failure degrades to pre- behavior
     instead of blocking the request build.
     """
     try:
@@ -701,7 +701,7 @@ def _codex_wait_notice_recovery(
     return f"; auto-reconnect at {int(min(deadlines))}s"
 
 
-# ── Cross-turn stale-call circuit breaker (#58962) ─────────────────────
+# ── Cross-turn stale-call circuit breaker ─────────────────────
 # A session wedged against an unresponsive provider hits the stale detector
 # on every call and loops forever (observed: 494 consecutive failures over
 # 3+ days, each burning the full stale timeout × retries with no response).
@@ -919,7 +919,7 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
             on_first_delta=getattr(agent, "_codex_on_first_delta", None),
         )
     if agent.api_mode == "anthropic_messages":
-        # #67142: use a request-local Anthropic client so the stale/interrupt
+        #: use a request-local Anthropic client so the stale/interrupt
         # watchdog aborts sockets from the stranger thread while the worker
         # owns the SDK close — never closing the shared client mid-flight.
         request_client = make_client(
@@ -962,7 +962,7 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
         # client is NOT the facade: the facade consumes the key, and
         # stripping it there forces a wasteful duplicate reference
         # fan-out (the facade re-prepares from scratch).  Only the MoA
-        # facade's completions object exposes ``prepare()``.  (#78382)
+        # facade's completions object exposes ``prepare``.
         _completions = getattr(getattr(agent.client, "chat", None), "completions", None)
         if not callable(getattr(_completions, "prepare", None)):
             api_kwargs.pop("_moa_prepared_request", None)
@@ -977,21 +977,21 @@ def should_use_direct_api_call(agent) -> bool:
     Two nested-pool contexts wedge before the socket opens when the request
     is pushed onto yet another daemon worker thread:
 
-    - Gateway cron turns (#62151): gateway asyncio loop → cron thread →
+    - Gateway cron turns: gateway asyncio loop → cron thread →
       interrupt worker. Fixed by running inline.
-    - Delegated children (#60203): gateway loop → async-delegation executor
+    - Delegated children: gateway loop → async-delegation executor
       (module-lifetime daemon pool) → per-child timeout executor → interrupt
       worker. Same fingerprint after multi-day gateway uptime — children hang
       at their FIRST API call with zero stale-detector output (the worker
       never reaches dispatch), all providers, restart cures it. The cron fix
-      originally excluded delegation "for lack of evidence"; #60203 is that
+      originally excluded delegation "for lack of evidence"; is that
       evidence.
 
     Running inline drops the deepest thread layer (whose only job is
     interactive-interrupt responsiveness). Interrupts still work: the inline
     path registers ``agent._active_request_abort``, which ``interrupt()``
     invokes cross-thread to shut the active sockets — the same mechanism the
-    async-delegation stall monitor (#72227) relies on.
+    async-delegation stall monitor relies on.
 
     Keep native/Codex/Bedrock/MoA transports on their established workers:
     their cancellation and client ownership differ.
@@ -1049,12 +1049,12 @@ def _resolve_direct_stale_timeout(agent, api_kwargs: dict) -> float:
 
 
 def _inline_nonstream_hard_timeout(stale_timeout: float):
-    """Socket-level backstop for inline non-streaming calls (#85252).
+    """Socket-level backstop for inline non-streaming calls.
 
     The keepalive httpx client uses ``read=None`` so SSE streams can idle
     during reasoning. That same client serves cron/subagent non-streaming
     calls. Combined with a stranger-thread abort that must not ``close()``
-    the FD (#29507), a hung provider then waits until TCP dies — observed
+    the FD, a hung provider then waits until TCP dies — observed
     5–11× past the stale threshold.
 
     Returns an ``httpx.Timeout`` whose read budget equals the stale
@@ -1083,7 +1083,7 @@ def direct_api_call(agent, api_kwargs: dict):
     Used when ``should_use_direct_api_call`` is True (cron turns and
     delegated children). Skips the interrupt worker (whose only job is
     interactive-interrupt responsiveness, which these contexts do not have)
-    so the nested-pool deadlock (#62151, #60203) cannot occur.
+    so the nested-pool deadlock (,) cannot occur.
 
     While the inline request blocks, a lightweight activity heartbeat keeps
     ``last_activity_ts`` advancing. Subagents use this path (non-streaming),
@@ -1092,21 +1092,21 @@ def direct_api_call(agent, api_kwargs: dict):
     450s — surfacing as ``Operation interrupted: waiting for model response``.
 
     A stale-call watchdog bounds the request the same way the interrupt
-    worker's poll loop does (#80759). The keepalive httpx client uses
+    worker's poll loop does. The keepalive httpx client uses
     ``read=None`` (SSE), so the socket itself is not a usable bound: a
     provider that accepts the request and then goes silent never trips a
     read timeout, and a stranger-thread abort cannot ``close()`` the FD
-    (#29507). The watchdog aborts in-flight sockets through the already-
+. The watchdog aborts in-flight sockets through the already-
     registered abort hook; a per-call ``timeout`` matching the stale budget
     is the hard backstop when that abort finds nothing to shut down
-    (#85252). Either path surfaces a retryable ``TimeoutError`` so the
+. Either path surfaces a retryable ``TimeoutError`` so the
     outer retry loop reconnects with backoff / credential rotation /
     provider fallback.
     """
     _check_stale_giveup(agent)
     agent._touch_activity("waiting for non-streaming API response")
     # Request-lifecycle state, every transition under ``request_client_lock``
-    # (ported from the #75301 design): ``done`` stops a late timer from
+    # (ported from the design): ``done`` stops a late timer from
     # bumping the stale streak after the call already unwound; ``cancelled``
     # marks a user/monitor interrupt as the owner of the outcome so a racing
     # stale timer cannot misclassify the kill as provider staleness;
@@ -1195,7 +1195,7 @@ def direct_api_call(agent, api_kwargs: dict):
 
     def _activity_heartbeat() -> None:
         # Do not put the API call itself on another worker thread — that is
-        # the nested-pool deadlock this path exists to avoid (#60203). This
+        # the nested-pool deadlock this path exists to avoid. This
         # ticker only refreshes the activity clock.
         while not activity_hb_stop.wait(_DIRECT_API_ACTIVITY_HEARTBEAT_SECONDS):
             try:
@@ -1217,7 +1217,7 @@ def direct_api_call(agent, api_kwargs: dict):
     # Do not override an explicit per-call timeout (provider config /
     # transport already set one). Otherwise pin read=stale_timeout so a
     # no-op stranger-thread abort cannot leave the keepalive client's
-    # read=None socket hanging until TCP dies (#85252).
+    # read=None socket hanging until TCP dies.
     hard_timeout = _inline_nonstream_hard_timeout(stale_timeout)
     if hard_timeout is not None and "timeout" not in api_kwargs:
         api_kwargs = dict(api_kwargs)
@@ -1227,7 +1227,7 @@ def direct_api_call(agent, api_kwargs: dict):
     def _on_stale() -> None:
         # Runs on the timer thread. It only aborts the in-flight sockets —
         # it never issues a request — so the inline / no-worker property that
-        # fixes #62151 and #60203 is preserved. The abort helper owns the
+        # fixes and is preserved. The abort helper owns the
         # stale transition under the request lock: it returns False (and this
         # callback stays silent) when the request already finished or a user
         # interrupt owns the outcome.
@@ -1320,13 +1320,13 @@ def interruptible_api_call(agent, api_kwargs: dict):
     """
     # Cron and other non-interactive, nested-pool contexts must not spawn the
     # interrupt worker — it wedges before the socket opens on the 2nd+ call
-    # (#62151). Run inline instead. See should_use_direct_api_call.
+    # Run inline instead. See should_use_direct_api_call.
     if should_use_direct_api_call(agent):
         return direct_api_call(agent, api_kwargs)
 
     result = {"response": None, "error": None}
 
-    # Cross-turn stale-call circuit breaker (#58962) — non-streaming sibling
+    # Cross-turn stale-call circuit breaker — non-streaming sibling
     # of the guard in interruptible_streaming_api_call.  Quiet-mode /
     # subagent / no-stream-consumer sessions take THIS path, and a wedged
     # unattended session here has the same infinite stale-retry class.
@@ -1335,7 +1335,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
     request_client_holder = {"client": None, "owner_tid": None}
     # Transport kind of the registered request client ("openai" or
     # "anthropic_messages") so _close_request_client_once routes to the right
-    # abort/close helpers (#67142).
+    # abort/close helpers.
     request_client_kind = {"value": "openai"}
     request_client_lock = threading.Lock()
     # Request-local cancellation flag. Distinct from agent._interrupt_requested
@@ -1344,7 +1344,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
     # AIAgent instances per session). Tracks whether THIS specific request was
     # cancelled by the main thread's interrupt handler, so the transport error
     # that is the expected consequence of our own force-close isn't misread as
-    # a network bug and surfaced to the caller. (PR #6600 — cascading interrupt
+    # a network bug and surfaced to the caller. ( — cascading interrupt
     # hang.)
     _request_cancelled = {"value": False}
 
@@ -1352,14 +1352,14 @@ def interruptible_api_call(agent, api_kwargs: dict):
         with request_client_lock:
             request_client_holder["client"] = client
             request_client_kind["value"] = kind
-            # #29507: stamp the owning thread so a stranger-thread interrupt
+            #: stamp the owning thread so a stranger-thread interrupt
             # only shuts the connection down rather than racing the worker
             # for FD ownership during ``client.close()``.
             request_client_holder["owner_tid"] = threading.get_ident()
         return client
 
     def _close_request_client_once(reason: str) -> None:
-        # #29507: dispatch on the calling thread.
+        #: dispatch on the calling thread.
         #
         # When ``_call`` (the worker) reaches its ``finally`` it owns the
         # close and we pop + fully close as before. When a *stranger* thread
@@ -1370,7 +1370,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
         # avoids the FD-recycling race where the kernel reassigned a
         # just-closed TLS socket FD to ``kanban.db``, and the still-live SSL
         # BIO on the worker thread then wrote a 24-byte TLS application-data
-        # record into the SQLite header (#29507).
+        # record into the SQLite header.
         with request_client_lock:
             request_client = request_client_holder.get("client")
             owner_tid = request_client_holder.get("owner_tid")
@@ -1410,7 +1410,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
             # stranger-thread abort machinery above; the shared dispatch helper
             # builds it via this callback (openai- or anthropic-kind) so the
             # interrupt / stale-call detectors can force-close the worker's
-            # connection without touching the shared client (#67142).
+            # connection without touching the shared client.
             result["response"] = _dispatch_nonstreaming_api_request(
                 agent,
                 api_kwargs,
@@ -1427,7 +1427,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
             # If the request was cancelled by the main thread's interrupt
             # handler, the transport error is the expected consequence of our
             # own force-close, NOT a network bug. Swallow it instead of
-            # surfacing — the main thread raises InterruptedError. (#6600)
+            # surfacing — the main thread raises InterruptedError.
             if _request_cancelled["value"]:
                 logger.debug(
                     "Non-streaming worker caught %s after request cancellation — "
@@ -1479,7 +1479,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
         if _codex_floor:
             _stale_timeout = max(_stale_timeout, _codex_floor)
 
-    # ── Codex absolute hard ceiling (#64507) ──────────────────────────
+    # ── Codex absolute hard ceiling ──────────────────────────
     # ``openai_codex_stale_timeout_floor`` *raises* the stale timeout (up to
     # 1200s at >100k tokens) so healthy gateway-scale payloads aren't aborted.
     # The scaled no-byte TTFB watchdog catches dead streams that never emit a
@@ -1724,13 +1724,13 @@ def interruptible_api_call(agent, api_kwargs: dict):
                 agent, api_kwargs, _elapsed, _stale_timeout, hint=_silent_hint
             )
             try:
-                # #67142: routes by client kind — anthropic now aborts the
+                #: routes by client kind — anthropic now aborts the
                 # request-local client's sockets from this poll (stranger)
                 # thread instead of closing the shared _anthropic_client.
                 _close_request_client_once("stale_call_kill")
             except Exception:
                 pass
-            # Circuit breaker (#58962): count the stale kill.  See the
+            # Circuit breaker: count the stale kill. See the
             # canonical comment block above ``_stale_streak()``.
             _bump_stale_streak(agent)
             _touch_stale_kill_activity(agent, _elapsed)
@@ -1754,14 +1754,14 @@ def interruptible_api_call(agent, api_kwargs: dict):
             # Mark THIS request cancelled before force-closing so the worker's
             # exception handler recognizes the forced transport error as a
             # cancel and exits cleanly instead of surfacing a network error or
-            # (in the streaming path) burning full retry cycles. (#6600)
+            # (in the streaming path) burning full retry cycles.
             _request_cancelled["value"] = True
             logger.debug(
                 "Force-closing httpx client due to interrupt (not a network error)."
             )
             # Force-close the in-flight worker-local HTTP connection to stop
             # token generation without poisoning the shared client used to
-            # seed future retries. #67142: for anthropic this aborts the
+            # seed future retries.: for anthropic this aborts the
             # request-local client's sockets from this poll (stranger) thread
             # rather than closing the shared _anthropic_client, which could
             # release a TLS FD mid-SSL-BIO and corrupt an unrelated SQLite DB.
@@ -1769,7 +1769,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
                 _close_request_client_once("interrupt_abort")
             except Exception:
                 pass
-            # #81521 (sibling of the streaming-path fix): wait for the worker
+            # (sibling of the streaming-path fix): wait for the worker
             # to unwind Relay-managed scopes before surfacing
             # InterruptedError, so turn teardown cannot race a still-open
             # physical scope and corrupt the LIFO stack. No-op when Relay
@@ -1778,7 +1778,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
             raise InterruptedError("Agent interrupted during API call")
     if result["error"] is not None:
         raise result["error"]
-    # Success — clear the circuit breaker (#58962): the provider proved
+    # Success — clear the circuit breaker: the provider proved
     # responsive.  See the canonical comment block above ``_stale_streak()``.
     if result["response"] is not None:
         _reset_stale_streak(agent)
@@ -1870,7 +1870,7 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         # xAI's /responses endpoint rejects ``pattern`` and ``format`` keywords
         # in tool schemas (HTTP 400 "Invalid arguments passed to the model").
         # Most commonly hit when MCP-derived tools carry JSON Schema validation
-        # keywords through. Strip them before building kwargs. See #27197.
+        # keywords through. Strip them before building kwargs. See.
         # It also rejects ``enum`` values containing ``/`` (HuggingFace IDs
         # like ``Qwen/Qwen3.5-0.8B`` shipped by MCP servers) — same 400 with
         # the same opaque message; strip those enums too.
@@ -1882,7 +1882,7 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         # request permanently strips constraints from the shared per-agent
         # tool registry — every subsequent non-xAI call from the same
         # agent (auxiliary task routed to Anthropic, OpenRouter fallback,
-        # main-model swap) sees the already-stripped schema.  See #27907.
+        # main-model swap) sees the already-stripped schema. See.
         if is_xai_responses:
             try:
                 import copy as _copy
@@ -2126,8 +2126,8 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     # ``reasoning_text`` above (either from structured fields or the
     # inline-block fallback), so the raw tags in content are redundant.
     # Leaving them in place caused reasoning to leak to messaging
-    # platforms (#8878, #9568), inflate context on subsequent turns
-    # (#9306 observed 16% content-size reduction on a real MiniMax
+    # platforms, inflate context on subsequent turns
+    # observed 16% content-size reduction on a real MiniMax
     # session), and pollute generated session titles.  One strip at the
     # storage boundary cleans content for every downstream consumer:
     # API replay, session transcript, gateway delivery, CLI display,
@@ -2141,7 +2141,7 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     # response, catch it here at the persistence boundary so it never
     # reaches state.db, session_*.json, gateway delivery, or compression.
     # Respects PILOTAGE_REDACT_SECRETS via redact_sensitive_text — no-op
-    # when disabled. (#19798)
+    # when disabled.
     if isinstance(_san_content, str) and _san_content:
         from agent.redact import redact_sensitive_text
         _san_content = redact_sensitive_text(_san_content)
@@ -2182,10 +2182,10 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
         # string ("The reasoning content in the thinking mode must
         # be passed back to the API"). A space satisfies non-empty
         # checks everywhere without leaking fabricated reasoning.
-        # Refs #15250, #17400, #17341.
+        # Refs,.
         msg["reasoning_content"] = reasoning_text or " "
 
-    # Additive fallback (refs #16844, #16884). Streaming-only providers
+    # Additive fallback (refs,). Streaming-only providers
     # (glm, MiniMax, gpt-5.x via aigw, Anthropic via openai-compat shims)
     # accumulate reasoning through ``delta.reasoning_content`` chunks
     # but never land it on the message object as a top-level attribute,
@@ -2202,10 +2202,10 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     # preserves every existing behavior:
     #   - SDK-exposed ``reasoning_content`` (OpenAI/Moonshot/DeepSeek SDK)
     #     still wins.
-    #   - DeepSeek tool-call ""-pad (#15250) still fires.
+    # - DeepSeek tool-call ""-pad still fires.
     #   - Non-thinking turns with no reasoning leave the field absent,
     #     so ``_copy_reasoning_content_for_api``'s cross-provider leak
-    #     guard (#15748) and ``reasoning``→``reasoning_content``
+    # guard and ``reasoning``→``reasoning_content``
     #     promotion tiers still apply at replay time.
     if "reasoning_content" not in msg and reasoning_text:
         msg["reasoning_content"] = reasoning_text
@@ -2303,15 +2303,15 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
             # here poisons that replay: the model reads back its own
             # `PGPASSWORD='***' psql ...` call and copies the placeholder into
             # the next tool call, breaking every credential-dependent command
-            # on the second turn (#43083). The masking also provided no real
+            # on the second turn. The masking also provided no real
             # protection — the same secret still leaks verbatim through tool
             # OUTPUT (file contents, command output, diffs, the compaction
             # block), none of which this pass ever touched. Keeping secrets
             # out of the replayable store is a separate tokenization/vault
             # concern, not something arg-redaction can deliver without
             # breaking replay. Storage-time redaction remains governed by the
-            # `security.redact_secrets` toggle. (#19798 introduced this;
-            # #43083 removed it.)
+            # `security.redact_secrets` toggle. introduced this;
+            # removed it.)
             # Preserve extra_content (e.g. Gemini thought_signature) so it
             # is sent back on subsequent API calls.  Without this, Gemini 3
             # thinking models reject the request with a 400 error.
@@ -2428,7 +2428,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         # their own 60s cooldown above), arm a short cooldown so the next
         # turn's restore_primary_runtime stays gated instead of resetting
         # _fallback_index=0 and re-marshaling the whole context across every
-        # provider again.  Guards the cross-turn replay storm in #24996.
+        # provider again. Guards the cross-turn replay storm in.
         if (
             len(agent._fallback_chain) > 0
             and reason not in {FailoverReason.rate_limit, FailoverReason.billing, FailoverReason.upstream_rate_limit}
@@ -2469,7 +2469,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
     # falling back to it loops the failure. Identity semantics (which axes
     # distinguish two backends, shim aliases, first-class credential
     # surfaces, multi-endpoint pools) are owned by agent.backend_identity —
-    # see #22548, #70893, #62984. Do not re-implement comparisons here.
+    # see,,. Do not re-implement comparisons here.
     from agent.backend_identity import BackendIdentity, should_skip_candidate
 
     current_ident = BackendIdentity.build(
@@ -2506,7 +2506,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         # resolve_provider_client() calls _to_openai_base_url() which can rewrite
         # a dual-surface /anthropic base to /v1, losing the Anthropic wire signal
         # from the client's post-rewrite base_url. Pre-compute here so detection
-        # sees the URL the user actually configured. (#79787)
+        # sees the URL the user actually configured.
         #
         # An explicit ``api_mode`` on the fallback entry always wins — including
         # an explicit "chat_completions" — and suppresses all re-detection below.
@@ -2582,7 +2582,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
                 # base_url from config rather than the fallback entry, so the
                 # pre-resolve hint check above never sees it. Match the host
                 # the same way determine_api_mode() and _detect_api_mode_for_url()
-                # do on the primary path. (#32243, #49247)
+                # do on the primary path.
                 fb_api_mode = "anthropic_messages"
             elif _fb_is_azure:
                 # Azure OpenAI serves gpt-5.x on /chat/completions — does NOT
@@ -2609,7 +2609,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
 
         # Clear the per-config context_length override so the fallback
         # model's actual context window is resolved instead of inheriting
-        # the stale value from the previous model.  See #22387.
+        # the stale value from the previous model. See.
         agent._config_context_length = None
         agent.model = fb_model
         agent.provider = fb_provider
@@ -2624,7 +2624,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         # changes.  Keeping the primary pool attached would make downstream
         # recovery (rate_limit / billing / auth) mutate the wrong credential
         # set and can overwrite the fallback's base_url back to the primary
-        # endpoint.  See #33163.
+        # endpoint. See.
         #
         # When the fallback shares the pool's provider (e.g. both openrouter
         # entries with different routing) the pool is preserved.  When the
@@ -2748,7 +2748,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
                 api_mode=agent.api_mode,
             )
 
-        # Re-resolve reasoning_config for the new fallback model (Closes #21256).
+        # Re-resolve reasoning_config for the new fallback model (Closes).
         # Shared chokepoint: per-model override > global reasoning_effort
         # (YAML boolean False = disabled). Wrapped in try/except because a
         # config load failure must not kill the swap.
@@ -2792,7 +2792,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
             "Fallback activated: %s → %s (%s)",
             old_model, fb_model, fb_provider,
         )
-        # Reset the stale-call circuit breaker (#58962): the streak measured
+        # Reset the stale-call circuit breaker: the streak measured
         # the OLD provider's unresponsiveness.  Carrying it over would
         # short-circuit the freshly activated fallback before it gets a
         # single stream attempt.
@@ -2860,7 +2860,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
             # bypassing the transport — so mirror that sanitization here:
             # tool_name (SQLite FTS bookkeeping), the codex_* reasoning carriers,
             # timestamp (preserved on gateway user replay entries for the
-            # stale-confirmation expiry check — #47868 rejection class),
+            # stale-confirmation expiry check — rejection class),
             # and every Pilotage-internal underscore-prefixed scaffolding key.
             for schema_foreign in ("tool_name", "codex_reasoning_items", "codex_message_items", "timestamp"):
                 api_msg.pop(schema_foreign, None)
@@ -3210,7 +3210,7 @@ def _build_partial_stream_stub(
     delivering content (text-only drops, tool-call-arg drops).  The stub
     is tagged ``PARTIAL_STREAM_STUB_ID`` with ``FINISH_REASON_LENGTH`` so
     the conversation loop enters its continuation/retry path instead of
-    silently accepting truncated output as a complete turn (#32086).
+    silently accepting truncated output as a complete turn.
     """
     mock_message = SimpleNamespace(
         role=role,
@@ -3287,7 +3287,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             emit(final_text=final_text, finished=finished, error=error)
 
     # Cron and other non-interactive, nested-pool contexts deadlock on the
-    # spawned worker thread (#62151). They also have no stream consumer, so the
+    # spawned worker thread. They also have no stream consumer, so the
     # deltas this path produces go nowhere. Delegate to the non-streaming entry
     # (which runs inline via should_use_direct_api_call) exactly like the codex
     # branch below — routing through the _interruptible_api_call method keeps the
@@ -3332,7 +3332,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         # Same patience budget as the OpenAI/Anthropic stale detector.
         _bedrock_stale_timeout = _derive_stream_stale_timeout(agent, api_kwargs)
 
-        # Cross-turn stale-stream circuit breaker (#58962): a pre-elevated
+        # Cross-turn stale-stream circuit breaker: a pre-elevated
         # streak from prior wedged turns aborts before we even start — mirrors
         # the entry check on the OpenAI/Anthropic path below.
         _check_stale_giveup(agent)
@@ -3480,7 +3480,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             while t.is_alive():
                 t.join(timeout=0.3)
                 if agent._interrupt_requested:
-                    # #81521 (sibling of the main streaming-path fix): give
+                    # (sibling of the main streaming-path fix): give
                     # the Bedrock worker a bounded window to unwind its
                     # Relay-managed stream scopes before surfacing
                     # InterruptedError. No-op when Relay managed execution
@@ -3504,7 +3504,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                         f"(model: {api_kwargs.get('modelId', 'unknown')}). Aborting..."
                     )
                     # Count the stale kill in the SAME cross-turn breaker as the
-                    # OpenAI/Anthropic path (#58962).
+                    # OpenAI/Anthropic path.
                     _bump_stale_streak(agent)
                     # Best-effort: evict the region's cached bedrock-runtime client
                     # so the NEXT call reconnects with a fresh pool.  NOTE: this does
@@ -3544,12 +3544,12 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             # "response"] is populated with error=None and the in-loop raise above
             # never fires. Re-check here so /stop is not silently swallowed on the
             # Bedrock path — mirrors the post-worker guard on the main streaming
-            # loop. (#59999 area)
+            # loop. area)
             if agent._interrupt_requested:
                 raise InterruptedError("Agent interrupted during Bedrock API call (post-worker)")
             if result["error"] is not None:
                 raise result["error"]
-            # Success — clear the cross-turn breaker (#58962): Bedrock proved
+            # Success — clear the cross-turn breaker: Bedrock proved
             # responsive.  Mirrors the OpenAI/Anthropic success reset below so a
             # recovered provider doesn't carry a stale streak into later turns.
             if result["response"] is not None:
@@ -3562,7 +3562,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
 
     result = {"response": None, "error": None, "partial_tool_names": []}
 
-    # Cross-turn stale-stream circuit breaker (#58962) — see the canonical
+    # Cross-turn stale-stream circuit breaker — see the canonical
     # comment block above ``_stale_streak()``.  Raises past the give-up
     # threshold instead of burning another stale-timeout×retries cycle.
     _check_stale_giveup(agent)
@@ -3570,11 +3570,11 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
     request_client_holder = {"client": None, "diag": None, "owner_tid": None}
     # Transport kind of the registered request client — see the non-streaming
     # variant. Routes _close_request_client_once to anthropic vs openai abort/
-    # close helpers (#67142). ``kind="stream"`` registers a per-request
+    # close helpers. ``kind="stream"`` registers a per-request
     # *stream handle* instead of a client — used under the MoA facade, whose
     # singleton client has no per-request sockets to abort
     # (_abort_request_openai_client is a no-op on it), so interrupts must
-    # close the stream object itself (#57354).
+    # close the stream object itself.
     request_client_kind = {"value": "openai"}
     request_client_lock = threading.Lock()
     # Request-local cancellation flag — see interruptible_api_call for the full
@@ -3583,14 +3583,14 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
     # loop classified it as a transient network error, and burned full retry
     # cycles (and emitted "reconnecting" noise) on a request the user already
     # cancelled. The token lets the worker recognize its own forced close and
-    # exit immediately instead of retrying. (PR #6600.)
+    # exit immediately instead of retrying. (.)
     _request_cancelled = {"value": False}
 
     def _set_request_client(client, *, kind: str = "openai"):
         with request_client_lock:
             request_client_holder["client"] = client
             request_client_kind["value"] = kind
-            # See #29507 explanation in the non-streaming variant above.
+            # See explanation in the non-streaming variant above.
             request_client_holder["owner_tid"] = threading.get_ident()
         return client
 
@@ -3609,7 +3609,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         # interrupt closes the stream handle itself. Under the MoA facade the
         # registered "client" is the shared facade singleton whose
         # per-request abort helpers are no-ops, leaving the underlying HTTP
-        # stream open until the provider drained it (#57354).
+        # stream open until the provider drained it.
         if _stream_close_callable(stream) is None:
             return stream
         with request_client_lock:
@@ -3633,7 +3633,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             )
 
     def _close_request_client_once(reason: str) -> None:
-        # See #29507 explanation in the non-streaming variant above. A
+        # See explanation in the non-streaming variant above. A
         # stranger thread (the interrupt-check / stale-stream detector loop)
         # only aborts sockets — never pops, never calls ``client.close()`` —
         # so the worker thread retains ownership of the FD release.
@@ -3644,7 +3644,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             # A registered stream handle (kind="stream", MoA facade path) is
             # safe to close from any thread — closing IS the abort — so the
             # stranger-thread ownership carve-out only applies to real
-            # per-request clients (#57354).
+            # per-request clients.
             stranger_thread = (
                 request_kind != "stream"
                 and request_client is not None
@@ -4049,7 +4049,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 # model_extra.  Without this check the error is
                 # silently dropped and the stream ends empty →
                 # EmptyStreamError → misleading "empty stream" message
-                # and pointless retries on the same bad request. (#65631)
+                # and pointless retries on the same bad request.
                 _err_type = getattr(chunk, "error_type", None)
                 _err_msg = getattr(chunk, "error_message", None)
                 if _err_type or _err_msg:
@@ -4282,7 +4282,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                     # below — a normal "stop" turn carrying a tool call whose
                     # empty arguments string later gets silently coerced to
                     # "{}" at the dispatch boundary and executed with no
-                    # arguments and no retry (#80498). Route it through the
+                    # arguments and no retry. Route it through the
                     # same dropped-mid-tool-call stub path already used for a
                     # truncated-but-nonempty JSON string.
                     has_truncated_tool_args = True
@@ -4353,7 +4353,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         # SSE stream simply ended) with no finish_reason after delivering
         # text content but no tool calls.  Without this guard the partial
         # text is silently stamped finish_reason="stop" and the turn ends as
-        # if complete — the model's intended next step is lost (#32086).
+        # if complete — the model's intended next step is lost.
         _text_only_dropped_no_finish = (
             finish_reason is None
             and content_parts
@@ -4413,7 +4413,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         Uses ``request_client`` (a per-request Anthropic client registered with
         the stranger-thread abort machinery) rather than the shared
         ``_anthropic_client``, so the stale/interrupt watchdog can abort this
-        stream's socket without closing the shared client mid-flight (#67142).
+        stream's socket without closing the shared client mid-flight.
         """
         has_tool_use = False
         # Zero-event guard parity with the chat_completions path: track
@@ -4564,7 +4564,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             return None
 
         def _tool_use_dropped_mid_stream(message) -> bool:
-            """True when the stream died mid tool call (#80498 sibling).
+            """True when the stream died mid tool call sibling).
 
             Mirror of the chat_completions zero-byte/truncated-args gate: a
             legitimate completion always carries a ``stop_reason``
@@ -4604,7 +4604,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 raise EmptyStreamError(
                     "Stream ended with no stop_reason while a tool_use "
                     "block was still incomplete; treating as a "
-                    "mid-tool-call stream drop (#80498)."
+                    "mid-tool-call stream drop."
                 )
             return base_final_message
         final_message = accumulator.response(base_final_message)
@@ -4620,7 +4620,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             raise EmptyStreamError(
                 "Stream ended with no stop_reason while a tool_use "
                 "block was still incomplete; treating as a "
-                "mid-tool-call stream drop (#80498)."
+                "mid-tool-call stream drop."
             )
         return final_message
 
@@ -4644,7 +4644,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 _emit_stream_start()
                 try:
                     if agent.api_mode == "anthropic_messages":
-                        # #67142: per-request client (credential refresh happens
+                        #: per-request client (credential refresh happens
                         # inside _create_request_anthropic_client) registered so
                         # the watchdog aborts its socket, not the shared client.
                         request_client = _set_request_client(
@@ -4672,7 +4672,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                     # no "reconnecting" status. The outer poll loop raises
                     # InterruptedError. This is the fix for the cascading-
                     # interrupt hang where doomed retries burned full
-                    # stream-stale-timeout cycles. (#6600)
+                    # stream-stale-timeout cycles.
                     if _request_cancelled["value"]:
                         logger.debug(
                             "Streaming worker caught %s after request "
@@ -4786,11 +4786,11 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                         )
                         _cancel_current_stream_attempt("stream_mid_tool_retry_cleanup")
                         _close_request_client_once("stream_mid_tool_retry_cleanup")
-                        # #67142: anthropic streams on a request-local client,
+                        #: anthropic streams on a request-local client,
                         # already worker-owned-closed by _close_request_client_once
                         # above; the next attempt builds a fresh one. The shared
                         # _anthropic_client is never closed from inside a request.
-                        # #70773: same FD-recycle corruption vector for OpenAI.
+                        #: same FD-recycle corruption vector for OpenAI.
                         # The shared client will be replaced lazily by
                         # _ensure_primary_openai_client on the next attempt.
                         continue
@@ -4846,12 +4846,12 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                             _cancel_current_stream_attempt("stream_retry_cleanup")
                             _close_request_client_once("stream_retry_cleanup")
                             # Also rebuild the primary client to purge any dead
-                            # connections from the pool. #67142: anthropic uses a
+                            # connections from the pool.: anthropic uses a
                             # request-local client (already worker-owned-closed
                             # above; next attempt builds fresh), so the shared
                             # _anthropic_client is never closed from inside a
                             # request — only the OpenAI-wire primary is refreshed.
-                            # #70773: same FD-recycle corruption vector for OpenAI.
+                            #: same FD-recycle corruption vector for OpenAI.
                             # The shared client will be replaced lazily by
                             # _ensure_primary_openai_client on the next attempt.
                             continue
@@ -5089,22 +5089,22 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 _close_request_client_once("stale_stream_kill")
             except Exception:
                 pass
-            # Circuit breaker (#58962): count the stale kill.  See the
+            # Circuit breaker: count the stale kill. See the
             # canonical comment block above ``_stale_streak()``.
             _bump_stale_streak(agent)
             # Rebuild the primary client too — its connection pool
             # may hold dead sockets from the same provider outage.
             if agent.api_mode == "anthropic_messages":
-                # #67142: the stale stream ran on a request-local anthropic
+                #: the stale stream ran on a request-local anthropic
                 # client, already socket-aborted above via
                 # _close_request_client_once (which unblocks the worker and
-                # preserves the #28161 no-hang guarantee). The shared
+                # preserves the no-hang guarantee). The shared
                 # _anthropic_client is NOT the in-flight transport, so we must
                 # not close it from this poll (stranger) thread — that was the
                 # FD-recycle corruption vector. Nothing further is needed.
                 pass
             else:
-                # #70773: same FD-recycle corruption vector as #67142.
+                #: same FD-recycle corruption vector as.
                 # The shared OpenAI client's connection pool must NOT be
                 # closed from this watchdog/poll thread — worker threads
                 # from previous stale-killed attempts may still be
@@ -5128,7 +5128,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             # Mark THIS request cancelled before force-closing so the worker's
             # exception handler recognizes the forced transport error as a
             # cancel and exits without retrying or surfacing a network error.
-            # (#6600)
+            #
             _request_cancelled["value"] = True
             logger.debug(
                 "Force-closing streaming httpx client due to interrupt "
@@ -5136,7 +5136,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             )
             try:
                 _cancel_current_stream_attempt("stream_interrupt_abort")
-                # #67142: kind-aware — anthropic aborts the request-local
+                #: kind-aware — anthropic aborts the request-local
                 # client's socket from this poll thread; the shared
                 # _anthropic_client is never closed here.
                 _close_request_client_once("stream_interrupt_abort")
@@ -5148,7 +5148,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             # (finish_logical_calls / end_turn / close_session) race a
             # still-open physical scope and corrupt the LIFO stack —
             # "scope handle is not at the top of the stack" → CLI EIO /
-            # redraw storm (#81521). No-op when Relay managed execution
+            # redraw storm. No-op when Relay managed execution
             # is not live.
             _join_worker_for_relay_teardown(t, label="Streaming")
             raise InterruptedError("Agent interrupted during streaming API call")
@@ -5156,7 +5156,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
     # the interrupt flag.  If the worker returned early due to an interrupt
     # (e.g. _call_anthropic() detected _interrupt_requested and returned
     # None), the InterruptedError above was never raised.  Re-check the
-    # flag here so /stop is not silently swallowed.  (#59999 area)
+    # flag here so /stop is not silently swallowed. area)
     if agent._interrupt_requested:
         raise InterruptedError("Agent interrupted during streaming API call (post-worker)")
     if result["error"] is not None:
@@ -5228,7 +5228,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             # the filter — the conversation loop reads this tag and activates
             # the fallback chain instead of burning continuation retries.
             # error_classifier is the single source of truth for "what counts
-            # as a content filter" (#32421).
+            # as a content filter".
             _content_filter_terminated = False
             try:
                 from agent.error_classifier import classify_api_error, FailoverReason
@@ -5255,11 +5255,11 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 _stub._content_filter_terminated = True
             # Partial-stream stub: chunks WERE received (deltas fired), so
             # the provider is demonstrably responsive — clear the circuit
-            # breaker (#58962) just like the full-success return below.
+            # breaker just like the full-success return below.
             _reset_stale_streak(agent)
             return _stub
         raise result["error"]
-    # Success — clear the circuit breaker (#58962): the provider proved
+    # Success — clear the circuit breaker: the provider proved
     # responsive.  See the canonical comment block above ``_stale_streak()``.
     if result["response"] is not None:
         _reset_stale_streak(agent)

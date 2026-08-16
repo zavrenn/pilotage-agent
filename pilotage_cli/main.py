@@ -83,7 +83,7 @@ from pilotage_cli import _startup_fast  # noqa: E402
 
 # Early venv self-heal — MUST run before any third-party import below.  When
 # a prior ``pilotage update`` left a recovery marker and a core package's import
-# files were wiped (#57828 — failed lazy backend refresh), the module-level
+# files were wiped — failed lazy backend refresh), the module-level
 # ``from pilotage_cli.env_loader import ...`` / ``from pilotage_cli.config import
 # ...`` imports further down would crash before ``main()`` ever reaches
 # ``_recover_from_interrupted_install()``.  ``_early_recovery`` is stdlib-only
@@ -104,7 +104,7 @@ except Exception:
 def _exit_after_oneshot(rc: object) -> None:
     """Exit one-shot mode without letting late native finalizers change rc.
 
-    The SIGABRT this guards against (#30387, #43055) fires in a
+    The SIGABRT this guards against (,) fires in a
     native-extension finalizer during CPython's ``Py_FinalizeEx``, *after*
     the response has printed. Flush streams, shut down file logging, then
     ``os._exit`` past interpreter finalization. The ``atexit`` chain is
@@ -214,7 +214,7 @@ def _run_and_exit_oneshot(
     try:
         _cleanup_oneshot_runtime()
     finally:
-        # The hard exit is the safety boundary for #43055. Even an interrupt
+        # The hard exit is the safety boundary for. Even an interrupt
         # during best-effort cleanup must not fall back into interpreter
         # finalization, where the reported native SIGABRT occurs.
         _exit_after_oneshot(rc)
@@ -536,7 +536,7 @@ def _apply_profile_override() -> None:
     # instead (e.g. systemd hardcodes PILOTAGE_HOME=/root/.pilotage), we must
     # still read active_profile — the user may have switched profiles via
     # `pilotage profile use` and the gateway should honour that choice.
-    # See issue #22502.
+    # See.
     pilotage_home_env = os.environ.get("PILOTAGE_HOME", "")
     if profile_name is None and pilotage_home_env:
         if Path(pilotage_home_env).parent.name == "profiles":
@@ -1514,7 +1514,7 @@ def _pin_kanban_board_env() -> None:
     set, otherwise the global ``<root>/kanban/current`` file. A concurrent
     ``pilotage kanban boards switch`` from another session can flip the file
     mid-turn, so the same chat sees its tool calls hit board A while its shell
-    calls hit board B (#20074). Pinning at chat boot mirrors what the
+    calls hit board B. Pinning at chat boot mirrors what the
     dispatcher already does for spawned workers.
     """
     if os.environ.get("PILOTAGE_KANBAN_BOARD"):
@@ -2546,7 +2546,7 @@ def select_provider_and_model(args=None):
     # ── Post-switch cleanup: clear stale OPENAI_BASE_URL ──────────────
     # When the user switches to a named provider (anything except "custom"),
     # a leftover OPENAI_BASE_URL in ~/.pilotage/.env can poison auxiliary
-    # clients that use provider:auto. Clear it proactively.  (#5161)
+    # clients that use provider:auto. Clear it proactively.
     if selected_provider not in {
         "custom",
         "cancel",
@@ -2561,7 +2561,7 @@ def _clear_stale_openai_base_url():
     After a provider switch, a leftover OPENAI_BASE_URL causes auxiliary
     clients (compression, vision, delegation) with provider:auto to route
     requests to the old custom endpoint instead of the newly selected
-    provider.  See issue #5161.
+    provider. See.
     """
     from pilotage_cli.config import get_env_value, save_env_value, load_config
 
@@ -3142,7 +3142,7 @@ def _save_custom_provider(
     Uses *name* when provided, otherwise auto-generates from the URL.
 
     When *key_env* is set the caller has already written the key to ``.env``,
-    so the entry references it instead of inlining the secret (#69449).
+    so the entry references it instead of inlining the secret.
     """
     from pilotage_cli.config import load_config, save_config
 
@@ -4211,7 +4211,7 @@ def _record_bytecode_fingerprint() -> None:
 def _sweep_stale_bytecode_if_checkout_changed() -> None:
     """Clear ``__pycache__`` at launch when the checkout changed underneath us.
 
-    The stale-bytecode bug class (issues #6207, #60242; Dhruv's WhatsApp
+    The stale-bytecode bug class (issues,; Dhruv's WhatsApp
     ``cannot import name 'parse_model_flags_detailed'`` report) has one
     shared shape: the checkout's ``.py`` files change (git pull inside
     ``pilotage update``, a manual ``git pull``, a ZIP update, a file-sync
@@ -4302,7 +4302,7 @@ def _load_installable_optional_extras(group: str = "all") -> list[str]:
 # ``.lazy-refresh-incomplete`` — lazy-backend refresh phase may have corrupted
 # packages. Cleared only after import-probe repair confirms healthy (not when
 # probes are unavailable/indeterminate). Narrow lazy probes must NEVER clear
-# the generic core marker (#58004 review).
+# the generic core marker review).
 def _update_marker_path() -> Path:
     return PROJECT_ROOT / ".update-incomplete"
 
@@ -4488,7 +4488,7 @@ def _recover_core_update_marker_locked() -> None:
     # Windows: a normal ``pilotage.exe`` launch always has the launcher as an
     # ancestor. Full editable reinstall uses quarantine so the live shim can
     # still be replaced. Package-only import repair may help as first aid but
-    # must NEVER clear this core marker on its own (#58004 review).
+    # must NEVER clear this core marker on its own review).
     self_locked = _windows_running_pilotage_launcher_locked()
     if self_locked:
         install_prefix, install_env = _default_venv_install_target()
@@ -4869,7 +4869,7 @@ def _cleanup_quarantined_exes(scripts_dir: Path | None = None) -> None:
 
 
 # Import probes for venv corruption after a failed lazy ``uv pip install``.
-# Metadata can look fine while ``.py`` files were removed mid-install (#57828).
+# Metadata can look fine while ``.py`` files were removed mid-install.
 # Canonical tables live in the stdlib-only ``_early_recovery`` module (which
 # also probes/repairs BEFORE this module's third-party imports can run) so the
 # early and full recovery layers can never drift apart.
@@ -4891,7 +4891,7 @@ def _run_package_only_install(
 
     ``pip install --upgrade pip`` and ``--force-reinstall <pkg>`` do not
     rewrite ``pilotage.exe``. The editable-install quarantine path would rename
-    shims without uv recreating them on Windows (#57828).
+    shims without uv recreating them on Windows.
     """
     _run_install_with_heartbeat(cmd, env=env)
 
@@ -4974,7 +4974,7 @@ def _detect_broken_lazy_refresh_imports(
         "        elif mod == 'certifi':\n"
         "            # The module can import cleanly while cacert.pem is\n"
         "            # missing/corrupt (brew Python upgrade, interrupted venv\n"
-        "            # rebuild) - every TLS call then fails (#29866).\n"
+        " # rebuild) - every TLS call then fails.\n"
         "            bundle = imported.where()\n"
         "            if not os.path.isfile(bundle) or os.path.getsize(bundle) < 1024:\n"
         "                broken.append(mod)\n"
@@ -5049,7 +5049,7 @@ def _repair_venv_via_import_probes(
 
     Uses real ``import`` checks (not distribution metadata) so a venv where
     METADATA remains but ``.py`` files were wiped mid-install is still
-    detected (#57828). Package-only reinstall — never rewrites ``pilotage.exe``.
+    detected. Package-only reinstall — never rewrites ``pilotage.exe``.
 
     Never raises. Returns one of:
       - ``"healthy"`` — probes ran and found nothing broken
@@ -5183,7 +5183,7 @@ def _verify_console_scripts_installed(
     ``pilotage.exe`` shim is locked during ``pilotage update``, or when uv/distlib
     skips a launcher write. The symptom is ``pilotage-agent.exe`` and
     ``pilotage-acp.exe`` present but ``pilotage.exe`` missing, so ``pilotage`` drops
-    off PATH even though the install reported success (issue #52931).
+    off PATH even though the install reported success.
 
     If any shim is missing we reinstall with ``--reinstall -e .`` under the
     same quarantine dance as the primary install path, then re-check.
@@ -6434,7 +6434,7 @@ def _render_distribution_plan(plan) -> None:
                         # .env is written as UTF-8 everywhere in the codebase,
                         # but a Notepad-edited file can carry a BOM — read as
                         # utf-8-sig so the first key isn't hidden behind
-                        # U+FEFF (#62617).
+                        # U+FEFF.
                         for raw in env_path.read_text(encoding="utf-8-sig").splitlines():
                             line = raw.strip()
                             if not line or line.startswith("#"):
@@ -6649,7 +6649,7 @@ def _resolve_deferred_platform_cli_command(command_name: str | None) -> None:
     effect when its module is imported. On the unknown-top-level-command slow
     path, ``discover_plugins()`` records the deferred loader but does not
     import it, so the CLI registration never happens and ``pilotage photon``
-    fails with argparse ``invalid choice`` (issue #54678).
+    fails with argparse ``invalid choice``.
 
     Resolving only the platform whose name matches the first positional token
     keeps normal startup cheap while making the targeted command available.
@@ -6697,11 +6697,11 @@ def _prepare_agent_startup(args) -> None:
     """Discover plugins/MCP/hooks for commands that can run an agent turn."""
     # --yolo: chokepoint guarantee that PILOTAGE_YOLO_MODE is set before ANY
     # plugin/tool discovery below imports tools.approval, which freezes
-    # _YOLO_MODE_FROZEN at import time (PR #7994 security design).  main()'s
+    # _YOLO_MODE_FROZEN at import time ( security design). main's
     # dispatch path also sets this earlier, but _prepare_agent_startup() is
     # reachable from other launchers too (e.g. the Termux fast-CLI path),
     # so the guarantee lives here where the import is actually triggered
-    # (#60328).
+    #.
     if getattr(args, "yolo", False):
         os.environ["PILOTAGE_YOLO_MODE"] = "1"
     _apply_safe_mode(args)
@@ -7132,7 +7132,7 @@ def _advertise_agent_env() -> None:
     """Advertise the agent harness to child processes.
 
     ``AI_AGENT`` is the emerging cross-agent standard (huggingface_hub's agent
-    detection reads it; pi and other agents set it — earendil-works/pi#7493)
+    detection reads it; pi and other agents set it — earendil-works/pi)
     so generic tooling can attribute subprocesses to the harness that spawned
     them. The value must be our id in the public agent-harness registry
     (``pilotage-agent`` in huggingface.js ``agent-harnesses.ts``): standard-var
@@ -7234,7 +7234,7 @@ def main():
             "Manage the fallback provider chain.  Fallback providers are tried "
             "in order when the primary model fails with rate-limit, overload, or "
             "connection errors.  See: "
-            "https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers"
+            ""
         ),
     )
     fallback_subparsers = fallback_parser.add_subparsers(dest="fallback_command")
@@ -7268,7 +7268,7 @@ def main():
             "Pull API keys from an external secret manager at process startup "
             "instead of storing them in ~/.pilotage/.env.  Supports Bitwarden "
             "Secrets Manager and 1Password.  See: "
-            "https://hermes-agent.nousresearch.com/docs/user-guide/secrets/"
+            ""
         ),
     )
     secrets_subparsers = secrets_parser.add_subparsers(dest="secrets_command")
@@ -7288,7 +7288,7 @@ def main():
     # Lazy-import secrets_cli: the module imports agent.secret_sources.bitwarden
     # which loads cryptography._rust.pyd.  On Windows this maps the native
     # extension into the updater process, causing the self-lock preflight to
-    # defer (#86781).  secrets_cli defers its backend import to first use
+    # defer. secrets_cli defers its backend import to first use
     # (module-level __getattr__ + handler-level _load_bw()), so register_cli
     # at parse time only wires argparse structure with no crypto cost.
     from pilotage_cli import secrets_cli as _secrets_cli
@@ -7319,7 +7319,7 @@ def main():
             "Manage iron-proxy, the optional TLS-intercepting egress firewall "
             "that swaps proxy tokens for real API credentials before outbound "
             "requests leave a sandbox.  Disabled by default.  See: "
-            "https://hermes-agent.nousresearch.com/docs/user-guide/egress/iron-proxy"
+            ""
         ),
     )
 
@@ -7634,7 +7634,7 @@ def main():
             # A bundled platform whose top-level CLI command is the one being
             # invoked is still only a deferred entry at this point; import it
             # so its register_cli_command side effect runs before we read
-            # _cli_commands (issue #54678).
+            # _cli_commands.
             _resolve_deferred_platform_cli_command(_first_positional_argv())
             for cmd_info in get_plugin_manager()._cli_commands.values():
                 if cmd_info["name"] in seen_plugin_commands:
@@ -7979,9 +7979,9 @@ def main():
 
     sessions_clean_markers = sessions_subparsers.add_parser(
         "clean-markers",
-        help="Permanently clear stale tool-call marker content left by sessions from before #78148",
+        help="Permanently clear stale tool-call marker content left by sessions from before",
         description=(
-            "Before the #78148 fix, a local tool-call template could persist a "
+            "Before the fix, a local tool-call template could persist a "
             "bare bracketed marker (e.g. \"[memory]\") as an assistant turn's "
             "content instead of real text. This is already repaired in memory "
             "on every session load, so running this is optional — it rewrites "
@@ -8059,7 +8059,7 @@ def main():
             "Find gateway conversations stranded in session rows whose "
             "routing identity (session_key/chat_id/origin) was never "
             "written — the damage a corrupt state.db write path leaves "
-            "behind (#82616). Such a row is invisible to restart recovery, "
+            "behind. Such a row is invisible to restart recovery, "
             "so the chat resumes an older session instead. Re-stamps each "
             "orphan from the keyed predecessor it continues, and only when "
             "that predecessor is unambiguous. Reports without touching the "
@@ -8298,7 +8298,7 @@ def main():
             sys.stderr = _saved_stderr
             # Help/version flags (exit code 0) already printed output —
             # re-raise immediately to avoid a second parse_args printing
-            # the same help text again (#10230).
+            # the same help text again.
             if exc.code == 0:
                 raise
             # Subcommand name was consumed as a flag value (e.g. -c model).
@@ -8317,7 +8317,7 @@ def main():
     # --yolo: set PILOTAGE_YOLO_MODE *before* plugin discovery.  The call to
     # _prepare_agent_startup() below triggers discover_plugins() → tool
     # imports, and tools.approval freezes _YOLO_MODE_FROZEN at module
-    # import time (PR #7994, security hardening against prompt-injection).
+    # import time (, security hardening against prompt-injection).
     # If the env var is set only later (e.g. inside cmd_chat), the frozen
     # value is already False and --yolo silently does nothing.
     if getattr(args, "yolo", False):

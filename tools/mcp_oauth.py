@@ -151,7 +151,7 @@ _oauth_port: int | None = None
 # the actual connect+OAuth runs on the dedicated `mcp-event-loop` thread via
 # run_coroutine_threadsafe. asyncio copies the *calling context* into the
 # scheduled coroutine, so a ContextVar propagates across that boundary while a
-# threading.local would not — see #35927. Default True (interactive allowed).
+# threading.local would not — see. Default True (interactive allowed).
 _oauth_interactive_enabled: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
     "_oauth_interactive_enabled", default=True
 )
@@ -209,7 +209,7 @@ def _find_free_port() -> int:
 # keyed by port. Holding the socket from port-selection time until
 # _wait_for_callback adopts it closes the TOCTOU window where another process
 # could grab the port between _find_free_port() closing its probe socket and
-# HTTPServer binding minutes later (#22161). Bounded FIFO so repeated
+# HTTPServer binding minutes later. Bounded FIFO so repeated
 # build_oauth_auth calls (reconnect loops) cannot leak fds.
 _reserved_sockets: "dict[int, socket.socket]" = {}
 _MAX_RESERVED_SOCKETS = 8
@@ -312,7 +312,7 @@ def _raise_if_non_interactive(lead: str) -> None:
 
     ``lead`` is the boundary-specific first sentence; this helper appends the
     shared, actionable ``pilotage mcp login`` next-step so the guidance wording
-    lives in one place across every non-interactive OAuth boundary (#57836).
+    lives in one place across every non-interactive OAuth boundary.
     """
     if not _is_interactive():
         raise OAuthNonInteractiveError(
@@ -329,7 +329,7 @@ def force_interactive_oauth():
     For GUI-driven auth (dashboard/desktop REST endpoint): the user IS present
     — just not on stdin. Opens the browser + localhost callback flow that the
     TTY heuristic would otherwise refuse. Same ContextVar propagation story as
-    suppress_interactive_oauth() (#35927).
+    suppress_interactive_oauth.
     """
     token = _oauth_interactive_forced.set(True)
     try:
@@ -345,7 +345,7 @@ def suppress_interactive_oauth():
     Uses a ContextVar so the suppression propagates from a background-discovery
     thread onto the coroutine scheduled (via run_coroutine_threadsafe) on the
     dedicated MCP event-loop thread — where the OAuth callback actually runs
-    (#35927). A threading.local would not cross that thread boundary.
+. A threading.local would not cross that thread boundary.
     """
     token = _oauth_interactive_enabled.set(False)
     try:
@@ -392,12 +392,12 @@ def _write_json(path: Path, data: dict) -> None:
     ``chmod`` opened a TOCTOU window where the temp file briefly inherited
     the process umask (commonly 0o644 = world-readable), exposing OAuth
     tokens to other local users between create and chmod. Mirrors the fix
-    in ``agent/google_oauth.py`` (#19673).
+    in ``agent/google_oauth.py``.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     # Tighten parent dir to 0o700 so siblings can't traverse to the creds.
     # No-op on Windows (POSIX mode bits aren't enforced); ignore failures.
-    # secure_parent_dir refuses to chmod / or top-level dirs (#25821).
+    # secure_parent_dir refuses to chmod / or top-level dirs.
     secure_parent_dir(path)
     # Per-process random suffix avoids collisions between concurrent
     # writers and stale leftovers from a prior crashed write.
@@ -699,7 +699,7 @@ def _make_redirect_handler(port: int, redirect_uri: str | None = None):
 
     Using a closure instead of reading the module-level ``_oauth_port`` avoids
     cross-server state pollution when multiple MCP servers run OAuth
-    concurrently (fixes #44588).
+    concurrently (fixes).
 
     ``redirect_uri`` is the configured proxy callback (e.g. a Tailscale Funnel
     URL), or ``None`` for the loopback default. It tailors the remote-session
@@ -728,7 +728,7 @@ def _make_redirect_handler(port: int, redirect_uri: str | None = None):
         # for the full timeout. Raise before launching so gateway adapters start
         # promptly and the caller can skip this server with an actionable warning.
         # This intentionally re-checks interactivity here rather than trusting the
-        # token-file existence guard alone. See #57836.
+        # token-file existence guard alone. See.
         _raise_if_non_interactive(
             "MCP OAuth requires browser authorization but no interactive "
             "session is available (non-interactive/background context)."
@@ -772,7 +772,7 @@ def _make_redirect_handler(port: int, redirect_uri: str | None = None):
                 f"         ssh -N -L {port}:127.0.0.1:{port} <user>@<this-host>\n"
                 f"       then open the URL above and let it redirect normally.\n"
                 f"\n"
-                f"  See: https://hermes-agent.nousresearch.com/docs/guides/oauth-over-ssh\n",
+                f" See: \n",
                 file=sys.stderr,
             )
 
@@ -797,7 +797,7 @@ async def _wait_for_callback() -> tuple[str, str | None]:
     Kept for backwards compatibility with callers that never went through
     :func:`build_oauth_auth`'s per-flow wiring. New code paths receive a
     per-flow waiter from :func:`_make_callback_waiter` so concurrent OAuth
-    flows cannot cross ports (#34260).
+    flows cannot cross ports.
 
     Raises:
         RuntimeError: If ``_oauth_port`` has not been set, which would indicate
@@ -818,8 +818,8 @@ def _make_callback_waiter(port: int):
     Closing over the port (instead of reading the module-level
     ``_oauth_port``) keeps concurrent OAuth flows isolated: flow A's waiter
     listens on flow A's port even when flow B's ``_configure_callback_port``
-    overwrites the legacy global afterwards (#34260, the callback-side
-    sibling of the #44588 redirect-handler fix).
+    overwrites the legacy global afterwards (, the callback-side
+    sibling of the redirect-handler fix).
 
     The waiter polls for the redirect without blocking the event loop. On an
     interactive TTY it races the HTTP listener against a stdin paste fallback
@@ -848,7 +848,7 @@ def _make_callback_waiter(port: int):
         # fast keeps gateway startup independent of an unusable optional MCP
         # server. This guard holds "regardless of whether a token file exists"
         # — the point the build_oauth_auth token-file guard cannot cover.
-        # See #57836.
+        # See.
         _raise_if_non_interactive(
             "OAuth callback requires an interactive session but none is "
             "available (non-interactive/background context); skipping browser "
@@ -861,10 +861,10 @@ def _make_callback_waiter(port: int):
         # reserved at port-selection time when one exists. Holding the bound
         # socket from _reserve_callback_port() until here closes the TOCTOU
         # window where another process could steal the port between selection
-        # and bind (#22161). allow_reuse_address is set BEFORE binding (setting
+        # and bind. allow_reuse_address is set BEFORE binding (setting
         # it after the constructor has already bound is a no-op) so a lingering
         # TIME_WAIT socket from a previous flow cannot block the next one
-        # (#44590).
+        #.
         try:
             server = HTTPServer(
                 ("127.0.0.1", port), handler_cls, bind_and_activate=False
@@ -1066,7 +1066,7 @@ def _configure_callback_port(
 
     NOTE: also sets the legacy module-level ``_oauth_port`` so existing
     calls to ``_wait_for_callback`` keep working. The legacy global is
-    the root cause of issue #5344 (port collision on concurrent OAuth
+    the root cause of (port collision on concurrent OAuth
     flows); replacing it with a ContextVar is out of scope for this
     consolidation PR.
     """
@@ -1090,7 +1090,7 @@ def _configure_callback_port(
     # mismatched URI). Only a truly fresh ephemeral pick goes through
     # _reserve_callback_port(), which keeps the socket bound until
     # _wait_for_callback adopts it — closing the select→bind TOCTOU race
-    # (#22161). Explicit and cached ports are fixed, known values and bind
+    # Explicit and cached ports are fixed, known values and bind
     # via the reuse_address path instead.
     port = requested or _cached_redirect_port(storage) or _reserve_callback_port()
     cfg["_resolved_port"] = port
@@ -1243,7 +1243,7 @@ def _invalidate_tokens_on_client_change(
     Compares the on-disk ``client.json`` identity against the incoming
     config identity BEFORE the new client info overwrites it. Matching
     identity is a no-op so live sessions and valid tokens are preserved.
-    Port of cline/cline#12983's "invalidate tokens when OAuth client
+    Port of cline/cline's "invalidate tokens when OAuth client
     changes" invariant.
     """
     existing = _read_json(storage._client_info_path())
@@ -1413,7 +1413,7 @@ def build_oauth_auth(
     client_metadata = _build_client_metadata(cfg)
     _maybe_preregister_client(storage, cfg, client_metadata)
 
-    # Use closure factories to avoid global state pollution (#44588, #34260).
+    # Use closure factories to avoid global state pollution.
     resolved_port = cfg.get("_resolved_port", _oauth_port)
     redirect_handler = _make_redirect_handler(
         resolved_port, redirect_uri=cfg.get("redirect_uri") or None

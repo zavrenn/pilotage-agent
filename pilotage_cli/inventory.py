@@ -223,7 +223,7 @@ def build_models_payload(
     # aggregator (e.g. openrouter) instead of the user's proxy — silently
     # breaking the call.  Filtering at the payload level keeps the
     # aggregator rows honest: they only show models the user can't get
-    # from a more-specific provider.  (#45954)
+    # from a more-specific provider.
     try:
         from pilotage_cli.providers import is_routing_aggregator as _is_routing_aggregator
     except Exception:
@@ -251,7 +251,7 @@ def build_models_payload(
                 # so their rows must keep models that a user's proxy happens to
                 # share a name with — otherwise a subscription provider's own
                 # catalog (minimax-m3, glm-5, deepseek-v4-flash, ...) is silently
-                # gutted in the picker. (#47077)
+                # gutted in the picker.
                 if not _is_routing_aggregator(slug):
                     continue
                 original = row.get("models") or []
@@ -331,8 +331,8 @@ def build_aux_picker_rows(
     Aux pickers kept re-deriving their own kwargs and each one silently
     dropped a different slice of the user's configuration. Two independent
     contributor PRs landed against the same two call sites for exactly this:
-    #52642 (user ``providers:`` / ``custom_providers:`` entries never
-    appeared) and #66624 (providers with an exhausted credential pool were
+    (user ``providers:`` / ``custom_providers:`` entries never
+    appeared) and (providers with an exhausted credential pool were
     hidden). Both were per-site kwarg patches, so the next aux picker would
     have reintroduced the same gap. Routing through one function makes the
     correct behaviour the default that a new caller cannot forget:

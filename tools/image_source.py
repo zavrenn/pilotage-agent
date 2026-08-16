@@ -128,7 +128,7 @@ async def resolve_image_source(
     # path outside the caches never yields the host's bytes.
     host_target = _permitted_host_read_target(p, ctx)
     if host_target is not None and host_target.is_file():
-        # Shared credential-read guard (agent.file_safety, #57698): refuse
+        # Shared credential-read guard (agent.file_safety,): refuse
         # secret-bearing files (.env, auth.json, ...) with an intentional,
         # specific error instead of relying on the magic-byte sniff to
         # reject them incidentally. Same chokepoint the image-gen/video-gen
@@ -230,7 +230,7 @@ def _media_cache_roots() -> list:
     home = get_pilotage_home()
     return [
         home / "cache",  # cache/images, cache/vision, cache/video(s), cache/audio
-        home / "images",  # desktop/clipboard/PDF uploads (tui_gateway) — #69575
+        home / "images", # desktop/clipboard/PDF uploads (tui_gateway) —
         home / "image_cache",
         home / "audio_cache",
         home / "video_cache",
@@ -288,7 +288,7 @@ def _ensure_container_env(task_id: Optional[str]) -> None:
     Unlike the terminal tool, vision never triggered environment creation, so a
     session whose first action is ``vision_analyze`` on a container-only path
     under a non-local backend found no active env and failed — until a terminal
-    command happened to create one (issue #62825). Best-effort: any failure just
+    command happened to create one. Best-effort: any failure just
     leaves the env absent and the caller hits the existing fail-closed error.
     """
     if not task_id:
@@ -320,7 +320,7 @@ async def _resolve_container_fallback(
     started container can fail (empty pipe / partial setup) while an identical
     second call succeeds. We retry once with a short delay before giving up,
     so callers don't see "could not read inside the sandbox" on a file that is
-    verifiably readable on the immediate retry. See #76566.
+    verifiably readable on the immediate retry. See.
 
     Diagnostic: when every attempt fails, the container's own output (stderr
     + stdout) is folded into the raised error so the user can distinguish
@@ -332,7 +332,7 @@ async def _resolve_container_fallback(
 
     # Bring the sandbox up on demand: without this, the first vision_analyze of
     # a session (before any terminal command) has no active env to read from
-    # under a non-local backend (issue #62825).
+    # under a non-local backend.
     _ensure_container_env(ctx.task_id)
 
     env = _get_active_env(ctx.task_id)

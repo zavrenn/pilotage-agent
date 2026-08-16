@@ -15,7 +15,7 @@ Three coexisting TTS extension surfaces — in resolution order:
    :mod:`tools.tts_tool`) — native Python implementations (edge, openai,
    elevenlabs, …). **Always win** — plugins cannot shadow them.
 2. **Command-type providers** declared under ``tts.providers.<name>:
-   type: command`` (PR #17843, commit ``2facea7f7``). Wire any local
+   type: command`` (, commit ``2facea7f7``). Wire any local
    CLI into Pilotage with shell-template placeholders. **Wins over a
    same-name plugin** — config is more local than plugin install.
 3. **Plugin-registered providers** (this ABC). For backends that need a
@@ -31,7 +31,7 @@ name command provider is configured.
 
 Providers live in ``<repo>/plugins/tts/<name>/`` (built-in plugins, no
 shipped today) or ``~/.pilotage/plugins/tts/<name>/`` (user-installed).
-None ship in-tree as of issue #30398 — the hook is additive
+None ship in-tree as of — the hook is additive
 infrastructure waiting for a real consumer (Cartesia, Fish Audio, …).
 
 Response contract
@@ -246,7 +246,7 @@ class TTSProvider(abc.ABC):
         """Whether output is suitable for voice-bubble delivery.
 
         Mirrors the ``tts.providers.<name>.voice_compatible`` field
-        from PR #17843. When True, the gateway's voice-message
+        from. When True, the gateway's voice-message
         delivery pipeline runs ffmpeg conversion to Opus if needed.
         When False, output is delivered as a regular audio attachment.
 

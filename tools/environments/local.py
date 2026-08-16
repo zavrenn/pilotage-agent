@@ -145,7 +145,7 @@ def _cwd_usable(path: str) -> bool:
     ``subprocess.Popen(cwd='/root')`` then dies with ``PermissionError:
     [Errno 13] Permission denied: '/root'``. Seen in the wild when a
     root-launched CLI session leaks ``/root`` into shared state that a
-    non-root gateway/cron process later reads (#65583) — every cron job's
+    non-root gateway/cron process later reads — every cron job's
     terminal/file tool then fails on every command, forever. Checking
     X_OK up front lets the caller fall back instead.
     """
@@ -166,9 +166,9 @@ def _resolve_safe_cwd(cwd: str) -> str:
 
     Used by ``_run_bash`` to recover when the configured cwd is gone — most
     commonly because a previous tool call deleted its own working directory
-    (issue #17558) — or inaccessible to this user, e.g. ``/root`` leaking
+     — or inaccessible to this user, e.g. ``/root`` leaking
     from a root-launched CLI session into a non-root gateway's cron jobs
-    (issue #65583).  Without this guard, ``subprocess.Popen(..., cwd=...)``
+    . Without this guard, ``subprocess.Popen(.., cwd=..)``
     raises ``FileNotFoundError``/``PermissionError`` before bash starts,
     wedging every subsequent terminal call until the gateway restarts.
     """
@@ -181,7 +181,7 @@ def _resolve_safe_cwd(cwd: str) -> str:
             "this user (uid=%s) — falling back to the nearest usable "
             "directory. If this is a gateway/cron process, check for "
             "root-owned paths leaking into terminal.cwd / TERMINAL_CWD "
-            "(#65583).",
+            ".",
             cwd, getattr(os, "getuid", lambda: "?")(),
         )
     parent = os.path.dirname(cwd) if cwd else ""
@@ -216,7 +216,7 @@ _PILOTAGE_PROVIDER_ENV_FORCE_PREFIX = "_PILOTAGE_FORCE_"
 # the agent terminal — not just Bedrock users, since the registry is iterated
 # unconditionally — and (b) be unrecoverable, because env_passthrough.py
 # refuses to re-allow anything in this blocklist (GHSA-rhgp-j443-p4rf).  See
-# issue #32314 discussion.
+# discussion.
 _AWS_SDK_CREDENTIAL_ENV_VARS = frozenset({
     "AWS_BEARER_TOKEN_BEDROCK",
 })
@@ -327,7 +327,7 @@ def _build_provider_env_blocklist() -> frozenset:
     # working Pilotage provider path.  Stripping it broke agent-spawned
     # ``claude`` CLIs: the child fell through to the shared macOS Keychain /
     # ``~/.claude/.credentials.json`` store and, on auth failure, cleared it,
-    # logging the user out of their interactive Claude sessions (#55878).
+    # logging the user out of their interactive Claude sessions.
     # It arrives via the registry loop above (anthropic api_key_env_vars),
     # so remove it explicitly.
     blocked.discard("CLAUDE_CODE_OAUTH_TOKEN")
@@ -345,7 +345,7 @@ _PILOTAGE_PROVIDER_ENV_BLOCKLIST = _build_provider_env_blocklist()
 # ``.venv`` — silently clobbering the Pilotage environment (e.g. a project pinned
 # to a different Python version overwrites it and breaks the gateway). The
 # Pilotage venv stays reachable via PATH (its bin dir is first), so stripping
-# these markers is safe and only prevents the cross-project clobber (#23473).
+# these markers is safe and only prevents the cross-project clobber.
 _ACTIVE_VENV_MARKER_VARS = ("VIRTUAL_ENV", "CONDA_PREFIX")
 
 
@@ -624,7 +624,7 @@ def pilotage_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, s
         for key in _PILOTAGE_PROVIDER_ENV_BLOCKLIST:
             env.pop(key, None)
 
-    # Windows UTF-8 safety for spawned processes (#31420).
+    # Windows UTF-8 safety for spawned processes.
     env.setdefault("PYTHONUTF8", "1")
 
     _inject_context_pilotage_home(env)
@@ -1008,7 +1008,7 @@ def _prepend_git_bash_dirs(existing_path: str) -> str:
 # POSIX-sh-family shells that understand the ``[shell, "-lic", "set +m; …"]``
 # invocation spawn_local uses. $SHELL values outside this set (fish, csh/tcsh,
 # nushell, elvish, xonsh, …) would error on that syntax, so _find_shell falls
-# back to bash for them rather than honouring $SHELL. (#42203)
+# back to bash for them rather than honouring $SHELL.
 _SPAWN_COMPATIBLE_SHELLS = frozenset({"bash", "zsh", "sh", "dash", "ksh", "mksh"})
 
 
@@ -1232,14 +1232,14 @@ def _apply_windows_msys_bash_env_defaults(env: dict) -> None:
     Windows commands such as ``tasklist``, ``schtasks``, and ``wmic``.  Pilotage
     runs terminal commands through bash on Windows, so set the standard MSYS
     opt-out by default.  Users who need conversion can override in their env.
-    Refs #56700.
+    Refs.
 
     ``MSYS_NO_PATHCONV`` is honored by Git for Windows bash only.  MSYS2-proper
     and Cygwin bash (which ``_find_bash`` can still return via the final
     ``shutil.which`` fallback) ignore it and honor ``MSYS2_ARG_CONV_EXCL``
     instead, so set both.  ``*`` disables all argv conversion — the semantic
     equivalent of ``MSYS_NO_PATHCONV=1``.  Also fixes ``cmd /c`` mangling
-    (#56147).
+.
     """
     if not _IS_WINDOWS:
         return
@@ -1502,7 +1502,7 @@ class LocalEnvironment(BaseEnvironment):
 
         # Recover when the cwd has been deleted out from under us — usually by
         # a previous tool call that ran ``rm -rf`` on its own working dir
-        # (issue #17558).  Popen would otherwise raise FileNotFoundError on
+        # Popen would otherwise raise FileNotFoundError on
         # the cwd before bash starts, wedging every subsequent call until the
         # gateway restarts.
         #
@@ -1678,7 +1678,7 @@ class LocalEnvironment(BaseEnvironment):
             except OSError:
                 pass
         # Remove any orphaned atomic-write temp snapshots (snap.tmp.<bashpid>)
-        # a failed/interrupted mv could have left behind (#38249).
+        # a failed/interrupted mv could have left behind.
         try:
             import glob
             for tmp in glob.glob(f"{self._snapshot_path}.tmp.*"):

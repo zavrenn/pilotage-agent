@@ -69,7 +69,7 @@ def _warn_if_gateway_not_running() -> None:
     The cron ticker only runs inside the gateway (``_start_cron_ticker`` in
     gateway/run.py); there is no standalone cron daemon. Without a running
     gateway, ``next_run_at`` passes but jobs never fire and ``last_run_at``
-    stays null — the most common cron support report (#51038). Surfacing this
+    stays null — the most common cron support report. Surfacing this
     at create/list time, when the user is right there, prevents it.
 
     An external provider (e.g. Chronos) fires jobs via a NAS-mediated webhook,
@@ -135,7 +135,7 @@ def cron_list(show_all: bool = False):
         # `deliver` may be present-but-null in the job record (same pitfall as
         # `repeat` above), so coalesce to the default rather than relying on the
         # dict-default, which only applies to a missing key. A null value would
-        # otherwise reach `", ".join(None)` and crash the whole listing (#32896).
+        # otherwise reach `", ".join(None)` and crash the whole listing.
         deliver = job.get("deliver") or ["local"]
         if isinstance(deliver, str):
             deliver = [deliver]
@@ -261,7 +261,7 @@ def cron_status():
         # can die silently, or stay alive while every tick fails. Check both
         # the liveness heartbeat and the last-successful-tick marker so we
         # don't report "will fire" when the ticker is dead or failing
-        # (#32612, #32895).
+        #.
         from cron.jobs import (
             get_ticker_heartbeat_age,
             get_ticker_last_error,
@@ -298,7 +298,7 @@ def cron_status():
             if last_error:
                 # Show WHY ticks fail — e.g. a root-rewritten jobs.json
                 # (PermissionError) that silently locked out the ticker's
-                # uid for ~14h in the field (#68483).
+                # uid for ~14h in the field.
                 print(color(f"  Last tick error: {last_error}", Colors.RED))
                 if "Permission denied" in last_error:
                     print(color(
@@ -467,7 +467,7 @@ def _job_action(action: str, job_id: str, success_verb: str) -> int:
         # One-shot CLI: this process exits as soon as the command returns, so
         # a background-dispatched run (daemon thread of THIS process) would be
         # orphaned mid-LLM-call — the delegation dies 'unknown' and the job's
-        # execution row is stuck 'claimed', blocking future runs (#86721).
+        # execution row is stuck 'claimed', blocking future runs.
         # The background path in ``_try_dispatch_background_run`` triggers when
         # the CLI inherits a gateway/desktop session env (PILOTAGE_SESSION_KEY);
         # declare the channel stateless so ``async_delivery_supported()`` gates
@@ -503,7 +503,7 @@ def _job_action(action: str, job_id: str, success_verb: str) -> int:
         # resolves a session key). Such responses carry
         # execution_mode="background" and/or a delegation_id, and the job
         # keeps running AFTER this CLI process exits — a terminal
-        # success/failure verdict would be a lie (#83340). Report the
+        # success/failure verdict would be a lie. Report the
         # background dispatch instead of claiming the run failed.
         delegation_id = job.get("delegation_id")
         if job.get("execution_mode") == "background" or delegation_id:

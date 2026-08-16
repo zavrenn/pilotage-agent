@@ -42,7 +42,7 @@ from utils import atomic_replace
 
 logger = logging.getLogger(__name__)
 
-# Per-profile by design (issue #4707): suggestions live alongside the active
+# Per-profile by design : suggestions live alongside the active
 # profile's cron store. Anchor on get_pilotage_home() (profile home), not the
 # shared default root. See cron/jobs.py for the full rationale.
 CRON_DIR = get_pilotage_home().resolve() / "cron"

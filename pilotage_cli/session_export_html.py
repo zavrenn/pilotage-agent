@@ -36,7 +36,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         :root {{
             --bg-color: #F8FAFC;
             --text-color: #0F172A;
-            --secondary-text: #475569;
+            --secondary-text:;
             --user-bg: #FFFFFF;
             --assistant-bg: #F1F5F9;
             --border-color: #E2E8F0;
@@ -55,20 +55,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         @media (prefers-color-scheme: dark) {{
             :root {{
-                --bg-color: #000101;
+                --bg-color:;
                 --text-color: #FFF8DC;
                 --secondary-text: #94A3B8;
-                --user-bg: #041c1c;
+                --user-bg:c1c;
                 --assistant-bg: #0c1a1a;
                 --border-color: #CD7F32;
                 --accent-color: #FFD700;
-                --code-bg: #000000;
+                --code-bg:;
                 --reasoning-bg: #1a1a1a;
                 --reasoning-border: #CD7F32;
                 --tool-bg: #0c4a6e;
-                --tool-border: #075985;
+                --tool-border:;
                 --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.3);
-                --sidebar-bg: #041c1c;
+                --sidebar-bg:c1c;
             }}
         }}
 
@@ -293,11 +293,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }}
 
             .message-assistant {{
-                background-color: #041c1c;
+                background-color:c1c;
             }}
 
             .message-system {{
-                background-color: #020617;
+                background-color:;
                 border-left: 4px solid var(--secondary-text);
             }}
 

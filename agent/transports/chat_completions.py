@@ -55,7 +55,7 @@ def _add_prompt_cache_key(
     ``cache_scope_id``, when provided, is the rotation-stable logical scope
     (compression-lineage root — agent/prompt_cache_scope.py) and takes
     precedence over the physical ``session_id`` so the key survives
-    context-compression session rotation (#79017).
+    context-compression session rotation.
     """
     if not supports_prompt_cache_key:
         return
@@ -71,7 +71,7 @@ def _add_prompt_cache_key(
     # Reuse the Responses transport's single authoritative hash algorithm and
     # session-scope normalization so equivalent static prefixes route to the
     # same cache bucket across modes, without concentrating unrelated
-    # sessions into one shared bucket (see #78941).
+    # sessions into one shared bucket.
     from agent.transports.codex import _cache_scope_from_session_id, _content_cache_key
 
     cache_key = _content_cache_key(
@@ -110,7 +110,7 @@ def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> 
     # ``gemini`` provider also serves Gemma (and historically PaLM/Bard);
     # those reject the field with HTTP 400 "Unknown name 'thinking_config':
     # Cannot find field" — including the polite ``{"includeThoughts": False}``
-    # form. Omit the field entirely on non-Gemini models. (#17426)
+    # form. Omit the field entirely on non-Gemini models.
     if not normalized_model.startswith("gemini"):
         return None
 
@@ -269,7 +269,7 @@ class ChatCompletionsTransport(ProviderTransport):
                 or "codex_message_items" in msg
                 or "tool_name" in msg
                 or "effect_disposition" in msg
-                or "timestamp" in msg  # #47868 — strict providers reject this
+                or "timestamp" in msg # — strict providers reject this
                 or "api_content" in msg  # persist-what-you-send sidecar
             ):
                 needs_sanitize = True
@@ -290,7 +290,7 @@ class ChatCompletionsTransport(ProviderTransport):
                 # any caller using it), this is the last boundary, so
                 # normalize here. Requests built by fully separate payload
                 # paths (e.g. some auxiliary clients) never pass through
-                # this layer and are out of scope for it. (#58755 follow-up)
+                # this layer and are out of scope for it. follow-up)
                 if (
                     msg.get("role") == "assistant"
                     and "tool_calls" in msg
@@ -340,7 +340,7 @@ class ChatCompletionsTransport(ProviderTransport):
                 or "codex_message_items" in msg
                 or "tool_name" in msg
                 or "effect_disposition" in msg
-                or "timestamp" in msg  # #47868 — leak into strict providers
+                or "timestamp" in msg # — leak into strict providers
                 or "api_content" in msg  # persist-what-you-send sidecar
             ):
                 out_msg = mutable_msg()
@@ -348,7 +348,7 @@ class ChatCompletionsTransport(ProviderTransport):
                 out_msg.pop("codex_message_items", None)
                 out_msg.pop("tool_name", None)
                 out_msg.pop("effect_disposition", None)
-                out_msg.pop("timestamp", None)  # #47868 — leak into strict providers
+                out_msg.pop("timestamp", None) # — leak into strict providers
                 out_msg.pop("api_content", None)  # persist-what-you-send sidecar
 
 
@@ -945,7 +945,7 @@ class ChatCompletionsTransport(ProviderTransport):
         written = getattr(details, "cache_write_tokens", 0) or 0 if details else 0
         if not cached:
             # DeepSeek native API shape (api.deepseek.com): top-level
-            # prompt_cache_hit_tokens / prompt_cache_miss_tokens (#61871).
+            # prompt_cache_hit_tokens / prompt_cache_miss_tokens.
             cached = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
         if cached or written:
             return {"cached_tokens": cached, "creation_tokens": written}

@@ -143,7 +143,7 @@ def build_profile_parser(subparsers, *, cmd_profile: Callable) -> None:
         help="Profile name (default: inferred from archive)",
     )
 
-    # ---------- Distribution subcommands (issue #20456) ----------
+    # ---------- Distribution subcommands  ----------
     profile_install = profile_subparsers.add_parser(
         "install",
         help="Install a profile distribution from a git URL or local directory",

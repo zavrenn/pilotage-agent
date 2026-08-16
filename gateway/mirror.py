@@ -45,7 +45,7 @@ def mirror_to_session(
     at the SQLite boundary (only role+content persist), so on replay an
     assistant-role mirror is indistinguishable from a real assistant turn and
     produces ``assistant → assistant`` pairs that break strict-alternation
-    providers (issue #2221). A user-role mirror collapses safely via
+    providers. A user-role mirror collapses safely via
     ``repair_message_sequence``'s consecutive-user merge on every provider.
 
     Returns True if mirrored successfully, False if no matching session or error.
@@ -102,7 +102,7 @@ def _find_session_id(
     """
     Find the active session_id for a platform + chat_id pair.
 
-    Queries state.db gateway session rows (primary source since #9006);
+    Queries state.db gateway session rows (primary source since);
     falls back to scanning sessions.json for pre-migration databases.
     DM session keys don't embed the chat_id (e.g. "agent:main:telegram:dm"),
     so we match on the persisted chat origin, not the key.

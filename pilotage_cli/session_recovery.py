@@ -245,7 +245,7 @@ def _copy_source_bundle(source: Path, snapshot_dir: Path) -> tuple[Path, list[st
     and *then* copying would be a check/use race: a connection could open in
     that window, and the copy's ``close()`` would cancel its POSIX advisory
     locks -- the failure class ``pilotage_cli.sqlite_safe_read`` exists to
-    prevent (see #71724). Holding the lock means no connection can appear
+    prevent. Holding the lock means no connection can appear
     mid-copy, across the main file and every sidecar.
 
     Recovery normally runs as its own short-lived CLI process against an
@@ -520,7 +520,7 @@ def _probe_populated_edge(
     edge: str,
     anchor: int,
 ) -> dict[str, Any]:
-    """Find a finite bound for a damaged rowid edge (issue #80205).
+    """Find a finite bound for a damaged rowid edge.
 
     When an ordered edge probe fails, :func:`_salvage_rowid_bounds` used to
     substitute the whole SQLite rowid domain. Range bisection then burned the
@@ -624,7 +624,7 @@ def _copy_table_salvage(
             result["error"] += f": {details}"
         return result
 
-    # Issue #80205: a damaged ordered edge probe used to substitute the whole
+    #: a damaged ordered edge probe used to substitute the whole
     # SQLite rowid domain, and bisecting that synthetic tail exhausted the
     # range-query budget while readable tail rows were still waiting to be
     # copied. Gallop outward from the surviving edge for a finite bound first.
@@ -660,7 +660,7 @@ def _copy_table_salvage(
     exact_sql = f'SELECT {quoted} FROM "{table}" WHERE rowid = ?'
 
     def recover_exact_rowid(rowid: int) -> bool:
-        """Issue #80205: salvage one row by exact-key lookup.
+        """: salvage one row by exact-key lookup.
 
         A singleton range scan (``rowid BETWEEN x AND x ORDER BY rowid``)
         must advance the cursor past ``x`` to prove the range is exhausted;

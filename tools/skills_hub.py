@@ -1010,7 +1010,7 @@ class GitHubSource(SkillSource):
         """Recursively download via Contents API (fallback)."""
         url = f"https://api.github.com/repos/{repo}/contents/{path.rstrip('/')}"
         # Route through _github_get so directory listing gets the same
-        # 429/403-rate-limit retry + backoff as file fetches (#3033).
+        # 429/403-rate-limit retry + backoff as file fetches.
         resp = self._github_get(url)
         if resp is None:
             return {}
@@ -3280,7 +3280,7 @@ class OptionalSkillSource(SkillSource):
     (search / install / inspect) and labelled "official" with "builtin" trust.
     """
 
-    OFFICIAL_REPO = "NousResearch/hermes-agent"
+    OFFICIAL_REPO = "REPLACE-WITH-PILOTAGE-REPO/pilotage-agent"
     OPTIONAL_SKILLS_PREFIX = "optional-skills"
 
     def __init__(self, auth: Optional[GitHubAuth] = None):
@@ -3914,7 +3914,7 @@ def install_from_quarantine(
     # with ``--category <name-of-an-existing-skill>`` would create a hybrid
     # skill-plus-category directory; a later update or uninstall of the outer
     # skill would then rmtree the inner one — the sibling case of the
-    # category-bucket wipe reported in issue #75983.
+    # category-bucket wipe reported in.
     skills_root = _skills_dir().resolve()
     ancestor = install_dir.parent
     while ancestor != skills_root and ancestor.is_relative_to(skills_root):
@@ -3938,7 +3938,7 @@ def install_from_quarantine(
             )
         # Guard against silent data loss when the install target collides with
         # an existing category bucket (a directory that holds other skills).
-        # This was reported as GitHub issue #75983: installing a skill with
+        # This was reported as GitHub: installing a skill with
         # --name matching an existing category directory caused rmtree to wipe
         # all sibling skills.  A directory that directly contains SKILL.md is
         # an existing skill installation and stays overwritable (hub-installed
@@ -4064,7 +4064,7 @@ def bundle_content_hash(bundle: SkillBundle) -> str:
     keys built on Windows carry backslashes (``str(f.relative_to(dir))``),
     which changed both the hashed bytes AND the sort order, so every
     installed skill reported ``update_available`` forever on Windows
-    (#62310). Normalize to POSIX separators before sorting/hashing.
+. Normalize to POSIX separators before sorting/hashing.
     """
     h = hashlib.sha256()
     normalized = {
@@ -4167,7 +4167,7 @@ def check_for_skill_updates(
 # Pilotage centralized index source
 # ---------------------------------------------------------------------------
 
-PILOTAGE_INDEX_URL = "https://hermes-agent.nousresearch.com/docs/api/skills-index.json"
+PILOTAGE_INDEX_URL = ""
 PILOTAGE_INDEX_TTL = 6 * 3600  # 6 hours
 
 

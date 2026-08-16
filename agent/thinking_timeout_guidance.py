@@ -24,7 +24,7 @@ provides the detection and the message as standalone helpers so the
 detection logic is unit-testable without driving the full retry loop,
 and the message text can be regression-tested for spelling and accuracy.
 
-Part 2 of Fixes #52310.
+Part 2 of Fixes.
 """
 
 from __future__ import annotations

@@ -13,9 +13,9 @@ Providers live in ``<repo>/plugins/browser/<name>/`` (built-in, auto-loaded as
 ``plugins.enabled``).
 
 This ABC mirrors :class:`agent.web_search_provider.WebSearchProvider` (PR
-#25182) — same shape, same registration flow, same picker integration. The
+) — same shape, same registration flow, same picker integration. The
 legacy in-tree ``tools.browser_providers.base.CloudBrowserProvider`` ABC was
-deleted in PR #25214 (this work) along with the per-vendor inline modules in
+deleted in (this work) along with the per-vendor inline modules in
 ``tools/browser_providers/``; the lifecycle contract documented below is
 preserved bit-for-bit so the tool wrapper (:mod:`tools.browser_tool`) does
 not have to translate.
@@ -160,7 +160,7 @@ class BrowserProvider(abc.ABC):
     # Backward-compat shims for the legacy CloudBrowserProvider API
     # ------------------------------------------------------------------
     #
-    # The pre-PR-#25214 ABC exposed ``is_configured()`` and ``provider_name()``;
+    # The pre-PR- ABC exposed ``is_configured`` and ``provider_name``;
     # ``tools.browser_tool`` has ~6 callers that still use those names. Rather
     # than churn every callsite (and break out-of-tree downstream code that
     # subclassed CloudBrowserProvider), we expose the old names as thin

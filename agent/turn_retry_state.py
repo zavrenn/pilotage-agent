@@ -80,7 +80,7 @@ class TurnRetryState:
     # Set when a content-filter stream stall (e.g. MiniMax "new_sensitive")
     # has been escalated to the fallback chain: the partial-stream content
     # was rolled back off ``messages`` and the loop should re-issue the API
-    # call against the newly-activated provider (#32421).
+    # call against the newly-activated provider.
     restart_with_rebuilt_messages: bool = False
     # A user correction cancelled the in-flight provider request. The outer
     # loop must append a role-safe checkpoint + user message, rebuild the API

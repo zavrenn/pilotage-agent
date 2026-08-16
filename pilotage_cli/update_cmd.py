@@ -386,7 +386,7 @@ def _print_curator_first_run_notice() -> None:
     print("  Preview now:  pilotage curator run --dry-run")
     print("  Pause it:     pilotage curator pause")
     print(
-        "  Docs:         https://hermes-agent.nousresearch.com/docs/user-guide/features/curator"
+        " Docs: "
     )
 
 def _print_fts_optimize_available_notice() -> None:
@@ -593,12 +593,12 @@ def _atomic_replace_dir(src: str, dst: str) -> None:
     the copy fails partway (common on the Windows ZIP-update path, which only
     runs because file I/O is already flaky on that machine), the old directory
     is already gone and nothing replaced it — the install is left with a
-    deleted tree (issue #49145, where ``ui-tui/`` vanished and broke the TUI).
+    deleted tree (, where ``ui-tui/`` vanished and broke the TUI).
 
     Now a thin single-entry alias over the two-phase helpers below, which
     generalise the same stage-then-swap discipline across every entry the ZIP
-    update touches (#76104). Retained because it is part of the mechanical
-    ``pilotage_cli.main`` re-export surface and guards the #49145 regression.
+    update touches. Retained because it is part of the mechanical
+    ``pilotage_cli.main`` re-export surface and guards the regression.
     """
     _commit_staged_replacements([(_stage_replacement(src, dst), dst)])
 
@@ -658,8 +658,8 @@ def _commit_staged_replacements(staged) -> None:
     the ZIP update replaces ~90 top-level entries in a loop, and nothing made
     the loop atomic *as a whole*. A failure partway left some entries at the
     new version and the rest at the old one — every file valid Python, the
-    combination unbootable (issue #76104; the ``ImportError`` in #76091 and
-    the field report in #63717 are both this).
+    combination unbootable (; the ``ImportError`` in and
+    the field report in are both this).
 
     This covers plain files as well as directories: the repo root holds 20
     first-party modules (``run_agent.py``, ``cli.py``, ``pilotage_constants.py``
@@ -714,7 +714,7 @@ def _commit_staged_replacements(staged) -> None:
 def _print_update_completion(message: str) -> None:
     """Print an update outcome plus, when the dashboard launched this run
     with an action id, a terminal receipt line the Desktop can match after
-    the dashboard restarts (see #47359 / #58764)."""
+    the dashboard restarts (see / )."""
     print(message)
     action_id = os.environ.get("PILOTAGE_ACTION_ID", "")
     if len(action_id) == 32 and all(char in "0123456789abcdef" for char in action_id):
@@ -753,7 +753,7 @@ def _update_via_zip(args):
         )
         _m().sys.exit(1)
     zip_url = (
-        f"https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch}.zip"
+        f"{branch}.zip"
     )
 
     print("→ Downloading latest version...")
@@ -803,7 +803,7 @@ def _update_via_zip(args):
         preserve = {"venv", "node_modules", ".git", ".env"}
         entries = [i for i in os.listdir(extracted) if i not in preserve]
 
-        # Two-phase replace (#76104). Phase 1 copies every entry — directories
+        # Two-phase replace. Phase 1 copies every entry — directories
         # AND top-level files — to a sibling staging path without touching
         # anything live; phase 2 swaps them all in with same-filesystem
         # renames and rolls back every swap if any one fails. Replacing
@@ -877,7 +877,7 @@ def _update_via_zip(args):
         print("  Your existing install was left in place.")
         print(
             "  Re-run `pilotage update` to retry; if the agent won't start, "
-            "reinstall from https://hermes-agent.nousresearch.com"
+            "reinstall from "
         )
         _m().sys.exit(1)
     finally:
@@ -896,7 +896,7 @@ def _update_via_zip(args):
     # breaks on this machine, keep base deps and reinstall the remaining extras
     # individually so update does not silently strip working capabilities.
     #
-    # Self-lock deferral (relocated preflight — #86735): the ZIP code swap
+    # Self-lock deferral (relocated preflight): the ZIP code swap
     # above is already committed; defer only the dependency sync when this
     # process holds a native extension the sync must rewrite.
     _m()._abort_dependency_sync_if_self_locked()
@@ -947,8 +947,8 @@ def _update_via_zip(args):
     )
 
     # ZIP path parity: heal the active memory provider's bridge packages
-    # after the dependency reinstall, same as the git-pull path (#53272,
-    # #70636).
+    # after the dependency reinstall, same as the git-pull path,
+    #).
     _m()._refresh_active_memory_provider_dependencies()
 
     # Now that dependencies are installed, verify the tree actually imports.
@@ -1012,7 +1012,7 @@ def _update_via_zip(args):
     except Exception as e:
         logger.debug("Model catalog seed during zip update failed: %s", e)
 
-    # ── Post-update state.db integrity guard (#68474) ─────────────────
+    # ── Post-update state.db integrity guard ─────────────────
     # Same as the git-pull path: verify state.db survived the ZIP update
     # and auto-restore from the most recent pre-update snapshot if needed.
     try:
@@ -1416,13 +1416,13 @@ def _discard_stashed_changes(
     return True
 
 OFFICIAL_REPO_URLS = {
-    "https://github.com/NousResearch/hermes-agent.git",
-    "git@github.com:NousResearch/hermes-agent.git",
-    "https://github.com/NousResearch/hermes-agent",
-    "git@github.com:NousResearch/hermes-agent",
+    "https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent",
+    "https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent.git",
+    "git@github.com:REPLACE-WITH-PILOTAGE-REPO/pilotage-agent.git",
+    "git@github.com:REPLACE-WITH-PILOTAGE-REPO/pilotage-agent",
 }
 
-OFFICIAL_REPO_URL = "https://github.com/NousResearch/hermes-agent.git"
+OFFICIAL_REPO_URL = ""
 
 SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
 
@@ -1548,7 +1548,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         # Ask user if they want to add upstream
         print()
         print("ℹ Your fork is not tracking the official Pilotage repository.")
-        print("  This means you may miss updates from NousResearch/hermes-agent.")
+        print("  This means you may miss updates from the official repository.")
         print()
         try:
             response = (
@@ -1562,7 +1562,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
             print("→ Adding upstream remote...")
             if _add_upstream_remote(git_cmd, cwd):
                 print(
-                    "  ✓ Added upstream: https://github.com/NousResearch/hermes-agent.git"
+                    " ✓ Added upstream: "
                 )
                 has_upstream = True
             else:
@@ -1570,7 +1570,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
                 return
         else:
             print(
-                "  Skipped. Run 'git remote add upstream https://github.com/NousResearch/hermes-agent.git' to add later."
+                " Skipped. Run 'git remote add upstream ' to add later."
             )
             _mark_skip_upstream_prompt()
             return
@@ -1724,7 +1724,7 @@ def _upgrade_pip_before_lazy_refresh(
     """Upgrade pip before lazy-backend refreshes.
 
     Older pip (e.g. 24.0 on Python 3.11) can fail setuptools-backed source
-    builds during lazy installs and leave a partially-written venv (#57828).
+    builds during lazy installs and leave a partially-written venv.
     Never raises.
     """
     try:
@@ -1859,7 +1859,7 @@ def _refresh_active_lazy_features(
     Returns True when the venv is safe to use (refresh succeeded, or no
     active lazy backends, or post-failure import repair succeeded). Returns
     False when a failed lazy install left broken core imports that automatic
-    repair could not fix (#57828).
+    repair could not fix.
 
     Never raises. A failure here must not block the rest of the update.
     """
@@ -1928,7 +1928,7 @@ def _refresh_active_lazy_features(
         return False
 
     # Immediate import-based recovery — metadata-only verifiers miss the case
-    # where DISTRIBUTION-INFO remains but import files were wiped (#57828).
+    # where DISTRIBUTION-INFO remains but import files were wiped.
     # Unavailable probes are indeterminate, not healthy — keep the lazy marker.
     status = _m()._repair_venv_via_import_probes(install_cmd_prefix, env=env)
     if status == "repaired":
@@ -1955,7 +1955,7 @@ def _refresh_active_memory_provider_dependencies() -> None:
     ``plugin.yaml`` (plus mode-dependent extras like Hindsight's
     ``hindsight-all``), NOT in Pilotage' editable-install extras or
     ``LAZY_DEPS`` alone — so the core dependency reinstall above can strip
-    or downgrade them (#53272 mem0ai, #70636 hindsight-embed). Re-run the
+    or downgrade them mem0ai, hindsight-embed). Re-run the
     provider's declared install for the ACTIVE provider only, after the
     core install and lazy refresh, so the last write to any shared package
     is the one the active provider needs.
@@ -2445,9 +2445,9 @@ def _run_pre_update_backup(args) -> Optional[str]:
       (pairing JSONs, cron jobs, config, auth; see ``_QUICK_STATE_FILES``)
       under ``state-snapshots/``. Files over 1 GiB are skipped with a
       warning so a bloated state.db can never stall the update
-      (issues #15733, #34600 are the reason this safety net exists).
+      (issues, are the reason this safety net exists).
     - ``full``  — the quick snapshot PLUS a full zip of PILOTAGE_HOME under
-      ``backups/`` (restorable via ``pilotage import``; the #48200 wrong-path
+      ``backups/`` (restorable via ``pilotage import``; the wrong-path
       wipe is the reason this level exists).
 
     ``--backup`` forces ``full`` for one run; ``--no-backup`` forces ``off``.
@@ -2491,7 +2491,7 @@ def _run_pre_update_backup(args) -> Optional[str]:
         # API), but a concurrent process (antivirus, force-killed gateway
         # releasing file handles, Windows filter driver) can corrupt the live
         # file at any point. A silent zeroing at this point would proceed with
-        # the update and exit code 0 — exactly the #68474 symptom.
+        # the update and exit code 0 — exactly the symptom.
         if snapshot_id:
             _src_path = _get_home() / "state.db"
             if _src_path.exists():
@@ -2814,13 +2814,13 @@ def _detect_venv_python_processes(
 # the updater process itself has any of these loaded, the dependency sync
 # below cannot rewrite the backing ``.pyd``/``.dll`` — Windows blocks REPLACE
 # on a mapped image — and the update dies with ``os error 5`` between
-# uninstall and reinstall, stranding the venv half-updated (#83569).
+# uninstall and reinstall, stranding the venv half-updated.
 # ``cryptography`` is the canonical case: ``pilotage_cli.main`` used to import
 # it at startup while resolving external secret sources; ``PyYAML``'s
 # ``_yaml`` C extension is loaded by every CLI process (config parsing).
 # Keep this guard as defence-in-depth against future eager imports (new
 # secret sources, plugins absorbed into core, refactors of the startup
-# order) — but the guard must be HONEST (#86735/#86780/#86781: a preflight
+# order) — but the guard must be HONEST //: a preflight
 # that fired on every run, before the fetch, re-bricked the exact flow it
 # was meant to protect).  Two honesty gates:
 #
@@ -2858,7 +2858,7 @@ def _dependency_sync_would_rewrite(dist_name: str) -> bool | None:
 
     Never raises.  Callers treat ``None`` as fail-OPEN (no deferral): a
     module in the registry can be loaded by every process (PyYAML), so
-    deferring on uncertainty would recreate the #86735 always-firing loop.
+    deferring on uncertainty would recreate the always-firing loop.
     """
     try:
         from importlib import metadata as _ilmd
@@ -2912,7 +2912,7 @@ def _detect_self_loaded_native_modules() -> list[str]:
     keep using an unlinked inode, so self-locking is a Windows-only hazard).
     A loaded module whose installed version already satisfies the on-disk
     pyproject pins is NOT reported: the dependency sync will not touch its
-    files, so there is no swap at risk (#86735 — the always-firing variant
+    files, so there is no swap at risk — the always-firing variant
     of this preflight bricked every Windows update).  Never raises.
     """
     if not _m()._is_windows():
@@ -2925,7 +2925,7 @@ def _detect_self_loaded_native_modules() -> list[str]:
         # (unreadable/unparseable pyproject, no pin found) must fail OPEN:
         # PyYAML is loaded in every CLI process, so treating unknown as
         # at-risk would re-create the exact always-firing loop this guard's
-        # first version caused (#86735). The downside of a missed deferral
+        # first version caused. The downside of a missed deferral
         # is the pre-existing failure mode — a mid-sync os error 5 that the
         # marker recovery already handles — which is strictly less harmful
         # than an update that can never run.
@@ -3219,7 +3219,7 @@ def _pause_windows_gateways_for_update() -> dict | None:
     # its own argv. Unmapped gateways are ones with no profile→PID-file mapping
     # — e.g. a Windows Scheduled Task running ``pythonw.exe -m pilotage_cli.main
     # gateway run``. Without this snapshot they were force-killed and never
-    # restarted (the "Restart manually after update" dead-end from #50090).
+    # restarted (the "Restart manually after update" dead-end from).
     unmapped: list[dict] = []
     for pid in unmapped_pids:
         argv = None
@@ -3281,7 +3281,7 @@ def _cold_start_windows_gateway_after_update() -> None:
 
     A successful ``Popen`` only proves the process was created, not that it
     survived (e.g. a Windows job object denying breakaway kills it before it
-    logs anything — #84185). So the success line is gated on the same
+    logs anything). So the success line is gated on the same
     post-spawn liveness poll every other ``_spawn_detached`` caller uses
     (``gateway_windows._report_gateway_start``), instead of being printed
     unconditionally from the returned PID.
@@ -3325,7 +3325,7 @@ def _for_each_systemd_gateway_unit(
 
     ``subprocess.TimeoutExpired`` raised by ``process_unit`` is isolated to
     that unit via ``on_unit_timeout`` so one wedged systemctl call cannot
-    abort the rest of the fleet (#68523).
+    abort the rest of the fleet.
     """
     for line in (list_units_stdout or "").strip().splitlines():
         parts = line.split()
@@ -3387,7 +3387,7 @@ def _surviving_gateway_pids_after_failed_restart():
 def _warn_gateway_restart_phase_aborted(exc: BaseException, pids) -> None:
     """Print a recovery warning when the whole restart phase raised.
 
-    Issue #78574: the gateway auto-restart phase was wrapped in a blanket
+: the gateway auto-restart phase was wrapped in a blanket
     ``except Exception`` that only logged at debug level, so an early failure
     (e.g. importing ``pilotage_cli.gateway`` from the freshly pulled checkout)
     erased every drain/restart line from the update output. The update still
@@ -3415,8 +3415,8 @@ def _refresh_windows_gateway_launchers() -> None:
     ``pilotage update`` never touched them, so installs created before the
     hidden-console rework (aa2ae36c3f) kept launching the gateway through
     ``pythonw.exe`` forever: every descendant spawn flashed a conhost
-    (#54220/#56747) and, since #70344, the console-less gateway died at
-    startup with ``RuntimeError: sys.stderr is None`` (#71671).
+    /) and, since, the console-less gateway died at
+    startup with ``RuntimeError: sys.stderr is None``.
 
     The task's /TR points at a stable script path, so rewriting the files in
     place retargets the task without any schtasks call (no UAC needed).
@@ -3441,19 +3441,19 @@ def _refresh_bootstrap_cache_scripts(branch: str = "main") -> None:
 
     The Desktop GUI updater (``pilotage-setup.exe``) executes
     ``$PILOTAGE_HOME/bootstrap-cache/install-<ref>.ps1`` (or ``.sh``) for its
-    repair/bootstrap stages. Installer binaries built before the #67193
+    repair/bootstrap stages. Installer binaries built before the
     cache-refresh fix (June 2026 and earlier) NEVER re-download a cached
     branch-ref script — ``install-main.ps1`` cached at install time is
     reused forever, executing months-stale code with long-fixed bugs (the
     2026-08-09 incident: a June 4 cached script's venv stage lacked the
-    #81327 process-tree sweep and died on ``Access denied``). The binary
+    process-tree sweep and died on ``Access denied``). The binary
     has no self-update path, so the poisoned cache outlives every
     ``pilotage update``.
 
     Overwriting the cached script for *branch* with the freshly pulled
     ``scripts/install.ps1`` / ``scripts/install.sh`` on every update turns
     the stale binary's unconditional reuse into a feature: it "reuses" a
-    file this function keeps permanently current. Post-#67193 installers
+    file this function keeps permanently current. Post- installers
     re-download on each run anyway, so for them this is a harmless
     pre-seed of the same bytes.
 
@@ -3472,7 +3472,7 @@ def _refresh_bootstrap_cache_scripts(branch: str = "main") -> None:
       caller passing a SHA as the branch).
 
     The .ps1 copy gets a UTF-8 BOM to match the installer's cache format
-    (#67193 encoding fix). Best-effort: a failed refresh must never fail
+     encoding fix). Best-effort: a failed refresh must never fail
     the update.
     """
     try:
@@ -3498,7 +3498,7 @@ def _refresh_bootstrap_cache_scripts(branch: str = "main") -> None:
             data = src.read_bytes()
             if kind == "ps1" and not data.startswith(b"\xef\xbb\xbf"):
                 # Match the installer's cache format: PowerShell needs the
-                # UTF-8 BOM or localized/em-dash text mis-decodes (#67193).
+                # UTF-8 BOM or localized/em-dash text mis-decodes.
                 data = b"\xef\xbb\xbf" + data
             if cached.read_bytes() == data:
                 continue  # already current
@@ -3633,7 +3633,7 @@ def _normalize_managed_eol(git_cmd, repo_root):
     renormalizes this repo's LF text files to CRLF in the working tree. That
     breaks ``git checkout`` on update with "Your local changes would be
     overwritten", so ``install.ps1`` pins ``core.autocrlf=false`` on the managed
-    clone (#67730). Checkouts created before that landed never got the pin and
+    clone. Checkouts created before that landed never got the pin and
     cannot receive it — the bootstrap installer reuses its build-pinned
     ``install.ps1`` forever — so ``pilotage update``, which ships with the checkout
     itself, is the only path left that can fix them.
@@ -3785,7 +3785,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
     # On Windows, abort early if another pilotage.exe is holding the venv shim
     # open. Continuing would result in a string of WinError 32 warnings and
     # then either a deferred-rename leftover or a failed git-pull fast path
-    # that silently falls back to the slower ZIP route. See issue #26670.
+    # that silently falls back to the slower ZIP route. See.
     if _m()._is_windows() and not getattr(args, "force", False):
         scripts_dir = _m()._venv_scripts_dir()
         if scripts_dir is not None:
@@ -3853,10 +3853,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
     # Self-lock deferral moved: the venv-holder sweep above excludes this
     # process by design (a CLI `pilotage update` IS the venv python), and an
     # updater that has imported a native venv extension cannot rewrite its
-    # own mapped .pyd (#83569). That check used to run HERE — before the
+    # own mapped.pyd. That check used to run HERE — before the
     # fetch — but firing pre-fetch meant a deferral stranded the user on the
     # OLD checkout, and any startup path that eagerly loaded cryptography
-    # turned every Windows update into an exit-2 loop (#86735/#86780/#86781).
+    # turned every Windows update into an exit-2 loop //).
     # It now runs via _abort_dependency_sync_if_self_locked() after the code
     # swap, immediately before the dependency sync — the only phase the lock
     # can actually break — and only when the sync would truly rewrite the
@@ -3873,7 +3873,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         else:
             print("✗ Not a git repository. Please reinstall:")
             print(
-                "  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+                " curl -fsSL | bash"
             )
             sys.exit(1)
 
@@ -4030,7 +4030,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
         # Check if there are updates. On shallow checkouts `rev-list --count`
         # walks the truncated graph and can report the entire remote ancestry
-        # (e.g. "Found 9980 new commit(s)" on a depth-1 install — #53479).
+        # (e.g. "Found 9980 new commit(s)" on a depth-1 install).
         # The zero/nonzero gate is still sound (HEAD == origin/<branch> counts
         # 0), so keep it, but treat the shallow NUMBER as unknown and recover
         # the real one via the GitHub compare API when possible.
@@ -4121,7 +4121,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 print("⚠ Checkout is current, but the venv is unhealthy:")
                 print(f"  {detail}")
                 print("→ Repairing Python dependencies...")
-                # Self-lock deferral (#86735): the repair rewrites the venv
+                # Self-lock deferral: the repair rewrites the venv
                 # too — same mapped-extension hazard as the update sync.
                 _m()._abort_dependency_sync_if_self_locked(_windows_gateway_resume)
                 _write_update_incomplete_marker()
@@ -4203,7 +4203,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         print("→ Pulling updates...")
         update_succeeded = False
         # Capture the pre-pull SHA so we can auto-roll-back if the new code
-        # has a syntax error in a critical-path file (PR #28452 incident:
+        # has a syntax error in a critical-path file ( incident:
         # orphan merge-conflict markers in pilotage_cli/config.py bricked
         # every user who ran ``pilotage update`` for the 7 minutes between
         # the bad commit and the fix landing).
@@ -4314,7 +4314,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
         _invalidate_update_cache()
 
-        # Verify HEAD actually moved (issue #79678). ``merge --ff-only``
+        # Verify HEAD actually moved. ``merge --ff-only``
         # succeeding only means the merge completed, not that the update
         # applied: a checkout that is pinned to a raw SHA (detached HEAD) can
         # report "N new commit(s)" against origin yet still sit on the old
@@ -4358,7 +4358,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # breaks on this machine, keep base deps and reinstall the remaining extras
         # individually so update does not silently strip working capabilities.
         #
-        # Self-lock deferral (relocated preflight — #86735): if THIS process
+        # Self-lock deferral (relocated preflight): if THIS process
         # holds a native extension the sync must rewrite, defer NOW — after
         # the code swap, so only the dependency install is pending and the
         # next fresh launch completes it via the marker.
@@ -4429,7 +4429,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # Core ``.[all]`` install finished. Clear the generic core breadcrumb
         # before the lazy-refresh phase — that phase uses its own marker so a
         # later lazy failure cannot be "healed" by clearing the core marker
-        # based on a narrow 7-package import probe (#58004 review).
+        # based on a narrow 7-package import probe review).
         _m()._clear_update_incomplete_marker()
 
         # The update process is still the old Python interpreter process. Run
@@ -4437,7 +4437,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # refresh, which imports newly-pulled modules that may depend on fresh
         # symbols in pilotage_constants or lazy_deps. The dependency install
         # above may also have regenerated bytecode from build-cache copies —
-        # this second sweep catches those stragglers (#60242, #65240).
+        # this second sweep catches those stragglers.
         removed = _m()._clear_bytecode_cache(_m().PROJECT_ROOT)
         if removed:
             print(
@@ -4448,7 +4448,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         _m()._reload_updated_runtime_modules()
 
         # Upgrade pip before lazy refreshes — stale pip can fail source builds
-        # and leave partially-written packages (#57828).
+        # and leave partially-written packages.
         _write_lazy_refresh_incomplete_marker()
         _m()._upgrade_pip_before_lazy_refresh(install_prefix, env=lazy_env)
 
@@ -4475,14 +4475,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
         # Heal the active memory provider's bridge packages last — the core
         # reinstall + lazy refresh above may have stripped or downgraded
-        # plugin.yaml-declared deps that aren't in extras (#53272, #70636).
+        # plugin.yaml-declared deps that aren't in extras.
         _m()._refresh_active_memory_provider_dependencies()
 
         # Everything that can legitimately produce a transient ImportError has
         # now run (bytecode sweep, dependency reinstall, lazy refresh), so a
         # module that still won't import is real breakage. Warn only — never
         # roll back here: `cannot import name X` is also the signature of the
-        # stale-bytecode class (#6207, #60242), and the launch-time sweep in
+        # stale-bytecode class, and the launch-time sweep in
         # _sweep_stale_bytecode_if_checkout_changed() self-heals that on the
         # next run. A destructive reset would undo a good update over a state
         # that fixes itself.
@@ -4494,12 +4494,12 @@ def _cmd_update_impl(args, gateway_mode: bool):
             print(f"  ⚠ {failing_module} still fails to import after updating:")
             print(f"      {import_error}")
             print("    Run `pilotage update` again — if it persists, reinstall:")
-            print("    https://hermes-agent.nousresearch.com")
+            print(" ")
 
         print()
         print("✓ Code updated!")
 
-        # ── Post-update state.db integrity guard (#68474) ─────────────────
+        # ── Post-update state.db integrity guard ─────────────────
         # Verify that state.db survived the update intact.  If the live file
         # is now corrupted (zeroed, missing header, integrity failure),
         # automatically restore from the pre-update snapshot rather than
@@ -4662,7 +4662,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             pass  # profiles module not available or no profiles
 
         # Backfill per-profile .env files for profiles created before the
-        # .env-seeding fix (#44792). Copies the default install's .env so
+        #.env-seeding fix. Copies the default install's.env so
         # those profiles keep the credentials they were effectively using.
         try:
             from pilotage_cli.profiles import backfill_profile_envs
@@ -4699,7 +4699,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # ``DEFAULT_CONFIG["_config_version"]`` is the OLD value and
         # ``check_config_version()`` reports ``(33, 33)`` — "up to date" —
         # even though the freshly-pulled code has v34 with a migration to
-        # run. The personality reset migration (#81946) was silently skipped
+        # run. The personality reset migration was silently skipped
         # this way, leaving ``display.personality: kawaii`` active after
         # updates that should have reset it.
         print()
@@ -4836,8 +4836,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
         # Safety net: config-version migrations have been observed to leave
         # cron/jobs.json valid-but-empty, silently dropping every scheduled
-        # job (issue #34600). The desktop scheduler can also overwrite with
-        # its own small set, causing partial loss (issue #52144). If the
+        # job. The desktop scheduler can also overwrite with
+        # its own small set, causing partial loss. If the
         # live file now has fewer jobs than the pre-update snapshot, restore
         # it and warn loudly.
         try:
@@ -4924,7 +4924,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # so an exception raised before we touch any gateway keeps this empty
         # (nothing to fail closed on), while a failure after we have stopped a
         # discovered gateway lets the handler fail closed on an empty survivor
-        # probe rather than reporting a clean update (#78574).
+        # probe rather than reporting a clean update.
         _pre_restart_gateway_pids: list | None = []
 
         # Auto-restart ALL gateways after update.
@@ -5086,7 +5086,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
             # Wait budget for graceful SIGUSR1 restarts.  In-band restart
             # may defer stop() until active turns finish
-            # (``restart_after_turn_timeout``, #77184) and then spend up to
+            # (``restart_after_turn_timeout``,) and then spend up to
             # ``restart_drain_timeout`` inside stop(). Cover both phases so
             # we don't fall back to a hard kill while the gateway is still
             # patiently waiting for the requesting turn. On older systemd
@@ -5108,7 +5108,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # Record which gateways are running before any stop/drain, so a
             # later failure that leaves the survivor probe empty can still be
             # recognised as "a running gateway was stopped and did not come
-            # back" rather than "nothing was running" (#78574). Best-effort:
+            # back" rather than "nothing was running". Best-effort:
             # if the probe itself raises, leave the snapshot as-is (the
             # survivor probe's own None result already fails closed).
             try:
@@ -5215,13 +5215,13 @@ def _cmd_update_impl(args, gateway_mode: bool):
                                 == GATEWAY_LOOP_WEDGED
                             ):
                                 # Loop-liveness probe says the gateway's event
-                                # loop is provably dead (#81642): SIGUSR1 can
+                                # loop is provably dead: SIGUSR1 can
                                 # never drain it, so waiting the full budget
                                 # (180s default) only wedges the update too.
                                 # Bounded escalation (SIGTERM grace → SIGKILL,
                                 # ~10s) then restart the unit. A busy gateway
                                 # keeps a fresh heartbeat and never takes this
-                                # path — its drain (incl. the #86684 cron
+                                # path — its drain (incl. the cron
                                 # floor) is untouched.
                                 print(
                                     f"  ⚠ {svc_name}: gateway event loop is "
@@ -5357,7 +5357,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         # dead.  Clearing the failed state first makes
                         # the restart idempotent.  Mirrors the recovery
                         # path in `pilotage gateway restart`
-                        # (`systemd_restart()`) as of PR #20949.
+                        # (`systemd_restart`) as of.
                         subprocess.run(
                             _manage_cmd + ["reset-failed", svc_name],
                             capture_output=True,
@@ -5428,7 +5428,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
                     def _on_unit_timeout(svc_name: str, exc: subprocess.TimeoutExpired) -> None:
                         # Isolate the timeout to this unit and keep going
-                        # (#68523). A scope-wide handler used to abort every
+                        # A scope-wide handler used to abort every
                         # later gateway and leave the fleet on mixed code.
                         failed_or_stale_units.append(svc_name)
                         print(
@@ -5497,7 +5497,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 # Announce the drain first: this wait can hold for the full
                 # budget per gateway with no other output, and on surfaces
                 # that stream update progress (the desktop updater most of
-                # all) the silence reads as a hung update (#44515).
+                # all) the silence reads as a hung update.
                 print(
                     f"  → {proc.profile}: draining gateway PID {pid} "
                     f"(up to {int(_drain_budget)}s)..."
@@ -5510,12 +5510,12 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
                 if probe_gateway_loop_liveness(pid) == GATEWAY_LOOP_WEDGED:
                     # Loop-liveness probe: this gateway's event loop is
-                    # provably dead (#81642) — SIGUSR1/SIGTERM shutdown can
+                    # provably dead — SIGUSR1/SIGTERM shutdown can
                     # never run, so the drain wait would burn the full budget
                     # and stall the update. Bounded stop instead (SIGTERM
                     # grace → SIGKILL, ~10s). A busy-but-alive gateway keeps
                     # a fresh heartbeat and never takes this branch, so live
-                    # drains (incl. the #86684 cron floor) are unaffected.
+                    # drains (incl. the cron floor) are unaffected.
                     print(
                         f"  ⚠ {proc.profile}: gateway event loop is "
                         "unresponsive — skipping drain, forcing a bounded stop..."
@@ -5603,7 +5603,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 pass
 
             # --- Post-restart survivor sweep -----------------------------
-            # Issue #17648: some gateways ignore SIGTERM (stuck drain,
+            #: some gateways ignore SIGTERM (stuck drain,
             # blocked I/O, PID dead but zombie).  The detached profile
             # watchers wait 120s for the old PID to exit — if it never
             # does, no respawn happens and the user keeps hitting
@@ -5649,7 +5649,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # An exception escaping the whole phase means the drain/restart
             # output the user relies on never printed. Don't let that pass for
             # a clean update: surface it and treat the fleet as stale unless we
-            # can positively prove no gateway is running (#78574).
+            # can positively prove no gateway is running.
             #
             # A positive-empty ``_surviving`` is only proof-of-safety when
             # nothing was running before we touched anything. If a gateway was
@@ -5674,7 +5674,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # Warn if legacy Pilotage gateway unit files are still installed.
         # When both pilotage.service (from a pre-rename install) and the
         # current pilotage-gateway.service are enabled, they SIGTERM-fight
-        # for the same bot token (see PR #11909). Flagging here means
+        # for the same bot token (see). Flagging here means
         # every `pilotage update` surfaces the issue until the user migrates.
         try:
             from pilotage_cli.gateway import (
@@ -5741,7 +5741,7 @@ def _restart_phase_failure_is_incomplete(surviving, pre_restart_pids) -> bool:
       ONLY when nothing was running before we touched anything. If a gateway
       was discovered pre-restart (``pre_restart_pids`` non-empty, or ``None``
       meaning the pre-state could not be read), it was stopped without a
-      verified replacement, so we still fail closed (#78574).
+      verified replacement, so we still fail closed.
     """
     if surviving is None or surviving:
         return True

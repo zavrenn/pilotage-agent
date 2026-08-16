@@ -973,7 +973,7 @@ class ShellFileOperations(FileOperations):
         byte it cannot decode, including a multibyte character cut in half by
         ``head -c``. Wrapping the sample in base64 lets the original bytes
         survive the transport, so binary detection can happen at the byte
-        layer where it is well-defined (#80308 and friends).
+        layer where it is well-defined and friends).
 
         Returns the sample bytes, or ``None`` when the transport could not
         produce clean base64 (exotic shells without ``base64``); callers fall
@@ -997,7 +997,7 @@ class ShellFileOperations(FileOperations):
 
     @staticmethod
     def _is_likely_binary_bytes(sample: bytes) -> bool:
-        """Byte-layer binary detection (the boundary for the #80308 class).
+        """Byte-layer binary detection (the boundary for the class).
 
         Contract: a file is text when its sample is valid UTF-8, allowing one
         incomplete multibyte sequence at the very end (an artifact of cutting
@@ -1212,7 +1212,7 @@ class ShellFileOperations(FileOperations):
         #  - brand-new targets get `chmod "=rw"` — the POSIX who-less
         #    symbolic form, which sets rw minus the process umask (e.g.
         #    0644 under umask 022) instead of mktemp's hardcoded 0600
-        #    (#70856).  Deliberately NOT shell arithmetic on `$(umask)`:
+        # Deliberately NOT shell arithmetic on `$(umask)`:
         #    zsh (reachable via _find_bash's $SHELL fallback) parses
         #    leading-zero constants as decimal and silently computes a
         #    garbage mode, while `chmod "=rw"` is spec-identical in
@@ -1251,7 +1251,7 @@ class ShellFileOperations(FileOperations):
             '[ -n "$m" ] && chmod "$m" "$tmp" 2>/dev/null || true; '
             "fi; "
             'cat > "$tmp"; '
-            # new file: umask-default perms instead of mktemp's 0600 (#70856).
+            # new file: umask-default perms instead of mktemp's 0600.
             # Runs AFTER cat so a write-masking umask can't EACCES the stream;
             # quoted "=rw" so zsh doesn't =word-expand it.
             'if [ ! -e "$t" ]; then chmod "=rw" "$tmp" 2>/dev/null || true; fi; '

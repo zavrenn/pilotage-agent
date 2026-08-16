@@ -344,7 +344,7 @@ def _prompt_inline_memory_approval(summary: str, detail: str) -> Optional[bool]:
     commands (``tools.terminal_tool.set_approval_callback``). The callback is
     invoked directly — NOT via ``prompt_dangerous_approval`` — because that
     wrapper falls back to ``input()`` (deadlock-prone under prompt_toolkit,
-    see #15216) and converts callback errors into a silent deny; here a
+    see) and converts callback errors into a silent deny; here a
     failed prompt must stage the write instead.
     """
     try:

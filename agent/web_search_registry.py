@@ -267,7 +267,7 @@ def _disabled_web_plugin_for(configured: Optional[str] = None, *, capability: Op
     misleading "No web extract provider configured. Set web.extract_backend
     to ..." error — even though the backend IS configured correctly. The
     real fix is to re-enable the plugin. This helper detects that case so
-    the dispatcher can point the user at the actual cause (issue #40190
+    the dispatcher can point the user at the actual cause (
     follow-up: pi314's disabled-plugin symptom).
 
     Pass ``capability`` ("search" | "extract") to resolve the configured

@@ -32,7 +32,7 @@ from pilotage_cli.providers import custom_provider_slug
 # AWS cross-region inference profile prefixes. Any geo-prefixed profile only
 # routes from endpoints in its own geography, so the Bedrock picker must not
 # offer (e.g.) us.* profiles to an eu-central-2 endpoint — selecting one
-# produces a config AWS rejects regardless of credentials (#28156).
+# produces a config AWS rejects regardless of credentials.
 # global.* routes from everywhere. Full set per the AWS cross-region
 # inference docs.
 BEDROCK_GEO_PREFIXES = (
@@ -1060,7 +1060,7 @@ def _model_flow_custom(config):
             print(f"Invalid context length: {context_length_str} — will auto-detect.")
             context_length = None
 
-    # The key goes to .env and config.yaml only references it (#69449). Keyed
+    # The key goes to.env and config.yaml only references it. Keyed
     # on host:port so two servers on one machine keep separate credentials.
     custom_key_env = ""
     if effective_key:
@@ -1095,7 +1095,7 @@ def _model_flow_custom(config):
         # Sync the caller's config dict so the setup wizard's final
         # save_config(config) preserves our model settings.  Without
         # this, the wizard overwrites model.provider/base_url with
-        # the stale values from its own config dict (#4172).
+        # the stale values from its own config dict.
         config["model"] = dict(model)
 
         print(f"Default model set to: {model_name} (via {effective_url})")
@@ -1531,7 +1531,7 @@ def _model_flow_named_custom(config, provider_info):
     # disabled, use the configured ``models:`` list verbatim and skip the
     # live /models probe. This lets operators restrict the picker to the
     # subset their plan actually serves instead of the endpoint's full
-    # catalog (#18726: Baidu Qianfan returns 100+ models for a 2-3 model
+    # catalog (: Baidu Qianfan returns 100+ models for a 2-3 model
     # plan). Same semantics as the slash-command picker (model_switch.py
     # sections 3 & 4): default discovers, false keeps the explicit list.
     discover = provider_info.get("discover_models", True)
@@ -1684,7 +1684,7 @@ def _model_flow_named_custom(config, provider_info):
                 # key from ``key_env`` directly, and writing the resolved
                 # secret (or even a synthesized template) would silently
                 # downgrade credential hygiene on entries that intentionally
-                # keep plaintext out of ``config.yaml``. See issue #15803.
+                # keep plaintext out of ``config.yaml``. See.
                 original_api_key_ref = str(
                     provider_info.get("api_key_ref", "") or ""
                 ).strip()
@@ -2452,7 +2452,7 @@ def _model_flow_bedrock(config, current_model=""):
 
         # Recommended models, matched geo-agnostically so an EU (eu.*) or
         # APAC (apac.*) picker pins its own region's profile of the same
-        # model rather than a us.* one it can't route to (#28156).
+        # model rather than a us.* one it can't route to.
         _RECOMMENDED_BASES = [
             "anthropic.claude-sonnet-4-6",
             "anthropic.claude-opus-4-6",

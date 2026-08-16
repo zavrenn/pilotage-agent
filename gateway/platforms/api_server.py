@@ -110,7 +110,7 @@ def _get_scoped_secret(name, default=None):
     *unscoped* under multiplexing, where a bare ``get_secret`` would raise
     ``UnscopedSecretError`` and crash this path; there ``os.environ`` is that
     profile's own value, so fall back to it. Same pattern as the Slack
-    ``SLACK_APP_TOKEN`` read (#59739) and
+    ``SLACK_APP_TOKEN`` read and
     ``gateway/platforms/whatsapp_common.py::_get_wsecret``.
     """
     try:
@@ -698,7 +698,7 @@ def _reap_disconnected_agent_processes(
 ) -> None:
     """Reap background processes an abandoned API-server turn created.
 
-    Mirrors the gateway-turn cleanup in ``gateway/run.py`` (#76115) for this
+    Mirrors the gateway-turn cleanup in ``gateway/run.py`` for this
     API-server surface, which runs its own agent lifecycle via ``_run_agent``
     and never passes through ``TurnRunner`` — so it needs its own trigger for
     the same baseline-diff reap. Fire-and-forget on a daemon thread so the
@@ -1369,7 +1369,7 @@ class APIServerAdapter(BasePlatformAdapter):
 
     # Same statelessness applies to the startup auto-resume prompt: no client
     # is waiting to answer "session restored — what next?", so a resumed turn
-    # should complete the interrupted work rather than acknowledge (#57056).
+    # should complete the interrupted work rather than acknowledge.
     interactive_resume: bool = False
 
     def __init__(self, config: PlatformConfig):
@@ -1411,7 +1411,7 @@ class APIServerAdapter(BasePlatformAdapter):
         # default rather than switching the executing model.  Requests that
         # send an explicit ``provider`` — and the Pilotage-native session-chat
         # and /v1/runs endpoints — are always honored regardless of this flag.
-        # (Idea credit: PR #22825 by @mssteuer.)
+        # (Idea credit: by @mssteuer.)
         self._direct_model_requests: bool = _coerce_request_bool(
             extra.get("direct_model_requests"), default=False
         )
@@ -1444,7 +1444,7 @@ class APIServerAdapter(BasePlatformAdapter):
         # ONLY — never session_id, which rotates/is ephemeral for one-off API
         # server requests; "*" is the process-wide fallback), mirroring
         # GatewayRunner._last_resolved_model in run.py — recovers from a
-        # transient empty model resolution (#35314) instead of building an
+        # transient empty model resolution instead of building an
         # agent with model="" that 400s every call until manual retry.
         self._last_resolved_model: Dict[str, str] = {}
         self._session_db_lock: Optional[asyncio.Lock] = None  # Single-flight for lazy init
@@ -1452,7 +1452,7 @@ class APIServerAdapter(BasePlatformAdapter):
         # (/v1/chat/completions, /v1/responses, /v1/runs). Read from
         # config.yaml gateway.api_server.max_concurrent_runs; 0 disables
         # the cap. Bounds CPU / memory / upstream-LLM-quota exhaustion
-        # from a request flood (#7483).
+        # from a request flood.
         self._max_concurrent_runs: int = self._resolve_max_concurrent_runs()
         # Number of in-flight runs on the non-streaming chat/responses paths
         # (the /v1/runs path tracks its own in-flight set via
@@ -2009,7 +2009,7 @@ class APIServerAdapter(BasePlatformAdapter):
         enter the DEFAULT profile's scope instead of a no-op: api_server is a
         port-binding platform that lives on the default profile, and with
         multiplex fail-closed ``get_secret`` active, an unscoped agent run
-        raises ``UnscopedSecretError`` on its first credential read (#61276).
+        raises ``UnscopedSecretError`` on its first credential read.
         Single-profile gateways keep the no-op — ``get_secret`` falls through
         to ``os.environ`` there, unchanged.
         """
@@ -2856,7 +2856,7 @@ class APIServerAdapter(BasePlatformAdapter):
             except Exception:
                 pass
 
-        # Final safety net (#35314): if resolution still produced an empty
+        # Final safety net: if resolution still produced an empty
         # model — e.g. a transient config-cache miss — reuse the last model
         # successfully resolved for this session (or, failing that, the most
         # recent one resolved process-wide). Building an agent with model=""
@@ -2877,7 +2877,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 logger.warning(
                     "Empty model resolved for session=%s — recovering "
                     "last-known-good model %s (config read likely returned "
-                    "empty; see #35314)",
+                    "empty; see)",
                     _resolved_key, _recovered,
                 )
                 model = _recovered
@@ -2892,7 +2892,7 @@ class APIServerAdapter(BasePlatformAdapter):
         max_iterations = _current_max_iterations()
 
         # Load fallback provider chain so the API server platform has the
-        # same fallback behaviour as Telegram/Discord/Slack (fixes #4954).
+        # same fallback behaviour as Telegram/Discord/Slack (fixes).
         fallback_model = (
             None
             if confirmed_runtime_lock
@@ -4123,7 +4123,7 @@ class APIServerAdapter(BasePlatformAdapter):
     @_admit_api_agent_request
     async def _handle_chat_completions(self, request: "web.Request") -> "web.Response":
         """POST /v1/chat/completions — OpenAI Chat Completions format."""
-        # Bound total in-flight agent runs (configurable; #7483).
+        # Bound total in-flight agent runs (configurable;).
         limited = self._concurrency_limited_response()
         if limited is not None:
             return limited
@@ -4297,8 +4297,8 @@ class APIServerAdapter(BasePlatformAdapter):
                 Replaces the old ``tool_progress_callback("tool.started",
                 ...)`` emit so SSE consumers receive a single event per
                 tool start, carrying both the legacy ``tool``/``emoji``/
-                ``label`` payload (for #6972 frontends) and the new
-                ``toolCallId``/``status`` correlation fields (#16588).
+                ``label`` payload (for frontends) and the new
+                ``toolCallId``/``status`` correlation fields.
 
                 Skips tools whose names start with ``_`` so internal
                 events (``_thinking``, …) stay off the wire — matching
@@ -4410,7 +4410,7 @@ class APIServerAdapter(BasePlatformAdapter):
 
         # Decide finish_reason. OpenAI uses "length" for truncation, "stop"
         # for normal completion, and downstream SDKs accept "error" / custom
-        # codes. See issue #22496.
+        # codes. See.
         if is_partial and err_msg and "truncat" in err_msg.lower():
             finish_reason = "length"
         elif is_failed or (not completed and err_msg):
@@ -4530,8 +4530,8 @@ class APIServerAdapter(BasePlatformAdapter):
                 Tagged tuples ``("__tool_progress__", payload)`` are sent
                 as a custom ``event: pilotage.tool.progress`` SSE event so
                 frontends can display them without storing the markers in
-                conversation history.  See #6972 for the original event,
-                #16588 for the ``toolCallId``/``status`` lifecycle fields.
+                conversation history. See for the original event,
+                for the ``toolCallId``/``status`` lifecycle fields.
                 """
                 if isinstance(item, tuple) and len(item) == 2 and item[0] == "__tool_progress__":
                     await response.write(_sse_frame(item[1], event="pilotage.tool.progress"))
@@ -5246,7 +5246,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     pass
                 # Same abandonment as a client disconnect: the run will never
                 # be resumed, so reap the background processes it created
-                # (#76115). Epoch-gated; no-op when the turn already
+                # Epoch-gated; no-op when the turn already
                 # finished and cleared its markers.
                 _reap_disconnected_agent_processes(
                     agent, source="api_server_sse_cancelled"
@@ -5285,7 +5285,7 @@ class APIServerAdapter(BasePlatformAdapter):
     @_admit_api_agent_request
     async def _handle_responses(self, request: "web.Request") -> "web.Response":
         """POST /v1/responses — OpenAI Responses API format."""
-        # Bound total in-flight agent runs (configurable; #7483).
+        # Bound total in-flight agent runs (configurable;).
         limited = self._concurrency_limited_response()
         if limited is not None:
             return limited
@@ -5973,7 +5973,7 @@ class APIServerAdapter(BasePlatformAdapter):
         Emitting the authoritative per-turn transcript on ``run.completed`` lets
         any SSE consumer reconcile its live view against ground truth without a
         separate ``GET /messages`` round-trip.  Purely additive: clients that
-        ignore the field are unaffected.  Refs #34703.
+        ignore the field are unaffected. Refs.
         """
         agent_messages = result.get("messages") if isinstance(result, dict) else None
         if not isinstance(agent_messages, list) or not agent_messages:
@@ -6098,7 +6098,7 @@ class APIServerAdapter(BasePlatformAdapter):
         This is the SINGLE structural chokepoint every API-server agent-entry
         path must use to seed session context — it hardwires
         ``platform="api_server"`` and ``async_delivery=False`` so a new route
-        physically cannot reintroduce the silent-no-op bug (#10760) by
+        physically cannot reintroduce the silent-no-op bug by
         forgetting to mark the channel as non-delivering. There is no
         ``async_delivery`` parameter to get wrong; the stateless HTTP path can
         never wake the agent after the turn ends, on ANY route.
@@ -6209,11 +6209,11 @@ class APIServerAdapter(BasePlatformAdapter):
                     effective_task_id = session_id or str(uuid.uuid4())
                     # Baseline for selective background-process reaping on
                     # SSE client disconnect — mirrors gateway/run.py's
-                    # gateway-turn cleanup (#76115); this API-server surface
+                    # gateway-turn cleanup; this API-server surface
                     # runs its own agent lifecycle and doesn't go through
                     # TurnRunner, so it needs its own baseline.
                     _publish_turn_process_ownership(agent, effective_task_id)
-                    # Shutdown interrupt coverage (#63529).  Registering here,
+                    # Shutdown interrupt coverage. Registering here,
                     # once, covers every _run_agent() caller — the same reason
                     # the _ProviderAuthResolutionError handler below lives here
                     # rather than in each route.  Only two callers pass
@@ -6232,7 +6232,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     }
                     # Include the effective session ID in the result so callers
                     # (e.g. X-Pilotage-Session-Id header) can track compression-
-                    # triggered session rotations. (#16938)
+                    # triggered session rotations.
                     _eff_sid = getattr(agent, "session_id", session_id)
                     if isinstance(_eff_sid, str) and _eff_sid:
                         result["session_id"] = _eff_sid
@@ -6240,7 +6240,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     # so _build_response_conversation_history can skip the
                     # prior-concatenation path and store the compressed transcript
                     # directly.  Rotation mode changes agent.session_id; in-place
-                    # mode sets _last_compaction_in_place (see #38763).
+                    # mode sets _last_compaction_in_place.
                     _compacted_in_place = bool(getattr(agent, "_last_compaction_in_place", False))
                     _session_rotated = (
                         isinstance(_eff_sid, str) and isinstance(session_id, str)
@@ -6650,7 +6650,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 def _approval_notify(approval_data: Dict[str, Any]) -> None:
                     event = dict(approval_data or {})
                     # Redact credentials from the command before it enters the
-                    # SSE/API event stream — same egress bug as #48456, second
+                    # SSE/API event stream — same egress bug as, second
                     # transport: API/desktop clients would otherwise receive the
                     # raw command Tirith flagged. Reuse the gateway seam.
                     if "command" in event:
@@ -6711,7 +6711,7 @@ class APIServerAdapter(BasePlatformAdapter):
                             # /v1/runs runs its own agent lifecycle (no
                             # TurnRunner, no _run_agent) — record turn process
                             # ownership so stop/cancel can reap only the
-                            # background processes this run created (#76115).
+                            # background processes this run created.
                             _publish_turn_process_ownership(agent, effective_task_id)
                             r = agent.run_conversation(
                                 user_message=user_message,
@@ -6759,7 +6759,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     )
                 # Check for structured failure (non-retryable client errors like
                 # 401/400 return failed=True instead of raising, so the except
-                # block below never fires — issue #15561).
+                # block below never fires).
                 elif isinstance(result, dict) and result.get("failed"):
                     error_msg = _redact_api_error_text(result.get("error") or "agent run failed")
                     _put_event_if_active({
@@ -7133,7 +7133,7 @@ class APIServerAdapter(BasePlatformAdapter):
             except Exception:
                 pass
             # The stopped run is abandoned — reap only the background
-            # processes it created (#76115). Epoch-gated inside, so a
+            # processes it created. Epoch-gated inside, so a
             # concurrent run sharing the same session_id keeps its own
             # processes; no-op if the run already finished and cleared
             # its ownership markers.
@@ -7250,7 +7250,7 @@ class APIServerAdapter(BasePlatformAdapter):
             # bare ``return False`` makes the reconnect watcher in
             # gateway.run treat it as retryable and loop forever at the
             # backoff cap, re-instantiating the adapter (and its
-            # ResponseStore sqlite connection) every retry (#38803: ~501
+            # ResponseStore sqlite connection) every retry (: ~501
             # leaked connections / 1002 fds over 2.5 days until EMFILE took
             # the whole gateway down). Non-retryable drops it from the
             # reconnect queue — same treatment as the port-conflict guard
@@ -7335,11 +7335,11 @@ class APIServerAdapter(BasePlatformAdapter):
             await self._runner.setup()
             # Bind directly instead of probing 127.0.0.1 first — the old
             # single-family pre-probe raced the real bind and reported a
-            # TIME_WAIT socket as "in use" (#10297), failing gateway
+            # TIME_WAIT socket as "in use", failing gateway
             # restarts for up to ~60s.
             #
             # SO_REUSEADDR is platform-dependent (same rationale as the
-            # webhook adapter, #65482):
+            # webhook adapter,):
             #   - macOS (BSD semantics): two sockets with SO_REUSEADDR can
             #     silently split traffic while both report success — disable.
             #   - Linux: SO_REUSEADDR only permits rebinding past TIME_WAIT
@@ -7364,7 +7364,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     # reconnect watcher in gateway.run treat it as retryable
                     # and loop forever at the backoff cap (observed: 1568+
                     # retries over 5 days across multi-profile setups all
-                    # defaulting to the same port, #52132), filling
+                    # defaulting to the same port,), filling
                     # errors.log and leaking the adapter's ResponseStore
                     # fds each retry. Non-retryable drops it from the
                     # reconnect queue; the operator recovers with
@@ -7404,7 +7404,7 @@ class APIServerAdapter(BasePlatformAdapter):
         every retry, so 2 fds/retry × 300s backoff cap ≈ 12 fds/hour, which
         exhausts the default 2560 fd limit after ~12h of failed reconnects
         and turns the whole gateway into a zombie
-        (OSError: [Errno 24] Too many open files, #37011).
+        (OSError: [Errno 24] Too many open files,).
         """
         self._mark_disconnected()
         if self._response_store is not None:

@@ -5,7 +5,7 @@ The ``pilotage`` console entry point is ``pilotage_cli.main:main``.  Importing
 via ``pilotage_cli.env_loader``, ``yaml`` via ``pilotage_cli.config``, ...).  In
 the exact failure state the update-recovery markers exist for — a failed lazy
 backend refresh or interrupted core install that wiped a core package's
-import files (#57828) — a normal launch crashes *while importing main.py*,
+import files — a normal launch crashes *while importing main.py*,
 before ``_recover_from_interrupted_install()`` can run.  The marker system is
 unreachable precisely when it is needed most.
 
@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 # Core packages a failed lazy ``uv pip install`` is known to leave with intact
-# distribution metadata but wiped import files (#57828).  ``module`` is what we
+# distribution metadata but wiped import files. ``module`` is what we
 # probe via a real import; ``attr`` guards against an empty/stub module.
 # main.py's marker-recovery path reuses these tables — keep them here (the
 # dependency-light module) so both layers probe and repair the same set.
@@ -100,7 +100,7 @@ def _certifi_bundle_broken() -> bool:
     distribution metadata (and even the module) intact while the bundled
     ``cacert.pem`` is gone or a dangling symlink — every TLS connection then
     fails with an opaque ``Could not find a suitable TLS CA certificate
-    bundle`` from deep inside httpx/requests (#29866). An attribute probe
+    bundle`` from deep inside httpx/requests. An attribute probe
     alone passes in that state, so validate the bundle path itself.
     """
     try:
@@ -123,7 +123,7 @@ def _probe_broken_packages() -> list[str]:
     in ``sys.modules``, so a post-repair retry in the same process works.
 
     certifi additionally gets a bundle-file check: the module can import
-    cleanly while ``cacert.pem`` is missing (#29866).
+    cleanly while ``cacert.pem`` is missing.
     """
     broken: list[str] = []
     for mod_name, attr in LAZY_REFRESH_IMPORT_PROBES:
@@ -167,7 +167,7 @@ def _base_interpreter_is_externally_managed() -> bool:
     stdlib (PEP 668), so ``python -m pip install`` aborts with
     ``externally-managed-environment``.  The early repair must then go
     through uv (or explicitly override pip) or the reinstall no-ops and the
-    venv stays broken (#83569).
+    venv stays broken.
     """
     try:
         import sysconfig
@@ -313,7 +313,7 @@ def recover_if_needed(
         # any native extension can be imported by this process.  The lazy
         # import-probe path below only proves main.py is importable; the core
         # install here guarantees the WHOLE dependency set is replaced while
-        # nothing pins venv .pyd files yet (#83569 self-lock: deferring the
+        # nothing pins venv.pyd files yet self-lock: deferring the
         # install to main()'s post-import recovery re-locks it on Windows).
         # Bounded retries: a persistently failing install must not hammer
         # every launch, so attempts past the ceiling are left for main.py's
@@ -416,7 +416,7 @@ def _complete_pending_core_install(root: Path, core_marker: Path) -> None:
     """Run the pending core install BEFORE main.py can import native modules.
 
     ``recover_if_needed`` invokes this when ``.update-incomplete`` exists —
-    a prior ``pilotage update`` (or the self-lock preflight, #83569) left the
+    a prior ``pilotage update`` (or the self-lock preflight,) left the
     dependency sync deliberately unfinished.  Completing it here matters on
     Windows: the deferral exists precisely because the process that wrote the
     marker had a native venv extension mapped; this process, running before

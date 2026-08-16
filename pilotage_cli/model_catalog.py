@@ -62,18 +62,11 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_CATALOG_URL = (
-    "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
-)
-# Fallback fetch chain. The Docusaurus site is served through Vercel, which
-# occasionally returns HTTP 403 + x-vercel-mitigated: challenge for non-
-# browser clients (urllib, curl). When that happens the disk cache goes
-# stale and new model releases never reach the picker. The raw GitHub URL
-# is the same manifest published from the same repo and is not bot-gated,
-# so we fall through to it whenever the primary URL fails.
-DEFAULT_CATALOG_FALLBACK_URLS: tuple[str, ...] = (
-    "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/website/static/api/model-catalog.json",
-)
+# Remote catalog fetching is DISABLED by default: Pilotage has no hosted
+# catalog yet. Set model_catalog.url (and enabled: true) in config.yaml to
+# point at a self-hosted manifest using the same schema.
+DEFAULT_CATALOG_URL = ""
+DEFAULT_CATALOG_FALLBACK_URLS: tuple[str, ...] = ()
 DEFAULT_TTL_HOURS = 1
 DEFAULT_FETCH_TIMEOUT = 8.0
 SUPPORTED_SCHEMA_VERSION = 1
@@ -125,6 +118,8 @@ def _cache_path() -> Path:
 
 def _fetch_manifest(url: str, timeout: float) -> dict[str, Any] | None:
     """HTTP GET the manifest URL and return a parsed dict, or None on failure."""
+    if not url:
+        return None
     try:
         req = urllib.request.Request(
             url,

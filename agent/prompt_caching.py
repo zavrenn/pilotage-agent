@@ -63,7 +63,7 @@ def _apply_cache_marker(msg: dict, cache_marker: dict, native_anthropic: bool = 
         if role == "user":
             stable_prefix = find_stable_prefix(content)
             if stable_prefix is not None:
-                # Builder-declared boundary (#81867): the scaffold carries the
+                # Builder-declared boundary: the scaffold carries the
                 # breakpoint, the volatile invocation tail rides unmarked so a
                 # changed ticket ID or timestamp no longer invalidates the
                 # whole skill body. Request-local only — the canonical session
@@ -123,7 +123,7 @@ def _build_marker(ttl: str) -> Dict[str, str]:
 # Alibaba-family providers (Qwen routes). Their context cache documents a
 # five-minute window (renewed on hit) and rejects the Anthropic 1h tier.
 # Shared with agent_runtime_helpers.anthropic_prompt_cache_policy so the
-# cache-policy opt-in and the TTL clamp can never desync (#84733).
+# cache-policy opt-in and the TTL clamp can never desync.
 ALIBABA_FAMILY_PROVIDERS = frozenset({
     "opencode",
     "opencode-zen",
@@ -137,7 +137,7 @@ def is_qwen_model(model: str) -> bool:
 
     Shared by the TTL clamp below and
     ``agent_runtime_helpers.anthropic_prompt_cache_policy`` so the
-    cache-policy opt-in and the clamp can never desync (#84733).
+    cache-policy opt-in and the clamp can never desync.
     """
     return "qwen" in (model or "").lower()
 
@@ -153,7 +153,7 @@ def effective_cache_ttl(
     Qwen/Alibaba context caching documents an explicit five-minute window
     (renewed on hit); the Anthropic ``1h`` tier is ignored/rejected there,
     so a configured ``1h`` regresses to ``5m`` instead of shipping a marker
-    the provider drops and creating a false 1h-cache expectation (#84733).
+    the provider drops and creating a false 1h-cache expectation.
     All other caching routes keep the requested TTL.
 
     ``None`` (caching active with no explicit tier) resolves to ``5m``.
@@ -236,7 +236,7 @@ def strip_anthropic_cache_control(
 
     Used before re-applying decoration after a mid-turn provider failover so
     the mutated, undecorated shape (image shrink / ASCII cleanup / etc.) is
-    preserved while markers match the *new* provider's cache policy (#72626).
+    preserved while markers match the *new* provider's cache policy.
 
     Flattening back to a plain string is restricted to the exact shapes
     :func:`apply_anthropic_cache_control` produces from string content —
@@ -263,13 +263,13 @@ def strip_anthropic_cache_control(
         content = msg.get("content")
         if not isinstance(content, list):
             continue
-        # Two-part skill-invocation split (#81867). The builder-declared
+        # Two-part skill-invocation split. The builder-declared
         # boundary is the only decoration that marks the *first* part of a
         # user message: list content otherwise receives its marker on the
         # last part, and the two-part [static, volatile] split is role-gated
         # to system. So the shape alone identifies it, and flattening stays
         # correct even when the prefix registry has since evicted the entry
-        # (failover re-decorates a request built many messages ago, #72626).
+        # (failover re-decorates a request built many messages ago,).
         skill_split_shape = (
             msg.get("role") == "user"
             and len(content) == 2

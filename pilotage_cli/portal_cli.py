@@ -28,7 +28,7 @@ from pilotage_cli.config import load_config
 
 DEFAULT_PORTAL_URL = "https://portal.nousresearch.com"
 SUBSCRIPTION_URL = "https://portal.nousresearch.com/manage-subscription"
-DOCS_URL = "https://hermes-agent.nousresearch.com/docs/user-guide/features/tool-gateway"
+DOCS_URL = ""
 
 
 def _cmd_status(args) -> int:

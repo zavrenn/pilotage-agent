@@ -256,7 +256,7 @@ def apply_migration(
     # is the only copy left. The load half above returns early when ``doc is
     # None``, so the next `pilotage migrate xai` reports nothing to migrate
     # rather than surfacing the damage. atomic_replace also keeps a symlinked
-    # config.yaml (dotfiles repo / managed deployment) intact (GitHub #16743).
+    # config.yaml (dotfiles repo / managed deployment) intact (GitHub).
     buf = io.StringIO()
     yaml.dump(doc, buf)
 

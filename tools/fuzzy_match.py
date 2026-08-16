@@ -46,7 +46,7 @@ UNICODE_MAP = {
     # space in CJK text) never match a model's ASCII-space old_string via
     # the precise strategies, falling through to the similarity-based
     # context_aware fallback — which can pick the wrong region and flattens
-    # the file's Unicode on replacement.  (anomalyco/opencode#38133 corpus)
+    # the file's Unicode on replacement. ( corpus)
     "\u2000": " ", "\u2001": " ",  # en/em quad
     "\u2002": " ", "\u2003": " ",  # en/em space
     "\u2004": " ", "\u2005": " ", "\u2006": " ",  # three/four/six-per-em
@@ -1064,7 +1064,7 @@ def _map_normalized_positions(original: str, normalized: str,
         # but only when the normalized match itself ended with whitespace.
         # When the match ends with a non-space character, the first
         # whitespace in the original is a word boundary and must not be
-        # consumed.  See https://github.com/NousResearch/hermes-agent/issues/52491
+        # consumed.
         if norm_end < len(normalized) and normalized[norm_end - 1] == ' ':
             while orig_end < len(original) and original[orig_end] in ' \t':
                 orig_end += 1

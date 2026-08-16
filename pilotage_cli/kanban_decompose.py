@@ -315,7 +315,7 @@ def decompose_task(
         # Route through call_llm so auxiliary.kanban_decomposer.* config
         # (provider/model/base_url, extra_body, reasoning_effort, retries)
         # all apply — the previous direct client.chat.completions.create()
-        # path dropped auxiliary.<task>.extra_body entirely (#35566).
+        # path dropped auxiliary.<task>.extra_body entirely.
         resp = call_llm(
             task="kanban_decomposer",
             messages=[

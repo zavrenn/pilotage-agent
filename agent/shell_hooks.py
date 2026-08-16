@@ -340,8 +340,8 @@ def re_register_config_hooks() -> None:
     shell hooks that were registered from ``config.yaml`` at startup (they
     are config-owned, not plugin-owned, so the ledger cannot restore them).
     Clear the idempotence set and re-run ``register_from_config()`` so hooks
-    are wired again (#60036 / PR #60267; tracking #64178 — salvaged from
-    PR #64188).
+    are wired again /; tracking — salvaged from
+).
 
     Commands already allowlisted stay allowlisted, so this never re-prompts
     at a TTY for hooks the user previously approved.
@@ -543,7 +543,7 @@ def _spawn(spec: ShellHookSpec, stdin_json: str) -> Dict[str, Any]:
         "error": None,
     }
     try:
-        # Windows-safe: plain shlex.split eats backslashes in paths (#78293).
+        # Windows-safe: plain shlex.split eats backslashes in paths.
         from pilotage_cli._subprocess_compat import split_command_line
 
         argv = split_command_line(os.path.expanduser(spec.command))
@@ -561,7 +561,7 @@ def _spawn(spec: ShellHookSpec, stdin_json: str) -> Dict[str, Any]:
     # goes through ``taskkill /T`` in ``kill_process_tree``. Hooks that
     # complete in time keep their descendants — an intentionally detached
     # helper (``some-daemon &``) survives a successful run. Ported from
-    # openai/codex#37527 ("Terminate timed-out hook process trees").
+    # openai/codex ("Terminate timed-out hook process trees").
     _popen_kwargs: Dict[str, Any] = (
         {"creationflags": windows_hide_flags()} if IS_WINDOWS else {"process_group": 0}
     )

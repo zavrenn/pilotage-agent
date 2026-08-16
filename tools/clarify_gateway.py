@@ -560,7 +560,7 @@ def get_clarify_timeout() -> int:
     unblocks the agent thread instead of pinning the running-agent guard
     forever.  The old 600s default evicted the entry mid-think, so a late
     tap landed on a dead entry and the agent hung on ``running: clarify``
-    (#32762).
+.
 
     Reads ``agent.clarify_timeout`` from config.yaml (see
     :func:`resolve_clarify_timeout` for the full resolution order).  Set to

@@ -236,7 +236,7 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         },
         # Light overlay (merged onto `colors`; dark mode renders the vivid
         # block above untouched). The goldenrod ladder: on white, the vivid
-        # #FFD700/#FFBF00 read as glare and WCAG-darkened mustard (#867000)
+        # #FFD700/#FFBF00 read as glare and WCAG-darkened mustard
         # reads as mud — the sweet spot is the statusbar's goldenrod family
         # (#B8860B/#DAA520): hue kept, saturation tamed, mid luminance.
         # Hierarchy on white: ink body 8.9:1 > fade 5.2 > label 3.7 >
@@ -615,7 +615,7 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
 [#153C73]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
 [#5DB8F5]⠀⠀⠀⠀⠀≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈⠀⠀⠀⠀⠀[/]
 [#A9DFFF]⠀⠀⠀⠀⠀⠀≈≈≈≈≈≈≈≈≈≈≈≈≈⠀⠀⠀⠀⠀⠀[/]
-[dim #153C73]⠀⠀⠀⠀⠀⠀⠀deep waters hold⠀⠀⠀⠀⠀⠀⠀[/]""",
+[dimC73]⠀⠀⠀⠀⠀⠀⠀deep waters hold⠀⠀⠀⠀⠀⠀⠀[/]""",
     },
     "sisyphus": {
         "name": "sisyphus",

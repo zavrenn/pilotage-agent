@@ -23,7 +23,7 @@ go through `get_manager()`.
 Design reference:
 
 - Claude Code's ``invalidateOAuthCacheIfDiskChanged``
-  (``claude-code/src/utils/auth.ts:1320``, CC-1096 / GH#24317). Identical
+  (``claude-code/src/utils/auth.ts:1320``, CC-1096 / GH). Identical
   external-refresh staleness bug class.
 - Codex's ``refresh_oauth_if_needed`` / ``persist_if_needed``
   (``codex-rs/rmcp-client/src/rmcp_client.rs:805``). We lean on the MCP SDK's
@@ -126,7 +126,7 @@ def _make_pilotage_provider_class() -> Optional[type]:
         visible to the running MCP session without requiring a restart.
 
         Reference: Claude Code's ``invalidateOAuthCacheIfDiskChanged``
-        (``src/utils/auth.ts:1320``, CC-1096 / GH#24317).
+        (``src/utils/auth.ts:1320``, CC-1096 / GH).
         """
 
         def __init__(
@@ -328,7 +328,7 @@ def _make_pilotage_provider_class() -> Optional[type]:
             (+ stale metadata) so the SDK's next ``async_auth_flow`` takes the
             ``if not client_info`` branch and re-runs RFC 7591 dynamic client
             registration. This addresses the recurring manual-reset ritual in
-            GH#36767 for the auto-detectable subset (token-endpoint rejection);
+            GH for the auto-detectable subset (token-endpoint rejection);
             the browser-side "Redirect URI Mismatch" case has no HTTP signal
             and is handled by ``pilotage mcp reauth``.
 
@@ -414,7 +414,7 @@ def _make_pilotage_provider_class() -> Optional[type]:
             #
             # The bridge below forwards each .asend() value into the inner
             # generator via inner.asend(incoming), preserving the bidirectional
-            # contract. Regression from PR #11383 caught by
+            # contract. Regression from caught by
             # tests/tools/test_mcp_oauth_bidirectional.py.
             inner = super().async_auth_flow(request)
             try:
@@ -422,7 +422,7 @@ def _make_pilotage_provider_class() -> Optional[type]:
                 while True:
                     incoming = yield outgoing
                     # Sniff the response for a dead-client-registration signal
-                    # before handing it back to the SDK (best-effort, GH#36767).
+                    # before handing it back to the SDK (best-effort, GH).
                     await self._maybe_flag_poisoned_client(incoming)
                     outgoing = await inner.asend(incoming)
             except StopAsyncIteration:

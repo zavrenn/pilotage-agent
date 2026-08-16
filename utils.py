@@ -199,7 +199,7 @@ def atomic_replace(tmp_path: Union[str, Path], target: Union[str, Path]) -> str:
     replaced with a regular file — silently detaching managed deployments
     that symlink ``config.yaml`` / ``SOUL.md`` / ``auth.json`` etc. from
     ``~/.pilotage/`` to a git-tracked profile package or dotfiles repo
-    (GitHub #16743).
+    (GitHub).
 
     This helper resolves the symlink first so ``os.replace`` writes to
     the real file in-place while the symlink survives.  For non-symlink
@@ -394,7 +394,7 @@ def atomic_json_write(
             )
             f.flush()
             os.fsync(f.fileno())
-        # Preserve symlinks — swap in-place on the real file (GitHub #16743).
+        # Preserve symlinks — swap in-place on the real file (GitHub).
         real_path = atomic_replace(tmp_path, path)
         real_path_obj = Path(real_path)
         _restore_file_owner(real_path_obj, original_owner)
@@ -465,7 +465,7 @@ class IndentDumper(yaml.SafeDumper):
     Mixing both styles in the same ``config.yaml`` produces a file that
     stricter parsers like ``js-yaml`` reject with ``bad indentation of a
     mapping entry``.  Forcing ``indentless=False`` aligns the two
-    serializers so all write paths emit byte-identical layouts (#31999).
+    serializers so all write paths emit byte-identical layouts.
     """
 
     def increase_indent(self, flow=False, indentless=False):  # noqa: ARG002
@@ -525,7 +525,7 @@ def atomic_yaml_write(
             # inside multi-line double-quoted strings wrapped with `\`
             # continuations — a structure that stricter/non-PyYAML parsers and
             # hand-edits routinely break into unclosed quotes, corrupting the whole
-            # config (GitHub #51356).
+            # config (GitHub).
             yaml.dump(
                 data,
                 f,
@@ -538,7 +538,7 @@ def atomic_yaml_write(
                 f.write(extra_content)
             f.flush()
             os.fsync(f.fileno())
-        # Preserve symlinks — swap in-place on the real file (GitHub #16743).
+        # Preserve symlinks — swap in-place on the real file (GitHub).
         real_path = atomic_replace(tmp_path, path)
         real_path_obj = Path(real_path)
         _restore_file_owner(real_path_obj, original_owner)

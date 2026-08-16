@@ -53,7 +53,7 @@ def _platform_gate_env(name: str, default: str = "") -> str:
     profile's first-writer-bridged value (the YAML→env bridges in the
     Discord/Telegram adapters' ``_apply_yaml_config`` are first-writer-wins),
     so falling through would leak profile A's allowlist into profile B
-    (issue #72348). Single-profile deployments — no scope installed, or
+    . Single-profile deployments — no scope installed, or
     multiplex off — behave exactly like the legacy ``os.getenv`` read.
     """
     if not name:
@@ -450,7 +450,7 @@ class GatewayAuthorizationMixin:
             except Exception:
                 pass
 
-        # Bots admitted by {PLATFORM}_ALLOW_BOTS bypass the human allowlist (#4466).
+        # Bots admitted by {PLATFORM}_ALLOW_BOTS bypass the human allowlist.
         # Checked before the no-user-id guard below: some platforms deliver
         # bot/automation traffic with no user_id at all, so deferring past the
         # guard would reject them outright (the same reason the chat-scoped
@@ -521,7 +521,7 @@ class GatewayAuthorizationMixin:
         # paired user is authorized regardless of the allowlist, and when an
         # allowlist IS configured, operator approval also writes the user into
         # that allowlist (see PairingStore._approve_user), keeping a single
-        # operator-visible source of truth. (#23778: the original bypass was the
+        # operator-visible source of truth. (: the original bypass was the
         # inbound message/approval-button gate, not this gate; that gate is
         # fixed separately.)
         # In multiplex gateways, route to the per-profile PairingStore so each
@@ -563,7 +563,7 @@ class GatewayAuthorizationMixin:
             # "pairing" / anything else, fall through to default-deny, where
             # GATEWAY_ALLOW_ALL_USERS, the per-platform {PLATFORM}_ALLOW_ALL_USERS
             # flag (checked above), and the pairing flow remain the explicit
-            # opt-ins to broader access. (#34515 follow-up: trusting "open" was a
+            # opt-ins to broader access. follow-up: trusting "open" was a
             # fail-open.)
             if allow_adapter_delegation and self._adapter_enforces_own_access_policy(
                 source.platform,
@@ -593,7 +593,7 @@ class GatewayAuthorizationMixin:
                     # until restart; re-check when the adapter exposes a DM
                     # allowlist helper. Adapters without that helper keep the
                     # historical "reached the gateway under allowlist policy"
-                    # rubber-stamp (#34515).
+                    # rubber-stamp.
                     if source.chat_type not in {"group", "forum", "channel"}:
                         adapter = self._authorization_adapter(
                             source.platform,
@@ -635,7 +635,7 @@ class GatewayAuthorizationMixin:
             if "*" in allowed_group_ids or source.chat_id in allowed_group_ids:
                 return True
 
-        # Backward-compat shim for #15027: prior to PR #17686,
+        # Backward-compat shim for: prior to,
         # TELEGRAM_GROUP_ALLOWED_USERS was (mis)used as a chat-ID allowlist.
         # Values starting with "-" are Telegram chat IDs, not user IDs, so if
         # users still have those in TELEGRAM_GROUP_ALLOWED_USERS we honor them
@@ -738,7 +738,7 @@ class GatewayAuthorizationMixin:
            or ``GATEWAY_ALLOWED_USERS``) is configured, default to ``"ignore"`` —
            the allowlist signals that the owner has deliberately restricted
            access; spamming unknown contacts with pairing codes is both noisy
-           and a potential info-leak. (#9337)
+           and a potential info-leak.
         6. No allowlist and no explicit config → ``"pair"`` (open-gateway default).
         """
         config = getattr(self, "config", None)

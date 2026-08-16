@@ -332,10 +332,10 @@ def _missing_requires_env_names(manifest: dict) -> list[str]:
 
 
 def _print_python_dependencies(manifest: dict, console) -> None:
-    """Surface declared python_dependencies at install time (#64165).
+    """Surface declared python_dependencies at install time.
 
     Declaration seam ONLY — Pilotage never auto-installs plugin pip
-    dependencies (isolation design deferred; see #64165 / #15220). We print
+    dependencies (isolation design deferred; see / ). We print
     the declared requirements with a copy-pasteable install hint.
     """
     deps = manifest.get("python_dependencies") or []
@@ -960,7 +960,7 @@ def cmd_install(
             f"Run `pilotage plugins enable {installed_name}` to activate.[/dim]",
         )
 
-    # Capability consent (#64228): if the manifest declares capabilities,
+    # Capability consent: if the manifest declares capabilities,
     # show the list once and record consent. Non-interactive installs (and
     # declines) proceed with capabilities ungranted — fail closed.
     declared_caps = _declared_capabilities_from_manifest(
@@ -1027,7 +1027,7 @@ def cmd_update(name: str) -> None:
             metadata[target.name] = install_record
             _write_install_metadata(metadata)
 
-    # Same stale-bytecode class as the main checkout (#6207/#60242): the
+    # Same stale-bytecode class as the main checkout /): the
     # pull just changed .py files under this plugin dir, so drop any
     # __pycache__ compiled from the previous revision.
     _clear_plugin_bytecode(target)
@@ -1035,7 +1035,7 @@ def cmd_update(name: str) -> None:
     # Copy any new .example files
     _copy_example_files(target, console)
 
-    # Update-time re-consent (#64228): if the new version declares
+    # Update-time re-consent: if the new version declares
     # capabilities the granted set lacks, surface the diff and require
     # re-consent for the additions. The stored consent hash detects a
     # changed declaration; additions stay ungranted until the user says yes
@@ -1300,7 +1300,7 @@ def cmd_enable(name: str, allow_tool_override: Optional[bool] = None) -> None:
         # (``web/firecrawl``) AND the manifest name (``web-firecrawl``);
         # a stale entry under either form makes "explicit disable wins"
         # (plugins.py) silently veto this enable. Discard the key, its
-        # bare leaf, and the manifest name. (#40190 follow-up.)
+        # bare leaf, and the manifest name. follow-up.)
         bare = key.split("/")[-1]
         if bare != key:
             disabled.discard(bare)
@@ -1323,7 +1323,7 @@ def cmd_enable(name: str, allow_tool_override: Optional[bool] = None) -> None:
     if source == "bundled":
         return
 
-    # Capability consent (#64228): when the manifest declares capabilities,
+    # Capability consent: when the manifest declares capabilities,
     # the consent screen is the canonical grant path — it covers
     # tools.override too, so skip the legacy standalone prompt unless the
     # operator explicitly passed --allow-tool-override/--no-allow-tool-override.
@@ -1337,7 +1337,7 @@ def cmd_enable(name: str, allow_tool_override: Optional[bool] = None) -> None:
     _resolve_tool_override_grant(console, key, allow_tool_override)
 
 
-# ── Capability consent flow (#64228) ─────────────────────────────────────────
+# ── Capability consent flow ─────────────────────────────────────────
 
 
 def _declared_capabilities_from_manifest(manifest: dict, plugin_name: str = "?") -> list:
@@ -2092,7 +2092,7 @@ def cmd_toggle() -> None:
     # forms to drift: the menu would write ``web-firecrawl`` to
     # plugins.disabled, but ``pilotage plugins enable web/firecrawl`` cleared
     # only the key — so "explicit disable wins" kept a bundled backend off
-    # forever (pi314's #40190 symptom). Keys keep every surface aligned.
+    # forever (pi314's symptom). Keys keep every surface aligned.
     plugin_keys = []
     plugin_labels = []
     plugin_selected = set()
@@ -2370,7 +2370,7 @@ def _run_composite_ui(curses, plugin_keys, plugin_labels, plugin_selected,
     # disabled-list so they stay off even if a future plugin auto-enables
     # itself — but we ONLY ever write the canonical key (never the bare
     # manifest name), so the disabled-list can't drift out of sync with
-    # what ``cmd_enable`` clears or what PluginManager gates on (#40190).
+    # what ``cmd_enable`` clears or what PluginManager gates on.
     new_enabled: set = set()
     new_disabled: set = set(disabled)  # preserve existing disabled state for unseen plugins
     for i, key in enumerate(plugin_keys):
@@ -2443,7 +2443,7 @@ def _run_composite_fallback(plugin_keys, plugin_labels, plugin_selected,
 
         # Persist by canonical key only — never the bare manifest name — so
         # the disabled-list stays aligned with cmd_enable / PluginManager
-        # (#40190).
+        #.
         new_enabled: set = set()
         new_disabled: set = set(disabled)
         for i, key in enumerate(plugin_keys):
@@ -2713,7 +2713,7 @@ def _clear_plugin_bytecode(target: Path) -> int:
     Plugin dirs live outside the main repo, so the launch-time checkout
     fingerprint sweep in ``pilotage_cli.main`` never covers them. After a
     ``git pull`` changes a plugin's ``.py`` files, stale bytecode here can
-    produce the same ImportError class as #6207/#60242 in whichever
+    produce the same ImportError class as/ in whichever
     process imports the plugin next. Never raises.
     """
     removed = 0
@@ -2761,7 +2761,7 @@ def _git_pull_plugin_dir(target: Path) -> tuple[bool, str]:
     un-updatable until they hand-run git. Same UX class Factory Droid fixed
     in v0.188 ("Updating a plugin marketplace now succeeds when its checkout
     has local changes"), and the same autostash approach ``pilotage update``
-    already uses for the main checkout (PR #70161).
+    already uses for the main checkout.
 
     Flow: clean tree → plain pull (unchanged). Dirty tree → stash push
     (ref-compared, so "nothing saved" is distinguished from "saved but exit

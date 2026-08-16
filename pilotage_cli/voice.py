@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 
 # Modifier aliases mirrored from the TUI parser (``ui-tui/src/lib/platform.ts``)
 # ``_MOD_ALIASES`` table — the contract that removes the cross-runtime
-# mismatch Copilot flagged in round-9 on #19835.
+# mismatch Copilot flagged in round-9 on.
 #
 # ``super``/``win``/``windows`` are intentionally absent: prompt_toolkit
 # has no super/meta modifier for the Cmd key, so those spellings are
@@ -51,7 +51,7 @@ _VOICE_MOD_ALIASES = {
 # Named keys prompt_toolkit accepts in ``c-<name>`` / ``a-<name>`` form.
 # Aliases collapse to prompt_toolkit's canonical spelling so the same
 # config value binds identically in both runtimes (Copilot round-10 on
-# #19835).
+#).
 _VOICE_NAMED_KEYS = {
     "space": "space",
     "spc": "space",
@@ -78,7 +78,7 @@ _VOICE_RESERVED_CTRL_CHARS = frozenset({"c", "d", "l"})
 # lookup, and pilotage-ink reports Alt as ``key.meta`` on many terminals.
 # Mirror the TUI parser's darwin-only reservation so ``option+c`` etc.
 # don't bind Alt+C in the CLI while the TUI silently falls back to
-# Ctrl+B (Copilot round-14 on #19835).
+# Ctrl+B (Copilot round-14 on).
 _VOICE_RESERVED_ALT_CHARS_MAC = frozenset({"c", "d", "l"})
 
 _DEFAULT_PT_KEY = "c-b"
@@ -92,7 +92,7 @@ def voice_record_key_from_config(cfg: Any) -> Any:
     leaves ``cfg["voice"]`` as a bool/str instead of a dict, and the
     naive ``.get("voice", {}).get("record_key")`` chain raises
     AttributeError before voice can even start (Copilot round-11 on
-    #19835). Return ``None`` for malformed shapes so call sites can
+   ). Return ``None`` for malformed shapes so call sites can
     feed the result straight into the normalizer/formatter and get
     the documented default.
     """
@@ -120,7 +120,7 @@ def normalize_voice_record_key_for_prompt_toolkit(raw: Any) -> str:
     * ``super`` / ``win`` / ``windows`` → ``c-b`` (TUI-only modifiers —
       prompt_toolkit has no super mod; the CLI binding site is
       expected to warn when this fallback fires so users see the
-      cross-runtime split, Copilot round-11 on #19835)
+      cross-runtime split, Copilot round-11 on)
     """
     if not isinstance(raw, str):
         return _DEFAULT_PT_KEY
@@ -152,7 +152,7 @@ def normalize_voice_record_key_for_prompt_toolkit(raw: Any) -> str:
     # startup). Fall back to the documented default here; the CLI
     # binding site is expected to log a warning when the configured
     # value is one of these spellings so users know the TUI+CLI
-    # runtimes diverge on that shortcut (Copilot round-11 on #19835).
+    # runtimes diverge on that shortcut (Copilot round-11 on).
     if modifier_token in {"super", "win", "windows"}:
         return _DEFAULT_PT_KEY
 
@@ -200,7 +200,7 @@ def format_voice_record_key_for_status(raw: Any) -> str:
     Mirrors the TUI's ``formatVoiceRecordKey``: returns ``Ctrl+B`` /
     ``Alt+Space`` / ``Ctrl+Enter``. Malformed configs surface as the
     documented default so status never advertises a shortcut that
-    won't bind (Copilot round-10 on #19835).
+    won't bind (Copilot round-10 on).
     """
     normalized = normalize_voice_record_key_for_prompt_toolkit(raw)
 
@@ -266,7 +266,7 @@ def _beeps_enabled() -> bool:
         voice_cfg = load_config().get("voice", {})
         if isinstance(voice_cfg, dict):
             # is_truthy_value handles quoted YAML strings like "false"
-            # which bool() would misread as True (#49883).
+            # which bool would misread as True.
             return is_truthy_value(voice_cfg.get("beep_enabled", True), default=True)
     except Exception:
         pass
@@ -969,7 +969,7 @@ def speak_text(text: str, stop_event: Optional[threading.Event] = None) -> None:
     try:
         from tools.tts_tool import text_to_speech_tool
 
-        # One dispatcher, zero parallel streaming implementations (#58930):
+        # One dispatcher, zero parallel streaming implementations:
         # when the configured provider has a chunked streamer registered in
         # tools.tts_streaming, route the whole reply through the same
         # stream_tts_to_speaker pipeline the CLI voice mode uses — audio

@@ -704,7 +704,7 @@ def _content_digest(skill_path: Path) -> str:
     bundle side on Windows: Path comparison is case-insensitive there
     (normcase), while ``bundle_content_hash`` sorts plain strings — the
     same skill hashed to different digests and every installed skill
-    reported ``update_available`` forever (#62310). Sorting the rel-posix
+    reported ``update_available`` forever. Sorting the rel-posix
     strings makes the digest OS-independent and byte-symmetric with
     ``tools.skills_hub.bundle_content_hash``.
     """

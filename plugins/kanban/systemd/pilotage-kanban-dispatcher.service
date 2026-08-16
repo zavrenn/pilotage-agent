@@ -15,7 +15,7 @@
 
 [Unit]
 Description=Pilotage Kanban dispatcher (DEPRECATED standalone daemon — prefer gateway-embedded dispatch)
-Documentation=https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban
+Documentation=
 After=network.target
 
 [Service]

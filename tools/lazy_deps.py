@@ -147,7 +147,7 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # Keep in sync with the `wake` extra in pyproject.toml. openWakeWord is the
     # free, local default (ONNX runtime); Porcupine is the premium engine.
     # openWakeWord's ONNX embedding model returns near-zero scores on macOS
-    # ARM64 (dscripka/openWakeWord#336), so the wake word runs on the tflite
+    # ARM64 (dscripka/openWakeWord), so the wake word runs on the tflite
     # backend there. Upstream declares tflite-runtime for Linux only;
     # ai-edge-litert is the macOS equivalent, bridged in tools/wake_word.py.
     # It lives in its own feature because lazy-dep specs cannot carry PEP 508
@@ -210,7 +210,7 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # (pyproject `dependencies`), so this entry is a belt-and-suspenders fallback
     # for stripped/source-build installs that somehow dropped it. The vision
     # call site uses prompt=False so it can never raise a blocking input()
-    # prompt mid-session (#40490).
+    # prompt mid-session.
     "tool.vision": ("Pillow==12.3.0",),
     # Document-to-Markdown extraction for read_file (firecrawl-anydoc, Rust
     # core, imports as `anydoc`). Widens read_file's auto-extraction beyond

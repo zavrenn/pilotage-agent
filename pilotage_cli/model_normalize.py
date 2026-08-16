@@ -117,7 +117,7 @@ _MATCHING_PREFIX_STRIP_PROVIDERS: frozenset[str] = frozenset({
 # ``nvidia/nemotron-…`` (and third-party ``z-ai/glm-…``), while the same
 # provider id also points at local NIM containers with their own naming.
 # Without this repair a bare ``nemotron-3-ultra-550b-a55b`` reaches the API
-# and returns a bare ``404 page not found`` that never names the model (#78796).
+# and returns a bare ``404 page not found`` that never names the model.
 _CATALOGUE_PREFIX_REPAIR_PROVIDERS: frozenset[str] = frozenset({
     "nvidia",
 })
@@ -407,7 +407,7 @@ def suggest_prefixed_model_id(provider: str, model_name: str) -> Optional[str]:
     to explain a provider's content-free 404 when the configured id lost its
     ``vendor/`` prefix. Returns ``None`` when the name already has a prefix,
     the provider has no curated catalogue, or nothing matches — so callers can
-    stay silent rather than guess (#78796).
+    stay silent rather than guess.
     """
     name = (model_name or "").strip()
     if not name or "/" in name:
@@ -524,7 +524,7 @@ def normalize_model_for_provider(model_input: str, target_provider: str) -> str:
     #     stripping for Anthropic/OpenAI, dash-to-dot repair for Claude)
     #     and live-catalog lookups.  Without this, vendor-prefixed or
     #     dash-notation Claude IDs survive to the Copilot API and hit
-    #     HTTP 400 "model_not_supported".  See issue #6879.
+    # HTTP 400 "model_not_supported". See.
     if provider in {"copilot", "copilot-acp"}:
         try:
             from pilotage_cli.models import normalize_copilot_model_id

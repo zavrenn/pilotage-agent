@@ -6,7 +6,7 @@ memory/skill review) wraps its whole body in those context managers, every other
 thread in the process — including a gateway's asyncio event-loop thread driving a
 Telegram long-poll — sees ``sys.stdout``/``sys.stderr`` pointing at ``devnull``
 for the full duration.  Any bare ``print`` / ``sys.stderr.write`` from those other
-threads is silently lost during that window (see issue #55769 / #55925).
+threads is silently lost during that window (see /).
 
 This module installs a thin proxy as ``sys.stdout``/``sys.stderr`` that routes
 writes per-thread: threads registered as "silenced" go to a sink; every other

@@ -1,7 +1,7 @@
 """Single source of truth for the agent working directory.
 
 `TERMINAL_CWD` is the runtime carrier for the configured working directory
-(design #19214/#19242: `terminal.cwd` is bridged once to `TERMINAL_CWD` at
+(design/: `terminal.cwd` is bridged once to `TERMINAL_CWD` at
 gateway/cron startup). The local-CLI backend deliberately leaves it unset and
 relies on the launch dir. Reading it in one place keeps the system prompt, the
 tool surfaces, and context-file discovery agreeing on where the agent lives.
@@ -81,7 +81,7 @@ def resolve_context_cwd() -> Path | None:
     # configured path is otherwise honored verbatim — including the Pilotage
     # source tree itself, which is a legitimate workspace when the user is
     # developing Pilotage (per-surface policy for fallback-picked directories
-    # lives in build_context_files_prompt; see #64590).
+    # lives in build_context_files_prompt; see).
     override = _session_cwd_override()
     if override:
         p = Path(override).expanduser()

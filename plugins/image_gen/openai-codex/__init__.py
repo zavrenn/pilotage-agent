@@ -51,8 +51,8 @@ logger = logging.getLogger(__name__)
 # payload as the user's entitlement problem and sent people away from a
 # provider that was never actually tried. The request-shape bug is fixed by
 # omitting tool_choice (see ``_build_responses_payload``); any remaining HTTP
-# error must surface verbatim so it stays diagnosable. See issues #19505,
-# #49008 and #31335.
+# error must surface verbatim so it stays diagnosable. See issues,
+# and.
 
 _MAX_ERROR_BODY_CHARS = 500
 
@@ -328,7 +328,7 @@ def _build_responses_payload(
         # parameter`` — the backend looks up tool_choice as a *function* name and
         # never recognizes hosted-tool entries. Letting the host model decide is
         # the only shape Codex currently accepts; the ``instructions`` above are
-        # what nudge it toward the tool. See issue #19505.
+        # what nudge it toward the tool. See.
         "stream": True,
     }
 

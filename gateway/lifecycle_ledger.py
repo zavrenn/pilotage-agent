@@ -23,7 +23,7 @@ This module closes that gap with a tiny state machine persisted to
 * On every clean exit path, :func:`mark_exited` rewrites the sentinel as
   ``phase=exited`` with the exit code and a reason string.  Wired into
   ``_exit_after_graceful_shutdown`` (the single funnel for all graceful
-  exits, #53107) and the two watchdog ``os._exit`` sites in
+  exits,) and the two watchdog ``os._exit`` sites in
   :mod:`gateway.shutdown_watchdog`.
 
 :func:`sample_memory` provides the cheap (<1ms, pure /proc reads) memory

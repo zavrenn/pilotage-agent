@@ -30,7 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Prevent uv from discovering config files (uv.toml, pyproject.toml) from the
-# wrong user's home directory when running under sudo -u <user>.  See #21269.
+# wrong user's home directory when running under sudo -u <user>. See.
 export UV_NO_CONFIG=1
 
 PYTHON_VERSION="3.11"
@@ -190,7 +190,7 @@ SETUP_PYTHON="$SCRIPT_DIR/venv/bin/python"
 
 run_locked_uv_sync() {
     # Bootstrap uv calls stay isolated from ambient config via UV_NO_CONFIG
-    # (#21269). A locked project sync is different: uv.lock records resolver
+    # A locked project sync is different: uv.lock records resolver
     # settings from this checkout's [tool.uv], so hiding pyproject.toml makes
     # uv 0.12+ reject the valid lock. Re-enable project discovery only for
     # this subprocess while redirecting user/system config lookups to an empty

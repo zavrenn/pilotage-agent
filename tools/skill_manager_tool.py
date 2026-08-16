@@ -162,7 +162,7 @@ def _skills_dir() -> Path:
 
     Long-lived multi-profile runtimes (Dashboard/TUI/Desktop backend, cron,
     kanban workers) import this module once under the launch PILOTAGE_HOME and
-    later bind a different profile per session (#40677). Honor an explicitly
+    later bind a different profile per session. Honor an explicitly
     patched module-level ``SKILLS_DIR`` (tests), otherwise resolve from the
     live profile-scoped PILOTAGE_HOME on every call.
     """
@@ -216,7 +216,7 @@ def _validate_delete_target(skill_dir: Path) -> Optional[str]:
     ``_find_skill`` already restricts ``skill_dir`` to a real ``SKILL.md``
     parent discovered by walking the skills roots, so the agent cannot inject
     an arbitrary path the way Kilo Code's HTTP endpoint could (their issue
-    #11227: a built-in-skill sentinel resolved to the server cwd and a
+: a built-in-skill sentinel resolved to the server cwd and a
     recursive delete wiped the user's entire working directory). This is the
     matching defense-in-depth for our agent-facing ``skill_manage`` delete
     path: even if discovery or a poisoned tree hands us a bad directory, never
@@ -320,7 +320,7 @@ def _background_review_write_guard(
     # Pin must be respected by autonomous maintenance. The curator already
     # skips pinned skills from every auto-transition; the background review
     # fork is the same kind of autonomous, no-user-present actor, so it must
-    # not write to a pinned skill either (issue #25839). This is stricter than
+    # not write to a pinned skill either. This is stricter than
     # the foreground ``_pinned_guard`` (which only blocks deletion) precisely
     # because there is no user in the loop to consent to an edit here.
     try:
@@ -385,7 +385,7 @@ def _background_review_write_guard(
         # the `created_by: "agent"` marker.
         #
         # A MISSING record and an explicit `created_by: null` must resolve
-        # IDENTICALLY (issue #67140). Keying on `isinstance(usage_rec, dict)`
+        # IDENTICALLY. Keying on `isinstance(usage_rec, dict)`
         # made the policy depend on the guard's own side effect: a local skill
         # with no telemetry record passed, the successful write called
         # bump_patch() which created a `created_by: null` record, and the very
@@ -472,7 +472,7 @@ def _curator_consolidation_delete_guard(
     exists on disk (validated separately in ``_delete_skill``).
 
     A delete with no forwarding target — ``absorbed_into`` omitted (``None``)
-    or empty (``""``) — is the fail-open behavior reported in #29912: the
+    or empty (``""``) — is the fail-open behavior reported in: the
     consolidation pass archived whole clusters of active skills with zero
     verified consolidations (``consolidated_this_run == 0``), leaving active
     automations pointing at names that no longer resolve. The deterministic
@@ -1209,7 +1209,7 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
 
     # Fail closed on unverified deletes during the curator consolidation pass.
     # A bare prune (no absorbed_into) from the LLM umbrella pass is the
-    # fail-open behavior reported in #29912 — refuse it; keep the skill active.
+    # fail-open behavior reported in — refuse it; keep the skill active.
     fail_closed = _curator_consolidation_delete_guard(name, absorbed_into)
     if fail_closed:
         return fail_closed
@@ -1245,7 +1245,7 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
     skill_dir = existing["path"]
     skills_root = _containing_skills_root(skill_dir)
 
-    # Defense-in-depth before the recursive delete (port of Kilo Code #11240).
+    # Defense-in-depth before the recursive delete (port of Kilo Code).
     unsafe = _validate_delete_target(skill_dir)
     if unsafe:
         return {"success": False, "error": unsafe}
@@ -1255,7 +1255,7 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
     # the maximum destructive action the curator may take, and
     # `pilotage curator restore` promises the skill can be brought back. Route
     # through the recoverable archive primitive instead of permanent rmtree so
-    # a misjudged consolidation can be undone (#29912). Foreground,
+    # a misjudged consolidation can be undone. Foreground,
     # user-directed deletes keep their existing hard-delete semantics.
     try:
         from tools.skill_provenance import is_background_review

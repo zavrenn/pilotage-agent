@@ -274,7 +274,7 @@ def build_bundle_invocation_message(
     passes it explicitly because the gateway handles multiple platforms
     in one process); when *None*, the platform resolves from session env
     vars and the global disabled list still applies.  Mirrors the
-    stacked-skill gate in gateway dispatch (#58888).
+    stacked-skill gate in gateway dispatch.
     """
     bundles = get_skill_bundles()
     info = bundles.get(cmd_key)

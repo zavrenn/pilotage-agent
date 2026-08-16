@@ -5,8 +5,8 @@ keyed by session_key, each with its own ad-hoc lifecycle.  Three failure
 classes grew out of that shape:
 
 1. Boundary drift — every conversation boundary carried a hand-copied
-   pop-list that went stale when a new dict was added (#48031, #58403,
-   #10702, #35809).  Mitigated by the ``_CONVERSATION_SCOPED_STATE`` registry,
+   pop-list that went stale when a new dict was added (,
+,). Mitigated by the ``_CONVERSATION_SCOPED_STATE`` registry,
    now structurally fixed: the fields live in one ``ConversationState``
    dataclass with a single ``clear()``.
 2. Turn-release drift — ad-hoc ``del self._running_agents[key]`` sites that
@@ -25,7 +25,7 @@ Scopes (placement follows where each dict is CLEARED today):
   (/new, /resume, auto-reset, expiry, compression-exhausted reset).
 - ``SessionState.persistent`` — own lifecycles (approval resolution, update
   prompt answer, native-image consumption); ``run_generation`` is monotonic
-  and NEVER reset (#28686).
+  and NEVER reset.
 
 Entries in ``GatewayRunner._sessions`` are never evicted (matching the old
 dicts, most of which also leaked empty/stale entries for dead sessions —
@@ -55,7 +55,7 @@ class TurnState:
     Cleared by ``GatewayRunner._release_running_agent_state`` (via
     ``clear()``) at every site that ends a running turn.  ``lease_token`` /
     ``lease_generation`` are deliberately NOT cleared here — they are owned
-    by ``_release_turn_lease`` (#64934), which must release the registry
+    by ``_release_turn_lease``, which must release the registry
     lease exactly once per acquiring turn.
     """
 
@@ -99,7 +99,7 @@ class ConversationState:
     reasoning_override: Optional[Dict[str, Any]] = None
     # /fast per-session override: "priority" or None; _UNSET_TIER = absent.
     service_tier_override: Any = _UNSET_TIER
-    # Last successfully-resolved non-empty model (#35314 recovery).
+    # Last successfully-resolved non-empty model recovery).
     last_resolved_model: str = ""
     # /queue overflow FIFO (adapter slot holds the head).
     queued_events: List[Any] = field(default_factory=list)
@@ -141,15 +141,15 @@ class PersistentState:
     # Image paths staged for native (inline) attachment; consumed one-shot.
     native_image_paths: List[str] = field(default_factory=list)
     # Legacy runner-level pending message text (write-mostly; flushed to
-    # disk on shutdown — see #72680).  NOTE: distinct from the adapter-level
+    # disk on shutdown — see). NOTE: distinct from the adapter-level
     # ``_pending_messages`` (Dict[str, MessageEvent]) in gateway/base.py,
     # which is a different store that happens to share the old name.
     pending_command_text: Optional[str] = None
-    # Monotonic run-generation counter (#28686).  NEVER reset: clearing it
+    # Monotonic run-generation counter. NEVER reset: clearing it
     # would break stale-run detection.
     run_generation: int = 0
     # Consecutive session-hygiene compression failures for this session
-    # (#79624).  The in-agent compressor escalates repeat timeouts via
+    # The in-agent compressor escalates repeat timeouts via
     # ContextCompressor._consecutive_timeout_failures, but hygiene builds a
     # FRESH AIAgent per run and bind_session_state() zeroes that counter, so
     # the in-agent ladder is structurally unreachable from the gateway.
@@ -159,12 +159,12 @@ class PersistentState:
     #
     # PROCESS-LOCAL, deliberately: `PersistentState` means "survives turn and
     # boundary resets", NOT "survives a restart" — this field has no disk flush
-    # (unlike `pending_command_text` above, #72680), so a gateway restart drops
+    # (unlike `pending_command_text` above,), so a gateway restart drops
     # escalation back to rung 1 while the DB-backed deadline itself survives
-    # (#74136). Keying on `session_key` rather than `session_id` is what buys
+    # Keying on `session_key` rather than `session_id` is what buys
     # correctness across compaction ROTATION (the sid changes, the chat does
     # not), which the persisted `compression_*_streak` columns cannot express
-    # since they key on sid. Making this durable is tracked on #79624 as a
+    # since they key on sid. Making this durable is tracked on as a
     # schema-level follow-up.
     hygiene_failure_streak: int = 0
 

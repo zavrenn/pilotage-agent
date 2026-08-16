@@ -849,7 +849,7 @@ def _resize_image_for_vision(image_path: Path, mime_type: Optional[str] = None,
             from tools.lazy_deps import ensure as _ensure_dep
             # prompt=False: never raise a blocking input() prompt mid-session.
             # Under the interactive CLI prompt_toolkit owns stdin, so a bare
-            # input() deadlocks the terminal (#40490). The install is already
+            # input deadlocks the terminal. The install is already
             # gated by security.allow_lazy_installs, so reaching here is opt-in.
             _ensure_dep("tool.vision", prompt=False)
             from PIL import Image
@@ -1630,7 +1630,7 @@ def check_vision_requirements() -> bool:
     and if that fails, the auto chain (main provider → openrouter → nous).
     Without the auto-fallback step the tool would disappear from the model's
     tool list whenever the explicit provider name was unresolvable, even
-    when the auto chain would have served the request (issue #31179).
+    when the auto chain would have served the request.
     """
     try:
         from agent.auxiliary_client import aux_probe_mode, resolve_vision_provider_client
@@ -1858,7 +1858,7 @@ async def _materialize_video_from_terminal_backend(video_source: str, task_id: O
     pipeline vision_analyze uses: media-cache host reads (gateway-downloaded
     videos live on the host, not in the sandbox), bounded in-sandbox exec-read
     (``head -c`` cap — no unbounded base64 stream, no python3 dependency in
-    the sandbox image), lazy env bring-up (#62825), the credential-read
+    the sandbox image), lazy env bring-up, the credential-read
     guard, and the 50MB ingest cap.
     """
     from tools.image_source import ImageResolutionError, ResolveContext, resolve_image_source

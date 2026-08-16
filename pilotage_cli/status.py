@@ -95,7 +95,7 @@ def _effective_provider_label() -> str:
         # (model.base_url — the canonical location; the runtime treats
         # config.yaml as the single source of truth) or via the legacy
         # OPENAI_BASE_URL env var. Either way, labeling it "OpenRouter"
-        # is misleading (#3296).
+        # is misleading.
         config_base_url = ""
         try:
             model_cfg = load_config().get("model")
@@ -589,7 +589,7 @@ def show_status(args):
     print()
     print(color("◆ Sessions", Colors.CYAN, Colors.BOLD))
 
-    # Gateway session count: state.db is the source of truth (#9006);
+    # Gateway session count: state.db is the source of truth;
     # fall back to sessions.json for pre-migration installs.
     _session_count = None
     _gateway_rows = []

@@ -118,7 +118,7 @@ def register_credential_file(
     # mount rather than risk bind-mounting auth.json into a sandbox. The
     # import lives at module top (no circular-import concern — file_safety is
     # stdlib-only); the sentinel + logger.exception keep guard failures
-    # debuggable instead of silently swallowed (#67665).
+    # debuggable instead of silently swallowed.
     if get_read_block_error is None:
         logger.error(
             "credential_files: refusing %r — agent.file_safety could not be "
@@ -397,13 +397,13 @@ _CACHE_DIRS: list[tuple[str, str]] = [
     ("cache/delegation", "delegation_cache"),
     # Desktop/clipboard/PDF uploads land in the flat top-level ``images/`` dir
     # (tui_gateway attach RPCs), not under ``cache/``. Mount it so vision can
-    # reach uploads inside sandbox containers (#69575). No legacy alias exists,
+    # reach uploads inside sandbox containers. No legacy alias exists,
     # so both tuple slots are ``images``.
     ("images", "images"),
     # Desktop non-image file attachments (tui_gateway ``file.attach`` staging)
     # land in the flat top-level ``attachments/`` dir. Mount it so the agent's
     # file tools can read dropped binaries (zip/pdf/...) from inside sandbox
-    # containers instead of dangling host paths (#76577).
+    # containers instead of dangling host paths.
     ("attachments", "attachments"),
 ]
 
@@ -427,7 +427,7 @@ def get_cache_directory_mounts(
             # snapshots this mount list at container CREATION, so a dir that
             # appears later (first desktop attachment, first clipboard image)
             # would dangle for the whole life of a persistent container
-            # (#76577). An empty bind-mounted dir costs nothing; a missing
+            # An empty bind-mounted dir costs nothing; a missing
             # mount costs the feature. get_pilotage_dir() already resolved
             # new-vs-legacy layout, so creating its answer cannot shadow a
             # populated legacy dir.
@@ -512,7 +512,7 @@ def to_agent_visible_cache_path(
       home; ``~/.pilotage`` is shell-expanded by the remote shell, so tool
       commands resolve it regardless of the actual remote home. Previously
       these backends synced the bytes but still rendered the dangling host
-      path (#76577 gap).
+      path gap).
     * singularity — NOT translated: Apptainer auto-binds the host home, so
       the host path is directly readable and translation would dangle
       (cache dirs are not remapped into that sandbox).

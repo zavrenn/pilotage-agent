@@ -407,7 +407,7 @@ def _sanitize_node(node: Any, path: str) -> Any:
     - Normalizes ``type: [X, "null"]`` arrays to single ``type: X`` (keeping
       ``nullable: true`` as a hint), and multi-type arrays like
       ``["number", "string"]`` to an ``anyOf`` of single-type schemas so no
-      branch is dropped (ported from anomalyco/opencode#31877).
+      branch is dropped (ported).
     - Recurses into ``properties``, ``items``, ``additionalProperties``,
       ``anyOf``, ``oneOf``, ``allOf``, and ``$defs`` / ``definitions``.
     """
@@ -462,7 +462,7 @@ def _sanitize_node(node: Any, path: str) -> Any:
         #     EVERY branch survives instead of silently dropping all but the
         #     first. ``null`` is lifted into ``nullable: true``.
         #   * all-null / empty → ``type: "null"`` (or object fallback).
-        # Ported from anomalyco/opencode#31877.
+        # Ported
         if key == "type" and isinstance(value, list):
             has_null = "null" in value
             non_null = [t for t in value if isinstance(t, str) and t != "null"]

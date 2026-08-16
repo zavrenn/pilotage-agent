@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # lifetime of the process — Python install state doesn't change
 # mid-session in any way that would matter for the system prompt.
 #
-# Concurrency model (#67964): the probe runs in exactly ONE background
+# Concurrency model: the probe runs in exactly ONE background
 # worker thread; ``_PROBE_DONE`` signals completion.  Callers never
 # execute the probe themselves and never wait unboundedly — they block
 # at most ``_PROBE_WAIT_TIMEOUT`` seconds on the event and then fail
@@ -278,7 +278,7 @@ def get_environment_probe_line(*, force_refresh: bool = False) -> str:
     The probe itself always runs in a single background worker thread;
     this function waits on its completion event for at most
     ``_PROBE_WAIT_TIMEOUT`` seconds and then fails open with "".  A
-    wedged probe subprocess (#67964) therefore can never block
+    wedged probe subprocess therefore can never block
     system-prompt construction — at worst the toolchain line is absent
     from prompts built while the probe is stuck.
 

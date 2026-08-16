@@ -1,7 +1,7 @@
 """Unified deadline layer — one bounded-execution primitive, one timeout resolver.
 
 Phase 1 of the architectural fix for the timeout/hang backlog
-(https://github.com/NousResearch/hermes-agent/issues/85125).
+.
 
 The tree currently carries at least six site-local deadline mechanisms, each
 built for one incident, none shared (tool_executor batch deadline, telegram
@@ -14,24 +14,24 @@ migrate onto in later phases:
   values (``timeouts:`` section in config.yaml > legacy env var > default),
   so new surfaces stop inventing ``PILOTAGE_*_TIMEOUT`` env vars (".env is for
   secrets only") and hardcoded literals stop ignoring user config
-  (#63302, #53161, #43272 class).
+  (, class).
 
 * :func:`clamp_timeout` — platform-safe clamping.  Large user-supplied
   timeouts overflow ``time_t`` inside ``threading.Lock.acquire(timeout=...)``
   / ``Thread.join(timeout=...)`` on macOS and kill whole tool batches
-  (#83220).  Clamping at the shared boundary fixes that class once, for
+. Clamping at the shared boundary fixes that class once, for
   every consumer.
 
 * :func:`run_bounded_async` — a wall-clock deadline for awaitables that does
   NOT depend on event-loop timers.  ``asyncio.wait_for`` schedules its expiry
   on the loop; when the loop thread itself is blocked in a synchronous call
-  (family A of the #84047 stall triage), every asyncio-based timeout in the
+  (family A of the stall triage), every asyncio-based timeout in the
   process is silently disabled.  This helper drives the deadline from a
   daemon ``threading.Timer`` (generalizing the proven telegram-adapter
   primitive) and abandons cancellation-shielded tasks instead of waiting for
   cancellation to complete.  The telegram adapter's private copy
   (``plugins/platforms/telegram/adapter.py:_await_with_thread_deadline``)
-  migrates onto this in Phase 2 of #85125 — do not let the two drift in the
+  migrates onto this in Phase 2 of — do not let the two drift in the
   meantime; fix bugs here first.
 
 * :func:`run_bounded_sync` — the same contract for synchronous callables
@@ -39,9 +39,9 @@ migrate onto in later phases:
   expiry).
 
 * :func:`kill_process_tree` — portable whole-tree termination so
-  kill-on-timeout stops orphaning descendants (#71148, #59549, #84967,
-  #68139 class).  Existing site-local tree-kills that migrate onto this in
-  Phase 4 of #85125: ``gateway/status.py`` (taskkill wrapper + psutil
+  kill-on-timeout stops orphaning descendants (,,
+  class). Existing site-local tree-kills that migrate onto this in
+  Phase 4 of: ``gateway/status.py`` (taskkill wrapper + psutil
   snapshot/reap pair) and ``tools/code_execution_tool.py`` (psutil
   recursive children kill).
 
@@ -54,7 +54,7 @@ Design invariants:
 * A timeout produced by this layer is OUR deadline, not the provider's.
   Callers that feed errors into ``agent/error_classifier.py`` should
   classify :class:`DeadlineExpired` distinctly from transport timeouts
-  (the #59549 / #80323 misattribution class).
+  (the / misattribution class).
 * ``None`` timeout means unbounded, and non-positive resolved values are
   normalized to ``None`` (matching the existing
   ``PILOTAGE_CONCURRENT_TOOL_TIMEOUT_S`` convention).
@@ -91,7 +91,7 @@ __all__ = [
 # CPython converts ``threading.Lock.acquire(timeout=...)`` /
 # ``Thread.join(timeout=...)`` deadlines to an absolute timestamp; very large
 # relative timeouts overflow ``time_t`` on macOS and raise
-# ``OverflowError: timestamp out of range for platform time_t`` (#83220).
+# ``OverflowError: timestamp out of range for platform time_t``.
 # One year is semantically "unbounded" for every wait in this codebase while
 # staying far below any platform conversion limit.
 MAX_SAFE_TIMEOUT_S = 31_536_000.0  # 365 days
@@ -107,7 +107,7 @@ class DeadlineExpired(TimeoutError):
     Distinct from transport/provider timeout types on purpose: when this is
     raised (or a :class:`BoundedResult` reports ``timed_out``), the timeout
     was Pilotage's own bound — error classification must not attribute it to
-    the provider (#59549 / #80323 misattribution class).
+    the provider / misattribution class).
     """
 
     def __init__(self, label: str, timeout_s: float):
@@ -146,7 +146,7 @@ def clamp_timeout(timeout: Optional[float]) -> Optional[float]:
       ``PILOTAGE_CONCURRENT_TOOL_TIMEOUT_S`` "0 disables the bound" convention.
     * Values above :data:`MAX_SAFE_TIMEOUT_S` are capped so they can never
       overflow ``time_t`` inside ``Lock.acquire`` / ``Thread.join`` on macOS
-      (#83220).
+.
     * Non-numeric values are treated as unset (``None``) with a warning
       rather than crashing the call path they were meant to protect.
     """
@@ -250,7 +250,7 @@ def resolve_timeout(
 # Bounded execution — async flavor.
 #
 # Generalizes plugins/platforms/telegram/adapter.py:_await_with_thread_deadline
-# (the #63309 fix): the deadline is driven by a daemon threading.Timer so a
+# (the fix): the deadline is driven by a daemon threading.Timer so a
 # blocked event loop cannot disable it, and a second timer dumps all thread
 # stacks when the loop provably failed to process the expiry — the one piece
 # of information loop-blocked hangs otherwise never surface.
@@ -450,7 +450,7 @@ def kill_process_tree(pid: int, *, sig: Optional[int] = None) -> bool:
     """Terminate ``pid`` and all its descendants, portably.
 
     Kill-on-timeout that signals only the direct child orphans process trees
-    (cron scripts, in-container shells, browser daemons — #71148 class).
+    (cron scripts, in-container shells, browser daemons — class).
 
     * Windows: ``taskkill /F /T`` terminates the tree (``sig`` ignored;
       Windows has no equivalent). Console-window flash is suppressed via

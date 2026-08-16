@@ -52,7 +52,7 @@ def _get_wsecret(name, default=None):
     under multiplexing, where a bare ``get_secret`` would raise
     ``UnscopedSecretError`` and crash its WhatsApp path; there ``os.environ``
     is that profile's own value, so fall back to it. Same pattern as the
-    Slack ``SLACK_APP_TOKEN`` read (#59739).
+    Slack ``SLACK_APP_TOKEN`` read.
     """
     try:
         val = _scoped_get_secret(name, default)

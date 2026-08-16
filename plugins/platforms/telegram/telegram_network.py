@@ -60,7 +60,7 @@ class TelegramFallbackTransport(httpx.AsyncBaseTransport):
 
     # Bound every pool. httpx defaults to 100 connections per pool, so a wedged
     # endpoint plus the seed IPs can outgrow the process file-descriptor limit
-    # on its own (#63311).
+    # on its own.
     _POOL_LIMITS = httpx.Limits(max_connections=8, max_keepalive_connections=4)
 
     def __init__(self, fallback_ips: Iterable[str], **transport_kwargs):
@@ -105,7 +105,7 @@ class TelegramFallbackTransport(httpx.AsyncBaseTransport):
         A connect that reaches ESTABLISHED and is then closed by the peer leaves
         its socket in CLOSE_WAIT inside the pool. Retaining the poisoned pool
         leaks one descriptor per retry until the process hits its file limit and
-        can no longer accept connections or resolve DNS (#63311).
+        can no longer accept connections or resolve DNS.
         """
         async with self._fallback_lock:
             transport = self._fallbacks.pop(ip, None)
@@ -254,7 +254,7 @@ async def discover_fallback_ips() -> list[str]:
     than excluded: in many networks the system-DNS IP is the most reliable path
     to api.telegram.org and a transient primary-path failure should be retried
     against the same address via the IP-rewrite path before the seed list is
-    consulted (#14520).  Falls back to a hardcoded seed list only when DoH
+    consulted. Falls back to a hardcoded seed list only when DoH
     yields no usable answers.
     """
     async with httpx.AsyncClient(timeout=httpx.Timeout(_DOH_TIMEOUT)) as client:
@@ -265,7 +265,7 @@ async def discover_fallback_ips() -> list[str]:
     # The system-resolver leg runs socket.getaddrinfo in a worker thread with
     # no timeout of its own — a wedged OS resolver (broken VPN/DNS) can sit for
     # minutes. Its result only feeds the no-usable-answers log line below, so
-    # it must never gate discovery: bound it and move on (#63309). The DoH legs
+    # it must never gate discovery: bound it and move on. The DoH legs
     # are already bounded by the client timeout above.
     system_ips: set[str] = set()
     try:

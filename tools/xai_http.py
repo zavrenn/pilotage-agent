@@ -266,7 +266,7 @@ def resolve_xai_http_credentials(
     stored in ``~/.pilotage/.env`` (the standard Pilotage location) are honored —
     not just ones already exported into ``os.environ``. This keeps direct xAI
     endpoints (images, TTS, STT, etc.) aligned with the main runtime auth model
-    and preserves the regression contract from PR #17140 / #17163.
+    and preserves the regression contract from /.
 
     Set ``force_refresh=True`` to perform an unconditional OAuth refresh.
     Reactive callers should also pass the rejected bearer as ``api_key_hint``

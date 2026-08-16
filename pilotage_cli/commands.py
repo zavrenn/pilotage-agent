@@ -535,7 +535,7 @@ def should_bypass_active_session(command_name: str | None) -> bool:
     /voice, /insights, /title, /resume, /retry, /undo, /compress,
     /usage, /reload-mcp, /sethome, /reset) would silently
     interrupt the agent AND get discarded, producing a zero-char
-    response. See issue #5057 / PRs #6252, #10370, #4665.
+    response. See / PRs,.
 
     ACTIVE_SESSION_BYPASS_COMMANDS remains the subset of commands with
     explicit Level-2 handlers; the rest fall through to the catch-all.
@@ -663,7 +663,7 @@ def telegram_bot_commands() -> list[tuple[str, str]]:
             continue
         # Built-in arg-taking commands are included — their handlers show
         # usage text when invoked without arguments, and hiding them from
-        # the menu hurts discoverability (issue #24312).
+        # the menu hurts discoverability.
         tg_name = _sanitize_telegram_name(cmd.name)
         if tg_name:
             result.append((tg_name, cmd.description))
@@ -979,7 +979,7 @@ def _collect_gateway_skill_entries(
         # with ``/`` so ``/my-skills`` does not also match ``/my-skills-extra``.
         # Without this widening, external skills are visible in
         # ``pilotage skills list`` and the agent's ``/skill-name`` dispatch but
-        # silently excluded from gateway slash menus (#8110).
+        # silently excluded from gateway slash menus.
         _allowed_prefixes = [_skills_dir.rstrip("/") + "/"]
         _allowed_prefixes.extend(
             str(d).rstrip("/") + "/" for d in get_external_skills_dirs()
@@ -1424,7 +1424,7 @@ class SlashCommandCompleter(Completer):
                             # Windows: relpath raises for paths on a different
                             # mount than cwd — device paths (\\.\nul, \\.\con)
                             # or another drive letter. One bad entry must not
-                            # crash the @ autocomplete event loop (#42016).
+                            # crash the @ autocomplete event loop.
                             continue
                         files.append(rel)
                     break
@@ -1581,7 +1581,7 @@ class SlashCommandCompleter(Completer):
             # Read-only path: the completer only inspects the config (toolset
             # enable state + MCP server names) — it never mutates it. Use the
             # readonly loader so the per-keystroke completion doesn't pay the
-            # defensive deepcopy (perf(agent) #74322 converted 29 call sites
+            # defensive deepcopy (perf(agent) converted 29 call sites
             # to the readonly loader; this per-keystroke site was missed).
             config = load_config_readonly()
             enabled = _get_platform_tools(config, "cli", include_default_mcp_servers=False)

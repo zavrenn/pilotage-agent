@@ -228,7 +228,7 @@ def _maybe_title_session_at_turn_start(agent: Any, messages: List[Any]) -> None:
 
         # Snapshot the runtime identity; the validator lets the background
         # titler skip its LLM call if the user switches models before it fires
-        # (a stale request would reload an unloaded Ollama model, #19027).
+        # (a stale request would reload an unloaded Ollama model,).
         _model = getattr(agent, "model", None)
         _provider = getattr(agent, "provider", None)
 
@@ -266,11 +266,11 @@ def reanchor_current_turn_user_idx(messages: List[Any], user_message: Any) -> in
     copy of the current turn's message), so a pre-compression index is
     meaningless. Prefer the LAST user message whose content exactly matches
     this turn's text — the surviving copy in the common case — so the
-    injection stamp and the #48677 persist override can't land on a
+    injection stamp and the persist override can't land on a
     todo-snapshot or historical row. Fall back to the last *user-originated*
     turn when no exact match survives (merge-summary-into-tail rewrites the
     content but the trackers still need a live anchor). Compaction handoffs
-    must never become the fallback anchor (#80622) — they are reference-only
+    must never become the fallback anchor — they are reference-only
     scaffolding, not the active ask. Returns -1 when the list has no
     user-originated message at all.
     """
@@ -300,13 +300,13 @@ def compression_made_progress(
     count.  Treating row count as the sole progress signal false-positives
     on size-only wins and surfaces a misleading "Cannot compress further"
     failure even when post-compression tokens are well below the model
-    context window.  See issue #39548 for an observed case: 220 → 220
+    context window. See for an observed case: 220 → 220
     messages, ~288k → ~183k tokens on a 1M-context model still triggered
     auto-reset.
 
     The token reduction must be *material* (>5%) to count as progress — the
     same floor the overflow-handler retry path uses (conversation_loop.py,
-    #39550) — so a sub-5% wobble doesn't keep the multi-pass loop spinning.
+) — so a sub-5% wobble doesn't keep the multi-pass loop spinning.
     """
     if new_len < orig_len:
         return True
@@ -314,7 +314,7 @@ def compression_made_progress(
 
 
 # Back-compat alias: this predicate was module-private until the gateway's
-# session-hygiene recovery gate needed the same semantics (#79624).  Keeping the
+# session-hygiene recovery gate needed the same semantics. Keeping the
 # old name bound means existing callers and any test that patches
 # ``_compression_made_progress`` continue to work unchanged.
 _compression_made_progress = compression_made_progress
@@ -348,7 +348,7 @@ def _should_run_preflight_estimate(
     Returns ``True`` when either:
       (a) message count exceeds the protected ranges (the historical gate), or
       (b) a cheap char-based estimate already crosses the configured threshold
-          — the few-but-huge case from issue #27405 that the count-only gate
+          — the few-but-huge case from that the count-only gate
           would silently skip (a handful of very large messages never trips
           the count condition, so compression was never attempted and the
           turn hit a hard context-overflow error).
@@ -471,7 +471,7 @@ def build_turn_context(
     # row with system_prompt=NULL on a fresh API/gateway agent that carries
     # client-managed history, which then trips the "stored system prompt is
     # null; rebuilding from scratch" warning and a needless first-turn prefix
-    # cache miss. (Issue #45499.)
+    # cache miss. (.)
 
     # Tag log records on this thread with the session ID for ``pilotage logs``.
     set_session_context(agent.session_id)
@@ -493,7 +493,7 @@ def build_turn_context(
         # (_ensure_db_session); that first turn falls back to the physical
         # id here and the first build_api_kwargs re-resolves. Stays valid
         # through a mid-turn compression rotation because the lineage root
-        # is by definition rotation-invariant (#79017). Resolved with the
+        # is by definition rotation-invariant. Resolved with the
         # never-raising variant OUTSIDE the argument list, so a resolution
         # failure can only lose the scope — never the whole runtime binding.
         _cache_scope = resolve_prompt_cache_scope_safe(agent) or ""
@@ -652,7 +652,7 @@ def build_turn_context(
     if conversation_history and not agent._todo_store.has_items():
         agent._hydrate_todo_store(conversation_history)
 
-    # Hydrate per-session nudge counters from persisted history (issue #22357).
+    # Hydrate per-session nudge counters from persisted history.
     if conversation_history and agent._user_turn_count == 0:
         prior_user_turns = sum(
             1 for m in conversation_history if m.get("role") == "user"
@@ -685,7 +685,7 @@ def build_turn_context(
     # Track user turns for memory flush and periodic nudge logic.
     agent._user_turn_count += 1
     # Copilot x-initiator: the first API call of this user turn is
-    # user-initiated; tool-loop follow-ups revert to "agent" (#3040).
+    # user-initiated; tool-loop follow-ups revert to "agent".
     agent._is_user_initiated_turn = True
 
     # Reset the streaming context scrubber at the top of each turn.
@@ -739,7 +739,7 @@ def build_turn_context(
 
     # Create the DB session row now that _cached_system_prompt is populated, so
     # the persisted snapshot is written non-NULL on the first turn (Issue
-    # #45499). Idempotent: _ensure_db_session() no-ops once the row exists.
+    #). Idempotent: _ensure_db_session no-ops once the row exists.
     # Must run BEFORE preflight compression: in-place compaction inserts
     # message rows referencing this session (archive_and_compact), and
     # rotation creates a child with parent_session_id pointing at it — with
@@ -852,7 +852,7 @@ def build_turn_context(
     # ── Preflight context compression ──
     # Gate the (expensive) full token estimate behind a cheap pre-check.
     # See ``_should_run_preflight_estimate`` for the OR semantics that fix
-    # issue #27405 (a few very large messages slipping past the count gate).
+    # (a few very large messages slipping past the count gate).
     _preflight_compressed = False
     _preflight_compression_blocked = False
     agent._turn_received_provider_response = False
@@ -891,7 +891,7 @@ def build_turn_context(
         )
         _preflight_deferred = _defer_preflight(_preflight_tokens)
         # Codex app-server threads are compacted by the codex agent itself;
-        # Pilotage only initiates compaction in "pilotage" mode (#36801).
+        # Pilotage only initiates compaction in "pilotage" mode.
         _codex_native_auto = (
             getattr(agent, "api_mode", None) == "codex_app_server"
             and str(
@@ -907,7 +907,7 @@ def build_turn_context(
 
         if not _preflight_deferred:
             _last = _compressor.last_prompt_tokens
-            # Do NOT overwrite the -1 sentinel (#36718).
+            # Do NOT overwrite the -1 sentinel.
             if _last >= 0 and _preflight_tokens > _last:
                 _compressor.last_prompt_tokens = _preflight_tokens
 
@@ -1009,7 +1009,7 @@ def build_turn_context(
                     messages is _preflight_input
                     and compression_skipped_due_to_lock(agent)
                 ):
-                    # #69870 lock-skip: another path holds this session's
+                    # lock-skip: another path holds this session's
                     # compression lock, so the pass no-oped. That is a
                     # temporary DEFER, not proof the transcript cannot
                     # compress — do NOT arm the insufficient-progress
@@ -1026,7 +1026,7 @@ def build_turn_context(
                 # Re-estimate now so size-only compression (same row count,
                 # lower token count — e.g. summarising tool outputs) is
                 # recognised as progress instead of being misread as
-                # "Cannot compress further". Fixes #39548.
+                # "Cannot compress further". Fixes.
                 _preflight_tokens = estimate_request_tokens_rough(
                     messages,
                     system_prompt=active_system_prompt or "",
@@ -1082,7 +1082,7 @@ def build_turn_context(
                 _clear_warn()
             # Engine maintenance only when NO skip-branch fired: a failure
             # cooldown, deferred estimate, or codex-native route must keep
-            # the engine hook un-consulted (#20316 contract — the cooldown
+            # the engine hook un-consulted contract — the cooldown
             # exists precisely because compression recently failed).
             if _compression_cooldown or _preflight_deferred or _codex_native_auto:
                 _engine_preflight = None
@@ -1090,7 +1090,7 @@ def build_turn_context(
                 _engine_preflight = getattr(
                     _compressor, "should_compress_preflight", None
                 )
-            # ── Engine-driven sub-threshold preflight maintenance (#20316) ──
+            # ── Engine-driven sub-threshold preflight maintenance ──
             # None of the threshold-path branches fired (not deferred, no
             # failure cooldown, not codex-native, and should_compress() said
             # the request is under pressure). Context engines that override
@@ -1109,7 +1109,7 @@ def build_turn_context(
             # No-op-blocking integration: a sub-threshold engine pass that
             # no-ops says nothing about over-threshold compressibility, so it
             # must neither set nor clear ``_preflight_compression_blocked``
-            # (#64382) — and being in the ``else`` arm it can never run after
+            # — and being in the ``else`` arm it can never run after
             # the threshold loop has proven a retry ineffective.
             # (resolved above, gated on no skip-branch having fired)
             _wants_engine_preflight = False
@@ -1160,7 +1160,7 @@ def build_turn_context(
         # copies), so the pre-compression index of this turn's user message
         # is stale. Re-anchor both index trackers: the api_content stamp
         # below, the loop's injection site, and the flush's persist-override
-        # row (#48677) must all target the surviving dict, not a stale
+        # row must all target the surviving dict, not a stale
         # position. Exact-content match first so a todo-snapshot user message
         # appended after the tail can't steal the anchor.
         current_turn_user_idx = reanchor_current_turn_user_idx(
@@ -1188,7 +1188,7 @@ def build_turn_context(
         _ctx_parts: list[str] = []
         # Spill oversized per-hook context to disk so a runaway plugin
         # can't inflate every subsequent turn's prompt. Ported from
-        # openai/codex PR #21069 ("Spill large hook outputs from context").
+        # openai/codex ("Spill large hook outputs from context").
         try:
             from tools.hook_output_spill import (
                 get_spill_config as _spill_cfg,

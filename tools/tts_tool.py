@@ -792,7 +792,7 @@ DEFAULT_COMMAND_TTS_MAX_TEXT_LENGTH = 5000
 # Platforms whose native voice-bubble delivery requires Ogg/Opus audio.
 # Previously only Telegram was recognized, so Matrix/Feishu/WhatsApp/Signal
 # voice replies were synthesized as MP3 and rendered as broken attachments
-# (#14841, #45557 and siblings).
+# (, and siblings).
 OPUS_VOICE_PLATFORMS = frozenset({
     "telegram",
     "matrix",
@@ -878,14 +878,14 @@ def _dispatch_to_plugin_provider(
     to fall through to the next resolution layer (built-in dispatch or
     Edge TTS default).
 
-    Resolution invariants enforced here (matches issue #30398):
+    Resolution invariants enforced here (matches):
 
     1. Built-in provider names short-circuit — never reach the plugin
        registry. The caller is responsible for the elif chain that
        handles ``edge``/``openai``/etc.; this function explicitly
        rejects those names defensively.
     2. Command-type providers declared under
-       ``tts.providers.<name>: type: command`` (PR #17843) win over a
+       ``tts.providers.<name>: type: command``  win over a
        plugin with the same name. The caller passes us only when its
        own command-provider check returned None — we re-verify here so
        a refactor of the caller can't silently break the invariant.
@@ -1183,7 +1183,7 @@ def _run_command_tts(
 ) -> subprocess.CompletedProcess:
     """Run a command-provider shell command with process-tree idle cleanup.
 
-    Child env is scrubbed of Pilotage secrets (salvage of #56332) while still
+    Child env is scrubbed of Pilotage secrets (salvage of) while still
     propagating delegated-child lineage markers when applicable.
     """
     from agent.delegation_context import delegated_child_subprocess_env
@@ -1200,7 +1200,7 @@ def _run_command_tts(
         "stderr": subprocess.PIPE,
         "text": True,
         # Lossy UTF-8 decode — locale-mismatched bytes from the TTS command
-        # must not raise in the reader threads on non-UTF-8 Windows (#45099).
+        # must not raise in the reader threads on non-UTF-8 Windows.
         "encoding": "utf-8",
         "errors": "replace",
         "env": delegated_child_subprocess_env(scrubbed),
@@ -3257,7 +3257,7 @@ def _text_to_speech_single(
                 text, file_str, provider, command_provider_config, tts_config,
             )
 
-        # Plugin-registered TTS backend (issue #30398). Fires when the
+        # Plugin-registered TTS backend. Fires when the
         # configured provider is neither a built-in nor a command-type
         # entry, AND a plugin is registered under that name. The walrus
         # binds `_plugin_path` only when the dispatcher returns a path
@@ -3425,7 +3425,7 @@ def _text_to_speech_single(
                         file_str = opus_path
                 voice_compatible = file_str.endswith(".ogg")
         elif provider not in BUILTIN_TTS_PROVIDERS:
-            # Plugin-registered provider (issue #30398). Voice-bubble
+            # Plugin-registered provider. Voice-bubble
             # delivery opts in via ``TTSProvider.voice_compatible``
             # (mirrors the command-provider opt-in). Plugins that
             # already write Opus skip the ffmpeg conversion.
@@ -4035,7 +4035,7 @@ def stream_tts_to_speaker(
             # CoreAudio init triggers a kTCCServiceMediaLibrary permission
             # prompt even though output needs no media-library access. Leaving
             # output_stream=None routes each sentence through the tempfile
-            # -> play_audio_file -> afplay path. See PR #62601 / #13291.
+            # -> play_audio_file -> afplay path. See /.
             if platform.system() == "Darwin":
                 output_stream = None
             else:

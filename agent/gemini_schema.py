@@ -114,7 +114,7 @@ def sanitize_gemini_schema(schema: Any) -> Dict[str, Any]:
     # names that exist in this node's ``properties`` and drop it when
     # nothing valid remains.  The tool handler still validates required
     # fields at execution time, so this only removes what Gemini couldn't
-    # accept anyway.  (Port of Kilo-Org/kilocode#11955.)
+    # accept anyway. (Port of Kilo-Org/kilocode.)
     required_val = cleaned.get("required")
     if isinstance(required_val, list):
         props_val = cleaned.get("properties")

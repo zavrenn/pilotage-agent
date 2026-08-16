@@ -108,8 +108,8 @@ _GLOBAL_ENV_EXACT = frozenset({
     "PILOTAGE_KANBAN_DB", "PILOTAGE_KANBAN_WORKSPACES_ROOT", "PILOTAGE_KANBAN_BOARD",
     # API-server LISTENER settings — deployment config (Docker compose
     # ``environment:`` block, systemd ``Environment=``), not profile secrets.
-    # The scoped runner reload (#64674) must keep seeing them or container
-    # deployments silently lose the api_server platform (#69379). NOTE:
+    # The scoped runner reload must keep seeing them or container
+    # deployments silently lose the api_server platform. NOTE:
     # API_SERVER_KEY is deliberately NOT here — it IS a credential and stays
     # profile-scoped.
     "API_SERVER_ENABLED", "API_SERVER_HOST", "API_SERVER_PORT",

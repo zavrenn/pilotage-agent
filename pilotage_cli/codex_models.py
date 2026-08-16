@@ -33,7 +33,7 @@ DEFAULT_CODEX_MODELS: List[str] = [
     # surfaces it. The Codex backend reports ``supported_in_api: false`` for
     # this slug; that flag describes API availability, not Codex backend
     # availability, so the fetch/cache code paths below intentionally do
-    # not filter on it. PR #12994 removed this entry on the assumption it
+    # not filter on it. removed this entry on the assumption it
     # was unsupported — that was wrong; restored here. Keep it in the
     # curated fallback so Pro users still see Spark in `/model` when live
     # discovery is unavailable (offline first run, transient API failure).

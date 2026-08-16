@@ -177,7 +177,7 @@ class WebhookAdapter(BasePlatformAdapter):
     # No human is present to answer a "session restored — what next?" prompt:
     # webhook runs are event-triggered.  The startup auto-resume turn must
     # instruct the model to FINISH the interrupted work instead of emitting an
-    # interactive acknowledgement that abandons the task (#57056).
+    # interactive acknowledgement that abandons the task.
     interactive_resume: bool = False
 
     def __init__(self, config: PlatformConfig):

@@ -155,7 +155,7 @@ def _check_dispatcher_presence(
     dashboard plugin API passes it because the dashboard backend process can
     be running under a different PILOTAGE_HOME than the profile the request
     targets, which otherwise produced a "no gateway is running" warning
-    against a perfectly healthy profile gateway (#71211). CLI callers leave
+    against a perfectly healthy profile gateway. CLI callers leave
     it ``None`` and keep the existing process-level behavior.
     """
     try:
@@ -225,7 +225,7 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
             "Durable SQLite-backed task board shared across Pilotage profiles. "
             "Tasks are claimed atomically, can depend on other tasks, and "
             "are executed by a named profile in an isolated workspace. "
-            "See https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban "
+            "See "
             "or docs/pilotage-kanban-v1-spec.pdf for the full design."
         ),
     )
@@ -1356,7 +1356,7 @@ def _cmd_boards_rm(args: argparse.Namespace) -> int:
     # When the user runs `pilotage kanban boards delete <slug>` (alias), the
     # boards_action is 'delete' but args.delete is never set to True because
     # the --delete flag belongs to the 'rm' subparser only.  Detect the alias
-    # and treat it identically to `boards rm --delete` (fixes #23139).
+    # and treat it identically to `boards rm --delete` (fixes).
     force_delete = getattr(args, "delete", False) or getattr(args, "boards_action", "") == "delete"
     try:
         res = kb.remove_board(args.slug, archive=not force_delete)
@@ -2618,10 +2618,10 @@ def _cmd_tail(args: argparse.Namespace) -> int:
 
 def _cmd_dispatch(args: argparse.Namespace) -> int:
     # Honour kanban.default_assignee as the fallback for unassigned ready
-    # tasks (#27145), kanban.max_in_progress as the global concurrency cap
-    # (#33488), kanban.max_in_progress_per_profile as the per-profile
-    # cap (#21582), and kanban.max_spawn as the per-tick spawn limit
-    # (#28805). Same semantics as the gateway dispatch path so behavior
+    # tasks, kanban.max_in_progress as the global concurrency cap
+    #, kanban.max_in_progress_per_profile as the per-profile
+    # cap, and kanban.max_spawn as the per-tick spawn limit
+    # Same semantics as the gateway dispatch path so behavior
     # matches whether the user runs the CLI directly or relies on the
     # gateway-embedded dispatcher.
     try:

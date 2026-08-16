@@ -50,7 +50,7 @@ def _wenv(name: str, default: str = "") -> str:
         # DEFAULT profile's adapter constructs/connects outside any
         # _profile_runtime_scope under multiplexing; os.environ is that
         # profile's own value there. Same pattern as Slack SLACK_APP_TOKEN
-        # (#59739) and the Matrix recovery key. A *scoped* miss still
+        # and the Matrix recovery key. A *scoped* miss still
         # returns the default (no cross-profile borrow).
         val = os.getenv(name)
     return val if val is not None else default
@@ -388,7 +388,7 @@ def whatsapp_deps_present() -> bool:
     import so a status pass doesn't pull aiohttp into the process.  The
     ACTIVE lazy-installer (``ensure_whatsapp_requirements``) is registered
     as ``ensure_deps_fn`` and runs from ``create_adapter()`` when this
-    returns False (#79812).
+    returns False.
     """
     if not check_whatsapp_requirements():
         return False
@@ -1406,7 +1406,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
 
             # Must wrap in `async with` — a bare `await session.post(...)`
             # leaves the response object alive until GC, holding its TCP
-            # socket in CLOSE_WAIT. See #18451.
+            # socket in CLOSE_WAIT. See.
             async with self._http_session.post(
                 f"http://127.0.0.1:{self._bridge_port}/typing",
                 json={"chatId": to_whatsapp_jid(chat_id)},
@@ -1772,10 +1772,10 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Plugin migration glue (#41112 / #3823)
+# Plugin migration glue / )
 #
 # Added when the WhatsApp adapter moved from gateway/platforms/whatsapp.py into
-# this bundled plugin. Mirrors the Discord (#24356) / Slack migrations: a
+# this bundled plugin. Mirrors the Discord / Slack migrations: a
 # register(ctx) entry point plus hook implementations that replace the
 # per-platform core touchpoints (the Platform.WHATSAPP elif in gateway/run.py,
 # the whatsapp_cfg YAML→env block + _PLATFORM_CONNECTED_CHECKERS entry in
@@ -1965,7 +1965,7 @@ def interactive_setup() -> None:
 def _apply_yaml_config(yaml_cfg: dict, whatsapp_cfg: dict) -> dict | None:
     """Translate config.yaml whatsapp: keys into WHATSAPP_* env vars.
 
-    Implements the apply_yaml_config_fn contract (#24849). Mirrors the legacy
+    Implements the apply_yaml_config_fn contract. Mirrors the legacy
     whatsapp_cfg block from gateway/config.py::load_gateway_config(). Env vars
     take precedence over YAML. Returns None — everything flows through env.
     """
@@ -2005,7 +2005,7 @@ def _is_connected(config) -> bool:
     built-in path keyed off ``WHATSAPP_ENABLED`` in both the connected-platforms
     check and the setup-status display; returning an unconditional True here
     would make WhatsApp always show as "configured" in ``pilotage setup`` even
-    when the user never enabled it. #41112.
+    when the user never enabled it.
     """
     extra = getattr(config, "extra", {}) or {}
     if config is not None and getattr(config, "enabled", False) and extra:
@@ -2033,7 +2033,7 @@ def register(ctx) -> None:
         adapter_factory=_build_adapter,
         check_fn=whatsapp_deps_present,
         # ACTIVE lazy-installer — create_adapter() calls this when check_fn
-        # is False, right before the gateway connects WhatsApp (#79812).
+        # is False, right before the gateway connects WhatsApp.
         ensure_deps_fn=ensure_whatsapp_requirements,
         is_connected=_is_connected,
         required_env=["WHATSAPP_ENABLED"],

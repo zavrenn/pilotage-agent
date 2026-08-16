@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Ensure boto3/botocore are installed before any code in this module runs.
-# Upstream removed boto3 from [all] extras (PRs #24220, #24515); lazy_deps
+# Upstream removed boto3 from [all] extras (PRs,); lazy_deps
 # handles on-demand installation so the Bedrock provider still works in the
 # EKS deployment without baking boto3 into the base image.
 # ---------------------------------------------------------------------------
@@ -330,7 +330,7 @@ def has_aws_credentials(env: Optional[Dict[str, str]] = None) -> bool:
     Lambda execution roles, and other IMDS-based sources that don't set
     environment variables.
 
-    This two-tier approach mirrors the pattern from OpenClaw PR #62673:
+    This two-tier approach mirrors the pattern from OpenClaw:
     cloud environments (EC2, ECS, Lambda) provide credentials via instance
     metadata, not environment variables. The env-var check is a fast path
     for local development; the boto3 fallback covers all cloud deployments.
@@ -439,7 +439,7 @@ def _model_supports_tool_use(model_id: str) -> bool:
 # Claude on Bedrock already gets prompt caching through the AnthropicBedrock
 # SDK path (see is_anthropic_bedrock_model / runtime_provider.py's dual-path
 # routing) — it never reaches build_converse_kwargs unless bearer-token auth
-# forces the Converse path (#28156). This allowlist covers the Converse API
+# forces the Converse path. This allowlist covers the Converse API
 # itself: sending an unsupported model a cachePoint block raises a
 # ValidationException, so — like _model_supports_tool_use but inverted —
 # unknown models default to NOT receiving cache markers until confirmed.
@@ -519,7 +519,7 @@ def convert_tools_to_converse(tools: List[Dict]) -> List[Dict]:
 # Bedrock's Converse API rejects any text content block whose text is empty
 # OR whitespace-only (ValidationException: "text content blocks must contain
 # non-whitespace text"). A lone space is whitespace and is rejected too — the
-# placeholder MUST itself be non-whitespace. Ref: issue #9486.
+# placeholder MUST itself be non-whitespace. Ref:.
 _EMPTY_TEXT_PLACEHOLDER = "(empty)"
 
 
@@ -546,7 +546,7 @@ def _convert_content_to_converse(content) -> List[Dict]:
     Replaces empty/whitespace-only text blocks with a non-whitespace
     placeholder — Bedrock's Converse API rejects messages where a text
     content block is empty or whitespace-only (ValidationException:
-    "text content blocks must contain non-whitespace text"). Ref: issue #9486.
+    "text content blocks must contain non-whitespace text"). Ref:.
     """
     if content is None:
         return [{"text": _safe_text(content)}]
@@ -578,7 +578,7 @@ def _convert_content_to_converse(content) -> List[Dict]:
                     # Decode base64 to raw bytes — boto3 re-encodes at the
                     # wire layer, so passing the base64 string directly
                     # results in double-encoding and Bedrock rejects it with
-                    # "Failed to sanitize image".  Ref: #33317.
+                    # "Failed to sanitize image". Ref:.
                     import base64
                     try:
                         raw_bytes = base64.b64decode(data)
@@ -1072,7 +1072,7 @@ def build_converse_kwargs(
             # DeepSeek R1, reasoning-only models).  Sending toolConfig to
             # these models causes a ValidationException → retry loop → failure.
             # Strip tools for known non-tool-calling models and warn the user.
-            # Ref: PR #7920 feedback from @ptlally, pattern from PR #4346.
+            # Ref: feedback from @ptlally, pattern from.
             if _model_supports_tool_use(model):
                 if cache_enabled:
                     converse_tools = converse_tools + [{"cachePoint": {"type": "default"}}]

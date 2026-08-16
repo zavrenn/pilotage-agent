@@ -37,8 +37,8 @@ def _fmt_est_cost(est_cost: float) -> str:
     """Format an aggregate estimated cost via the shared cost-label helper.
 
     Routes through ``format_cost_label`` so sub-cent aggregates render at
-    4dp instead of collapsing to "~$0.00" (#79220 bug class — the same
-    dishonesty this module's cost buckets exist to fix, #77223).
+    4dp instead of collapsing to "~$0.00" bug class — the same
+    dishonesty this module's cost buckets exist to fix,).
     """
     return format_cost_label(Decimal(str(est_cost)))
 
@@ -523,11 +523,11 @@ class InsightsEngine:
             total_cost = sum(float(m.get("cost") or 0.0) for m in models)
             # Token totals likewise: the per-model breakdown includes
             # auxiliary usage rows (vision/compression/titles — task
-            # dimension in session_model_usage, #23270) plus reconciled
+            # dimension in session_model_usage,) plus reconciled
             # residuals, while the sessions counters carry main-loop usage
             # only. Summing the breakdown keeps overview totals consistent
             # with the per-model table and stops `pilotage insights`
-            # undercounting aux spend (#58592, #9979).
+            # undercounting aux spend.
             total_input = sum(int(m.get("input_tokens") or 0) for m in models)
             total_output = sum(int(m.get("output_tokens") or 0) for m in models)
             total_cache_read = sum(int(m.get("cache_read_tokens") or 0) for m in models)
@@ -598,7 +598,7 @@ class InsightsEngine:
     )
 
     def _get_model_usage(self, cutoff: float, source: str = None) -> List[Dict]:
-        """Fetch per-model usage rows within the window (issue #51607).
+        """Fetch per-model usage rows within the window.
 
         Returns an empty list when the table is missing (e.g. a DB opened by
         older code that never created it) so the caller can fall back to the
@@ -623,7 +623,7 @@ class InsightsEngine:
         Tokens and cost are attributed per model from session_model_usage, so a
         session that switched models mid-flight (via ``/model``) splits across
         every model it used instead of dumping everything on the initial model
-        (issue #51607). Sessions without per-model rows — e.g. data written
+        . Sessions without per-model rows — e.g. data written
         before this table existed and not yet backfilled — fall back to their
         single recorded (model, billing_provider) aggregate so nothing is lost.
 
@@ -1014,7 +1014,7 @@ class InsightsEngine:
 
         # Cost breakdown — surface the three buckets so subscription-included
         # and unknown-cost sessions are visible instead of silently collapsing
-        # to $0. See #77223.
+        # to $0. See.
         est_cost = o.get("estimated_cost", 0.0)
         included_sessions = o.get("included_cost_sessions", 0)
         unknown_sessions = o.get("unknown_cost_sessions", 0)

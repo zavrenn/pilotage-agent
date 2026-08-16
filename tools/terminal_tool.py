@@ -1095,7 +1095,7 @@ _creation_locks_lock = threading.Lock()  # Protects _creation_locks dict itself
 _cleanup_thread = None
 _cleanup_running = False
 
-# Once-per-process guard for the docker orphan reaper (issue #20561).
+# Once-per-process guard for the docker orphan reaper.
 # Set when _maybe_reap_docker_orphans first runs; concurrent _create_environment
 # calls for parallel subagents won't re-trigger the sweep.
 _docker_orphan_reaper_ran = False
@@ -1106,7 +1106,7 @@ def _maybe_reap_docker_orphans(container_config: Dict[str, Any]) -> None:
     """Run the docker orphan reaper once per process, if enabled.
 
     Sweeps long-Exited containers labeled ``pilotage-agent=1`` for the current
-    profile that match the issue #20561 leak class — containers left behind
+    profile that match the leak class — containers left behind
     by Pilotage processes that exited without firing ``atexit`` (SIGKILL,
     OOM, terminal-window-close). The reaper is conservative by default:
     only Exited containers older than ``2 × lifetime_seconds`` and scoped to
@@ -1532,7 +1532,7 @@ def _ensure_terminal_env_bridged() -> None:
     serve`` / the Desktop app backend's in-process agents, the desktop cron
     ticker, ACP) used to silently fall back to the local backend even when
     config.yaml selects ``terminal.backend: docker``, running commands on the
-    host the user intended to sandbox (#63141, #54449, #61115, #65696).
+    host the user intended to sandbox.
 
     Explicit terminal config keys win: when config.yaml has a ``terminal``
     section, each key present there overrides its matching env value (which may
@@ -1682,7 +1682,7 @@ def _get_env_config() -> Dict[str, Any]:
         "docker_network": os.getenv("TERMINAL_DOCKER_NETWORK", "true").lower() in {"true", "1", "yes"},
         "docker_extra_args": docker_extra_args,
         "docker_shm_size": docker_shm_size,
-        # Cross-process container reuse (issue #20561).  The docs claim
+        # Cross-process container reuse. The docs claim
         # "ONE long-lived container shared across sessions" — this toggle
         # makes that real by probing for a labeled container at startup and
         # attaching to it instead of always starting a fresh one.  Set to
@@ -1694,7 +1694,7 @@ def _get_env_config() -> Dict[str, Any]:
         # Startup orphan reaper for pilotage-tagged containers left behind by
         # crashed / SIGKILL'd previous processes that bypassed atexit.
         # Conservative: only sweeps Exited containers older than 2× the
-        # idle-reap window AND scoped to the current profile. Issue #20561.
+        # idle-reap window AND scoped to the current profile.
         "docker_orphan_reaper": os.getenv(
             "TERMINAL_DOCKER_ORPHAN_REAPER", "true"
         ).lower() in {"true", "1", "yes"},
@@ -1794,7 +1794,7 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
         # before the atexit cleanup hook could run.  Gated to once per
         # process so concurrent _create_environment calls (parallel
         # subagents, RL benchmarks) don't run the reaper N times.
-        # Disable via ``terminal.docker_orphan_reaper: false`` (issue #20561).
+        # Disable via ``terminal.docker_orphan_reaper: false``.
         _maybe_reap_docker_orphans(cc)
         # Per-session container isolation: a session-keyed container must not
         # outlive its session, so cross-process reuse/persist is disabled for
@@ -2057,7 +2057,7 @@ def ensure_task_env(task_id: Optional[str] = None):
     but nothing else did — so under a non-local backend (ssh, docker, …) a
     session whose first action is ``vision_analyze`` on a container-only path hit
     "no active sandbox session" because the SSH/Docker handshake never ran
-    (issue #62825). vision reads such paths inside the sandbox (see
+    . vision reads such paths inside the sandbox (see
     ``tools.image_source``), so it calls this to bring the env up on demand,
     reusing the same creation machinery as the terminal tool.
 
@@ -2233,7 +2233,7 @@ def cleanup_vm(task_id: str, *, force_remove: bool = False):
     try:
         if hasattr(env, 'cleanup'):
             # Pass force_remove only if the env's cleanup() accepts it
-            # (DockerEnvironment after issue #20561; other backends don't).
+            # (DockerEnvironment after; other backends don't).
             import inspect
             sig = inspect.signature(env.cleanup)
             if "force_remove" in sig.parameters:
@@ -2267,7 +2267,7 @@ def _atexit_cleanup():
         envs_to_wait = list(_active_environments.values())
         cleanup_all_environments()
         # Block briefly so docker stop/rm actually completes before the
-        # interpreter exits. Issue #20561 — without this join, the daemon
+        # interpreter exits. — without this join, the daemon
         # cleanup threads were getting torn down mid-`docker stop`, leaving
         # Exited containers piled up on the host.
         for env in envs_to_wait:
@@ -2511,7 +2511,7 @@ def _resolve_command_cwd(
     via ``register_task_env_overrides`` → ``record_session_cwd``) is unusable
     inside the sandbox — the shell prefixes every command with ``cd <host
     path>`` and fails with exit 126. Same guard class as the env-creation
-    sanitizers (#50636, #54447); this is the per-command sibling site.
+    sanitizers ; this is the per-command sibling site.
     """
     if workdir:
         return workdir
@@ -2832,7 +2832,7 @@ def terminal_tool(
                                     # Binary (ELF/Mach-O/PE), not a shell script:
                                     # feeding its decoded bytes back into the guard
                                     # tokenizes machine code into bogus NUL-bearing
-                                    # paths and crashes the scanner (#77703). Mirror
+                                    # paths and crashes the scanner. Mirror
                                     # lifecycle_guard._read_referenced_script and
                                     # treat it as nothing to scan.
                                     return None
@@ -2858,7 +2858,7 @@ def terminal_tool(
                         output = result.get("output", "")
                         if output and "\x00" in output:
                             # Binary content from a remote read: skip for the
-                            # same reason as the local branch above (#77703).
+                            # same reason as the local branch above.
                             return None
                         return output
                 except Exception:
@@ -3036,7 +3036,7 @@ def terminal_tool(
                 # processes that never exit (servers, watchers). For every
                 # bounded task (tests, builds, CI pollers, deploys, batch
                 # jobs) the agent almost certainly wanted notification and
-                # forgot the flag. May 2026 PR #31231 incident: bg CI poller
+                # forgot the flag. May 2026 incident: bg CI poller
                 # ran fine, exited green, agent never noticed — user had to
                 # surface the result. Cheap nudge here costs ~one read for
                 # server cases (false positive) and prevents silent
@@ -3059,8 +3059,8 @@ def terminal_tool(
                 # `--json statusCheckRollup` or `gh pr checks` piped through
                 # `jq` is the #1 cause of silent CI-watcher failures in
                 # pilotage-agent dev work. May 2026 PRs that surfaced this
-                # exact failure mode: #31329, #31448, #31695, #31709, #31745,
-                # #32264, #33131. Failure modes seen:
+                # exact failure mode:,,,
+                #,. Failure modes seen:
                 #   * `gh pr view --json statusCheckRollup --jq ...` with
                 #     `from_entries` choking on null `conclusion` keys, loop
                 #     silently exits with empty status, never terminates.
@@ -3106,8 +3106,8 @@ def terminal_tool(
                             "This looks like a homebrewed CI poller built from "
                             "`gh pr view --json statusCheckRollup` and/or "
                             "`gh pr checks | jq`. That shape has burned us "
-                            "repeatedly in pilotage-agent dev work (PRs #31329, "
-                            "#31448, #31695, #31709, #31745, #32264, #33131) — "
+                            "repeatedly in pilotage-agent dev work (PRs, "
+                            ",,,,,) — "
                             "stdout buffering kills output capture, jq null-key "
                             "edge cases silently exit the loop, conclusion-vs-"
                             "status field confusion exits early with bogus "
@@ -3273,7 +3273,7 @@ def terminal_tool(
                         "cwd": command_cwd,
                         # Foreground model-facing output: cap retention while
                         # streaming (head/tail window) so a verbose command
-                        # can't OOM the gateway before truncation (#64435).
+                        # can't OOM the gateway before truncation.
                         # Internal env.execute() consumers (file ops cat
                         # reads, RPC reads) intentionally stay unbounded.
                         "bounded_capture": True,
@@ -3403,7 +3403,7 @@ def terminal_tool(
             # credential dump, so redact_terminal_output runs the ENV pass
             # (code_file=False) to mask opaque tokens with no vendor prefix.
             # Real prefixes, auth headers, JWTs, private keys are masked in
-            # both modes. See issue #43025.
+            # both modes. See.
             from agent.redact import redact_terminal_output
             output = redact_terminal_output(output.strip(), command) if output else ""
 

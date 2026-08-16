@@ -187,7 +187,7 @@ def _enforce_worker_task_ownership(tid: str) -> Optional[str]:
     to its own task id. Tools like ``kanban_complete`` / ``kanban_block``
     / ``kanban_heartbeat`` mutate run-lifecycle state, so a buggy or
     prompt-injected worker that passed an explicit ``task_id`` for some
-    other task could corrupt sibling or cross-tenant runs (see #19534).
+    other task could corrupt sibling or cross-tenant runs.
 
     Orchestrator profiles (kanban toolset enabled but **no**
     ``PILOTAGE_KANBAN_TASK`` in env) aren't subject to this check — their
@@ -274,7 +274,7 @@ def _goal_mode_handoff_rejection(task, evidence: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Runtime-activity → board-heartbeat bridge (#31752)
+# Runtime-activity → board-heartbeat bridge
 # ---------------------------------------------------------------------------
 # When the agent ticks ``_touch_activity`` during normal work (between
 # tool calls, mid-stream chunks, etc.), we want the kanban board's
@@ -746,7 +746,7 @@ def _handle_complete(args: dict, **kw) -> str:
     try:
         kb, conn = _connect(board=board)
         try:
-            # Goal-mode pre-completion judge gate (Issue #38367).
+            # Goal-mode pre-completion judge gate.
             # Prevent workers from bypassing the auxiliary judge by
             # calling kanban_complete before acceptance criteria are met.
             # Only enforce when a judge is actually reachable — see
@@ -789,7 +789,7 @@ def _handle_complete(args: dict, **kw) -> str:
                 # kanban_complete again. Spell that out — without it the
                 # model often interprets a tool_error as a terminal
                 # failure and either blocks or crashes the run instead
-                # of retrying. See #22923.
+                # of retrying. See.
                 return tool_error(
                     f"kanban_complete blocked: the following created_cards "
                     f"do not exist or were not created by this worker: "
@@ -840,8 +840,8 @@ def _handle_block(args: dict, **kw) -> str:
             return tool_error(
                 f"kind must be one of {sorted(kb.VALID_BLOCK_KINDS)} (or omit it)"
             )
-        # Goal-mode block gate (Issue #38696, sibling of the kanban_complete
-        # judge gate in #38367). kanban_block is a second exit path out of
+        # Goal-mode block gate (, sibling of the kanban_complete
+        # judge gate in). kanban_block is a second exit path out of
         # the goal loop — run_kanban_goal_loop() treats ANY `blocked` status
         # as terminal, identically to `done`, regardless of kind. Without
         # this, a worker that learns kanban_complete is gated can just call
@@ -1097,7 +1097,7 @@ def _handle_comment(args: dict, **kw) -> str:
     # ``args["author"]`` override let a worker forge a comment from
     # an authoritative-looking name like ``pilotage-system`` and poison
     # the future-worker context with what reads as a system directive.
-    # Cross-task commenting itself remains unrestricted (see #19713) —
+    # Cross-task commenting itself remains unrestricted —
     # comments are the deliberate handoff channel between tasks.
     author = os.environ.get("PILOTAGE_PROFILE") or "worker"
     board = args.get("board")
@@ -1379,7 +1379,7 @@ def _handle_create(args: dict, **kw) -> str:
     # Resolve workspace. Workspace sharing is always explicit: omitted fields
     # mean a fresh scratch workspace, even when a dispatcher-spawned worker
     # creates the task. Reusing a parent's literal path would let a child
-    # mutate review evidence or race the parent's checkout (#67567).
+    # mutate review evidence or race the parent's checkout.
     #
     # Project identity is the one safe context to inherit implicitly. The DB
     # resolves a project-linked scratch request into a fresh per-task worktree,
@@ -1546,7 +1546,7 @@ def _maybe_auto_subscribe(conn: Any, task_id: str) -> bool:
             # regardless of whether the parent is a TUI or a CLI, so
             # treating it as a notification target would auto-subscribe
             # every CLI invocation, which is exactly the over-eager
-            # behaviour that got #19718 reverted upstream. The TUI
+            # behaviour that got reverted upstream. The TUI
             # poller keys on PILOTAGE_SESSION_KEY.
             session_key = (
                 get_session_env("PILOTAGE_SESSION_KEY", "")

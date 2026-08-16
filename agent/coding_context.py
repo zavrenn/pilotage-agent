@@ -722,7 +722,7 @@ def _git(cwd: Path, *args: str) -> str:
     Uses the shared :func:`bounded_git_probe` so the post-kill cleanup is bounded
     on Windows — a plain ``subprocess.run(timeout=...)`` here deadlocked the agent
     turn inside ``build_coding_workspace_block`` when a killed git left a suspended
-    descendant holding the pipe handles (issue #66037).
+    descendant holding the pipe handles.
     """
     return bounded_git_probe(["git", "-C", str(cwd), *args], timeout=_GIT_TIMEOUT)
 

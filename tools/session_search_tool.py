@@ -26,8 +26,8 @@ All four modes operate on the SQLite session DB via the FTS5 index and
 the get_anchored_view / get_messages_around primitives in pilotage_state.
 No LLM calls anywhere — every shape returns actual messages from the DB.
 
-History: PR #20238 (JabberELF) seeded a fast/summary dual-mode split; the
-toolkit expansion in PR #26419 (yoniebans) added the anchored drill-down,
+History: (JabberELF) seeded a fast/summary dual-mode split; the
+toolkit expansion in (yoniebans) added the anchored drill-down,
 bookends, and sort. This module merges all of that into a single calling
 shape with no mode parameter, no summary LLM path, and explicit scroll
 support.
@@ -50,7 +50,7 @@ _HIDDEN_SESSION_SOURCES = ("kanban", "subagent", "tool")
 # large volumes of repetitive vocabulary (recurring project names, dates,
 # "session", summaries); under bare BM25 they dominate the top-N FTS rows and
 # starve out the user's own interactive sessions, producing "recall blindness"
-# where only cron sessions surface (#19434). Demoting — not excluding — keeps
+# where only cron sessions surface. Demoting — not excluding — keeps
 # cron content reachable when it's the only match, while interactive sessions
 # always win when both match.
 _DEMOTED_SESSION_SOURCES = ("cron",)
@@ -77,7 +77,7 @@ _DISCOVER_SEARCH_FIELDS = (
 # These are inserted by agent/context_compressor.py as normal user/assistant
 # messages but contain machine-generated summary metadata — not user content.
 # They must be excluded from discovery bookends to avoid re-introducing huge
-# compaction payloads into fresh sessions via session_search.  (#43175)
+# compaction payloads into fresh sessions via session_search.
 _COMPACTION_PREFIXES = (
     "[CONTEXT COMPACTION",
     "[CONTEXT SUMMARY]:",
@@ -286,7 +286,7 @@ def _order_for_recall(raw_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     ranked by relevance. This only changes cross-class ordering: a cron hit
     never displaces an interactive hit during lineage dedup, so the user's
     own conversations surface first even when cron rows out-rank them under
-    bare BM25 (#19434). Demoted rows still appear when they're the only
+    bare BM25. Demoted rows still appear when they're the only
     matches.
     """
     return sorted(
@@ -491,7 +491,7 @@ def _list_recent_sessions(db, limit: int, current_session_id: str = None, link_p
         # the legacy same-key heuristic), while delegation/compression
         # children are hidden. Re-classifying rows here in Python duplicated
         # that predicate and re-hid legacy pre-marker reset children the SQL
-        # deliberately admits — trust the query instead (#85756).
+        # deliberately admits — trust the query instead.
         sessions = db.list_sessions_rich(
             limit=limit + 15,
             exclude_sources=list(_HIDDEN_SESSION_SOURCES),
@@ -785,7 +785,7 @@ def _discover(
 
     # Demote automation (cron) rows below interactive ones before dedup, so a
     # high-volume cron corpus can't starve the user's own sessions out of the
-    # top `limit` results (#19434). Stable — preserves BM25/recency order
+    # top `limit` results. Stable — preserves BM25/recency order
     # within each class.
     raw_results = _order_for_recall(raw_results)
 
@@ -830,7 +830,7 @@ def _discover(
         # /new-reset (and idle/daily/CLI new_session): the predecessor was
         # ended without carrying any transcript into the child. Same lineage
         # root, but the prior conversation is NOT in the active context —
-        # hiding it made gateway recall go blind after every /new (#85756).
+        # hiding it made gateway recall go blind after every /new.
         # A live delegation child has end_reason=None, so it stays excluded.
         #
         # In-place compaction: the FTS hit lives on the SAME session_id as the

@@ -61,7 +61,7 @@ def _has_system_browser() -> bool:
 
 
 def _has_npx_agent_browser() -> bool:
-    """agent-browser resolves lazily via npx on the default install (#43564),
+    """agent-browser resolves lazily via npx on the default install,
     invisible to the PATH/managed-dir probes above. Mirror
     tools.browser_tool.check_browser_requirements's Termux carve-out so this
     check can't diverge from what browser tools actually find."""

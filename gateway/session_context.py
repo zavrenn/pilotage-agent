@@ -471,7 +471,7 @@ def declare_stateless_channel() -> None:
     returned within the turn instead of being dispatched to a channel that will
     never deliver them.
 
-    See NousResearch/hermes-agent#53027 and #63142.
+ and.
     """
     _SESSION_ASYNC_DELIVERY.set(False)
 

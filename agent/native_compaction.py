@@ -274,13 +274,13 @@ def is_native_compaction_rejection(error: Any, status_code: Any = None) -> bool:
     disable native compaction for the rest of the session, retry. Matching
     is deliberately narrow — a transient 5xx/timeout whose body merely
     ECHOES the request (and therefore contains the field name) must NOT
-    permanently downgrade native compaction for the session (#82777).
+    permanently downgrade native compaction for the session.
 
     Two conditions, both required when a status is known:
 
     * ``status_code`` is 400 (or unknown/None — some transports surface
       only a message string; field-name matching alone is then the best
-      available signal, preserving pre-#82777 behavior for them), and
+      available signal, preserving pre- behavior for them), and
     * the error text names ``context_management`` / ``compact_threshold``
       alongside rejection language ("unknown", "unsupported", "invalid",
       "unexpected", "not permitted"...). A bare field-name echo without

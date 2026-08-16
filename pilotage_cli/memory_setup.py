@@ -28,7 +28,7 @@ def _provider_pip_dependencies(provider_name: str, declared: list) -> list:
     ``hindsight-all`` (daemon + embedder + client) during
     ``pilotage memory setup`` — if the update-time refresh only reinstalled
     the declared ``hindsight-client``, the embedded daemon would stay
-    broken after a venv rebuild stripped ``hindsight-embed`` (#70636).
+    broken after a venv rebuild stripped ``hindsight-embed``.
     """
     deps = list(declared or [])
     if provider_name == "hindsight":
@@ -112,7 +112,7 @@ def _install_dependencies(provider_name: str, *, force: bool = False) -> None:
     reinstalls anything missing or version-drifted and no-ops on satisfied
     ranges. This is how ``pilotage update`` heals the active memory provider
     after a venv rebuild/sync removed or downgraded its bridge packages
-    (#53272, #70636).
+    .
     """
     import subprocess
     from plugins.memory import find_provider_dir

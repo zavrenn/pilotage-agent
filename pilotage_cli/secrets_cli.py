@@ -27,7 +27,7 @@ from rich.table import Table
 # ``cryptography`` at module-import time.  On Windows the resulting
 # ``cryptography._rust.pyd`` is mapped into the running process — and when
 # that process is ``pilotage update``, the self-lock preflight detects the
-# loaded native module and defers (#86781).  Keep the backend import lazy:
+# loaded native module and defers. Keep the backend import lazy:
 # this module is registered parse-time from ``pilotage_cli.main`` and must not
 # touch ``bw`` until a handler actually runs.
 #
@@ -59,7 +59,7 @@ def __getattr__(name: str):
     Existing callers (and upstream tests) monkeypatch attributes on
     ``pilotage_cli.secrets_cli.bw`` directly.  Resolving that attribute at
     module-import time would re-import ``cryptography`` eagerly — the very
-    self-lock we are preventing (#86781).  Defer the backend import until
+    self-lock we are preventing. Defer the backend import until
     the first actual attribute access, so ``import pilotage_cli.secrets_cli``
     stays crypto-free while ``secrets_cli.bw.find_bws`` still resolves.
     """

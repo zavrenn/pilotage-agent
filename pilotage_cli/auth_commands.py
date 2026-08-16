@@ -320,7 +320,7 @@ def auth_add_command(args) -> None:
         # The singleton round-trip collapsed every added account into the
         # latest login: a second ``pilotage auth add openai-codex`` overwrote
         # the first account's singleton-mirrored ``device_code`` entry rather
-        # than creating an independent one (#39236). ``manual:device_code``
+        # than creating an independent one. ``manual:device_code``
         # entries refresh from their own token pair, so they need no singleton
         # shadow.
         entry = PooledCredential(

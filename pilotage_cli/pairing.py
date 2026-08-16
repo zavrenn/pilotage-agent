@@ -81,7 +81,7 @@ def _cmd_approve(store, platform: str, code: str):
     elif store._is_locked_out(platform):
         # Disambiguate: approve_code returns None for both invalid codes
         # and lockout. Tell the operator it's lockout so they don't chase
-        # a "wrong code" rabbit hole (#10195).
+        # a "wrong code" rabbit hole.
         import time as _time
         limits = store._load_json(store._rate_limit_path())
         lockout_until = limits.get(f"_lockout:{platform}", 0)

@@ -1,4 +1,4 @@
-"""Shared session activity observation contract (#72016 / #72039).
+"""Shared session activity observation contract / ).
 
 Observation-only: timestamp + bounded description/provenance.
 Notification, timeout, kill, and retry policy stay in their own components.
@@ -33,7 +33,7 @@ class ActivityProvenance(str, Enum):
     """Where a durable/in-memory activity stamp came from."""
 
     UNKNOWN = "unknown"
-    # Compression writers (#72424 / activity contract): heartbeat, host timeout, cooldown.
+    # Compression writers / activity contract): heartbeat, host timeout, cooldown.
     AGENT_COMPRESSION = "agent.compression"
     AGENT_COMPRESSION_TIMEOUT = "agent.compression_timeout"
     AGENT_COMPRESSION_COOLDOWN = "agent.compression_cooldown"

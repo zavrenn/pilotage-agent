@@ -13,7 +13,7 @@ this module. Nothing else may:
 History: personality state used to be written differently per surface — the
 old CLI/gateway wrote rendered personality TEXT into ``agent.system_prompt``
 while the TUI/desktop wrote the NAME to ``display.personality``. When
-``display.personality`` became authoritative (PR #81946), years of stale
+``display.personality`` became authoritative, years of stale
 per-surface state resurrected personalities users had turned off. The v34
 config migration resets the selection once; this module ensures the split
 cannot happen again.

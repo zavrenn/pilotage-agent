@@ -552,7 +552,7 @@ DEFAULT_CONTEXT_LENGTHS = {
     "solar-mini": 32768,
     # Tencent — Hy3 Preview (Hunyuan) with 256K context window.
     # OpenRouter live metadata reports 262144 (256 × 1024); align the
-    # static fallback so cache and offline both agree (issue #22268).
+    # static fallback so cache and offline both agree.
     "hy3-preview": 262144,
     # Tencent — Hy3 (GA successor to Hy3 Preview), same 256K window.
     "hy3": 262144,
@@ -1194,7 +1194,7 @@ def fetch_model_metadata(force_refresh: bool = False) -> Dict[str, Dict[str, Any
         _ensure_requests()
         # Tuple (connect, read) — flat timeout=10 means urllib3 can block 10s per
         # retry stage through proxies that 403 CONNECT, ballooning to minutes
-        # (#46620). 5s connect / 10s read fails fast on unreachable hosts.
+        # 5s connect / 10s read fails fast on unreachable hosts.
         response = requests.get(OPENROUTER_MODELS_URL, timeout=(5, 10), verify=_resolve_requests_verify())
         response.raise_for_status()
         data = response.json()
@@ -1751,7 +1751,7 @@ def is_output_cap_error(error_msg: str) -> bool:
     misclassified as a context-overflow it gets routed into the compression
     loop, the compressor re-issues the call with the same oversized
     ``max_tokens``, the provider rejects it identically, and the session
-    death-loops until "cannot compress further" (issue #55546, DashScope/Qwen:
+    death-loops until "cannot compress further" (, DashScope/Qwen:
     "Range of max_tokens should be [1, 65536]").  Compression cannot help an
     output-cap error — the input already fits.
 
@@ -2664,8 +2664,8 @@ def get_model_context_length(
     # lookup_models_dev_context at step 5f, once the catalog has actually
     # missed — so a _default can never preempt custom_providers or live
     # probes). This is the supported self-unblock path for models with
-    # wrong context in models.dev (#84482) and for custom/local models
-    # (#8731). Config-read only; never blocks on the network.
+    # wrong context in models.dev and for custom/local models
+    # Config-read only; never blocks on the network.
     if provider and model:
         try:
             from agent.models_dev import _override_context_window
@@ -2678,7 +2678,7 @@ def get_model_context_length(
     # 0c. custom_providers per-model override — check before any probe.
     # This closes the gap where /model switch and display paths used to fall
     # back to 128K despite the user having a per-model context_length set.
-    # See #15779.
+    # See.
     if custom_providers and base_url and model:
         try:
             from pilotage_cli.config import get_custom_provider_context_length
@@ -2889,7 +2889,7 @@ def get_model_context_length(
             # Modelfile context values first.  _query_local_context_length
             # prefers num_ctx from Modelfile, while _query_ollama_api_show
             # returns the GGUF training max first which can be larger and
-            # would create a false-safe window for compression (#63122).
+            # would create a false-safe window for compression.
             # Non-local endpoints preserve the existing GGUF-first behavior.
             if is_local_endpoint(base_url):
                 local_ctx = _query_local_context_length(model, base_url, api_key=api_key)
@@ -3234,7 +3234,7 @@ def estimate_messages_tokens_rough(messages: List[Dict[str, Any]]) -> int:
 #   * strings are fingerprinted by ``id()`` AND pinned (a strong reference is
 #     stored in the cache entry). While the entry lives, that id cannot be
 #     reused by another object, so id-equality implies object-equality —
-#     strings are immutable, so value-equality too (no #50372-style aliasing).
+# strings are immutable, so value-equality too (no-style aliasing).
 #   * ints/floats/bools/None are fingerprinted by value.
 #   * dicts/lists recurse structurally, preserving key order — ``str(shadow)``
 #     depends on insertion order, so order is part of the key.

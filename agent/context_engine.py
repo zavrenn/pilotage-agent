@@ -113,7 +113,7 @@ class ContextEngine(ABC):
     # override via __init__ or property; defaults are sensible for most
     # engines.
     #
-    # protect_first_n semantics (since PR #13754): count of non-system head
+    # protect_first_n semantics (since): count of non-system head
     # messages always preserved verbatim, IN ADDITION to the system prompt
     # which is always implicitly protected.  Default 3 keeps the
     # historical "system + first 3 non-system messages" head shape.
@@ -155,7 +155,7 @@ class ContextEngine(ABC):
         summary-LLM cooldown or an anti-thrashing guard) override this to
         surface a human-readable reason so callers can warn the user instead
         of silently skipping compression. Added for the silent-overflow
-        warning fix (#62625) so plugin engines don't raise AttributeError.
+        warning fix so plugin engines don't raise AttributeError.
         """
         return self.should_compress(prompt_tokens), None
 

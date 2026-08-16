@@ -1,6 +1,6 @@
 """Periodic process memory usage logging for the gateway.
 
-Ported from cline/cline#10343 (src/standalone/memory-monitor.ts).
+Ported from cline/cline (src/standalone/memory-monitor.ts).
 
 The gateway is a long-lived process that accumulates memory as it caches
 agent instances, session transcripts, tool schemas, memory providers, MCP

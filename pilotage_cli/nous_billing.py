@@ -77,7 +77,7 @@ class BillingError(Exception):
         self.portal_url = portal_url
         self.retry_after = retry_after
         self.payload = payload or {}
-        # Remote-Spending contract extras (NAS PR #481): `actor` (self|admin) on a
+        # Remote-Spending contract extras (NAS): `actor` (self|admin) on a
         # revoke, `code` (the new machine code dual-emitted alongside `error`), and
         # `recovery` (reconnect|login|enable_account_toggle). Additive — absent on
         # older NAS / unrelated errors.
@@ -312,7 +312,7 @@ def _raise_for_error(
 ) -> None:
     """Map an HTTP error response to the right typed :class:`BillingError`.
 
-    Recognizes the Remote-Spending gate contract (NAS PR #481):
+    Recognizes the Remote-Spending gate contract (NAS):
     403 ``remote_spending_revoked`` (this terminal's spend revoked → reconnect),
     401 ``session_revoked`` (full logout → re-login), 503 ``temporarily_unavailable``
     (gate fail-closed → back off, NOT revoked). The business-denial codes

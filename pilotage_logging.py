@@ -58,7 +58,7 @@ from typing import Optional, Sequence
 #     guarantee and the eager file-creation those paths depend on.
 # Aliasing keeps every existing ``RotatingFileHandler`` reference in this
 # module (class declaration, ``isinstance`` checks, docstring) working
-# unchanged. See #44873.
+# unchanged. See.
 if sys.platform == "win32":
     from concurrent_log_handler import (  # noqa: E402
         ConcurrentRotatingFileHandler as RotatingFileHandler,
@@ -233,7 +233,7 @@ class _ComponentFilter(logging.Filter):
 # Used by _ComponentFilter and exposed for ``pilotage logs --component``.
 COMPONENT_PREFIXES = {
     # ``plugins.platforms`` covers messaging-platform adapters that migrated
-    # out of ``gateway/platforms/`` into bundled plugins (#41112) — they are
+    # out of ``gateway/platforms/`` into bundled plugins — they are
     # still gateway components and their logs belong in gateway.log / match
     # ``pilotage logs --component gateway``.
     "gateway": ("gateway", "pilotage_plugins", "plugins.platforms"),

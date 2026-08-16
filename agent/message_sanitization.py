@@ -127,7 +127,7 @@ def _sanitize_messages_surrogates(messages: list) -> bool:
         # reasoning_content, reasoning_details, etc.) — surrogates from
         # byte-level reasoning models (xiaomi/mimo, kimi, glm) can lurk
         # in these fields and aren't covered by the per-field checks above.
-        # Matches _sanitize_messages_non_ascii's coverage (PR #10537).
+        # Matches _sanitize_messages_non_ascii's coverage.
         for key, value in msg.items():
             if key in {"content", "name", "tool_calls", "role"}:
                 continue
@@ -150,7 +150,7 @@ def _escape_invalid_chars_in_json_strings(raw: str) -> str:
     sequence with their ``\\uXXXX`` equivalents. Pass-through for everything
     else.
 
-    Ported from #12093 — complements the other repair passes in
+    Ported from — complements the other repair passes in
     ``_repair_tool_call_arguments`` when ``json.loads(strict=False)`` is
     not enough (e.g. llama.cpp backends that emit literal apostrophes or
     tabs alongside other malformations).
@@ -185,7 +185,7 @@ def _escape_invalid_chars_in_json_strings(raw: str) -> str:
 
 # When a repair is about to destroy the only copy of a tool call's original
 # argument bytes (rewriting them to "{}"), the WARNING log is the last
-# surviving copy of content that can hold real user data (#80498). Bound the
+# surviving copy of content that can hold real user data. Bound the
 # logged string at this size instead of a short preview so it stays
 # recoverable from agent.log without letting a pathological payload flood
 # the log.
@@ -217,7 +217,7 @@ def _repair_tool_call_arguments(raw_args: str, tool_name: str = "?") -> str:
     # characters (tabs, newlines) inside JSON string values. json.loads
     # with strict=False accepts these and lets us re-serialise the
     # result into wire-valid JSON without any string surgery. This is
-    # the most common local-model repair case (#12068).
+    # the most common local-model repair case.
     try:
         parsed = json.loads(raw_stripped, strict=False)
         reserialised = json.dumps(parsed, separators=(",", ":"))
@@ -283,7 +283,7 @@ def _repair_tool_call_arguments(raw_args: str, tool_name: str = "?") -> str:
     # crash the entire session. Log the FULL original string (bounded) —
     # for callers that discard the original (e.g. the pre-send transcript
     # sanitizer), this WARNING is the last surviving copy of bytes that can
-    # contain real user content (#80498: a truncated write_file call's
+    # contain real user content (: a truncated write_file call's
     # streamed file content).
     logger.warning(
         "Unrepairable tool_call arguments for %s — "
@@ -302,7 +302,7 @@ def close_interrupted_tool_sequence(messages: list, final_response: Any = None) 
     the next user message lands as ``… tool → user`` — a role-alternation
     violation that strict providers (Gemini, Claude) react to by hallucinating
     a continuation of the user's message and ignoring prior context, which
-    reads to the user as "lost context" (#48879).
+    reads to the user as "lost context".
 
     ``finalize_turn`` closes this on the happy interrupt path, but the
     retry/backoff/error interrupt aborts in ``conversation_loop`` ``return``
@@ -513,7 +513,7 @@ __all__ = [
 #   * run_agent.AIAgent._get_tool_call_id_static — `call_id or id`
 #     coalescing for dicts and SDK objects.
 #   * run_agent.AIAgent._uniquify_tool_call_ids — duplicate-id repair with
-#     deterministic `_d<n>` suffixes (#58327 loss class).
+# deterministic `_d<n>` suffixes loss class).
 #
 # NOT consolidated (different scheme on purpose):
 #   agent/transports/codex_event_projector._deterministic_call_id maps codex
@@ -554,9 +554,9 @@ def uniquify_tool_call_ids(tool_calls: list) -> list:
     Some models/providers reuse one call id across different calls in a
     single batch (observed with native Kimi Responses replays, Ollama-
     compatible endpoints, and degraded models at long context; same bug
-    class as openclaw/openclaw#110518 / #110956). Duplicate ids are lossy
+    class as openclaw/ /). Duplicate ids are lossy
     downstream: the pre-API sanitizer keeps only the first call/result
-    pair per id (#58327), so the later call's result silently vanishes
+    pair per id, so the later call's result silently vanishes
     from every replayed payload, and strict providers (Anthropic
     tool_use, DeepSeek) reject duplicate ids outright.
 
@@ -644,13 +644,13 @@ def uniquify_tool_call_ids(tool_calls: list) -> list:
 #                moonshot.ai / moonshot.cn.  Host-driven on purpose:
 #                aggregators re-exporting kimi models reject the echo.
 #     deepseek — provider "deepseek", model contains "deepseek", or host
-#                api.deepseek.com (#15250; V4 rejects empty-string pads,
-#                hence the " " single-space pad, #17341).
+# api.deepseek.com (; V4 rejects empty-string pads,
+# hence the " " single-space pad,).
 #     mimo     — provider "xiaomi", model contains "mimo", or host
 #                *.xiaomimimo.com.
 #   strict side (field rejected with 400/422 "Extra inputs are not
 #     permitted"): everyone else — Mistral, Cerebras, Groq, SambaNova, …
-#     (#45655). Strip the key entirely, even a single-space pad.
+# Strip the key entirely, even a single-space pad.
 
 _REASONING_ECHO_RULES: tuple = (
     # (family, exact providers (raw), exact providers (lowered),
@@ -728,7 +728,7 @@ def apply_reasoning_content_policy(
     # When the active provider enforces the thinking-mode echo-back
     # (DeepSeek / Kimi / MiMo), preserve it verbatim — that includes their
     # own space-placeholder written at creation time and any valid reasoning
-    # from the same provider. Sessions persisted BEFORE #17341 have
+    # from the same provider. Sessions persisted BEFORE have
     # empty-string placeholders pinned at creation time; DeepSeek V4 Pro
     # rejects those with HTTP 400, so upgrade "" → " " on replay.
     #
@@ -740,7 +740,7 @@ def apply_reasoning_content_policy(
     # reasoning primary (DeepSeek/Kimi/MiMo) pads history with " ", then a
     # fallback to a strict provider replays that pad and 422s. Stripping
     # here covers the rebuild path; ``reapply_reasoning_echo`` covers the
-    # already-built api_messages path. Refs #45655.
+    # already-built api_messages path. Refs.
     existing = source_msg.get("reasoning_content")
     if isinstance(existing, str):
         if not needs_thinking_pad:
@@ -751,7 +751,7 @@ def apply_reasoning_content_policy(
             api_msg["reasoning_content"] = existing
         return
 
-    # 2. Cross-provider poisoned history (#15748): on DeepSeek/Kimi,
+    # 2. Cross-provider poisoned history: on DeepSeek/Kimi,
     # if the source turn has tool_calls AND a 'reasoning' field but no
     # 'reasoning_content' key, the 'reasoning' text was written by a
     # prior provider (e.g. MiniMax) — DeepSeek's own _build_assistant_message
@@ -761,7 +761,7 @@ def apply_reasoning_content_policy(
     # Inject a single space to satisfy the API without leaking another
     # provider's chain of thought to DeepSeek/Kimi. Space (not "")
     # because DeepSeek V4 Pro rejects empty-string reasoning_content
-    # in thinking mode (refs #17341).
+    # in thinking mode (refs).
     normalized_reasoning = source_msg.get("reasoning")
     if (
         needs_thinking_pad
@@ -775,9 +775,9 @@ def apply_reasoning_content_policy(
     # 3. Healthy session: promote 'reasoning' field to 'reasoning_content'
     # for providers that use the internal 'reasoning' key.
     # This must happen before the unconditional empty-string fallback so
-    # genuine reasoning content is not overwritten (#15812 regression in
-    # PR #15478). Only promote for providers that enforce echo-back —
-    # strict providers reject the field (refs #45655).
+    # genuine reasoning content is not overwritten regression in
+    #). Only promote for providers that enforce echo-back —
+    # strict providers reject the field (refs).
     if isinstance(normalized_reasoning, str) and normalized_reasoning:
         if needs_thinking_pad:
             api_msg["reasoning_content"] = normalized_reasoning
@@ -792,7 +792,7 @@ def apply_reasoning_content_policy(
     # at all) and plain text turns. Space (not "") because DeepSeek V4
     # Pro tightened validation and rejects empty string with HTTP 400
     # ("The reasoning content in the thinking mode must be passed back
-    # to the API"). Refs #17341.
+    # to the API"). Refs.
     if needs_thinking_pad:
         api_msg["reasoning_content"] = " "
         return
@@ -821,7 +821,7 @@ def reapply_reasoning_echo(api_messages: list, needs_thinking_pad: bool) -> int:
       primary carry a ``reasoning_content`` pad (often a single space ``" "``),
       and the strict provider rejects it with HTTP 400/422 ("Extra inputs are
       not permitted").  Strip the field.  This is the exact cross-provider
-      fallback bug from #45655 — a DeepSeek primary pads history with ``" "``,
+      fallback bug from — a DeepSeek primary pads history with ``" "``,
       the request falls back to Mistral, and Mistral 422s on the stale pad.
 
     Calling this immediately before building the request kwargs reconciles the

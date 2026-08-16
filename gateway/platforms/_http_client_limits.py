@@ -12,7 +12,7 @@ Cloudflare Warp (and other transparent proxies), peer-initiated FIN can
 sit in ``CLOSE_WAIT`` longer than that before the local socket actually
 drains — which, multiplied across 7 long-lived adapters plus the LLM
 client and MCP clients, walks straight into the default 256 fd limit.
-See #18451.
+See.
 
 ``platform_httpx_limits()`` returns a tighter ``httpx.Limits`` the
 adapter factories use instead of the httpx default.  The values chosen:

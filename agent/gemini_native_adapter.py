@@ -293,7 +293,7 @@ def _tool_call_extra_signature(tool_call: Dict[str, Any]) -> Optional[str]:
 # quota fallback) when history leaves a human user text turn directly after a
 # tool-result turn. Interposed between the two user contents so the request
 # stays alternation-valid while the user's message remains a turn of its own.
-# Mirrors gemini-cli's INTERRUPTED_RESPONSE_PLACEHOLDER (gemini-cli#28700).
+# Mirrors gemini-cli's INTERRUPTED_RESPONSE_PLACEHOLDER (gemini-cli).
 _INTERRUPTED_RESPONSE_PLACEHOLDER = (
     "[The previous response was interrupted before it completed.]"
 )
@@ -412,9 +412,9 @@ def _build_gemini_contents(messages: List[Dict[str, Any]]) -> tuple[List[Dict[st
     #    Gemini 3 accepts that fold with HTTP 200 but then reads the trailing
     #    text as a continuation of the tool result — it returns an empty
     #    candidate or "finishes the user's sentence" instead of answering
-    #    (same defect gemini-cli fixed in google-gemini/gemini-cli#28700).
+    # (same defect gemini-cli fixed in google-gemini/gemini-cli).
     # 3) Because rule 1's HTTP 400 makes two consecutive user contents unsafe
-    #    to emit (#55125 — the reason this merge exists), the split pair is
+    # to emit — the reason this merge exists), the split pair is
     #    kept API-valid by interposing a placeholder model turn between the
     #    functionResponse content and the human text content, mirroring
     #    gemini-cli's INTERRUPTED_RESPONSE_PLACEHOLDER repair.
@@ -1102,7 +1102,7 @@ class AsyncGeminiNativeClient:
         self.base_url = sync_client.base_url
         self.chat = _AsyncGeminiChatNamespace(self)
         # Expose the underlying sync client as _real_client so the auxiliary
-        # cache's eviction-by-leaf-client helper (#23482) can find and drop
+        # cache's eviction-by-leaf-client helper can find and drop
         # this async entry when the sync GeminiNativeClient is poisoned.
         # GeminiNativeClient is itself the leaf (no OpenAI client beneath
         # it), so we point at the sync_client directly.

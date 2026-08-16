@@ -9,7 +9,7 @@ _BRACKETED_PASTE_BOUNDARY_END = re.compile(r"\[201~(?=$|[\s\n<\[\(\):;.,!?])")
 _BRACKETED_PASTE_DEGRADED_START = re.compile(r"(^|[\s\n>:\]\)])00~")
 _BRACKETED_PASTE_DEGRADED_END = re.compile(r"01~(?=$|[\s\n<\[\(\):;.,!?])")
 
-# Corruption signature from desktop bracketed-paste leaks (#62557).
+# Corruption signature from desktop bracketed-paste leaks.
 _DESKTOP_PASTE_ARTIFACT = "~[[e"
 
 
@@ -40,7 +40,7 @@ def strip_leaked_bracketed_paste_wrappers(text: str) -> str:
 
 
 def collapse_repeated_input_artifacts(text: str, min_repeats: int = 4) -> str:
-    """Drop a trailing run of the desktop ~[[e corruption signature (#62557)."""
+    """Drop a trailing run of the desktop ~[[e corruption signature."""
     if not text:
         return text
 

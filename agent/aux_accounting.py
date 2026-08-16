@@ -3,7 +3,7 @@
 Auxiliary calls (vision, compression, title generation, web_extract,
 session_search, ...) funnel through ``agent.auxiliary_client`` which has no
 session handle — so their token usage was historically discarded, leaving
-dashboard analytics blind to aux model spend (issue #23270).
+dashboard analytics blind to aux model spend.
 
 Instead of threading ``session_db``/``session_id`` parameters through every
 aux call site, the agent loop publishes them here (mirroring the Nous Portal

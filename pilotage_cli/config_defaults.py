@@ -76,13 +76,13 @@ DEFAULT_CONFIG = {
         # Keep this short and under systemd TimeoutStopSec — a long value
         # here invites SIGKILL-mid-cleanup. For in-band restart
         # (/restart, SIGUSR1), prefer restart_after_turn_timeout below so
-        # active turns finish *before* stop() begins (#77184).
+        # active turns finish *before* stop begins.
         "restart_drain_timeout": 0,
         # Cron-only floor under the stop()/drain wait (seconds). A chat turn
         # interrupted by a restart is announced to the user and resumed on
         # their next message; an interrupted cron run is written to jobs.json
         # as a permanent failure that nobody is waiting on, so it must not
-        # inherit restart_drain_timeout's 0 (#82161). Clamped at runtime to
+        # inherit restart_drain_timeout's 0. Clamped at runtime to
         # the shutdown-watchdog leash minus teardown headroom, so raising it
         # past ~50s has no effect unless TimeoutStopSec is raised too.
         # 0 = opt out (cron drains on restart_drain_timeout, legacy).
@@ -94,12 +94,12 @@ DEFAULT_CONFIG = {
         # 0 = legacy behaviour (enter stop()/drain immediately). Default
         # 30 min is a safety valve for wedged agents, not a target latency —
         # an interactive `pilotage gateway restart` must never block for hours
-        # on a turn that wedged (#79133). Long unattended turns can raise
+        # on a turn that wedged. Long unattended turns can raise
         # this in config.yaml.
         "restart_after_turn_timeout": 1800,
         # Upper bound (seconds) a submitted prompt waits for the deferred
         # agent build (MCP discovery, model metadata, skills scan) before
-        # failing with a visible error (#63078). The gateway's wait is
+        # failing with a visible error. The gateway's wait is
         # patient — the prompt is delivered the moment the build completes
         # and a progress notice is emitted past 30s — so this cap only fires
         # on a genuinely hung build. Raise it for deployments with many slow
@@ -215,7 +215,7 @@ DEFAULT_CONFIG = {
         # blocks indefinitely (input() is synchronous) and ignores this.
         # Default 3600 (1h): real users step away (meetings, AFK) and the
         # old 600s default evicted the entry mid-think, so a later button
-        # tap landed on a dead entry (#32762).  Tradeoff: a higher value
+        # tap landed on a dead entry. Tradeoff: a higher value
         # holds the gateway's running-agent guard longer for a genuinely
         # abandoned prompt — lower it if a single session must free up the
         # guard sooner.
@@ -228,7 +228,7 @@ DEFAULT_CONFIG = {
         # (60+ tool iterations with tiny output) before users assume the
         # bot is dead and /restart.
         "gateway_notify_interval": 180,
-        # Session stall watchdog (seconds). Scope (#76354): this is a
+        # Session stall watchdog (seconds). Scope: this is a
         # RECOVERY notifier for an in-process AIAgent that has an
         # adapter-queued follow-up (pending inbound / queued event) while its
         # activity clock is stale — NOT a general gateway/session stall
@@ -584,7 +584,7 @@ DEFAULT_CONFIG = {
     # payload sent to the model (keeping head + tail for terminal,
     # enforcing pagination for read_file). Tuning these trades context
     # footprint against how much raw output the model can see in one
-    # shot. Ported from anomalyco/opencode PR #23770.
+    # shot. Ported from anomalyco/opencode.
     #
     # - max_bytes:       terminal_tool output cap, in chars
     #                    (default 50_000 ≈ 12-15K tokens).
@@ -631,7 +631,7 @@ DEFAULT_CONFIG = {
 
     "compression": {
         "enabled": True,
-        "progress_notices": False,    # opt-in (#52995): when True, routine compression
+        "progress_notices": False, # opt-in: when True, routine compression
                                       # progress statuses (compacting/preflight/pre-API/
                                       # idle/retry) are delivered to chat gateway
                                       # platforms instead of being suppressed by the
@@ -775,7 +775,7 @@ DEFAULT_CONFIG = {
         "codex_app_server_auto": "native",  # Codex app-server (codex CLI runtime) thread
                                       # compaction mode. The codex agent owns the real
                                       # thread context, so Pilotage' summarizer cannot
-                                      # shrink it (#36801). native = codex decides when
+                                      # shrink it. native = codex decides when
                                       # to compact its own thread (default); pilotage =
                                       # Pilotage' compression threshold triggers
                                       # thread/compact/start; off = never auto-trigger
@@ -796,9 +796,9 @@ DEFAULT_CONFIG = {
                                       # keeps one durable id for its whole life
                                       # (no parent_session_id chain, no `name #N`
                                       # renumbering). Eliminates the session-rotation
-                                      # bug cluster (#33618 /goal loss, #14238 lost
-                                      # response, #33907 orphans, #45117 search gaps,
-                                      # #42228 null cwd) — see #38763. Non-destructive:
+                                      # bug cluster /goal loss, lost
+                                      # response, orphans, search gaps,
+                                      # null cwd) — see. Non-destructive:
                                       # the live context is compacted (lossy for what
                                       # the model reloads), but the pre-compaction
                                       # turns are soft-archived under the same id
@@ -966,7 +966,7 @@ DEFAULT_CONFIG = {
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
         },
-        # Note: session_search no longer uses an auxiliary LLM (PR #27590 —
+        # Note: session_search no longer uses an auxiliary LLM ( —
         # single-shape tool returns DB content directly). The old
         # ``auxiliary.session_search.*`` block was removed here. Existing
         # values in user config.yaml files are harmless leftovers and ignored.
@@ -1286,9 +1286,9 @@ DEFAULT_CONFIG = {
         # Default 1.0 keeps the wall-clock status-bar read-outs (idle-since-
         # last-turn) ticking and keeps the bottom chrome alive during idle —
         # without it prompt_toolkit stops repainting the status bar after a
-        # turn and it can go stale/disappear (#45592).
+        # turn and it can go stale/disappear.
         # Set 0 to disable the background refresh if it fights terminal
-        # auto-scroll in non-fullscreen mode on some emulators (#48309).
+        # auto-scroll in non-fullscreen mode on some emulators.
         "cli_refresh_interval": 1.0,
         "user_message_preview": {  # CLI: how many submitted user-message lines to echo back in scrollback
             "first_lines": 2,
@@ -1557,7 +1557,7 @@ DEFAULT_CONFIG = {
             "model": "hey_pilotage",
             # "" (auto — tflite on macOS ARM64, onnx elsewhere) | "onnx" | "tflite".
             # openWakeWord's onnx backend scores near-zero on macOS ARM64
-            # (dscripka/openWakeWord#336), so auto avoids a listener that arms
+            # (dscripka/openWakeWord), so auto avoids a listener that arms
             # but never fires. Set explicitly only to override that choice.
             "inference_framework": "",
         },
@@ -1753,7 +1753,7 @@ DEFAULT_CONFIG = {
         #               shown in the UI + saved MoA trace records); the
         #               aggregator still sees raw advisor text.
         #   "full"    — additionally redact the advisor text injected into
-        #               the aggregator prompt (issue #59959).
+        # the aggregator prompt.
         "privacy_filter": "",
         "presets": {
             "default": {
@@ -2063,7 +2063,7 @@ DEFAULT_CONFIG = {
         # Default inference model for cron jobs (Axis A — WHAT model an
         # agent job runs on). Resolution at fire time: per-job user pin >
         # cron.model > global model.default. When set, unpinned jobs follow
-        # this deliberately, so the #44585 model-drift fail-closed guard does
+        # this deliberately, so the model-drift fail-closed guard does
         # not engage for the model axis — cron spend no longer shadows chat
         # `/model` switches. Empty string = fall through to model.default.
         "model": "",
@@ -2170,7 +2170,7 @@ DEFAULT_CONFIG = {
         # assignee to any installed profile. When unset, falls back to the
         # default profile. A task never ends up with assignee=None.
         "default_assignee": "",
-        # Per-profile concurrency cap (#21582). When set to a positive int,
+        # Per-profile concurrency cap. When set to a positive int,
         # no single profile can have more than N workers running at once,
         # even if the global max_in_progress / max_spawn caps would allow
         # it. Tasks blocked this way defer to the next dispatcher tick.
@@ -2288,8 +2288,11 @@ DEFAULT_CONFIG = {
     # update model picker lists without shipping a pilotage-agent release.
     # The default URL is served by the docs site GitHub Pages deploy.
     "model_catalog": {
-        "enabled": True,
-        "url": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json",
+        # Remote catalog disabled: no hosted Pilotage manifest exists yet.
+        # Point url at a self-hosted JSON (same schema) and set enabled:
+        # true to restore live fetching.
+        "enabled": False,
+        "url": "",
         # Disk cache TTL in hours.  Beyond this, the CLI refetches on the
         # next /model or `pilotage model` invocation; network failures
         # silently fall back to the stale cache.
@@ -2325,8 +2328,8 @@ DEFAULT_CONFIG = {
     # An unknown model id (not in models.dev) starts from safe defaults
     # (200K context, tools on, vision/reasoning off) and the override
     # patches the fields it sets — overriding a model the catalog
-    # doesn't know yet is the supported self-unblock path (#84482,
-    # #8731).
+    # doesn't know yet is the supported self-unblock path,
+    #).
     #
     # Provider keys accept the Pilotage provider id (as used elsewhere in
     # this file) or the models.dev provider id; model ids match
@@ -2424,14 +2427,14 @@ DEFAULT_CONFIG = {
         # Seconds the gateway waits for a single messaging platform to finish
         # connecting during startup (and on reconnect). A platform can blow
         # past the old fixed 30s when an account has many slash commands to
-        # sync (#19776: 90-173 skills → ~28-31s sync). Raise this if your
+        # sync (: 90-173 skills → ~28-31s sync). Raise this if your
         # gateway hits connect-timeout restart loops. ``0`` or negative disables
         # the timeout entirely (wait indefinitely). Bridged at startup to the
         # internal PILOTAGE_GATEWAY_PLATFORM_CONNECT_TIMEOUT env var, which still
         # works as a manual override and wins if set explicitly.
         "platform_connect_timeout": 30,
 
-        # In-process event-loop liveness watchdog (#69089). A daemon OS thread
+        # In-process event-loop liveness watchdog. A daemon OS thread
         # probes the gateway asyncio loop; after consecutive missed probes it
         # dumps all-thread stacks and hard-exits with the service-restart exit
         # code so the supervisor (systemd/launchd) revives the process instead
@@ -2445,7 +2448,7 @@ DEFAULT_CONFIG = {
         # producing ~/.pilotage/sessions/sessions.json entirely.
         "write_sessions_json": True,
 
-        # Auto-resume restart-loop breaker (#30719, defense-3). When the
+        # Auto-resume restart-loop breaker (, defense-3). When the
         # gateway is killed mid-turn (SIGTERM) and revived by a supervisor
         # (launchd KeepAlive / systemd Restart=), it auto-resumes the
         # restart-interrupted session on the next boot. If the resumed turn
@@ -2463,7 +2466,7 @@ DEFAULT_CONFIG = {
         # SLOW crash cycles: a loop whose period exceeds the window used to
         # prune its own history on every boot, so the counter never left 1 and
         # the breaker never tripped — e.g. the ~150s wedged-event-loop cycle in
-        # #81642 (stall -> ~90s liveness-watchdog hard-exit -> respawn ->
+        # (stall -> ~90s liveness-watchdog hard-exit -> respawn ->
         # auto-resume replays the same session), which also makes
         # `pilotage update` hang because it can never drain the gateway.
         "restart_loop_guard": {
@@ -2725,12 +2728,12 @@ DEFAULT_CONFIG = {
         #     DBs) into <PILOTAGE_HOME>/state-snapshots/ before the update.
         #     Files over 1 GiB (e.g. a bloated state.db) are skipped with a
         #     warning so the snapshot stays fast. Restore via ``/snapshot``.
-        #     This is the #15733 (lost pairing data) / #34600 (emptied cron
+        # This is the (lost pairing data) / (emptied cron
         #     jobs) safety net.
         #   full — the quick snapshot PLUS a full ``pilotage backup``-style zip
         #     of PILOTAGE_HOME into <PILOTAGE_HOME>/backups/, restorable with
         #     ``pilotage import``. Can add minutes on large homes. This is the
-        #     #48200 (wrong-path wipe) safety net. ``--backup`` forces this
+        # (wrong-path wipe) safety net. ``--backup`` forces this
         #     for a single run.
         #   off — no pre-update backup of any kind. ``--no-backup`` forces
         #     this for a single run.

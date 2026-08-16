@@ -88,7 +88,7 @@ def _transaction() -> Iterator[sqlite3.Connection]:
     alone therefore leaks a connection — and its WAL/SHM file descriptors — on
     every call, deferring the close to the garbage collector, which over a
     long-running process can exhaust ``RLIMIT_NOFILE`` (the cron-ledger sibling
-    of this bug was #69567 / PR #69594).
+    of this bug was /).
     """
     conn = _connect()
     try:

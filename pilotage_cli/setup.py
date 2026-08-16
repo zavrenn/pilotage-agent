@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
-_DOCS_BASE = "https://hermes-agent.nousresearch.com/docs"
+_DOCS_BASE = ""
 
 
 def _model_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -860,7 +860,7 @@ def setup_model_provider(config: dict, *, quick: bool = False):
     # Re-sync the wizard's config dict from what cmd_model saved to disk.
     # This is critical: cmd_model writes to disk via its own load/save cycle,
     # and the wizard's final save_config(config) must not overwrite those
-    # changes with stale values (#4172). Refresh the dict in place so callers
+    # changes with stale values. Refresh the dict in place so callers
     # that keep the same object see every section the shared model picker may
     # have changed (model, custom_providers, auxiliary, provider metadata, etc.).
     _refreshed = load_config()
@@ -1650,7 +1650,7 @@ def setup_agent_settings(config: dict):
 
     # ── Max Iterations ──
     # config.yaml is authoritative; read from there. If a legacy .env
-    # entry is still around (from pre-PR#18413 setups), prefer the
+    # entry is still around (from pre- setups), prefer the
     # config value so we don't surface a stale number to the user.
     current_max = str(cfg_get(config, "agent", "max_turns", default=90))
     print_info("Maximum tool-calling iterations per conversation.")
@@ -1994,7 +1994,7 @@ def _setup_webhooks():
     print_warning("   internet. For security, run the gateway in a sandboxed environment")
     print_warning("   (Docker, VM, etc.) to limit blast radius from prompt injection.")
     print()
-    print_info("   Full guide: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks/")
+    print_info(" Full guide: ")
     print()
 
     port = prompt("Webhook port (default 8644)")
@@ -2021,7 +2021,7 @@ def _setup_webhooks():
     print_info("      http://your-server:8644/webhooks/<route-name>")
     print()
     print_info("   Route configuration guide:")
-    print_info("   https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks/#configuring-routes")
+    print_info(" #configuring-routes")
     print()
     print_info("   Open config in your editor:  pilotage config edit")
     print_info("   Open config in your editor:  pilotage config edit")
@@ -2731,7 +2731,7 @@ def run_setup_wizard(args):
     config = load_config()
     pilotage_home = get_pilotage_home()
 
-    # Back up existing config before setup modifies it (#3522)
+    # Back up existing config before setup modifies it
     config_path = get_config_path()
     if config_path.exists():
         from datetime import datetime as _dt
@@ -2976,7 +2976,7 @@ def _run_first_time_quick_setup(config: dict, pilotage_home, is_existing: bool):
 
     # Re-sync the wizard's config dict from disk — _model_flow_nous (and the
     # underlying login/model save) write via their own load/save cycle, and the
-    # wizard's later save_config(config) must not clobber those values (#4172).
+    # wizard's later save_config(config) must not clobber those values.
     _refreshed = load_config()
     config.clear()
     config.update(_refreshed)
@@ -3059,7 +3059,7 @@ def _blank_slate_minimal_toolsets(config: dict):
                 # selections made by agent/coding_context.py — not permanent
                 # user-facing disables. Adding them here causes model_tools
                 # to subtract their tools (terminal, read_file, …) from the
-                # minimal Blank Slate surface (#57315).
+                # minimal Blank Slate surface.
             all_keys.add(k)
 
         disabled = sorted(all_keys - keep)

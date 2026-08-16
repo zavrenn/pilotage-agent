@@ -466,7 +466,7 @@ def _resolve_codex_usage_credentials(
 
     # Tier 2: the native runtime resolver. It ALREADY falls back to the
     # credential pool when the singleton is empty (see
-    # ``resolve_codex_runtime_credentials`` — issue #32992), so in a pool-only
+    # ``resolve_codex_runtime_credentials``), so in a pool-only
     # setup this returns a usable ``source="credential_pool"`` token.
     #
     # Only ``AuthError`` ("no creds" / rate-limited) is caught so tier 3 can
@@ -703,7 +703,7 @@ def redeem_codex_reset_credit(
     if code == "reset":
         # The redeemed reset restores the account's quota upstream — lift any
         # persisted pool cooldowns so Pilotage doesn't keep the credential
-        # frozen behind the now-stale ``last_error_reset_at`` (issue #43747).
+        # frozen behind the now-stale ``last_error_reset_at``.
         try:
             from pilotage_cli.auth import clear_codex_pool_quota_cooldowns
 

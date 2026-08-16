@@ -57,8 +57,8 @@ def split_command_line(line: str) -> list[str]:
     ``shlex.split(line)`` (posix=True) treats every backslash as an escape
     character, so Windows paths are silently mangled: ``C:\\Users\\me\\out.txt``
     becomes ``C:Usersmeout.txt`` — no error, just a wrong path that then
-    "succeeds" against a mangled relative filename (#83934) or makes a valid
-    hook script report "not executable" (#78293).
+    "succeeds" against a mangled relative filename or makes a valid
+    hook script report "not executable".
 
     On Windows this uses ``posix=False``, which preserves backslashes while
     still honoring double-quoted tokens ("path with spaces"). The trade-off
@@ -137,7 +137,7 @@ def resolve_node_command(name: str, argv: Sequence[str]) -> list[str]:
 # present on stdlib subprocess on older Pythons or non-Windows builds.
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 # DETACHED_PROCESS is intentionally NOT part of any flag bundle here — do not
-# re-add it.  Two reasons (the recurring console-flash bug #54220 / #56747):
+# re-add it. Two reasons (the recurring console-flash bug / ):
 #
 # 1. MSDN (Process Creation Flags): CREATE_NO_WINDOW "is ignored if used with
 #    either CREATE_NEW_CONSOLE or DETACHED_PROCESS".  Combining them means
@@ -186,7 +186,7 @@ def windows_detach_flags() -> int:
       This deliberately replaces the old ``DETACHED_PROCESS`` approach:
       MSDN specifies CREATE_NO_WINDOW is *ignored* when combined with
       DETACHED_PROCESS, and a truly console-less daemon re-creates the
-      per-descendant console-flash bug (#54220/#56747) at every spawn —
+      per-descendant console-flash bug /) at every spawn —
       see the note on ``_DETACHED_PROCESS`` above.
     - ``CREATE_BREAKAWAY_FROM_JOB`` — escape any job object the parent is
       in.  Electron (Desktop app) and Tauri (bootstrap installer) wrap
@@ -349,7 +349,7 @@ def noninteractive_git_env(
     misconfigured, or requires auth, git's default behavior is to prompt on
     the inherited terminal (or via an askpass helper), which silently hangs
     the operation until its timeout — or forever at call sites without one.
-    Ported from openai/codex#34540 / #34612 ("detach non-interactive
+    Ported from openai/codex / ("detach non-interactive
     subprocesses from stdin"): a background tool invocation must fail fast
     with a readable error, not wait for input nobody can type.
 
@@ -398,8 +398,8 @@ def kill_process_tree(proc: "subprocess.Popen") -> None:
     when — the child leads its own group (``pgid == pid``), the entire group is
     signalled with ``os.killpg``. The ownership check means a fallback spawn
     that shares our group can never cause us to kill unrelated processes.
-    Ported from openai/codex#36793 ("Terminate timed-out Git process trees");
-    generalized for the shell-hook runner via openai/codex#37527
+    Ported from openai/codex ("Terminate timed-out Git process trees");
+    generalized for the shell-hook runner via openai/codex
     ("Terminate timed-out hook process trees").
 
     All failures are swallowed — this is cleanup on an already-failing path, and
@@ -454,7 +454,7 @@ def bounded_git_probe(argv: Sequence[str], *, timeout: float) -> str:
     EOF and the reader-thread join blocks forever. On the Desktop agent-build
     path (``_start_agent_build → _session_info → branch() → run_git``) that turned
     an optional branch label into ``agent initialization timed out``
-    (issues #68609 / #66037).
+    (issues / ).
 
     The bounded flow: an explicit ``communicate(timeout)``, then on any failure a
     tree-kill (see :func:`_kill_git_process_tree`) plus a bounded 1s post-kill
@@ -468,7 +468,7 @@ def bounded_git_probe(argv: Sequence[str], *, timeout: float) -> str:
     Python ≥3.11) so timeout cleanup can take down descendants — credential
     helpers, ``git-remote-https``, hook children — with the launcher instead of
     orphaning them (see :func:`_kill_git_process_tree`; port of
-    openai/codex#36793). ``process_group`` only changes which group the child
+    openai/codex). ``process_group`` only changes which group the child
     belongs to; it does not detach the terminal or alter the fast path.
     """
     _popen_kwargs: dict = {"creationflags": windows_hide_flags()} if IS_WINDOWS else {"process_group": 0}

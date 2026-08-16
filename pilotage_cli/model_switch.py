@@ -1053,7 +1053,7 @@ def resolve_display_context_length(
 
     When ``custom_providers`` is provided, per-model ``context_length``
     overrides from ``custom_providers[].models.<id>.context_length`` are
-    honored — this closes #15779 where ``/model`` switch ignored user-set
+    honored — this closes where ``/model`` switch ignored user-set
     overrides.
 
     Prefer the provider-aware value; fall back to ``model_info.context_window``
@@ -1157,7 +1157,7 @@ def _configured_provider_matches(
     leaving it on the current provider.  Without this, a model declared under
     ``providers.<slug>`` / ``custom_providers`` but typed while the current
     provider is ``openai-codex`` stays on Codex and is soft-accepted as an
-    unknown hidden Codex model (#45006).
+    unknown hidden Codex model.
 
     Matching is exact (case-insensitive); the configured spelling is returned
     so the downstream validation/override path sees the canonical id.  Only the
@@ -1552,7 +1552,7 @@ def switch_model(
                                 resolved_in_current_catalog = True
                                 break
 
-        # --- Step d.5: configured-provider exact-match detection (#45006) ---
+        # --- Step d.5: configured-provider exact-match detection ---
         # If the typed model is declared in user/custom provider config, route
         # to that provider BEFORE detect_provider_for_model() guesses from
         # static catalogs and BEFORE the common-path validation can let a
@@ -2340,7 +2340,7 @@ def list_authenticated_providers(
             pass
 
     results: List[dict] = []
-    seen_slugs: set = set()  # lowercase-normalized to catch case variants (#9545)
+    seen_slugs: set = set # lowercase-normalized to catch case variants
     _current_provider_norm = str(current_provider or "").strip().lower()
     _current_base_url_norm = str(current_base_url or "").strip().rstrip("/").lower()
 
@@ -2356,7 +2356,7 @@ def list_authenticated_providers(
     # Section 4 uses this to hide ``custom_providers`` entries that point at the
     # same endpoint as a built-in (e.g. a user-defined "my-dashscope" on
     # https://coding-intl.dashscope.aliyuncs.com/v1 collides with the built-in
-    # alibaba-coding-plan row when DASHSCOPE_API_KEY is present). Fixes #16970.
+    # alibaba-coding-plan row when DASHSCOPE_API_KEY is present). Fixes.
     _builtin_endpoints: set = set()
 
     def _norm_url(url: str) -> str:
@@ -2429,7 +2429,7 @@ def list_authenticated_providers(
     curated: dict[str, list[str]] = dict(_PROVIDER_MODELS)
     curated["openrouter"] = [mid for mid, _ in OPENROUTER_MODELS]
     # "nous" pulls from the remote model-catalog manifest published at
-    # https://hermes-agent.nousresearch.com/docs/api/model-catalog.json so
+    # so
     # newly added Portal models surface in the /model picker without
     # requiring a Pilotage release. Falls back to the in-repo
     # _PROVIDER_MODELS["nous"] snapshot when the manifest is unreachable.
@@ -2706,7 +2706,7 @@ def list_authenticated_providers(
         # Fallback: check external credential files directly.
         # The credential pool gates anthropic behind
         # is_provider_explicitly_configured() to prevent auxiliary tasks
-        # from silently consuming Claude Code tokens (PR #4210).
+        # from silently consuming Claude Code tokens.
         # But the /model picker is discovery-oriented — we WANT to show
         # providers the user can switch to, even if they aren't currently
         # configured.
@@ -3009,8 +3009,8 @@ def list_authenticated_providers(
                     ep_groups[group_key]["models"].append(_m)
             # Track allowlist-shaped ``models:`` separately from the merged
             # list: a singular ``default_model``/``model`` is only the active
-            # selection and must not suppress discovery (see #40542 / PR
-            # #61928). Dict-shaped ``models:`` is context_length metadata from
+            # selection and must not suppress discovery (see / PR
+            #). Dict-shaped ``models:`` is context_length metadata from
             # ``pilotage model``, not an allowlist — see
             # ``_models_config_is_allowlist``.
             if _models_config_is_allowlist(ep_cfg.get("models")):
@@ -3043,7 +3043,7 @@ def list_authenticated_providers(
             # - Without an api_key but with an allowlist-shaped ``models:``
             #   (list/string): skip — the user narrowed a public endpoint.
             #   A singular ``default_model``/``model`` does NOT count as
-            #   narrowing (mirrors section 4 / #40542).
+            # narrowing (mirrors section 4 /).
             # - A dict-shaped ``models:`` is per-model metadata
             #   (context_length), not an allowlist — still probe so local
             #   Ollama/llama.cpp match ``pilotage model``. Pin with
@@ -3361,7 +3361,7 @@ def list_authenticated_providers(
             if _pair_key[0] and _pair_key[1] and _pair_key in _section3_emitted_pairs:
                 continue
             # Skip if a built-in row (sections 1/2/2b) already represents this
-            # endpoint. Fixes #16970: a user-defined "my-dashscope" pointing at
+            # endpoint. Fixes: a user-defined "my-dashscope" pointing at
             # https://coding-intl.dashscope.aliyuncs.com/v1 duplicates the
             # built-in alibaba-coding-plan row whenever DASHSCOPE_API_KEY is
             # set. The built-in row carries the curated model list, correct

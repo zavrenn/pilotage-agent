@@ -62,7 +62,7 @@ def _sounddevice_output_allowed() -> bool:
     permission prompt, even though playback needs no media-library access.
     On macOS all output is routed through ``afplay`` instead. This does NOT
     affect audio *input* (recording), which legitimately needs microphone
-    permission. See PR #62601 / #13291.
+    permission. See /.
     """
     return platform.system() != "Darwin"
 
@@ -152,7 +152,7 @@ def _termux_microphone_command() -> Optional[str]:
 # some devices: on certain ROMs / Android API levels `pm` itself isn't on
 # Termux's PATH while `cmd package` is, on others `pm` returns nothing for
 # the calling user even when the app is present.  We try both before
-# concluding that the app is genuinely missing (issue #31015).
+# concluding that the app is genuinely missing.
 _TERMUX_API_PACKAGE_PROBES = (
     ("pm", "list", "packages", "com.termux.api"),
     ("cmd", "package", "list", "packages", "com.termux.api"),
@@ -162,7 +162,7 @@ _TERMUX_API_PACKAGE_PROBES = (
 def _termux_api_app_installed() -> bool:
     """Return True iff the Termux:API Android app is installed.
 
-    Strategy (issue #31015):
+    Strategy :
 
     1. Try each probe in ``_TERMUX_API_PACKAGE_PROBES`` and look for
        ``package:com.termux.api`` in stdout.  Any positive hit is
@@ -174,7 +174,7 @@ def _termux_api_app_installed() -> bool:
        and is only useful when the Android app is installed; users who
        installed the package deliberately almost always have the app
        too.  A false negative on this gate blocks ``/voice on``
-       outright (the symptom reported in #31015), while a false
+       outright (the symptom reported in), while a false
        positive only surfaces a precise runtime error from the binary
        itself — strictly more actionable.
     3. If at least one probe ran cleanly and definitively did not
@@ -211,7 +211,7 @@ def _termux_api_app_installed() -> bool:
     if inconclusive and shutil.which("termux-microphone-record") is not None:
         logger.debug(
             "Termux package-manager probes inconclusive; trusting "
-            "termux-microphone-record binary on PATH (issue #31015)."
+            "termux-microphone-record binary on PATH."
         )
         return True
     return False
@@ -229,7 +229,7 @@ def _pulse_socket_reachable() -> bool:
     the client just connects to the default socket under the runtime dir.
     We look at ``PULSE_SERVER`` unix paths, ``PULSE_RUNTIME_PATH``, and
     ``XDG_RUNTIME_DIR`` for a ``pulse/native`` or ``pipewire-0`` socket
-    (issue #35622).
+    .
     """
     import socket
     import stat
@@ -294,7 +294,7 @@ def detect_audio_environment() -> dict:
 
     # SSH detection -- normally no audio devices, but honor a reachable
     # sound server (PulseAudio/PipeWire socket or forwarding env vars), which
-    # works fine over SSH (issue #35622).
+    # works fine over SSH.
     if any(os.environ.get(v) for v in ('SSH_CLIENT', 'SSH_TTY', 'SSH_CONNECTION')):
         if has_forwarded_audio:
             notices.append("Running over SSH with a reachable PulseAudio/PipeWire sound server")
@@ -310,7 +310,7 @@ def detect_audio_environment() -> dict:
     # Docker/Podman container detection — honor host audio forwarding.
     # When the user mounts a PulseAudio/PipeWire socket into the container
     # and points PULSE_SERVER / PIPEWIRE_REMOTE at it, audio works fine
-    # (issue #21203).  Only block when no forwarding is configured.
+    # Only block when no forwarding is configured.
     from pilotage_constants import is_container
     if is_container():
         if has_forwarded_audio:
@@ -1044,7 +1044,7 @@ class AudioRecorder:
         except OSError as e:
             # sounddevice imports but PortAudio's shared library is missing —
             # a pip install can't fix that; point at the system package
-            # instead of misreporting missing Python packages (#18432).
+            # instead of misreporting missing Python packages.
             if _is_termux_environment():
                 portaudio_hint = "  Termux: pkg install portaudio"
             else:
@@ -1313,7 +1313,7 @@ def is_voice_stop_phrase(transcript: str, stop_phrases: Optional[tuple] = None) 
 
 # Similarity ratio (difflib.SequenceMatcher, 0..1) above which a
 # playback-phase barge transcript is treated as a self-capture of Pilotage'
-# own just-spoken TTS rather than genuine user speech. See #75780: the
+# own just-spoken TTS rather than genuine user speech. See: the
 # full-duplex listener has no acoustic echo cancellation, so speaker bleed
 # on the mic can trip the barge trigger and get transcribed nearly
 # verbatim from the TTS text, creating a TTS -> STT -> TTS feedback loop.
@@ -1326,7 +1326,7 @@ DEFAULT_TTS_ECHO_SIMILARITY_THRESHOLD = 0.6
 # also says "yes") scores a trivial 1.0 ratio and would otherwise be
 # misread as a self-capture. A real self-capture fragment spans at least
 # the pre-roll buffer plus time-to-silence, so it is normally well above
-# this length; a short genuine interjection is not (#75792 review).
+# this length; a short genuine interjection is not review).
 MIN_FRAGMENT_LENGTH_FOR_ECHO = 10
 
 
@@ -1347,7 +1347,7 @@ def is_tts_echo(
     is very unlikely to closely match Pilotage' own words, so a high ratio is
     a strong signal of speaker-bleed self-capture (fail-closed guard for the
     playback-phase full-duplex listener, which has no acoustic echo
-    cancellation; see #75780).
+    cancellation; see).
 
     The playback-phase capture is cut immediately when the barge trigger
     fires and only spans the pre-roll buffer plus time-to-silence, so for
@@ -1664,7 +1664,7 @@ def _play_audio_file_impl(file_path: str) -> bool:
             # WSLg RDP audio needs a warmup to avoid crackling at the start.
             # The RDP virtual-channel connection takes ~100 ms to stabilise,
             # and small default blocksize exasperates timing jitter caused by
-            # systemd-timesyncd clock adjustments (microsoft/wslg#1257).
+            # systemd-timesyncd clock adjustments (microsoft/wslg).
             if _is_wsl():
                 silence_samples = int(0.1 * sample_rate)
                 fade_samples = int(0.1 * sample_rate)
@@ -1706,7 +1706,7 @@ def _play_audio_file_impl(file_path: str) -> bool:
     # bridge, ffplay and aplay have no audio device. If powershell.exe and
     # ffmpeg are available, convert the audio to a uniquely-named WAV in the
     # Windows %TEMP% directory and play it via Media.SoundPlayer -- which
-    # always has a working audio device on the Windows host (#17608).
+    # always has a working audio device on the Windows host.
     # A unique suffix prevents concurrent Pilotage TTS calls from colliding on
     # the same filename. The WAV is deleted in the shell pipeline
     # unconditionally (success or failure), and the ORIGINAL ffmpeg/
@@ -1763,7 +1763,7 @@ def _play_audio_file_impl(file_path: str) -> bool:
         exe = shutil.which(cmd[0])
         if exe:
             try:
-                # Sibling of TTS/STT credential scrub (#70342 / #56332): system
+                # Sibling of TTS/STT credential scrub / ): system
                 # audio players must not inherit gateway tokens / API keys.
                 from tools.environments.local import pilotage_subprocess_env
 

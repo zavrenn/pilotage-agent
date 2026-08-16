@@ -179,7 +179,7 @@ class CLIAgentSetupMixin:
                 pass
 
         # Normalize model for the resolved provider (e.g. swap non-Codex
-        # models when provider is openai-codex).  Fixes #651.
+        # models when provider is openai-codex). Fixes.
         model_changed = self._normalize_model_for_provider(resolved_provider)
 
         # AIAgent/OpenAI client holds auth at init time, so rebuild if key,
@@ -196,7 +196,7 @@ class CLIAgentSetupMixin:
         Unlike ``_ensure_runtime_credentials`` this never prints and never
         mutates CLI state — it exists so the interactive first-run path can
         detect a completely unconfigured install *before* the user types a
-        message into a chat that cannot work (#62935-adjacent UX class:
+        message into a chat that cannot work -adjacent UX class:
         keyless first run must route into onboarding, not a broken chat).
         """
         from pilotage_cli.runtime_provider import resolve_runtime_provider
@@ -385,7 +385,7 @@ class CLIAgentSetupMixin:
             # tool_progress_mode == "off"), resume status lines go to stderr
             # so stdout stays machine-readable for automation wrappers that
             # do `$(pilotage chat -Q --resume <id> -q "...")`. Without this,
-            # the resume banner pollutes captured stdout. See #11793.
+            # the resume banner pollutes captured stdout. See.
             _quiet_mode = getattr(self, "tool_progress_mode", "full") == "off"
             if not session_meta:
                 if _quiet_mode:
@@ -400,7 +400,7 @@ class CLIAgentSetupMixin:
                 return False
             # If the requested session is the (empty) head of a compression
             # chain, walk to the descendant that actually holds the messages.
-            # See #15000 and SessionDB.resolve_resume_session_id.
+            # See and SessionDB.resolve_resume_session_id.
             try:
                 resolved_id = self._session_db.resolve_resume_session_id(self.session_id)
             except Exception:
@@ -549,11 +549,11 @@ class CLIAgentSetupMixin:
             # cli.py a bare ``global _active_agent_ref`` worked; after the
             # god-file extraction into this mixin a ``global`` here would bind
             # *this module's* namespace, leaving ``cli._active_agent_ref`` None
-            # forever — so memory shutdown never ran on /exit (#49287).
+            # forever — so memory shutdown never ran on /exit.
             import cli as _cli
             _cli._active_agent_ref = self.agent
             # Route agent status output through prompt_toolkit so ANSI escape
-            # sequences aren't garbled by patch_stdout's StdoutProxy (#2262).
+            # sequences aren't garbled by patch_stdout's StdoutProxy.
             self.agent._print_fn = _cprint
             # Hydrate credits notices at session OPEN (parity with the TUI), so a
             # depletion / usage-band warning shows before the first message. The
@@ -670,7 +670,7 @@ class CLIAgentSetupMixin:
             return False
 
         # If the requested session is the (empty) head of a compression chain,
-        # walk to the descendant that actually holds the messages. See #15000.
+        # walk to the descendant that actually holds the messages. See.
         try:
             resolved_id = self._session_db.resolve_resume_session_id(self.session_id)
         except Exception:
@@ -703,7 +703,7 @@ class CLIAgentSetupMixin:
             ]
             from agent.context_compressor import is_user_originated_turn
 
-            # Count only user-originated turns (#80622): legacy compaction
+            # Count only user-originated turns: legacy compaction
             # handoffs are durable role=user rows without display_kind.
             msg_count = len(
                 [

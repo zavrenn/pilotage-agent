@@ -743,7 +743,7 @@ def lookup_models_dev_context(
     An EXPLICIT ``model_overrides`` config entry for this provider+model
     wins over the catalog value; ``_default`` entries fill the gap only
     when the catalog has no answer — the supported self-unblock path for
-    models with wrong or missing context in models.dev (#84482).
+    models with wrong or missing context in models.dev.
 
     ``allow_network`` defaults to False — context-length lookup is a
     hot path (called during every conversation turn) and must never block
@@ -811,7 +811,7 @@ def lookup_models_dev_context(
                 if ctx:
                     return ctx
 
-    # Catalog miss — a _default override may fill the gap (#84482).
+    # Catalog miss — a _default override may fill the gap.
     return _default_override_context(provider)
 
 
@@ -869,7 +869,7 @@ class ModelCapabilities:
 #      wins over the catalog for the fields it sets (partial patch).
 #   2. ``model_overrides.<provider>._default`` / ``model_overrides._default``
 #      — FILL-GAP defaults. They apply ONLY to models the catalog does not
-#      know (the #8731/#84482 self-unblock path for custom/local/new
+# know (the/ self-unblock path for custom/local/new
 #      models) and never displace catalog data for known models. A
 #      ``_default: {context_window: 128000}`` therefore cannot clamp every
 #      catalog-known model of a provider.
@@ -1173,8 +1173,8 @@ def get_model_capabilities(
     EXPLICIT ``model_overrides`` entries (per-provider+model) win over
     catalog values for the fields they set. ``_default`` entries fill the
     gap only for models the catalog does not know — the supported
-    self-unblock path for custom/local models (#8731) and for models with
-    wrong metadata in models.dev (#84482). An override may set any subset
+    self-unblock path for custom/local models and for models with
+    wrong metadata in models.dev. An override may set any subset
     of fields; unspecified fields fall through to the catalog value (or
     sensible defaults when the model is absent from the catalog).
 
@@ -1489,7 +1489,7 @@ def get_model_info(
     catalog shape at this boundary, and sub-dicts (``limit``,
     ``modalities``) are merged rather than clobbered. EXPLICIT entries
     patch known catalog models; ``_default`` entries fill the gap only
-    for models the catalog does not know (#8731, #84482).
+    for models the catalog does not know.
 
     ``allow_network`` defaults to False — model info lookup is a hot path
     (cost guard, inventory) and must never block on the network.

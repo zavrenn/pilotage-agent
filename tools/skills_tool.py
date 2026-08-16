@@ -891,7 +891,7 @@ def _serve_plugin_skill(
         # sometimes carry a Notepad BOM or stray non-UTF-8 bytes. Pinning
         # UTF-8 with replacement keeps skill_view deterministic across
         # platforms — falling back to the machine locale (cp1252/GBK) would
-        # make the same skill render differently per host (see PR #51701).
+        # make the same skill render differently per host (see).
         content = skill_md.read_text(encoding="utf-8-sig", errors="replace")
     except Exception as e:
         return json.dumps(

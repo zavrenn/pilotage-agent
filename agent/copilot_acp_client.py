@@ -102,7 +102,7 @@ def _resolve_home_dir() -> str:
 def _build_subprocess_env() -> dict[str, str]:
     # Copilot ACP is a model-driving CLI executor: it legitimately needs LLM
     # provider credentials. Route through the central helper so Tier-1 secrets
-    # (gateway bot tokens, GitHub auth, infra) are still stripped (#29157).
+    # (gateway bot tokens, GitHub auth, infra) are still stripped.
     env = pilotage_subprocess_env(inherit_credentials=True)
     home = _resolve_home_dir()
     env["HOME"] = home
@@ -504,7 +504,7 @@ class CopilotACPClient:
     def _run_prompt(self, prompt_text: str, *, timeout_seconds: float) -> tuple[str, str]:
         try:
             # Hide the console the CLI child would otherwise flash on Windows
-            # (#56747). Hide-only — stdio pipes stay intact for the ACP wire.
+            # Hide-only — stdio pipes stay intact for the ACP wire.
             from pilotage_cli._subprocess_compat import windows_hide_flags
 
             proc = subprocess.Popen(

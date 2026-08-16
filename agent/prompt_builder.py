@@ -161,7 +161,7 @@ PILOTAGE_AGENT_HELP_GUIDANCE = (
     "You run on Pilotage Agent (by Nous Research). When the user needs help with "
     "Pilotage itself — configuring, setting up, using, extending, or troubleshooting "
     "it — or when you need to understand your own features, tools, or capabilities, "
-    "the documentation at https://hermes-agent.nousresearch.com/docs is your "
+    "the documentation at is your "
     "authoritative reference and always holds the latest, most up-to-date "
     "information. Load the `pilotage-agent` skill with skill_view(name='pilotage-agent') "
     "for additional guidance and proven workflows, but treat the docs as the source "
@@ -197,7 +197,7 @@ SESSION_SEARCH_GUIDANCE = (
     "asking them to repeat themselves."
 )
 
-# NOTE (#82154): the opening sentence is worded deliberately. Anthropic's
+# NOTE: the opening sentence is worded deliberately. Anthropic's
 # server-side content filter rejects the previous phrasing ("After completing a
 # complex task (5+ tool calls), fixing a tricky error, or discovering a
 # non-trivial workflow, save the approach as a skill with skill_manage so you
@@ -414,7 +414,7 @@ TASK_COMPLETION_GUIDANCE = (
 # session. Token cost is paid once at install and amortised across all
 # sessions via prefix caching. Keep it tight.
 #
-# Ported from cline/cline#11514 ("encourage parallel tool calls"), adapted
+# Ported from cline/cline ("encourage parallel tool calls"), adapted
 # from Cline's TypeScript tool-surface guidance to pilotage-agent's Python
 # prompt-assembly architecture.
 PARALLEL_TOOL_CALL_GUIDANCE = (
@@ -433,7 +433,7 @@ PARALLEL_TOOL_CALL_GUIDANCE = (
 # OpenAI GPT/Codex-specific execution guidance.  Addresses known failure modes
 # where GPT models abandon work on partial results, skip prerequisite lookups,
 # hallucinate instead of using tools, and declare "done" without verification.
-# Inspired by patterns from OpenAI's GPT-5.4 prompting guide & OpenClaw PR #38953.
+# Inspired by patterns from OpenAI's GPT-5.4 prompting guide & OpenClaw.
 # Also applied to xAI Grok — same failure modes in practice (claims completion
 # without tool calls, suggests workarounds instead of using existing tools,
 # replies with plans/suggestions instead of executing). The body is
@@ -899,7 +899,7 @@ def _windows_marketing_version() -> str:
 
     ``platform.release()`` reports the kernel version, which is ``10`` for
     BOTH Windows 10 and Windows 11 — the prompt then claims "Windows (10)"
-    on Windows 11 hosts and misleads the model about the OS (#51755).
+    on Windows 11 hosts and misleads the model about the OS.
     Windows 11 is distinguished by build number: >= 22000 is 11.
     Falls back to ``platform.release()`` on any lookup failure.
     """
@@ -1263,7 +1263,7 @@ def drain_truncation_warnings() -> list:
 # Skills prompt cache
 # =========================================================================
 
-# Sized for multi-profile processes: since #86313 the cache key carries a
+# Sized for multi-profile processes: since the cache key carries a
 # per-profile skills_dir (one entry per profile × platform), so the old cap
 # of 8 could thrash on a gateway multiplexing default + several bots (each
 # miss = full os.walk manifest rebuild). ~32 costs low single-digit MB worst
@@ -1952,8 +1952,8 @@ def load_soul_md(
     ``home_override`` scopes the read to an explicit profile home (the agent
     knows its own home from its session_db path). Without it, resolution is
     ambient — which on a thread that lost the PILOTAGE_HOME ContextVar falls
-    back to the launch home and reads the wrong profile's SOUL.md (#50233,
-    same class as the skills-index leak fixed in #86313).
+    back to the launch home and reads the wrong profile's SOUL.md,
+    same class as the skills-index leak fixed in).
     """
     try:
         from pilotage_cli.config import ensure_pilotage_home
@@ -2177,7 +2177,7 @@ def build_context_files_prompt(
     # Never let a FALLBACK-picked directory inside the Pilotage install/source
     # tree gain system-prompt authority. A backend that self-spawns into that
     # tree (the desktop app default) would otherwise load this repo's
-    # contributor AGENTS.md as authoritative project context (#64590). An
+    # contributor AGENTS.md as authoritative project context. An
     # explicitly configured cwd is honored verbatim — the Pilotage tree is a
     # legitimate workspace when the user deliberately points a session at it —
     # and CLI-style surfaces pass allow_install_tree_fallback=True because

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Cadence for the heartbeat that keeps the calling agent's inactivity watchdog
 # at bay while a manual `cronjob(action="run")` executes the job synchronously
-# in-process (#76502). Mirrors the 10s cadence of
+# in-process. Mirrors the 10s cadence of
 # tools/environments/base.py::touch_activity_if_due (delegate_task's heartbeat
 # uses 30s) — comfortably below the 1800s default PILOTAGE_AGENT_TIMEOUT.
 _CRON_RUN_HEARTBEAT_INTERVAL = 10.0
@@ -29,7 +29,7 @@ _CRON_RUN_HEARTBEAT_INTERVAL = 10.0
 # The child cron run has its own inactivity watchdog (PILOTAGE_CRON_TIMEOUT,
 # default 600s) that bounds a wedged job, but with PILOTAGE_CRON_TIMEOUT=0
 # (explicit "unlimited") a truly hung run_one_job would otherwise mask the
-# gateway watchdog forever — pre-#76502 the parent was at least reaped at
+# gateway watchdog forever — pre- the parent was at least reaped at
 # ~1800s. After this ceiling the heartbeat stops and the gateway watchdog
 # regains authority over the turn.
 _CRON_RUN_HEARTBEAT_CEILING = 6 * 3600.0
@@ -78,7 +78,7 @@ def _notify_provider_jobs_changed_safe() -> None:
 #   2. Assembled prompt that includes loaded skill content (large markdown
 #      bodies, often security docs, postmortems, runbooks discussing attack
 #      patterns in PROSE). Reusing the strict patterns here false-positives
-#      every time a skill *describes* a command — see #3968 follow-up: the
+# every time a skill *describes* a command — see follow-up: the
 #      `pilotage-agent-dev` skill contains a security postmortem mentioning
 #      `cat ~/.pilotage/.env`, which tripped `read_secrets` and silently
 #      killed all PR-scout jobs.
@@ -366,7 +366,7 @@ def _local_delivery_notice(job: Dict[str, Any], user_deliver: Optional[str]) -> 
     ``last_output`` but is never delivered back into the session. This is by
     design (there is no live-delivery channel for local sessions), but silently
     dropping the user's "tell me when it runs" intent is the trap reported in
-    #51568. Surface it at create time so the agent can relay it instead of
+. Surface it at create time so the agent can relay it instead of
     promising a delivery that never happens.
 
     Returns ``None`` when the user explicitly asked for ``local`` (no surprise),
@@ -687,7 +687,7 @@ def _execute_job_now(
         if not isinstance(claimed_job, dict):
             # claim_job_for_fire returns False for paused/disabled/missing
             # jobs too — don't mislabel those as "already being fired"
-            # (#60703): that message sends the user chasing a phantom
+            #: that message sends the user chasing a phantom
             # in-flight run when the job simply isn't runnable.
             refreshed = get_job(job_id)
             if refreshed is None:
@@ -730,13 +730,13 @@ def _run_claimed_job(
             try_register_running_job,
         )
 
-        # In-flight dedupe (idea from #53395 by @izumi0uu): the fire claim's
+        # In-flight dedupe (idea from by @izumi0uu): the fire claim's
         # TTL (300s) is routinely outlived by real jobs, so it alone cannot
         # stop a manual run from double-firing a job the ticker (or another
         # manual run) is still executing. Register in the scheduler's shared
         # running set — the same guard _submit_with_guard uses — which also
         # makes this run visible to the gateway shutdown drain
-        # (get_running_job_ids, #60432) and mark_running_jobs_interrupted.
+        # (get_running_job_ids,) and mark_running_jobs_interrupted.
         if not try_register_running_job(job_id):
             return {
                 "claimed": True,
@@ -760,7 +760,7 @@ def _run_claimed_job(
         # and a cron job is itself a full agent run that routinely takes
         # minutes. The calling turn emits no tool activity for that entire
         # window, so the gateway inactivity watchdog concludes the agent is
-        # hung and kills the parent turn (#76502). Fire a heartbeat into the
+        # hung and kills the parent turn. Fire a heartbeat into the
         # caller's activity tracker (the same signal tool progress uses) while
         # the job runs, so the watchdog sees a working tool instead of a
         # silent one — mirrors the delegate_task heartbeat pattern. Best-effort:
@@ -820,7 +820,7 @@ def _run_claimed_job(
         # such as Matrix/aiohttp. Calling those clients from run_one_job's
         # standalone asyncio.run() loop raises errors like "Timeout context
         # manager should be used inside a task" and can break encrypted Matrix
-        # delivery (#61495 — salvaged from #63586 by @Fly-onlyone).
+        # delivery — salvaged from by @Fly-onlyone).
         gateway_module = sys.modules.get("gateway.run")
         runner_ref = getattr(gateway_module, "_gateway_runner_ref", None)
         runner = runner_ref() if callable(runner_ref) else None
@@ -965,7 +965,7 @@ def _try_dispatch_background_run(
     if not session_key and session_id:
         # CLI path: the approval contextvar is only bound during gateway/TUI
         # turns. The CLI drain filters completions by the durable agent
-        # session id (#64240), so stamp it as the key — an empty key would
+        # session id, so stamp it as the key — an empty key would
         # fail closed and the completion could never be claimed.
         session_key = str(session_id)
     if not session_key:
@@ -1314,8 +1314,8 @@ def cronjob(
             return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
 
         if normalized in {"run", "run_now", "trigger"}:
-            # Per-run context (#57331, salvaged from #57342/@liuhao1024 and
-            # #57360/@ghedeselmabot): `prompt` on the run action is transient
+            # Per-run context (, salvaged from/@liuhao1024 and
+            #/@ghedeselmabot): `prompt` on the run action is transient
             # context appended to the stored prompt for THIS fire only, never
             # persisted. It goes through the same strict injection scan as
             # stored prompts before firing.
@@ -1326,7 +1326,7 @@ def cronjob(
                     return tool_error(scan_error, success=False)
             # Execute the job immediately rather than only scheduling it for the
             # next scheduler tick — a manual `run` should actually run, even when
-            # no gateway/ticker is active (the #41037 case). The claim (taken
+            # no gateway/ticker is active (the case). The claim (taken
             # inside both paths below) advances next_run_at and blocks a
             # concurrent tick from double-firing.
             #

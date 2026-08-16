@@ -72,7 +72,7 @@ def _post_setup_no_window_flags(*, streams_to_console: bool = False) -> int:
 
 # Platforms already warned about an all-invalid platform_toolsets list, so the
 # runtime check in _get_platform_tools warns once per platform instead of on
-# every tool resolution for a persistently-corrupt config (#38798).
+# every tool resolution for a persistently-corrupt config.
 _warned_invalid_platform_toolsets: Set[str] = set()
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
@@ -708,7 +708,7 @@ def _run_post_setup(post_setup_key: str):
         # CLI when it's runnable — install it here too, not only on the
         # explicit "Browser Use" picker row.
         _ensure_browser_use_cli()
-        # agent-browser is no longer a root package.json dependency (#43564)
+        # agent-browser is no longer a root package.json dependency
         # — it resolves lazily via npx (or a global/Pilotage-managed install)
         # instead of a local `npm install`, so there's no node_modules/
         # population step here anymore.
@@ -826,7 +826,7 @@ def _run_post_setup(post_setup_key: str):
             import subprocess
             # Absolute npm path so .cmd shim executes on Windows.
             result = subprocess.run(
-                # --workspaces=false avoids resolving apps/desktop. See #38772.
+                # --workspaces=false avoids resolving apps/desktop. See.
                 [_npm_bin, "install", "--silent", "--workspaces=false"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(PROJECT_ROOT),
                 creationflags=_post_setup_no_window_flags(),
@@ -1138,7 +1138,7 @@ def _exempt_explicit_platform_native(
     opt-in), but once a user explicitly saves a toolset list for the platform
     the composite they chose (e.g. ``pilotage-telegram``, which contains those
     tools) is an opt-in — stripping them silently defeats the explicit
-    configuration (#35527). Mutates ``default_off`` in place.
+    configuration. Mutates ``default_off`` in place.
     """
     if not explicitly_configured:
         return
@@ -1222,7 +1222,7 @@ def _get_platform_tools(
     # Track whether the user explicitly saved a toolset list for this platform
     # (vs. falling back to the platform default). An explicit composite (e.g.
     # ``pilotage-telegram``) is an opt-in to the platform's native default-off
-    # toolsets — see _exempt_explicit_platform_native (#35527).
+    # toolsets — see _exempt_explicit_platform_native.
     explicitly_configured = isinstance(toolset_names, list)
 
     if toolset_names is None or not isinstance(toolset_names, list):
@@ -1243,7 +1243,7 @@ def _get_platform_tools(
     platform_default_keys = {p["default_toolset"] for p in PLATFORMS.values()}
     # Plugin-provided toolsets are first-class on a platform-toolsets list —
     # explicit config like ``[pilotage-cli, a2a]`` must survive filtering just
-    # like a built-in configurable toolset would. See issue #81163.
+    # like a built-in configurable toolset would. See.
     explicit_known_keys = configurable_keys | plugin_ts_keys
 
     # If the saved list contains any configurable keys directly, the user
@@ -1281,7 +1281,7 @@ def _get_platform_tools(
                 # Compare the toolset's STATIC membership: a tool registered
                 # into a toolset (e.g. delegate_cli -> delegation, desktop-only
                 # read_terminal -> terminal) that the composite never listed must
-                # not drop the whole toolset. See issue #49622.
+                # not drop the whole toolset. See.
                 ts_tools = set(resolve_toolset(ts_key, include_registry=False))
                 if ts_tools and ts_tools.issubset(composite_tools):
                     expanded.add(ts_key)
@@ -1311,7 +1311,7 @@ def _get_platform_tools(
             if not _toolset_allowed_for_platform(ts_key, platform):
                 continue
             # Compare the toolset's STATIC membership against the composite (see
-            # issue #49622): get_toolset() merges registry-registered tools into
+            #): get_toolset merges registry-registered tools into
             # a toolset, but platform composites enumerate static tool names, so
             # an all-tools subset test against the merged set drops the whole
             # toolset the moment a plugin/overlay/desktop tool joins it.
@@ -1350,7 +1350,7 @@ def _get_platform_tools(
         # _DEFAULT_OFF_TOOLSETS, which would silently drop HA from platforms
         # (e.g. cron) that run through _get_platform_tools without an
         # explicit saved toolset list. Without this, Norbert's HA cron jobs
-        # regressed after #14798 made cron honor per-platform tool config.
+        # regressed after made cron honor per-platform tool config.
         if "homeassistant" in default_off and _homeassistant_credentials_present():
             default_off.remove("homeassistant")
         # Symmetric carve-out for x_search auto-enable (see the inject
@@ -1390,7 +1390,7 @@ def _get_platform_tools(
         # by agent/coding_context.py — not per-platform capabilities to recover.
         if ts_def.get("posture"):
             continue
-        # Static membership (see #49622): a registry-added tool absent from the
+        # Static membership: a registry-added tool absent from the
         # platform composite must not block recovery of a non-configurable
         # toolset whose authored tools the composite does list.
         ts_tools = set(resolve_toolset(ts_key, include_registry=False))
@@ -1482,7 +1482,7 @@ def _get_platform_tools(
         disabled_set = {str(ts) for ts in disabled_toolsets}
         enabled_toolsets -= disabled_set
 
-    # #38798: if this platform was explicitly configured but every toolset name
+    #: if this platform was explicitly configured but every toolset name
     # is invalid (e.g. a migration or hand-edit left `pilotage` instead of
     # `pilotage-cli`), resolve_toolset() returns [] for each and the platform ends
     # up with no native tools — silently, with no error. Surface it at the point
@@ -1502,7 +1502,7 @@ def _get_platform_tools(
             logger.warning(
                 "platform '%s' has no valid toolsets configured (unknown "
                 "name(s): %s) - tools will be unavailable. Run `pilotage tools` "
-                "to reconfigure. See issue #38798.",
+                "to reconfigure. See.",
                 platform,
                 ", ".join(_named),
             )
@@ -1583,7 +1583,7 @@ def _save_platform_tools(config: dict, platform: str, enabled_toolset_keys: Set[
     # function writes — the toggle "saves" but silently can't ever take
     # effect. Blank Slate installs pre-populate this list with ~27 toolsets,
     # making most of the desktop Toolsets UI unusable for re-enabling
-    # anything (issue #49995).
+    # anything.
     #
     # Only toolsets the user just explicitly enabled FOR THIS PLATFORM are
     # cleared from the global disabled list — toolsets the user did not
@@ -1816,7 +1816,7 @@ def _plugin_image_gen_providers() -> list[dict]:
     code (config writing, model picker) knows to route through the
     plugin registry. Every image-gen backend is a plugin now — there
     are no hardcoded rows left in ``TOOL_CATEGORIES["image_gen"]`` for
-    this function to dedupe against (see issue #26241).
+    this function to dedupe against (see).
     """
     try:
         from agent.image_gen_registry import list_providers
@@ -1865,7 +1865,7 @@ def _plugin_web_search_providers() -> list[dict]:
     marker) so the picker behaves identically whether a provider is
     hardcoded or plugin-registered.
 
-    After PR #25182, all seven web providers (brave-free, ddgs, searxng,
+    After, all seven web providers (brave-free, ddgs, searxng,
     exa, parallel, tavily, firecrawl) are plugins; this helper is the sole
     source of provider rows for the Web Search & Extract category.
     """
@@ -1932,7 +1932,7 @@ def web_provider_capabilities(backend: str) -> list:
 
 
 # Mirror of _plugin_web_search_providers for cloud browser backends. After
-# PR #25214, Browserbase / Browser Use / Firecrawl live as plugins under
+#, Browserbase / Browser Use / Firecrawl live as plugins under
 # plugins/browser/<vendor>/; this helper is the sole source of provider rows
 # for those three in the "Browser Automation" picker. The hardcoded
 # ``TOOL_CATEGORIES["browser"]`` entries that drove the category before
@@ -1989,10 +1989,10 @@ def _plugin_browser_providers() -> list[dict]:
 def _plugin_tts_providers() -> list[dict]:
     """Build picker-row dicts from plugin-registered TTS providers.
 
-    Issue #30398 — the ``register_tts_provider()`` plugin hook
+ — the ``register_tts_provider`` plugin hook
     coexists alongside the 10 built-in TTS providers
     (``edge``/``openai``/``elevenlabs``/…) and the
-    ``tts.providers.<name>: type: command`` registry from PR #17843.
+    ``tts.providers.<name>: type: command`` registry from.
     Built-in rows stay hardcoded in ``TOOL_CATEGORIES["tts"]``; this
     function only injects PLUGIN-registered providers.
 
@@ -2078,7 +2078,7 @@ def _visible_providers(
     if cat.get("name") == "Image Generation":
         visible.extend(_plugin_image_gen_providers())
 
-    # Inject plugin-registered web search backends. After PR #25182, this
+    # Inject plugin-registered web search backends. After, this
     # is the SOLE source of provider rows for the Web Search & Extract
     # category — the per-provider hardcoded entries were deleted. The two
     # remaining hardcoded rows ("Nous Subscription", "Firecrawl
@@ -2086,7 +2086,7 @@ def _visible_providers(
     if cat.get("name") == "Web Search & Extract":
         visible.extend(_plugin_web_search_providers())
 
-    # Inject plugin-registered cloud browser backends. After PR #25214,
+    # Inject plugin-registered cloud browser backends. After,
     # Browserbase / Browser Use / Firecrawl are the plugin-supplied rows;
     # the hardcoded "Nous Subscription" / "Local Browser" / "Camofox" rows
     # stay because they're non-provider UX setup flows (subscription auth,
@@ -2094,7 +2094,7 @@ def _visible_providers(
     if cat.get("name") == "Browser Automation":
         visible.extend(_plugin_browser_providers())
 
-    # Inject plugin-registered TTS backends (issue #30398). Plugin rows
+    # Inject plugin-registered TTS backends. Plugin rows
     # render BELOW the 10 hardcoded built-in rows. Built-in shadowing
     # is filtered out by ``_plugin_tts_providers`` defensively.
     if cat.get("name") == "Text-to-Speech":
@@ -3736,7 +3736,7 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
     print(color("⚕ Pilotage Tool Configuration", Colors.CYAN, Colors.BOLD))
     print(color("  Enable or disable tools per platform.", Colors.DIM))
     print(color("  Tools that need API keys will be configured when enabled.", Colors.DIM))
-    print(color("  Guide: https://hermes-agent.nousresearch.com/docs/user-guide/features/tools", Colors.DIM))
+    print(color(" Guide: ", Colors.DIM))
     print()
 
     # ── First-time install: linear flow, no platform menu ──

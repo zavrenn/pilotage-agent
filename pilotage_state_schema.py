@@ -577,7 +577,7 @@ class SessionSchemaMixin:
                             continue
                         if "locked" in message or "busy" in message:
                             # Lock contention (e.g. an orphaned sibling
-                            # backend holding the write lock, #79531). This
+                            # backend holding the write lock,). This
                             # used to be swallowed at DEBUG, leaving the
                             # store half-reconciled: startup "succeeded" and
                             # every session-list read then failed with
@@ -600,7 +600,7 @@ class SessionSchemaMixin:
     def _heal_gateway_routing_pk(self, cursor: sqlite3.Cursor) -> None:
         """Rebuild ``gateway_routing`` when its PRIMARY KEY predates scoping.
 
-        Early builds of the routing-index migration (#59203) created the
+        Early builds of the routing-index migration created the
         table with ``session_key TEXT PRIMARY KEY`` and no ``scope`` column.
         ``_reconcile_columns()`` ADDs the missing ``scope`` column on those
         databases, but SQLite cannot ALTER a primary key, so the shipped
@@ -683,7 +683,7 @@ class SessionSchemaMixin:
         is already false), so every upsert in ``_record_model_usage()``
         fails with "ON CONFLICT clause does not match any PRIMARY KEY or
         UNIQUE constraint" — aborting the enclosing write transaction and
-        silently zeroing all token *and* cost accounting (#73823).
+        silently zeroing all token *and* cost accounting.
 
         Idempotent; runs unconditionally on every open, same pattern as
         :meth:`_heal_gateway_routing_pk` above.  On healthy databases the
@@ -821,7 +821,7 @@ class SessionSchemaMixin:
 
         # Rebuild session_model_usage if its PRIMARY KEY lacks the ``task``
         # column (5-column PK on installs already at v22+ when the column
-        # landed — the version-gated rebuild is unreachable there, #73823).
+        # landed — the version-gated rebuild is unreachable there,).
         # Same PK-rebuild constraint as gateway_routing above.
         self._heal_session_model_usage_pk(cursor)
 
@@ -845,7 +845,7 @@ class SessionSchemaMixin:
         # Heal NULL ``active`` rows unconditionally on every startup.
         # On real-world DBs the reconciler-added ``active`` column can lack
         # its NOT NULL DEFAULT 1 (older reconciler builds reconstructed the
-        # type without the default — see #51646: PRAGMA shows
+        # type without the default — see: PRAGMA shows
         # (17,'active','INTEGER',0,None,0) in the wild), so INSERTs that
         # omitted the column wrote NULL and the ``WHERE active = 1``
         # transcript loaders hid the whole history.  The INSERTs now set
@@ -923,7 +923,7 @@ class SessionSchemaMixin:
                     fts_migrations_complete = False
             if current_version < 11 and SCHEMA_VERSION < 23:
                 # v11 (SUPERSEDED by v23): re-index FTS5 tables to cover
-                # tool_name + tool_calls in inline mode (#16751). v23 drops
+                # tool_name + tool_calls in inline mode. v23 drops
                 # and rebuilds both FTS tables in external-content form, so
                 # running the v11 inline backfill first would only burn
                 # startup time and WAL space before v23 throws the work
@@ -959,7 +959,7 @@ class SessionSchemaMixin:
                 except sqlite3.OperationalError:
                     pass
             if current_version < 18:
-                # v18: gateway metadata consolidation (#9006). Backfill
+                # v18: gateway metadata consolidation. Backfill
                 # display_name / origin_json / expiry_finalized from
                 # sessions.json so pre-migration gateway sessions are
                 # discoverable from state.db without the JSON index.
@@ -972,7 +972,7 @@ class SessionSchemaMixin:
                     # rows until the gateway rewrites them.
                     logger.debug("v18 gateway metadata backfill skipped: %s", exc)
             if current_version < 20:
-                # v20: per-model usage attribution (issue #51607). Going
+                # v20: per-model usage attribution. Going
                 # forward update_token_counts() records each API call into
                 # session_model_usage keyed by the live model, but existing
                 # sessions only have their aggregate totals on the sessions
@@ -1016,7 +1016,7 @@ class SessionSchemaMixin:
                 except sqlite3.OperationalError:
                     pass
             if current_version < 22:
-                # v22: task-dimension usage attribution (issue #23270).
+                # v22: task-dimension usage attribution.
                 # session_model_usage gains a ``task`` column ('' = main agent
                 # loop; 'vision'/'compression'/'title_generation'/... =
                 # auxiliary calls) so aux model spend is visible in analytics.
@@ -1082,7 +1082,7 @@ class SessionSchemaMixin:
                 except sqlite3.OperationalError as exc:
                     logger.debug("v22 session_model_usage rebuild skipped: %s", exc)
             if current_version < 23:
-                # v23: FTS storage redesign (issues #22478, #43690, #55233).
+                # v23: FTS storage redesign (issues,).
                 # The v11 inline-mode FTS tables each store a full private
                 # copy of every message (content || tool_name || tool_calls),
                 # and the trigram index additionally covers role='tool' rows

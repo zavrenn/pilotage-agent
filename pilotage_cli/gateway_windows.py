@@ -164,7 +164,7 @@ def _exec_schtasks(args: list[str]) -> tuple[int, str, str]:
             # Localized Windows emits schtasks output in the console code page,
             # not UTF-8. Decode with the locale encoding and replace undecodable
             # bytes so a non-UTF-8 status line never surfaces a UnicodeDecodeError
-            # traceback from subprocess' reader threads (issue #38172).
+            # traceback from subprocess' reader threads.
             encoding=_schtasks_encoding(),
             errors="replace",
             timeout=_SCHTASKS_TIMEOUT_S,
@@ -213,7 +213,7 @@ def _launch_elevated_gateway_command(command: str, extra_args: list[str] | None 
     console window, so the child owns a single *hidden* console that its own
     subprocess spawns (schtasks, taskkill, …) inherit — no visible window
     after the UAC approval, and no per-descendant conhost flashes (the
-    console-less pythonw.exe alternative re-created #54220/#56747 for every
+    console-less pythonw.exe alternative re-created/ for every
     console-subsystem child). All operator decisions are already collected in
     the parent shell before this point.
     """
@@ -455,7 +455,7 @@ def _build_gateway_vbs_script(
 
     The Scheduled Task runs this through ``wscript.exe`` instead of ``cmd.exe``.
 
-    Why: issue #45599 root cause #1. Driving the gateway through ``cmd.exe``
+    Why: root cause #1. Driving the gateway through ``cmd.exe``
     allocates a console, and during logon Windows broadcasts ``CTRL_CLOSE_EVENT``
     to console process groups — reaping cmd.exe and the half-initialized gateway
     with ``STATUS_CONTROL_C_EXIT`` (``0xC000013A``). Task Scheduler treats that
@@ -467,7 +467,7 @@ def _build_gateway_vbs_script(
     ``python.exe`` with window style 0 (hidden): the gateway owns a single
     hidden console — never shown, never CTRL_CLOSE'd at logon, and inherited
     by every console-subsystem descendant (git, gh, node, …) so none of them
-    allocate a visible flashing conhost (#54220/#56747; the previous
+    allocate a visible flashing conhost /; the previous
     console-less pythonw.exe gateway forced exactly that per-descendant
     flash). No cmd.exe anywhere in the chain. Mirrors
     ``_build_gateway_cmd_script`` (same env + argv via
@@ -561,7 +561,7 @@ def _write_task_script() -> Path:
     tmp.replace(script_path)
 
     # Also render the console-less .vbs launcher used by Scheduled Task and the
-    # Startup-folder fallback via wscript.exe (issue #45599 fix A). The .cmd
+    # Startup-folder fallback via wscript.exe ( fix A). The.cmd
     # wrapper stays as a generated helper/compatibility artifact.
     vbs_content = _build_gateway_vbs_script(python_path, working_dir, pilotage_home, profile_arg)
     vbs_path = script_path.with_suffix(".vbs")
@@ -591,7 +591,7 @@ def _build_scheduled_task_xml(task_name: str, launcher_path: Path, user: str | N
 
     ``launcher_path`` is the console-less ``.vbs`` the task runs via
     ``wscript.exe`` — not the ``.cmd`` (see ``_build_gateway_vbs_script`` /
-    issue #45599 root cause #1).
+ root cause #1).
     """
     user_principal = f"\n      <UserId>{escape(user)}</UserId>" if user else ""
     return f"""<?xml version="1.0" encoding="UTF-16"?>
@@ -670,7 +670,7 @@ def _install_scheduled_task(task_name: str, script_path: Path) -> tuple[bool, st
         # Non-fatal: /Create /F below may still replace it. Keep the detail in
         # the final error if creation also fails.
     user = _resolve_task_user()
-    # The Scheduled Task launches the console-less .vbs (issue #45599 fix A), not
+    # The Scheduled Task launches the console-less.vbs ( fix A), not
     # the .cmd. Immediate manual starts use _spawn_detached().
     launcher_path = script_path.with_suffix(".vbs")
     xml_path = _write_scheduled_task_xml(task_name, launcher_path, user)
@@ -724,7 +724,7 @@ def _resolve_detached_python(python_exe: str) -> tuple[str, Path, list[str]]:
     console that all of its console-subsystem descendants (git, gh, cmd, node,
     wmic, powershell, …) inherit instead of each allocating a visible flashing
     one.  A GUI-subsystem ``pythonw.exe`` daemon has NO console, which is what
-    made every descendant spawn flash (#54220/#56747) and forced the endless
+    made every descendant spawn flash /) and forced the endless
     per-call-site CREATE_NO_WINDOW sweep.  Root cause isolated + A/B verified
     on Windows 11 by the desktop backend fix (commit aa2ae36c3f).
 
@@ -733,7 +733,7 @@ def _resolve_detached_python(python_exe: str) -> tuple[str, Path, list[str]]:
 
     - uv venv launcher: ``venv\\Scripts\\python.exe`` under ``CREATE_NO_WINDOW``
       re-execs the base interpreter *windowless* — the child inherits the
-      shim's hidden console, so no conhost flashes (the #52239 concern).  The
+      shim's hidden console, so no conhost flashes (the concern). The
       historical "CREATE_NO_WINDOW cannot suppress the second window"
       observations were made while ``DETACHED_PROCESS`` was in the flag
       bundle, where MSDN specifies CREATE_NO_WINDOW is IGNORED — the hide bit
@@ -749,8 +749,8 @@ def _resolve_detached_python(python_exe: str) -> tuple[str, Path, list[str]]:
     installs lead with ``pythonw.exe``. When the sibling console
     ``python.exe`` exists, swap to it so respawns and regenerated launchers
     get the hidden-console design instead of resurrecting the console-less
-    daemon (the #54220/#56747 flash class, plus the ``sys.stderr is None``
-    startup-crash class from #71671).
+    daemon (the/ flash class, plus the ``sys.stderr is None``
+    startup-crash class from).
     """
     p = Path(python_exe)
     if p.name.lower() in ("pythonw.exe", "pythonw"):
@@ -830,7 +830,7 @@ def windowless_gateway_restart_spec(
     ``get_python_path()`` (the venv's console ``python.exe``).  That is the
     right interpreter: the watcher launches it with ``CREATE_NO_WINDOW``
     detach flags, so the respawned gateway owns a single hidden console that
-    all of its descendants inherit — nothing flashes (#54220/#56747; the old
+    all of its descendants inherit — nothing flashes /; the old
     pythonw.exe rewrite here produced a console-less gateway whose every
     console-subsystem child allocated a visible conhost).  This helper now
     only normalizes the interpreter via ``_resolve_detached_python`` and
@@ -897,7 +897,7 @@ def _spawn_detached(script_path: Path | None = None) -> int:
     shell exits.  With ``CREATE_NO_WINDOW`` the gateway gets its OWN hidden
     console instead of inheriting ours, so it survives our shell closing, and
     every console-subsystem descendant it spawns inherits that hidden console
-    instead of flashing a visible one (#54220/#56747 — this is why we don't
+    instead of flashing a visible one / — this is why we don't
     use console-less pythonw.exe here). Combined with
     CREATE_NEW_PROCESS_GROUP + DEVNULL stdin + a fresh env, the resulting
     process is independent of whichever shell started it.

@@ -763,7 +763,7 @@ DANGEROUS_PATTERNS = [
     # filename, not flags; guarded both leading and mid-run). The flag token
     # itself must start right after whitespace so the `r` inside long options
     # like `--registry` (preceded by `-`, not whitespace) does not count.
-    # Port of openai/codex#33464 ("recognize force options when they follow
+    # Port of openai/codex ("recognize force options when they follow
     # operands").
     (r'\brm\s+(?!--(?:\s|$))(?:(?!\s--(?:\s|$))[^\n"\';|&])*\s'
      r'(?:-[a-z]*r[a-z]*\b|--recursive\b)',
@@ -780,7 +780,7 @@ DANGEROUS_PATTERNS = [
     # "del"/"rm" (e.g. `-File c:\del-logs\run.ps1`) is not.
     (r'\b(?:powershell|pwsh)(?:\.exe)?\b(?:\s+-\S+)*\s+(?:-(?:command|c)\s+)?["\']?(?:remove-item|rmdir|erase|del|rd|ri|rm)\b', "Windows PowerShell destructive delete"),
     (r'\b(?:powershell|pwsh)(?:\.exe)?\b.*\s-(?:encodedcommand|enc|e)\b', "PowerShell encoded command execution"),
-    # ── Windows destructive tier (#69472) ────────────────────────────────
+    # ── Windows destructive tier ────────────────────────────────
     # These are native Windows EXEs / cmdlets reachable from ANY Pilotage
     # terminal backend on a Windows host — including the default git-bash
     # backend (taskkill.exe, icacls.exe, reg.exe, vssadmin.exe, bcdedit.exe,
@@ -963,7 +963,7 @@ DANGEROUS_PATTERNS = [
     # project-relative env/config — so `cp evil ~/.ssh/authorized_keys` (key
     # implant), `cp creds ~/.netrc`, and `cp evil ~/.bashrc` (login-time command
     # injection) slipped through with auto-approve. Same unpaired-door rationale
-    # as #14639 / the sed-tee-redirect pairing on these targets.
+    # as / the sed-tee-redirect pairing on these targets.
     # Anchor the sensitive target to the command tail so this fires on the
     # DESTINATION (last arg) only — `cp evil ~/.ssh/authorized_keys` is gated,
     # but reading OUT of a sensitive path (`cp ~/.ssh/config /tmp/x`) stays safe.
@@ -982,12 +982,12 @@ DANGEROUS_PATTERNS = [
     # In-place edit of a Pilotage-managed security file (~/.pilotage/config.yaml or
     # .env). sed -i bypasses the redirection/tee patterns above because it
     # mutates the file directly. Pairs the file_tools write_file/patch deny so
-    # the terminal side is not an open door. See #14639.
+    # the terminal side is not an open door. See.
     (rf'\bsed\s+-[^\s]*i.*(?:{_PILOTAGE_CONFIG_PATH}|{_PILOTAGE_ENV_PATH})', "in-place edit of Pilotage config/env"),
     (rf'\bsed\s+--in-place\b.*(?:{_PILOTAGE_CONFIG_PATH}|{_PILOTAGE_ENV_PATH})', "in-place edit of Pilotage config/env (long flag)"),
     # perl -i and ruby -i perform the same in-place mutation as sed -i but are
     # not caught by the -e/-c script-execution pattern above (which targets code
-    # evaluation, not file mutation). Pairs the sed -i coverage from #14639.
+    # evaluation, not file mutation). Pairs the sed -i coverage from.
     # The -i flag can appear as its own token after other flags
     # (`perl -p -i -e ... config.yaml`), combined (`perl -pi -e`), or with a
     # backup suffix (`perl -i.bak`). Match any flag token containing `i`
@@ -1041,7 +1041,7 @@ DANGEROUS_PATTERNS = [
     # matching, so case variants of S/s and A/a collapse — both forms
     # are gated below. Lazy `[^;|&\n]*?` allows flag arguments (e.g.
     # `sudo -u root -S whoami`) without spanning command separators. See
-    # #17873 category 4.
+    # category 4.
     # sudo's own option parser (like git's) resolves unambiguous
     # long-flag prefixes, so `sudo --stdi` runs identically to
     # `sudo --stdin` and `sudo --ask` to `sudo --askpass` -- confirmed
@@ -2209,7 +2209,7 @@ def _command_detection_variants(command: str):
     grep_safe, _ = _grep_safe_detection_variant(normalized)
     seen = {grep_safe}
     yield grep_safe
-    # Windows-path variant (#69472): normalization treats backslashes as
+    # Windows-path variant: normalization treats backslashes as
     # shell escapes and strips them, so `del C:\Users\me\.ssh\id_rsa`
     # reaches the patterns as `del C:Usersme.sshid_rsa` — no path rule can
     # ever match a backslash Windows path. When the RAW command contains a
@@ -2337,7 +2337,7 @@ _permanent_approved: set = set()
 # waits at the source (rather than residency in the authorization gate, which
 # is arbitrary code) is what keeps a wedged pre_tool_call plugin or a dead
 # approval client from growing the exclusion 1:1 with wall clock and defeating
-# the deadline entirely (#79719).
+# the deadline entirely.
 #
 # Keyed by session so one gateway session's pending approval cannot extend a
 # different session's batch deadline. State is process-global like the rest
@@ -2416,7 +2416,7 @@ def human_wait_window(session_key: str | None = None):
     Wrap ONLY code that is genuinely parked waiting for a user's answer (the
     CLI approval prompt, the gateway approval poll loop). The concurrent tool
     batch deadline excludes this time; wrapping anything else re-creates the
-    #79719 hang where arbitrary wedged code pushes the deadline out forever.
+    hang where arbitrary wedged code pushes the deadline out forever.
 
     Overlapping windows for the same session coalesce (pending counter), so
     two serialized approval prompts don't double-count the same wall clock.
@@ -2461,7 +2461,7 @@ def human_wait_seconds(session_key: str | None = None) -> float:
     every legitimate human wait self-terminates at ``approvals.timeout``
     (both the CLI prompt join and the gateway poll loop enforce it), so a
     window that overstays that bound is itself wedged and must not keep
-    extending a batch deadline (belt-and-braces for #79719).
+    extending a batch deadline (belt-and-braces for).
     """
     key = session_key if session_key is not None else get_current_session_key()
     now = time.monotonic()
@@ -2573,7 +2573,7 @@ class _ApprovalEntry:
         self.result: Optional[str] = None  # "once"|"session"|"always"|"deny"
         # Optional free-text reason supplied with an explicit deny
         # (``/deny <reason>``) so the agent can adapt instead of only
-        # hearing "denied". Ported from qwibitai/nanoclaw#2832.
+        # hearing "denied". Ported from qwibitai/nanoclaw.
         self.reason: Optional[str] = None
 
 
@@ -2874,7 +2874,7 @@ def prompt_dangerous_approval(command: str, description: str,
     # Everything below is a human prompt: either the registered CLI callback
     # (prompt_toolkit panel, bounded by the approval deadline) or the input()
     # fallback (bounded by thread.join(timeout_seconds)). Record it as
-    # human-wait time so the concurrent batch deadline excludes it (#79719).
+    # human-wait time so the concurrent batch deadline excludes it.
     with human_wait_window():
         return _prompt_dangerous_approval_inner(
             command,
@@ -2915,7 +2915,7 @@ def _prompt_dangerous_approval_inner(command: str, description: str,
     # CLI session) and no approval callback is registered on this thread,
     # the input() fallback below would spawn a daemon thread whose read
     # can never see Enter -- the user's keystrokes go to prompt_toolkit,
-    # not input(), producing an invisible 60s deadlock (issue #15216).
+    # not input, producing an invisible 60s deadlock.
     # Deny fast and log loudly instead so the caller can surface a real
     # error to the agent. Any thread that needs interactive approval must
     # install a callback via tools.terminal_tool.set_approval_callback()
@@ -3206,7 +3206,7 @@ def _smart_approve(command: str, description: str) -> str:
        directives embedded in the command text.
 
     Inspired by OpenAI Codex's Smart Approvals guardian subagent
-    (openai/codex#13860).
+    (openai/codex).
     """
     try:
         from agent.auxiliary_client import call_llm
@@ -3983,7 +3983,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     # The poll loop below is verifiably blocked on a human answer (the user
     # tapping approve/deny on the gateway surface), bounded by the approval
     # timeout. Record it as human-wait time so the concurrent batch deadline
-    # excludes it (#79719).
+    # excludes it.
     with human_wait_window(session_key):
         while True:
             # Respect interrupt signals (e.g. /stop, /new, or an inactivity
@@ -3992,7 +3992,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
             # timeout. The wait runs on the agent's execution thread, which is the
             # exact thread AIAgent.interrupt() flags — so is_interrupted() here
             # sees the signal. Resolve as "deny" so the agent loop receives a
-            # normal denial and unwinds cleanly (#8697).
+            # normal denial and unwinds cleanly.
             if is_interrupted():
                 logger.info(
                     "Approval wait interrupted by user signal — "
@@ -4138,7 +4138,7 @@ def check_all_command_guards(command: str, env_type: str,
                     # has explicitly opted into fail-closed the command cannot
                     # be silently allowed — and a cron session has no user to
                     # approve it, so fail-closed means block (mirrors the
-                    # fail-closed synthesis in the main flow below; see #20733).
+                    # fail-closed synthesis in the main flow below; see).
                     _cron_fail_open = True  # safe default if config is unreadable
                     try:
                         from pilotage_cli.config import load_config_readonly as _load_cfg
@@ -4176,7 +4176,7 @@ def check_all_command_guards(command: str, env_type: str,
         # When tirith_fail_open is False the operator has explicitly opted into
         # fail-closed; an import failure must not silently grant access, so we
         # synthesize a warn result that will be surfaced to the user through the
-        # normal approval flow.  Fixes #20733.
+        # normal approval flow. Fixes.
         _tirith_fail_open = True  # safe default if config is unreadable
         try:
             from pilotage_cli.config import load_config_readonly as _load_cfg
@@ -4239,7 +4239,7 @@ def check_all_command_guards(command: str, env_type: str,
     # --- Phase 2.5: Smart approval (auxiliary LLM risk assessment) ---
     # When approvals.mode=smart, ask the aux LLM before prompting the user.
     # Inspired by OpenAI Codex's Smart Approvals guardian subagent
-    # (openai/codex#13860).
+    # (openai/codex).
     smart_denied_for_owner = False
     if approval_mode == "smart":
         combined_desc_for_llm = "; ".join(desc for _, desc, _ in warnings)
@@ -4420,7 +4420,7 @@ def check_all_command_guards(command: str, env_type: str,
                 # deny is also a hard halt — both produce a BLOCKED outcome
                 # that names the agent's most common evasion paths (retry,
                 # rephrase, achieve the same outcome via a different command).
-                # See issue #24912 for the original incident.
+                # See for the original incident.
                 if not resolved:
                     reason = "timed out without user response"
                     timeout_addendum = " Silence is not consent."
@@ -4605,10 +4605,10 @@ def check_execute_code_guard(code: str, env_type: str,
     ``subprocess``, ``os.system``, ``ctypes``, or other process/file APIs
     directly, none of which pass through ``terminal()`` /
     ``DANGEROUS_PATTERNS``. In gateway/ask contexts we fail closed by approving
-    the script as a whole before it runs (#30882). Returns the same dict
+    the script as a whole before it runs. Returns the same dict
     contract as ``check_all_command_guards``.
 
-    Scope (documented limitation, #30882): in a purely local non-interactive
+    Scope (documented limitation,): in a purely local non-interactive
     non-gateway session (no TTY, not gateway, not cron-deny) this returns
     approved — matching the existing terminal auto-approve contract. The
     hardline floor still blocks catastrophic ``terminal()`` commands the script
@@ -4662,7 +4662,7 @@ def check_execute_code_guard(code: str, env_type: str,
 
     # Only gateway/ask contexts get the one-shot whole-script approval.
     #   * CLI interactive: the script's terminal() calls are guarded per-call
-    #     (context now propagates into the RPC thread, #33057); a whole-script
+    # (context now propagates into the RPC thread,); a whole-script
     #     prompt would fire on every execute_code call.
     #   * Local non-interactive non-gateway: documented limitation above.
     # Ask-mode (PILOTAGE_EXEC_ASK) still takes this path even when INTERACTIVE
@@ -4679,7 +4679,7 @@ def check_execute_code_guard(code: str, env_type: str,
 
     # Check session/permanent approval — same gate as check_all_command_guards.
     # Without this, "Approve session" / "Always" choices are stored but never
-    # consulted, so every execute_code call re-prompts the user (#39275).
+    # consulted, so every execute_code call re-prompts the user.
     if is_approved(session_key, pattern_key):
         return {"approved": True, "message": None}
 

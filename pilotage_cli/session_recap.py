@@ -233,7 +233,7 @@ def _summarise_tool_activity(
 def _truncate(text: str, limit: int) -> str:
     # Stored history is untrusted for display — remove escape sequences and
     # control chars so a recap line can't clear the screen / retitle the
-    # window when echoed to a terminal (openai/codex#31494 bug class).
+    # window when echoed to a terminal (openai/codex bug class).
     text = sanitize_display_text(text)
     text = " ".join(text.split())  # collapse newlines for a compact one-liner
     if len(text) <= limit:

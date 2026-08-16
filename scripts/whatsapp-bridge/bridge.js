@@ -128,7 +128,7 @@ const SEND_TIMEOUT_MS = parseInt(process.env.WHATSAPP_SEND_TIMEOUT_MS || '60000'
 // --- Send queue: serialise all sock.sendMessage() calls across concurrent
 //     HTTP handlers so a single Baileys socket never has overlapping sends.
 //     Overlapping sends are the root cause of cross-chat contamination
-//     (#33360) — the WhatsApp protocol-level routing can misdeliver when
+// — the WhatsApp protocol-level routing can misdeliver when
 //     two sendMessage() Promises race on the same socket. ---
 let _sendQueue = Promise.resolve();
 
@@ -633,7 +633,7 @@ async function startSocket() {
       // Self-chat mode only responds to the user's own messages to
       // themselves — stranger DMs / group pings must never reach the
       // Python gateway, otherwise a pairing-code reply fires in response
-      // to arbitrary incoming messages (#8389).
+      // to arbitrary incoming messages.
       if (!msg.key.fromMe) {
         if (WHATSAPP_MODE === 'self-chat') {
           try {

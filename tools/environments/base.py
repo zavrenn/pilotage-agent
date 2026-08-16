@@ -248,7 +248,7 @@ def get_activity_callback() -> Callable[[str], None] | None:
     Public accessor for callers outside this module that need to capture the
     calling thread's callback before handing work to another thread (the
     callback is thread-local, so a freshly spawned thread cannot read it
-    back) — e.g. the manual cron-run heartbeat (#76502).
+    back) — e.g. the manual cron-run heartbeat.
     """
     return getattr(_activity_callback_local, "callback", None)
 
@@ -527,7 +527,7 @@ def _cwd_marker(session_id: str) -> str:
 # Kept in sync with gateway.session_context._VAR_MAP: every bridged name starts
 # with one of these prefixes (or is PILOTAGE_UI_SESSION_ID). Used by unit tests
 # as the Python-side contract for the exclusion set; the dump path unsets by
-# name/prefix instead of grepping declare lines (see below / issue #71296).
+# name/prefix instead of grepping declare lines (see below /).
 _SNAPSHOT_EXCLUDED_ENV_REGEX = (
     "^declare -x (PILOTAGE_SESSION_|PILOTAGE_UI_SESSION_ID|PILOTAGE_CRON_AUTO_DELIVER_|PILOTAGE_CRON_SESSION)"
 )
@@ -547,7 +547,7 @@ def _export_dump_excluding_session_vars(
     as a multi-line ``declare -x NAME="…`` block, so only the opener matches the
     regex and continuation lines (e.g. ``curl … | bash #`` smuggled into a
     Matrix room/display name via ``PILOTAGE_SESSION_CHAT_NAME``) land in the
-    snapshot and execute on the next ``source`` (issue #71296). Unsetting first
+    snapshot and execute on the next ``source``. Unsetting first
     means ``export -p`` never emits those vars — including any continuation
     lines. ``|| true`` keeps the success contract for callers that chain on it.
 
@@ -726,7 +726,7 @@ class BaseEnvironment(ABC):
         # Use atomic file replacement: assemble the snapshot in a temp file,
         # then mv it over the final path.  This prevents concurrent source()
         # calls from reading a half-written snapshot when another terminal
-        # command finishes and rewrites the env vars (issue #38249).  `mv` is
+        # command finishes and rewrites the env vars. `mv` is
         # atomic on POSIX when src and dest are on the same filesystem, so
         # source() either sees the old complete snapshot or the new complete
         # one — never a partial/truncated file.
@@ -854,7 +854,7 @@ class BaseEnvironment(ABC):
         # Quote the snapshot path (see init_session — LocalEnvironment
         # rewrites ``C:/...`` to ``/c/...`` so MSYS doesn't mangle it).
         _quoted_snap = self._quote_shell_path(self._snapshot_path)
-        # Use atomic file replacement for env snapshot updates (issue #38249).
+        # Use atomic file replacement for env snapshot updates.
         # Assemble into a per-writer-unique temp file, then mv to atomically
         # replace the snapshot so concurrent source() calls never read a
         # truncated/half-written file.  ``mktemp`` is used instead of
@@ -886,7 +886,7 @@ class BaseEnvironment(ABC):
         # Redirect stdout to /dev/null: on macOS (bash 3.2 and certain
         # Homebrew bash builds) sourcing a file containing ``declare -x``
         # can emit the declarations to stdout, leaking ~60 lines of env
-        # vars into every tool response (issue #15459).  Linux bash is
+        # vars into every tool response. Linux bash is
         # silent here, but the redirect is harmless.
         if self._snapshot_ready:
             parts.append(
@@ -947,7 +947,7 @@ class BaseEnvironment(ABC):
             )
 
         # Emit the CWD stdout marker; all backends (including local, since
-        # PR #63255) parse it from output — no temp-file write needed.
+        #) parse it from output — no temp-file write needed.
         # Use a distinct line for the marker. The leading \n ensures
         # the marker starts on its own line even if the command doesn't
         # end with a newline (e.g. printf 'exact'). We'll strip this
@@ -983,7 +983,7 @@ class BaseEnvironment(ABC):
         ``bounded_capture=True`` (foreground terminal-tool path only) retains
         at most ``tool_output.max_bytes`` of output in a head/tail window
         while draining, so a verbose subprocess cannot OOM the process
-        (#64435). The default (False) preserves full-fidelity capture for
+. The default (False) preserves full-fidelity capture for
         internal consumers — file-operation ``cat`` reads feeding the patch
         engine, code-execution RPC reads, log reads — where truncation would
         corrupt data.
@@ -1041,7 +1041,7 @@ class BaseEnvironment(ABC):
         # pipe via ``fork()``.  Even after ``bash`` itself exits, the pipe
         # stays open because the grandchild still holds it — so the drain
         # thread never returns and the tool hangs for the full lifetime of
-        # the grandchild (issue #8340: users reported indefinite hangs when
+        # the grandchild (: users reported indefinite hangs when
         # restarting uvicorn with ``setsid ... & disown``).
         #
         # The fix: select() with a short poll interval, and stop draining
@@ -1409,7 +1409,7 @@ class BaseEnvironment(ABC):
 
         ``bounded_capture=True`` caps stdout/stderr retention at
         ``tool_output.max_bytes`` WHILE the stream is drained (head/tail
-        window) instead of holding the full output in memory (#64435).
+        window) instead of holding the full output in memory.
         It must only be set by callers whose output is destined for the
         model/tool payload (the foreground terminal tool). Internal
         full-fidelity consumers — file operations ``cat`` reads that feed

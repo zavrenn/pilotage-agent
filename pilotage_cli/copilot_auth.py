@@ -99,13 +99,13 @@ def resolve_copilot_token() -> tuple[str, str]:
     #    Skipping the subprocess here also avoids a slow `gh auth token`
     #    call (up to 5s timeout on Windows) on every cold start that scans
     #    Copilot auth state — a measurable contributor to the ~14s
-    #    cold-start stall (#60800). The user can run `copilot login` or
+    # cold-start stall. The user can run `copilot login` or
     #    set a supported token (gho_*/github_pat_*/ghu_) explicitly.
     if any_env_var_set:
         logger.debug(
             "Copilot env var(s) set but none held a supported token; "
             "skipping `gh auth token` fallback to honor explicit env-var "
-            "intent (and avoid the subprocess cost on cold start, #60800)."
+            "intent (and avoid the subprocess cost on cold start,)."
         )
         return "", ""
 

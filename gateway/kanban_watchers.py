@@ -30,12 +30,12 @@ def _resolve_auto_decompose_settings(
 ) -> "tuple[bool, int]":
     """Resolve the live (enabled, per_tick) auto-decompose settings.
 
-    Read fresh from config on every dispatcher tick (#49638) so that flipping
+    Read fresh from config on every dispatcher tick so that flipping
     ``kanban.auto_decompose: false`` to STOP runaway fan-out takes effect on the
     next tick instead of requiring a gateway restart. Auto-decompose is a
     safety toggle — a user who sees it create and launch tasks they didn't
     intend reaches for this flag to halt it, and a stale boot-captured value
-    silently ignoring that change is the bug reported in #49638.
+    silently ignoring that change is the bug reported in.
 
     Fails **safe**: if the config read raises, return ``(False, 3)`` — a
     transient read error must never re-enable a feature the user turned off,
@@ -227,7 +227,7 @@ class GatewayKanbanWatchersMixin:
         # respawned the task: a worker that crashes, gets reclaimed, runs
         # again, and crashes a second time would only notify on the first
         # crash because the subscription was deleted after the first event.
-        # Same shape as the reblock-after-unblock cycle that PR #22941
+        # Same shape as the reblock-after-unblock cycle that
         # fixed for `blocked`. Keeping the subscription alive until the
         # task is archived lets the cursor (advanced atomically by
         # claim_unseen_events_for_sub) handle dedup, and any retry-loop
@@ -403,7 +403,7 @@ class GatewayKanbanWatchersMixin:
                             # connection, which races the first and used to
                             # log a benign but noisy `duplicate column name`
                             # traceback (and intermittent "database is locked"
-                            # — issue #21378) on every gateway start against
+                            #) on every gateway start against
                             # a legacy DB. `_add_column_if_missing` now
                             # tolerates that race, but we still skip the
                             # redundant call to avoid the wasted work.
@@ -520,7 +520,7 @@ class GatewayKanbanWatchersMixin:
                     wake_agent = mode in ("notify+wake", "wake")
                     send_passive = mode != "wake"
                     # Worker handoff carried into the synthetic wake turn below
-                    # (#70752): without it the woken creator only sees
+                    #: without it the woken creator only sees
                     # "Task X completed" and re-decomposes work that already
                     # exists on the board.
                     wake_handoff = ""
@@ -805,7 +805,7 @@ class GatewayKanbanWatchersMixin:
                                 assignee=_assignee,
                                 board=board_slug,
                             )
-                            # Graph-safe wake turn (#70752): carry the worker's
+                            # Graph-safe wake turn: carry the worker's
                             # completion handoff into the synthetic turn and
                             # label it as an automatic notification so the woken
                             # creator inspects the board instead of
@@ -877,13 +877,13 @@ class GatewayKanbanWatchersMixin:
                             from gateway.wake import deliver_wake
                             # Rebuild the creator's real session scope from
                             # the chat_type persisted on the subscription
-                            # row (#56580). build_session_key() keys DMs
+                            # row. build_session_key keys DMs
                             # (":dm:<chat_id>") on a wholly different shape
                             # from group/thread, so the old hardcoded
                             # "group" mis-routed DM/thread creators into a
                             # fresh session. Legacy rows written before the
                             # column existed may still carry chat_type in
-                            # delivery_metadata (#60600 rows) — fall back
+                            # delivery_metadata rows) — fall back
                             # to that, then to "group" (the historical
                             # default that suits the dashboard/group flows).
                             # handle_message() get_or_create_session's the
@@ -1333,7 +1333,7 @@ class GatewayKanbanWatchersMixin:
         # Read kanban.default_assignee — fallback profile for tasks
         # created without an explicit assignee (e.g. via the dashboard).
         # When set, the dispatcher applies it to unassigned ready tasks
-        # instead of skipping them indefinitely (#27145). Empty string
+        # instead of skipping them indefinitely. Empty string
         # (the schema default) means "no fallback, keep skipping" —
         # backward-compatible with existing installs.
         default_assignee = (kanban_cfg.get("default_assignee") or "").strip() or None
@@ -1345,7 +1345,7 @@ class GatewayKanbanWatchersMixin:
             )
 
         # Read kanban.max_in_progress_per_profile — per-profile concurrency
-        # cap (#21582). When set, no single profile gets more than N
+        # cap. When set, no single profile gets more than N
         # workers running at once, even if the global max_in_progress
         # would allow it. Prevents one profile's local model / API quota
         # / browser pool from being overwhelmed by a fan-out.
@@ -1456,7 +1456,7 @@ class GatewayKanbanWatchersMixin:
                 # `init_db()` call here busted the per-process cache and
                 # re-ran the migration on a second connection, racing
                 # the first. See the matching comment in
-                # `_kanban_notifier_watcher` and issue #21378.
+                # `_kanban_notifier_watcher` and.
                 return _kb.dispatch_once(
                     conn,
                     board=slug,
@@ -1571,7 +1571,7 @@ class GatewayKanbanWatchersMixin:
         # of triage tasks doesn't burst-spend the aux LLM in one tick;
         # remainder defers to subsequent ticks.
         #
-        # The flag is re-read from config EVERY tick (#49638) rather than
+        # The flag is re-read from config EVERY tick rather than
         # captured once at boot. Auto-decompose is a safety toggle: a user who
         # sees it fan out and run tasks they didn't intend reaches for
         # ``kanban.auto_decompose: false`` to STOP it — and that must take
@@ -1687,7 +1687,7 @@ class GatewayKanbanWatchersMixin:
                 else:
                     # Re-read the auto-decompose toggle live each tick so a user
                     # flipping kanban.auto_decompose=false to STOP runaway fan-out
-                    # takes effect on the next tick, not on gateway restart (#49638).
+                    # takes effect on the next tick, not on gateway restart.
                     _ad_enabled, _ad_per_tick = _read_auto_decompose_settings()
                     if _ad_enabled:
                         await asyncio.to_thread(_auto_decompose_tick, _ad_per_tick)

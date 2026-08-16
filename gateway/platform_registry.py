@@ -94,7 +94,7 @@ class PlatformEntry:
     # has it enabled/configured.  None = no auto-install; a False ``check_fn``
     # is then a hard block (correct for platforms with no optional deps).
     #
-    # Why two fields (#79812): when the ACTIVE installer was registered as
+    # Why two fields: when the ACTIVE installer was registered as
     # ``check_fn``, every status display pip-installed SDKs as a side effect
     # (desktop boot-loop at 94%, see gateway/config.py enablement comments);
     # when the PASSIVE probe was registered instead, ``create_adapter()``
@@ -641,7 +641,7 @@ class PlatformRegistry:
             # This is the ONE place the active installer runs in the adapter
             # path: the platform is enabled+configured and the gateway is
             # about to connect it, so an install is what the user wants
-            # (#79812 — Teams' installer previously lived behind this very
+            # — Teams' installer previously lived behind this very
             # gate inside connect(), which could never be reached).
             logger.info(
                 "Platform '%s' dependencies missing — attempting install...",

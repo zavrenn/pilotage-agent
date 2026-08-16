@@ -68,7 +68,7 @@ def start_background_mcp_discovery(*, logger, thread_name: str) -> None:
         # backend) and re-install it inside the discovery thread. ContextVars
         # do not propagate into bare threads, so without this a session
         # "switched" to profile X would discover the LAUNCH profile's
-        # mcp_servers instead (#67605). The config gate above already runs on
+        # mcp_servers instead. The config gate above already runs on
         # the caller's thread, so it sees the same override.
         try:
             from pilotage_constants import get_pilotage_home_override
@@ -203,7 +203,7 @@ def mcp_discovery_in_flight() -> bool:
     ``pilotage dashboard``).  Those processes populate THIS module's
     ``_mcp_discovery_thread``, not ``tui_gateway.entry``'s, so the late-refresh
     scheduler must consult both to decide whether a slow server's tools are
-    still pending (see #51587).
+    still pending.
     """
     thread = _mcp_discovery_thread
     return thread is not None and thread.is_alive()

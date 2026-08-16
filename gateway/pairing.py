@@ -63,7 +63,7 @@ PAIRING_DIR = get_pilotage_dir("platforms/pairing", "pairing")
 # already configured an allowlist for a platform, approving a pairing code also
 # writes the user into that allowlist (and revoking removes them), so the
 # operator's own list stays the single visible/editable source of truth instead
-# of drifting from an opaque approved.json (#23778 consolidation, option i).
+# of drifting from an opaque approved.json consolidation, option i).
 # Platforms absent from this map (or with no allowlist configured) keep the
 # pairing store as the sole grant record, honored by the authz union.
 _PLATFORM_ALLOWLIST_ENV = {
@@ -459,7 +459,7 @@ class PairingStore:
                 # the file, then the gateway process — running as `pilotage` after
                 # gosu drop — can't read it) would otherwise be swallowed by
                 # the generic OSError branch below, silently leaving the user
-                # marked unauthorized. See issue #10270.
+                # marked unauthorized. See.
                 try:
                     st = path.stat()
                     owner_info = f"owner_uid={st.st_uid} mode={oct(st.st_mode)[-4:]}"
@@ -653,7 +653,7 @@ class PairingStore:
 
         Returns ``{user_id, user_name}`` on success, ``None`` if the code is
         invalid/expired OR the platform is currently locked out after
-        ``MAX_FAILED_ATTEMPTS`` failed approvals (#10195). Callers can
+        ``MAX_FAILED_ATTEMPTS`` failed approvals. Callers can
         disambiguate with ``_is_locked_out(platform)``.
 
         Verification: the user-provided code is hashed with each stored

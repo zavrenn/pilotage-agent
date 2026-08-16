@@ -496,7 +496,7 @@ def _query_codex_plugins(
                 continue
             # Skip plugins codex itself reports as unavailable (broken
             # install, missing OAuth, removed from marketplace, etc.).
-            # Cf. openclaw/openclaw#80815 — OpenClaw learned to gate
+            # Cf. openclaw/ — OpenClaw learned to gate
             # migration on app readiness to avoid writing config that
             # would fail at activation time. Our migration writes to
             # codex's config.toml directly, so a broken plugin would
@@ -575,7 +575,7 @@ def _build_pilotage_tools_mcp_entry() -> dict:
     # — that would override the launcher's PILOTAGE_HOME and pin the subprocess
     # to the wrong profile.
     #
-    # The pytest-tempdir guard below catches the issue #26250 Bug C scenario:
+    # The pytest-tempdir guard below catches the Bug C scenario:
     # a sibling test's monkeypatch.setenv("PILOTAGE_HOME", tmp_path) would
     # otherwise leak a transient pytest tempdir into the user's real
     # ~/.codex/config.toml and silently brick codex once the tempdir is GC'd.

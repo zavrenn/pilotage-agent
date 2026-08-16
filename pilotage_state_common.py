@@ -506,7 +506,7 @@ END;
 
 -- UPDATE OF skips the trigger entirely for non-content column writes
 -- (status/compacted/observed/etc.), which is stronger than the WHEN gate
--- alone and avoids FTS I/O saturation on large state.db (#68858 / #73639).
+-- alone and avoids FTS I/O saturation on large state.db / ).
 CREATE TRIGGER IF NOT EXISTS messages_fts_update
 AFTER UPDATE OF content, tool_name, tool_calls ON messages
 WHEN (old.content IS NOT new.content

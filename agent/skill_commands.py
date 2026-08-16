@@ -79,7 +79,7 @@ def append_user_instruction(parts: list, instruction: str) -> str:
     prompts). The returned prefix ends exactly at the instruction marker, so
     registering it with ``agent.prompt_cache_boundary`` lets the Anthropic
     cache planner put a breakpoint on the scaffold instead of caching the
-    whole message as one atomic block (#81867). Keeping construction in one
+    whole message as one atomic block. Keeping construction in one
     place guarantees the registered prefix stays a byte-prefix of the built
     message — the invariant the request-time split depends on.
     """
@@ -189,7 +189,7 @@ def _resolve_skill_commands_platform() -> Optional[str]:
 
     Used to detect when the active platform has shifted so
     :func:`get_skill_commands` can drop a stale cache that was populated
-    for a different platform's ``skills.platform_disabled`` view (#14536).
+    for a different platform's ``skills.platform_disabled`` view.
 
     Resolves from (in order) ``PILOTAGE_PLATFORM`` env var and
     ``PILOTAGE_SESSION_PLATFORM`` from the gateway session context. Returns
@@ -384,7 +384,7 @@ def _build_skill_message(
         # Everything before the caller-supplied instruction is a stable
         # scaffold; declare the exact boundary so the Anthropic cache planner
         # can put a breakpoint on it instead of caching the whole message as
-        # one atomic block (#81867). The static instruction prose stays on
+        # one atomic block. The static instruction prose stays on
         # the stable side; the volatile instruction (webhook payload, ticket
         # IDs, timestamps) and any runtime note ride in the tail.
         stable_prefix = append_user_instruction(parts, user_instruction)
@@ -500,7 +500,7 @@ def get_skill_commands() -> Dict[str, Dict[str, Any]]:
 
     Rescans when the active platform scope changes (e.g. a gateway
     process serving Telegram and Discord concurrently) so each platform
-    sees its own ``skills.platform_disabled`` view (#14536).
+    sees its own ``skills.platform_disabled`` view.
     """
     if (
         not _skill_commands
@@ -620,7 +620,7 @@ def build_skill_invocation_message(
 
     loaded_skill, skill_dir, skill_name = loaded
 
-    # Track active usage for Curator lifecycle management (#17782)
+    # Track active usage for Curator lifecycle management
     try:
         from tools.skill_usage import bump_use
         bump_use(skill_name, task_id=task_id)
@@ -728,7 +728,7 @@ def build_stacked_skill_invocation_message(
             continue
         loaded_skill, skill_dir, skill_name = loaded
 
-        # Track active usage for Curator lifecycle management (#17782)
+        # Track active usage for Curator lifecycle management
         try:
             from tools.skill_usage import bump_use
             bump_use(skill_name, task_id=task_id)
@@ -783,7 +783,7 @@ def build_preloaded_skills_prompt(
     Disabled skills are treated the same as missing ones: this loads via a
     raw identifier straight into ``_load_skill_payload``, bypassing
     ``get_skill_commands()``'s scan-time disabled filter — mirrors the
-    bundle-invocation gate (#59156). Without this, ``pilotage -s <skill>`` or
+    bundle-invocation gate. Without this, ``pilotage -s <skill>`` or
     a deployment's ``PILOTAGE_TUI_SKILLS`` env var could force-load a skill an
     operator disabled via ``skills.disabled``/``skills.platform_disabled``.
     """
@@ -815,7 +815,7 @@ def build_preloaded_skills_prompt(
             missing.append(identifier)
             continue
 
-        # Track active usage for Curator lifecycle management (#17782)
+        # Track active usage for Curator lifecycle management
         try:
             from tools.skill_usage import bump_use
             bump_use(skill_name, task_id=task_id)

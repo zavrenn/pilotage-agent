@@ -4,7 +4,7 @@ This module hosts the ``_handle_*_command`` slash-command handlers lifted out of
 ``cli.py``'s ``PilotageCLI`` class. ``PilotageCLI`` inherits ``CLICommandsMixin`` so
 every ``self.<handler>`` call resolves unchanged via the MRO — behavior-neutral.
 
-Import discipline (mirrors gateway/slash_commands.py, PR #41886):
+Import discipline (mirrors gateway/slash_commands.py,):
   * Neutral, non-cyclic deps are imported at module top-level below.
   * cli.py-internal symbols (the ``_cprint``/``_ACCENT``/``save_config_value``…
     module-level helpers and constants) are imported LAZILY inside each handler
@@ -442,7 +442,7 @@ class CLICommandsMixin:
         background (async) delegations.
 
         Inspired by OpenAI Codex's separation of interrupt (stop current turn)
-        from /stop (clean up background processes). See openai/codex#14602.
+        from /stop (clean up background processes). See openai/codex.
         """
         from tools.process_registry import process_registry
 
@@ -507,7 +507,7 @@ class CLICommandsMixin:
                     f"    {d.get('delegation_id', '?')} · "
                     f"{status} · {goal}"
                 )
-                # Live-status detail for in-flight delegations (#51690).
+                # Live-status detail for in-flight delegations.
                 if status == "stalling":
                     quiet = d.get("stalled_after_quiet_seconds")
                     if quiet is not None:
@@ -640,7 +640,7 @@ class CLICommandsMixin:
             if is_remote_shell_session():
                 # Over SSH, native tools would write the REMOTE clipboard
                 # (or an X-forwarded one) — OSC 52 reaches the terminal
-                # the user is actually sitting at. Fixes #31528.
+                # the user is actually sitting at. Fixes.
                 self._write_osc52_clipboard(text)
                 _cprint(
                     f"  Copied assistant response #{idx + 1} via OSC 52 "
@@ -956,7 +956,7 @@ class CLICommandsMixin:
                 # retype `/resume 3`. The list here must match the one shown by
                 # _show_recent_sessions and used for index resolution below —
                 # all three go through _list_recent_sessions(limit=10). See
-                # #34584.
+                #
                 self._pending_resume_sessions = self._list_recent_sessions(limit=10)
                 return
             _cprint("  Tip:   Use /history or `pilotage sessions list` to find sessions.")
@@ -993,7 +993,7 @@ class CLICommandsMixin:
             return
 
         # If the target is the empty head of a compression chain, redirect to
-        # the descendant that actually holds the transcript. See #15000.
+        # the descendant that actually holds the transcript. See.
         try:
             resolved_id = self._session_db.resolve_resume_session_id(target_id)
         except Exception:
@@ -1013,7 +1013,7 @@ class CLICommandsMixin:
             return
 
         old_session_id = self.session_id
-        # Flush un-persisted messages before ending the old session (#47202).
+        # Flush un-persisted messages before ending the old session.
         if self.agent:
             try:
                 self.agent._flush_messages_to_session_db(
@@ -1078,7 +1078,7 @@ class CLICommandsMixin:
             # Notify memory providers that session_id rotated to a resumed
             # session. reset=False — the provider's accumulated state is
             # still valid; it just needs to target the new session_id for
-            # subsequent writes. See #6672.
+            # subsequent writes. See.
             try:
                 _mm = getattr(self.agent, "_memory_manager", None)
                 if _mm is not None:
@@ -1094,7 +1094,7 @@ class CLICommandsMixin:
         title_part = f" \"{session_meta['title']}\"" if session_meta.get("title") else ""
         from agent.context_compressor import is_user_originated_turn
 
-        # Count only user-originated turns (#80622): legacy compaction
+        # Count only user-originated turns: legacy compaction
         # handoffs are durable role=user rows without display_kind.
         msg_count = len([m for m in self._resume_display_history if is_user_originated_turn(m)])
         if self.conversation_history:
@@ -1112,7 +1112,7 @@ class CLICommandsMixin:
         # same directory as a startup `pilotage -c`/`--resume`. The startup resume
         # paths already call this; without it, the terminal/code-exec tools and
         # relative-path resolution keep operating in the wrong repo. Idempotent
-        # and a no-op when the session recorded no cwd. See #38562.
+        # and a no-op when the session recorded no cwd. See.
         self._restore_session_cwd(session_meta)
 
         # Restore the target session's persisted YOLO bypass. Any bypass the
@@ -1199,7 +1199,7 @@ class CLICommandsMixin:
         # Save the current session's state before branching
         parent_session_id = self.session_id
 
-        # Flush un-persisted messages before ending the old session (#47202).
+        # Flush un-persisted messages before ending the old session.
         if self.agent:
             try:
                 self.agent._flush_messages_to_session_db(
@@ -1237,7 +1237,7 @@ class CLICommandsMixin:
             return
 
         # Copy conversation history to the new session in bounded-chunk
-        # transactions (see #23254) instead of one txn per row. Best-effort
+        # transactions instead of one txn per row. Best-effort
         # like the old loop — a failed copy still yields a usable branch.
         try:
             self._session_db.append_messages_batch(
@@ -1299,7 +1299,7 @@ class CLICommandsMixin:
             # Notify memory providers that session_id forked to a new branch.
             # reset=False — the branched session carries the transcript
             # forward, so provider state tracks the lineage. parent_session_id
-            # links the branch back to the original. See #6672.
+            # links the branch back to the original. See.
             try:
                 _mm = getattr(self.agent, "_memory_manager", None)
                 if _mm is not None:
@@ -1949,7 +1949,7 @@ class CLICommandsMixin:
             # loaded on-disk store, mirroring the gateway path
             # (gateway/slash_commands.py): it persists to the same MEMORY/USER.md
             # and creates MEMORY.md on the first approved write. Without this the
-            # shared handler returns "memory store unavailable". See #46783.
+            # shared handler returns "memory store unavailable". See.
             # load_on_disk_store() honors the user's configured char limits, so
             # an approval here enforces the same caps as the live agent would.
             from tools.memory_tool import load_on_disk_store
@@ -2059,7 +2059,7 @@ class CLICommandsMixin:
 
                 # Display result in the CLI (thread-safe via patch_stdout).
                 # Force a TUI refresh first so spinner/status bar don't overlap
-                # with the output (fixes #2718).
+                # with the output (fixes).
                 if self._app:
                     self._app.invalidate()
                     time.sleep(0.05)  # brief pause for refresh
@@ -2100,7 +2100,7 @@ class CLICommandsMixin:
                     sys.stdout.flush()
 
             except Exception as e:
-                # Same TUI refresh pattern as success path (#2718)
+                # Same TUI refresh pattern as success path
                 if self._app:
                     self._app.invalidate()
                     time.sleep(0.05)

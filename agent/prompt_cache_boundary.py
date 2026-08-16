@@ -1,4 +1,4 @@
-"""Builder-declared stable prefixes for Anthropic prompt caching (#81867).
+"""Builder-declared stable prefixes for Anthropic prompt caching.
 
 Skill, webhook, and cron builders concatenate a large static scaffold
 (activation note + expanded skill body) with a small volatile invocation

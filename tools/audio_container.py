@@ -5,7 +5,7 @@ ONE sniffer owns container detection for the whole codebase:
 - **Outbound** (``tools/tts_tool.py``): TTS backends silently ignore the
   requested opus format (Edge emits MP3, Piper writes WAV, ...), so the
   synthesized file is sniffed and repaired when the bytes don't match the
-  ``.ogg`` extension (PR #73072).
+  ``.ogg`` extension.
 - **Inbound** (``gateway/platforms/base.py`` ``cache_audio_from_bytes`` /
   ``cache_audio_from_url``): platform adapters frequently pass a wrong or
   guessed extension for voice notes (Telegram ``.oga``, iOS Signal M4A-branded

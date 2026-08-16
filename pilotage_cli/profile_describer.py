@@ -227,7 +227,7 @@ def describe_profile(
     try:
         # Route through call_llm so auxiliary.profile_describer.* config
         # (provider/model/base_url, extra_body, reasoning_effort, retries)
-        # all apply — the direct-create path dropped extra_body (#35566).
+        # all apply — the direct-create path dropped extra_body.
         resp = call_llm(
             task="profile_describer",
             messages=[

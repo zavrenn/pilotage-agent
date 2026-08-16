@@ -36,7 +36,7 @@ _TASK_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 # Two alternatives: POSIX absolute (/tmp/shot.png) and Windows drive-letter
 # absolute (C:\Users\...\shot.png or C:/Users/.../shot.png). Browser Use on
 # Windows prints native paths — the POSIX-only pattern silently dropped them
-# and screenshot_path / the multimodal attach never fired (#83884).
+# and screenshot_path / the multimodal attach never fired.
 _IMAGE_PATH_RE = re.compile(
     r"((?:[A-Za-z]:[\\/]|/)[^\s\"']+?\.(?:png|jpe?g|webp))", re.IGNORECASE
 )
@@ -65,8 +65,8 @@ def _base_subprocess_env() -> dict:
     # from the agent process point at Pilotage's venv site-packages, and a
     # child interpreter honors them ahead of its own site-packages — so the
     # CLI imports compiled C-extensions (e.g. pydantic_core) built for the
-    # wrong interpreter and crashes on ABI mismatch (#83427, #84841, #86006,
-    # #86104). Strip both — the CLI manages its own environment and never
+    # wrong interpreter and crashes on ABI mismatch (,,
+    #). Strip both — the CLI manages its own environment and never
     # needs Pilotage's import path.
     env.pop("PYTHONPATH", None)
     env.pop("PYTHONHOME", None)

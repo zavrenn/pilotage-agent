@@ -141,7 +141,7 @@ def _truncate_stdout_text(stdout_text: str) -> Tuple[str, Dict[str, Any]]:
 # code can lose the DB-layer Kanban mutation guard while still inheriting
 # PILOTAGE_HOME.
 #
-# NB: the broad "PILOTAGE_" prefix was deliberately removed (#27303) — it leaked
+# NB: the broad "PILOTAGE_" prefix was deliberately removed — it leaked
 # PILOTAGE_*-named config that lacks a secret substring (e.g. PILOTAGE_BASE_URL,
 # PILOTAGE_KANBAN_DB, PILOTAGE_*_WEBHOOK).  The child only needs the few
 # location/profile vars in _PILOTAGE_CHILD_ALLOWED below; PILOTAGE_RPC_SOCKET /
@@ -242,7 +242,7 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
         is_windows = _IS_WINDOWS
 
     scrubbed = {}
-    # Non-secret PILOTAGE_* vars dropped by the tightened allowlist (#27303). The
+    # Non-secret PILOTAGE_* vars dropped by the tightened allowlist. The
     # broad "PILOTAGE_" prefix used to pass these through; now only the
     # operational set does. The drop is intentional (those vars can carry
     # config like PILOTAGE_KANBAN_DB / PILOTAGE_BASE_URL), but a sandbox script
@@ -274,7 +274,7 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
     if _dropped_pilotage:
         logger.debug(
             "execute_code: dropped %d non-allowlisted PILOTAGE_* var(s) from the "
-            "sandbox child env (%s). This is intentional hardening (#27303); if "
+            "sandbox child env (%s). This is intentional hardening; if "
             "a sandbox script legitimately needs one, declare it via "
             "env_passthrough in the skill/config so it passes by explicit opt-in.",
             len(_dropped_pilotage),
@@ -475,7 +475,7 @@ def json_parse(text: str):
     """Parse JSON tolerant of control characters and UTF-8 BOM (strict=False).
     Use this instead of json.loads() when parsing output from terminal()
     or web_extract() that may contain raw tabs/newlines in strings,
-    or from tools/files that prepend a UTF-8 BOM (salvage #57870, credit @woxinwuhen713-bit)."""
+    or from tools/files that prepend a UTF-8 BOM (salvage, credit @woxinwuhen713-bit)."""
     if isinstance(text, str) and text.startswith("﻿"):
         text = text[1:]
     return json.loads(text, strict=False)
@@ -1130,7 +1130,7 @@ def _execute_remote(
 
         # Wrapped so the thread inherits the turn's approval context + callbacks
         # (see tools.thread_context) — else sandbox RPC tool calls lose approval
-        # routing (#33057).
+        # routing.
         rpc_thread = threading.Thread(
             target=propagate_context_to_thread(_rpc_poll_loop),
             args=(
@@ -1228,7 +1228,7 @@ def _execute_remote(
         timeout_msg = f"Script timed out after {timeout}s and was killed."
         result["error"] = timeout_msg
         # Include timeout message in output so the LLM always surfaces it
-        # to the user (see local path comment — same reasoning, #10807).
+        # to the user (see local path comment — same reasoning,).
         if stdout_text:
             result["output"] = stdout_text + f"\n\n⏰ {timeout_msg}"
         else:
@@ -1294,7 +1294,7 @@ def execute_code(
     # execute_code runs arbitrary Python (subprocess/os.system/...) that never
     # passes through terminal()/DANGEROUS_PATTERNS, so guard the whole script
     # here before either dispatch path spawns it. Runs synchronously in the
-    # caller (tool-executor) thread, which holds the session context (#30882).
+    # caller (tool-executor) thread, which holds the session context.
     # A Docker sandbox with host bind mounts is no longer isolated, so its
     # script does not get the container fast-path.
     from tools.approval import check_execute_code_guard
@@ -1410,7 +1410,7 @@ def execute_code(
 
         # Wrapped so the thread inherits the turn's approval context + callbacks
         # (see tools.thread_context) — else gateway sandbox tool calls silently
-        # auto-approve dangerous commands (#33057, #30882).
+        # auto-approve dangerous commands.
         rpc_thread = threading.Thread(
             target=propagate_context_to_thread(_rpc_server_loop),
             args=(
@@ -1609,7 +1609,7 @@ def execute_code(
                 status = "timeout"
                 break
             # Periodic activity touch so the gateway's inactivity timeout
-            # doesn't kill the agent during long code execution (#10807).
+            # doesn't kill the agent during long code execution.
             if touch_activity_if_due is not None:
                 try:
                     touch_activity_if_due(_activity_state, "execute_code running")
@@ -1674,7 +1674,7 @@ def execute_code(
             # Include timeout message in output so the LLM always surfaces it
             # to the user.  When output is empty, models often treat the result
             # as "nothing happened" and produce an empty response, which the
-            # gateway stream consumer silently drops (#10807).
+            # gateway stream consumer silently drops.
             if stdout_text:
                 result["output"] = stdout_text + f"\n\n⏰ {timeout_msg}"
             else:
@@ -1998,7 +1998,7 @@ def _resolve_child_cwd(mode: str, staging_dir: str, task_id: str = "") -> str:
 
     This mirrors the resolution ladder file tools and the terminal use
     (record → registered override → TERMINAL_CWD), so all file-writing
-    paths within a session agree on the working directory. (#56047)
+    paths within a session agree on the working directory.
     """
     if mode != "project":
         return staging_dir

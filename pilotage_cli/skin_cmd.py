@@ -73,7 +73,7 @@ def _skin_set(key: str, value: str, skin: str | None) -> int:
     data.setdefault("name", target)
 
     # Atomic write: write_text truncates with no fsync; safe_load("") → None
-    # → {} would permanently lose the palette on the next set (#51356, #16743).
+    # → {} would permanently lose the palette on the next set.
     from utils import atomic_yaml_write
 
     atomic_yaml_write(path, data, sort_keys=False)

@@ -1,6 +1,6 @@
 """Configurable tool-output truncation limits.
 
-Ported from anomalyco/opencode PR #23770 (``feat(truncate): allow
+Ported from anomalyco/opencode (``feat(truncate): allow
 configuring tool output truncation limits``).
 
 OpenCode hardcoded ``MAX_LINES = 2000`` and ``MAX_BYTES = 50 * 1024``

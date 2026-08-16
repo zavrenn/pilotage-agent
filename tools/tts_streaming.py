@@ -314,7 +314,7 @@ def _capped(chunks: Iterator[bytes], label: str) -> Iterator[bytes]:
 class GeminiStreamer(StreamingTTSProvider):
     """Gemini ``streamGenerateContent?alt=sse`` → base64 PCM chunks (24 kHz).
 
-    Salvaged from PR #47588 (@Cdddo) and rebased onto the post-campaign
+    Salvaged from (@Cdddo) and rebased onto the post-campaign
     infrastructure: credentials via the provider-secret resolver, requests
     (not httpx) with a bounded streamed body, and main's provider ABC.
     """
@@ -401,7 +401,7 @@ class GeminiStreamer(StreamingTTSProvider):
 class XAIStreamer(StreamingTTSProvider):
     """xAI WebSocket TTS → binary PCM frames (24 kHz mono int16).
 
-    Salvaged from PR #47588 (@Cdddo): xAI's chunked TTS API is
+    Salvaged from (@Cdddo): xAI's chunked TTS API is
     WebSocket-only (``wss://api.x.ai/v1/tts``). Credentials route through
     ``resolve_xai_http_credentials`` (OAuth or XAI_API_KEY), same as the
     sync ``_generate_xai_tts`` path. The async WS loop is bridged to the

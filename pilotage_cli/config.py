@@ -61,7 +61,7 @@ def _backup_corrupt_config(config_path: Path) -> Optional[Path]:
     swallowed so config loading is never blocked by backup problems.
 
     Returns the backup path on success, else ``None``. Symlinks are not
-    followed/copied (mirrors the Gemini #21541 lstat guard) to avoid
+    followed/copied (mirrors the Gemini lstat guard) to avoid
     clobbering whatever a malicious/misconfigured symlink points at.
     """
     try:
@@ -119,7 +119,7 @@ def _warn_config_parse_failure(
 
     ``fallback`` selects the message wording: ``"defaults"`` (fresh process,
     nothing else to serve) or ``"last-known-good"`` (in-process retention of
-    the previously loaded config — see the codex#31188 port in
+    the previously loaded config — see the codex port in
     ``_load_config_impl``).
     """
     try:
@@ -245,7 +245,7 @@ _LAST_EXPANDED_CONFIG_BY_PATH: Dict[str, Any] = {}
 # merged_value, env_ref_snapshot) — the managed-file signature is folded in so
 # editing the managed-scope config.yaml invalidates the cache (see
 # managed_scope), and the env snapshot invalidates it when a referenced ${VAR}
-# changes value (late .env load, in-process rotation — #58514).
+# changes value (late.env load, in-process rotation).
 _LOAD_CONFIG_CACHE: Dict[str, Tuple[int, int, int, int, Dict[str, Any], Dict[str, Optional[str]]]] = {}
 # (path, mtime_ns, size) -> cached raw yaml dict. Same pattern as
 # _LOAD_CONFIG_CACHE but for read_raw_config() — used when callers want
@@ -407,7 +407,7 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
         stamp into ``/opt/pilotage`` at build time.
     An unsupported manual install dropped into a container (no stamp) falls
     through to the ``.git`` checks and behaves like any off-path install.
-    See issue #34397.
+    See.
     """
     root = _install_method_project_root(project_root)
     supported_methods = {"docker", "nix", "nixos", "git", "unknown"}
@@ -550,7 +550,7 @@ Notes:
   • If you pinned a specific tag (e.g. ``:v0.14.0``) the ``:latest`` tag
     won't move your container — pull the newer tag you actually want, or
     switch to ``:latest`` / ``:main`` for rolling updates.  See available
-    tags at https://hub.docker.com/r/nousresearch/hermes-agent/tags
+    tags
   • Your config and session history live under ``$PILOTAGE_HOME`` (``/opt/data``
     in the container, typically bind-mounted from the host) and persist
     across image upgrades — re-pulling doesn't lose any state.
@@ -670,7 +670,7 @@ def _resolve_pilotage_uid_gid() -> tuple[Optional[int], Optional[int]]:
     subdirectories created at runtime by ``ensure_pilotage_home()`` (especially
     for profile namespaces under ``profiles/<name>/``) need the same chown
     or they land as ``root:root`` and block subsequent uid-mapped workers
-    with ``PermissionError [Errno 13]``. See #34107.
+    with ``PermissionError [Errno 13]``. See.
 
     Returns ``(uid, gid)`` parsed from the env vars, or ``(None, None)``
     when either is missing/invalid. Returns ``(None, None)`` on Windows
@@ -701,7 +701,7 @@ def _chown_to_pilotage_uid(path) -> None:
 
     Used by :func:`_secure_dir` to keep ownership consistent across all
     directories created by :func:`ensure_pilotage_home` on Docker deployments.
-    See #34107.
+    See.
     """
     uid, gid = _resolve_pilotage_uid_gid()
     if uid is None and gid is None:
@@ -734,7 +734,7 @@ def _secure_dir(path):
     directory listings.
 
     Also applies ``PILOTAGE_UID``/``PILOTAGE_GID``-based ownership when those env
-    vars are set (#34107 — Docker deployments need this so profile subdirs
+    vars are set — Docker deployments need this so profile subdirs
     created at runtime by kanban workers don't land as root:root and block
     subsequent uid-mapped workers).
     """
@@ -963,7 +963,7 @@ def _set_nested(config, dotted_key: str, value):
     overrides (e.g. setting ``a.b.c`` where ``a.b`` was previously a
     string).
 
-    Guards against #17876: before this fix the code unconditionally
+    Guards against: before this fix the code unconditionally
     replaced any non-dict value (including lists) with ``{}``, silently
     destroying list-typed config like ``custom_providers`` whenever a
     caller used an indexed path.
@@ -1244,7 +1244,7 @@ _API_MODE_ALIASES = {
     # existed, an unrecognized api_mode was silently ignored and the
     # transport fell through to hostname-based guessing, so a config that
     # said ``api_mode: openai`` (valid on older releases) could flip to
-    # ``codex_responses`` after an update and break the provider (#66543
+    # ``codex_responses`` after an update and break the provider (
     # discussion; observed live against api.actual.inc).
     "openai": "chat_completions",
     "openai_chat": "chat_completions",
@@ -1349,7 +1349,7 @@ def _normalize_custom_provider_entry(
             # ``${ENV_VAR}`` env-refs and bare ``{region}``-style templates —
             # without URL validation. They are expanded at runtime, so a
             # caller reaching this normalizer with raw (un-expanded) config
-            # would otherwise see the provider silently dropped (#14457).
+            # would otherwise see the provider silently dropped.
             if re.search(r"\{[^}]+\}", candidate):
                 base_url = candidate
                 break
@@ -1730,7 +1730,7 @@ def get_custom_provider_context_length(
 
     Before this helper existed, the lookup was duplicated in ``run_agent.py``'s
     startup path only; every other path (notably ``/model`` switch) fell back
-    to the 128K default.  See #15779.
+    to the 128K default. See.
     """
     if not model or not base_url:
         return None
@@ -1917,9 +1917,9 @@ _EXTRA_KNOWN_ROOT_KEYS = {
     "multiplex_profiles",    # top-level form accepted alongside gateway.multiplex_profiles
     "profile_routes",        # top-level form accepted alongside gateway.profile_routes
     "platforms",             # top-level per-platform map merged by gateway/config.py
-    "require_mention",       # top-level convenience form honored by the gateway (#3979)
+    "require_mention", # top-level convenience form honored by the gateway
     "unauthorized_dm_behavior",  # top-level form read by gateway/config.py
-    "timeouts",          # unified timeout resolution section (agent/deadline.py, #85125)
+    "timeouts", # unified timeout resolution section (agent/deadline.py,)
 }
 _KNOWN_ROOT_KEYS = frozenset(DEFAULT_CONFIG.keys()) | _EXTRA_KNOWN_ROOT_KEYS
 
@@ -2277,7 +2277,7 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
     # ── Post-migration: disable exfiltration-shaped MCP stdio entries ──
     # Users can hand-edit mcp_servers, and older installs may already contain a
     # malicious entry. Preserve the stanza for auditability but mark it
-    # disabled so the next startup will not spawn it. (#45620)
+    # disabled so the next startup will not spawn it.
     config = read_raw_config()
     raw_mcp_servers = config.get("mcp_servers")
     if isinstance(raw_mcp_servers, dict):
@@ -2310,7 +2310,7 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
     # A migration (or hand-edit) that leaves an invalid toolset name in
     # platform_toolsets silently disables the affected tools — resolve_toolset()
     # returns [] for an unknown name, so the agent quietly loses tools with no
-    # error or warning. Surface it loudly instead. See #38798.
+    # error or warning. Surface it loudly instead. See.
     try:
         from toolsets import validate_toolset
         from pilotage_cli.toolset_validation import validate_platform_toolsets
@@ -2499,7 +2499,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
     An empty section key in config.yaml (``terminal:`` with no value) parses
     as YAML ``None``; treating that as an override would replace the entire
     default dict with ``None`` and crash every downstream consumer that
-    expects a mapping (#58277). A ``None`` override of a dict default is
+    expects a mapping. A ``None`` override of a dict default is
     ignored — same as the key being absent.
     """
     result = base.copy()
@@ -2626,7 +2626,7 @@ def _env_ref_snapshot(obj, snapshot=None):
     environment — e.g. a ``load_config()`` that ran before
     ``load_pilotage_dotenv()`` populated the process env, or an env var
     rotated in-process after the first load. File mtime/size alone cannot
-    see either case (#58514).
+    see either case.
 
     ``${env:VAR}`` refs are tracked under the real variable name; refs
     with a non-env source prefix never read the environment, so they are
@@ -2831,7 +2831,7 @@ def _normalize_root_model_keys(config: Dict[str, Any]) -> Dict[str, Any]:
     After migration the root-level keys are removed so they can't cause
     confusion on subsequent loads.
 
-    Also aliases ``api_base`` → ``base_url`` (issue #8919). ``api_base`` is the
+    Also aliases ``api_base`` → ``base_url``. ``api_base`` is the
     intuitive name OpenAI-SDK / LiteLLM users reach for, and ``pilotage config set``
     blindly accepts any dotted key — so ``model.api_base`` got written, confirmed,
     and then silently ignored by the runtime resolver (which reads only
@@ -2839,7 +2839,7 @@ def _normalize_root_model_keys(config: Dict[str, Any]) -> Dict[str, Any]:
     the alias to the canonical key (fallback-only — never override an explicit
     ``base_url``) and drop the alias so it can't confuse later loads.
 
-    Finally, canonicalizes the model-id key to ``model.default`` (issue #34500).
+    Finally, canonicalizes the model-id key to ``model.default``.
     The runtime resolver and ~14 other readers select the chat model via
     ``model.default``; ``model.model`` was already aliased inline at some sites
     but ``model.name`` was not, so a custom-provider config like
@@ -3491,7 +3491,7 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
             # every ${VAR} it was expanded against still has the same value.
             # Without this, a load_config() that ran before load_pilotage_dotenv()
             # pins unexpanded literals (e.g. auxiliary.<task>.api_key) for the
-            # life of the process (#58514).
+            # life of the process.
             env_snapshot = cached[5] if len(cached) > 5 else {}
             if all(os.environ.get(k) == v for k, v in env_snapshot.items()):
                 return copy.deepcopy(cached[4]) if want_deepcopy else cached[4]
@@ -3512,7 +3512,7 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
 
                 config = _deep_merge(config, user_config)
             except Exception as e:
-                # Last-known-good fallback (port of openai/codex#31188's
+                # Last-known-good fallback (port of openai/codex's
                 # invariant: a parse failure in a policy/config file must not
                 # silently replace the effective policy with an empty/default
                 # one). Falling through to DEFAULT_CONFIG here drops EVERY user
@@ -3865,7 +3865,7 @@ def load_env() -> Dict[str, str]:
             if line and not line.startswith('#') and '=' in line:
                 # Strip the bash-compatible ``export `` prefix so lines like
                 # ``export API_KEY=...`` parse as ``API_KEY`` rather than being
-                # stored under the wrong key ``"export API_KEY"`` (#6659).
+                # stored under the wrong key ``"export API_KEY"``.
                 if line.startswith('export '):
                     line = line[7:]
                 key, _, value = line.partition('=')
@@ -4029,9 +4029,9 @@ def _env_line_defines_key(line: str, key: str) -> bool:
     """True when a .env line assigns ``key`` — plain or ``export``-prefixed.
 
     ``load_env()`` accepts the bash-compatible ``export KEY=value`` form
-    (#6659), so the writers must recognise the same shape. Otherwise a
+, so the writers must recognise the same shape. Otherwise a
     hand-added ``export`` line is invisible to save (duplicate appended) and
-    remove (line survives → the value resurrects on the next load, #40041).
+    remove (line survives → the value resurrects on the next load,).
     """
     stripped = line.strip()
     if stripped.startswith("export "):
@@ -4081,11 +4081,11 @@ def save_env_value(key: str, value: str):
     serialized_value = _quote_env_value(value)
 
     # Find and update or append. Match both ``KEY=`` and the bash-compatible
-    # ``export KEY=`` form — load_env() parses export lines (#6659), so a
+    # ``export KEY=`` form — load_env parses export lines, so a
     # user-added ``export GITHUB_TOKEN=...`` shows as set in every UI. If the
     # writer didn't match it, a save would append a SECOND line and a later
     # delete of that line would silently resurrect the old exported value
-    # (#40041: "token detected but cannot be replaced through the UI").
+    # (: "token detected but cannot be replaced through the UI").
     found = False
     for i, line in enumerate(lines):
         if _env_line_defines_key(line, key):
@@ -4249,7 +4249,7 @@ def save_anthropic_api_key(value: str, save_fn=None):
 def save_env_value_secure(key: str, value: str) -> Dict[str, Any]:
     # Route through the unified credential lifecycle so a rotation via the
     # secret-capture path also refreshes any config.yaml mirror of the old
-    # value and lifts a prior env-source suppression (#62269 fix family).
+    # value and lifts a prior env-source suppression fix family).
     from pilotage_cli.credential_lifecycle import save_provider_env_credential
 
     save_provider_env_credential(key, value)
@@ -4294,7 +4294,7 @@ def get_env_value(key: str) -> Optional[str]:
     fallthrough); when multiplexing is off it behaves exactly like the
     legacy ``os.environ`` read. Its siblings ``get_env_value_prefer_dotenv``
     and ``gateway.config._getenv`` already work this way — this was the last
-    scope-blind reader of the trio (#67027).
+    scope-blind reader of the trio.
     """
     try:
         from agent.secret_scope import (
@@ -4494,7 +4494,7 @@ def show_config():
     _cfg_max_turns = config.get('agent', {}).get('max_turns', DEFAULT_CONFIG['agent']['max_turns'])
     print(f"  Max turns:    {_cfg_max_turns}")
     # Warn on stale PILOTAGE_MAX_ITERATIONS ghost in .env that disagrees with
-    # config.yaml (issue #17534). Read the .env FILE directly so we catch the
+    # config.yaml. Read the.env FILE directly so we catch the
     # ghost even when the gateway bridge already overrode os.environ.
     try:
         _env_ghost = load_env().get("PILOTAGE_MAX_ITERATIONS")
@@ -5067,7 +5067,7 @@ def _validate_config_key(key: str) -> tuple[bool, Optional[str]]:
     at any segment that hits an open-dict container (mcp_servers,
     providers, hooks, etc.) where users define the inner keys themselves.
 
-    Headline case from #34067: ``gateway.telegram.gateway_restart_notification``
+    Headline case from: ``gateway.telegram.gateway_restart_notification``
     was silently written, even though ``gateway`` only has 4 known sub-keys
     (``strict``, ``media_delivery_allow_dirs``, ``trust_recent_files``,
     ``trust_recent_files_seconds``). The correct path is
@@ -5188,14 +5188,14 @@ def set_config_value(key: str, value: str, force: bool = False):
     # Check if it's an API key (goes to .env)
     if _is_env_config_key(key):
         # Unified lifecycle: also rotates any config.yaml mirror of the old
-        # value so a stale higher-precedence copy can't win (#62269).
+        # value so a stale higher-precedence copy can't win.
         from pilotage_cli.credential_lifecycle import save_provider_env_credential
 
         save_provider_env_credential(key.upper(), value)
         print(f"✓ Set {key} in {get_env_path()}")
         return
 
-    # Unknown-key notice (#34067): the key is still written (arbitrary keys
+    # Unknown-key notice: the key is still written (arbitrary keys
     # are supported — top-level scalars are bridged into os.environ for
     # skills and external apps), but a plausible-but-wrong dotted path like
     # ``gateway.telegram.gateway_restart_notification`` previously reported
@@ -5226,7 +5226,7 @@ def set_config_value(key: str, value: str, force: bool = False):
     
     # Handle nested keys (e.g., "tts.provider") including numeric list
     # indices (e.g., "custom_providers.0.api_key").  Delegates to
-    # _set_nested which preserves list-typed nodes; before #17876 the
+    # _set_nested which preserves list-typed nodes; before the
     # inline navigation here silently overwrote lists with dicts.
 
     # Preserve values for string-typed settings.  In particular, enum members
@@ -5254,7 +5254,7 @@ def set_config_value(key: str, value: str, force: bool = False):
         _model_val = user_config.get("model")
         if isinstance(_model_val, str) and _model_val:
             user_config["model"] = {"default": _model_val}
-    # Guard against #74995: a single-segment key that names an existing
+    # Guard against: a single-segment key that names an existing
     # mapping would silently overwrite the entire section with a scalar
     # (e.g. ``pilotage config set model gpt-5.6-sol`` when model already
     # contains default/provider/context_length).  Bare ``model`` is a
@@ -5312,7 +5312,7 @@ def set_config_value(key: str, value: str, force: bool = False):
                 )
                 sys.exit(1)
     _set_nested(user_config, key, value)
-    # Normalize the api_base → base_url alias at set-time too (issue #8919),
+    # Normalize the api_base → base_url alias at set-time too,
     # so a fresh `pilotage config set model.api_base ...` lands on the canonical
     # key the runtime resolver actually reads, instead of being silently
     # ignored. Mirrors the load-time migration in _normalize_root_model_keys.
@@ -5358,7 +5358,7 @@ def set_config_value(key: str, value: str, force: bool = False):
     print(f"✓ Set {key} = {_display_value} in {config_path}")
     warn_unpinned_cron_jobs_after_model_config_change(key, value, user_config)
 
-    # Post-write unknown-key notice (#34067): value IS saved, but tell the
+    # Post-write unknown-key notice: value IS saved, but tell the
     # user the runtime may never read it and suggest the likely-intended path.
     if not is_known and not force:
         print(color(
@@ -5413,7 +5413,7 @@ def unset_config_value(key: str):
     if _is_env_config_key(key):
         # Unified lifecycle: prune env-seeded credential_pool entries and
         # model-cache rows too, so `pilotage config unset <KEY>` fully removes
-        # the provider instead of leaving it resurrectable (#51071 family).
+        # the provider instead of leaving it resurrectable family).
         from pilotage_cli.credential_lifecycle import remove_provider_env_credential
 
         if not remove_provider_env_credential(key.upper()).get("found"):

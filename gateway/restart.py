@@ -12,7 +12,7 @@ GATEWAY_SERVICE_RESTART_EXIT_CODE = 75
 # EX_CONFIG from sysexits.h — fatal configuration error (e.g. token
 # collision, no messaging platforms).  The s6 finish script translates
 # this into exit 125 (permanent failure) so the supervisor stops
-# restarting the gateway.  See #51228.
+# restarting the gateway. See.
 GATEWAY_FATAL_CONFIG_EXIT_CODE = 78
 
 # Set by ``pilotage gateway run --external-supervisor``. Unlike systemd's
@@ -28,7 +28,7 @@ DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT = float(
 # waits for active turns to finish *before* ``stop()`` begins. Distinct
 # from ``restart_drain_timeout``, which is the force-interrupt budget
 # once ``stop()`` is running (and must stay short under systemd
-# TimeoutStopSec). See #77184.
+# TimeoutStopSec). See.
 DEFAULT_GATEWAY_RESTART_AFTER_TURN_TIMEOUT = float(
     DEFAULT_CONFIG["agent"]["restart_after_turn_timeout"]
 )
@@ -39,7 +39,7 @@ DEFAULT_GATEWAY_RESTART_AFTER_TURN_TIMEOUT = float(
 # resume_pending. An interrupted *cron* run has neither property — nobody is
 # waiting on it, it lands in jobs.json as a permanent failure, and a recurring
 # job just waits for its next schedule — so a zero-second drain silently
-# destroys work. See #82161.
+# destroys work. See.
 DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT = float(
     DEFAULT_CONFIG["agent"]["cron_drain_timeout"]
 )
@@ -114,7 +114,7 @@ def parse_cron_drain_timeout(raw: object) -> float:
     """Parse the cron-only drain floor, falling back to the shared default.
 
     ``0`` is a deliberate opt-out — cron work is then interrupted on the same
-    budget as chat work, the pre-#82161 behaviour — and must not fall through
+    budget as chat work, the pre- behaviour — and must not fall through
     to the default, unlike empty/missing input.
     """
     if raw is None:
@@ -179,7 +179,7 @@ def resolve_restart_exit_wait_budget(
     In-band restart may defer ``stop()`` until active turns finish
     (``after_turn_timeout``) and then spend up to ``drain_timeout`` inside
     ``stop()``. Callers that fall back to a hard kill on wait expiry must
-    cover both phases or they reintroduce #77184.
+    cover both phases or they reintroduce.
     """
     try:
         drain = max(float(drain_timeout), 0.0)

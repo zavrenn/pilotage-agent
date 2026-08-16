@@ -129,7 +129,7 @@ def resolve_inference_framework(cfg: Dict[str, Any]) -> str:
     Honors an explicit ``openwakeword.inference_framework`` — EXCEPT the one
     combination that is provably dead: an explicit ``onnx`` on macOS ARM64,
     where ONNX's embedding model never lets a phrase cross threshold (upstream
-    #336). Existing macOS users who pinned ``onnx`` before the tflite fix landed
+   ). Existing macOS users who pinned ``onnx`` before the tflite fix landed
     would otherwise keep a wake word that arms but never fires. Coerce that one
     case to tflite (with a one-time warning) instead of silently shipping a dead
     ear. Every other explicit value is respected as-is; empty falls back to the
@@ -148,7 +148,7 @@ def resolve_inference_framework(cfg: Dict[str, Any]) -> str:
             _warned_onnx_coerced = True
             logger.warning(
                 "wake: openwakeword.inference_framework='onnx' is set but ONNX's "
-                "embedding model never fires on macOS ARM64 (openWakeWord #336) — "
+                "embedding model never fires on macOS ARM64 (openWakeWord) — "
                 "using tflite instead. Set inference_framework to '' (auto) or "
                 "'tflite' in config.yaml to silence this."
             )

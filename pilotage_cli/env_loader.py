@@ -135,7 +135,7 @@ def _clear_known_keys_missing_from_dotenv(path: Path) -> None:
     multiplexing), not by mutating ``os.environ`` here.
 
     Does **not** run when the ``.env`` file does not exist (bare-profile
-    case, which follows ``#66930`` / ``#67027`` semantics).
+    case, which follows ```` / ```` semantics).
     """
     if not path.exists():
         return
@@ -212,7 +212,7 @@ def _hydrate_profile_secret_sources(home: Path) -> dict[str, str]:
         # service-account token lives in <home>/.op.env (gitignored), not
         # .env. Without seeding it here a cold profile configured for the
         # supported .op.env flow fails 1Password hydration (sweeper review
-        # on #74549). .env values win — never override an existing key.
+        # on).env values win — never override an existing key.
         op_env = home / ".op.env"
         if op_env.exists():
             for _name, _value in load_env_file(op_env).items():
@@ -305,7 +305,7 @@ def _sanitize_loaded_credentials() -> None:
     Emits a one-line warning to stderr when characters are stripped.
     Silent stripping would mask copy-paste corruption (Unicode lookalike
     glyphs from PDFs / rich-text editors, ZWSP from web pages) as opaque
-    provider-side "invalid API key" errors (see #6843).
+    provider-side "invalid API key" errors.
     """
     for key, value in list(os.environ.items()):
         if not any(key.endswith(suffix) for suffix in _CREDENTIAL_SUFFIXES):
@@ -394,7 +394,7 @@ def _sanitize_env_file_if_needed(path: Path) -> None:
     # misdetect UTF-32-LE as UTF-16-LE and mangle the file.
     force_utf8_rewrite = False
     if raw.startswith(codecs.BOM_UTF32_LE) or raw.startswith(codecs.BOM_UTF32_BE):
-        # Lazy import keeps the module import block identical to #65124's
+        # Lazy import keeps the module import block identical to's
         # codecs/io additions so the two PRs auto-merge either order.
         path_key = str(path.resolve())
         if path_key not in _WARNED_UTF32_PATHS:
@@ -528,7 +528,7 @@ def load_pilotage_dotenv(
     # config→env once, but long-lived processes (gateway per-turn reload,
     # cron standalone runs) call load_pilotage_dotenv() repeatedly and used to
     # flip the effective backend back to the stale .env value mid-session
-    # (#29186, #67323). Re-apply config.yaml's explicit terminal keys last so
+    #. Re-apply config.yaml's explicit terminal keys last so
     # the documented config path always wins. Runs after _apply_managed_env()
     # so the merged config (which already carries the managed overlay) is
     # what lands in the env.
@@ -628,7 +628,7 @@ def _apply_external_secret_sources(home_path: Path) -> None:
     except Exception:  # noqa: BLE001 — config errors must not block startup
         # Deliberately NOT marked applied: a malformed config.yaml would
         # otherwise permanently disable secret loading for this process
-        # even after the user fixes the file (#40597).
+        # even after the user fixes the file.
         return
     if not cfg:
         # No secrets section (or everything disabled at parse level).  Not
@@ -674,13 +674,13 @@ def _apply_external_secret_sources(home_path: Path) -> None:
     # so the 3-5 import-time load_pilotage_dotenv() calls per startup don't
     # re-fetch / re-print — error retries within one process are opt-in via
     # reset_secret_source_cache().  Marking AFTER the attempt (not before,
-    # see #40597) is what lets the earlier failure paths stay retryable.
+    # see) is what lets the earlier failure paths stay retryable.
     _APPLIED_HOMES.add(home_key)
 
     if report.applied_any:
         # Re-run the ASCII sanitization pass: vault values are
         # user-supplied and might have the same copy-paste corruption as
-        # a manually edited .env (see #6843).
+        # a manually edited.env.
         _sanitize_loaded_credentials()
         # Remember where each var came from so setup / `pilotage model`
         # flows can label detected credentials with "(from Bitwarden)" /

@@ -3,7 +3,7 @@
 Reports a byte/char breakdown of the system prompt the agent would build for
 a fresh session — system prompt total, the ``<available_skills>`` index,
 memory + user profile, and tool-schema JSON. Lets users see where their fixed
-prompt budget goes (issue #34667) without parsing a saved session JSON by hand.
+prompt budget goes  without parsing a saved session JSON by hand.
 
 The diagnostic builds a real inspection agent (so the numbers match what
 actually ships on the wire) but never makes a network call: it passes dummy

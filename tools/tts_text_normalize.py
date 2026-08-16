@@ -211,7 +211,7 @@ def smooth_whitespace_for_tts(text: str) -> str:
 
 # Reasoning blocks: models with ``/reasoning show`` enabled emit
 # ``<think>...</think>`` blocks in the final assistant message.  Users want to
-# SEE reasoning, not hear it read aloud (#34213).
+# SEE reasoning, not hear it read aloud.
 _THINK_BLOCK_RE = re.compile(r"<think[\s>].*?</think>", flags=re.DOTALL | re.IGNORECASE)
 # An unterminated block (streaming cut-off) should still not be spoken.
 _THINK_BLOCK_OPEN_RE = re.compile(r"<think[\s>].*\Z", flags=re.DOTALL | re.IGNORECASE)
@@ -219,7 +219,7 @@ _THINK_BLOCK_OPEN_RE = re.compile(r"<think[\s>].*\Z", flags=re.DOTALL | re.IGNOR
 # Turn-end file-mutation verifier footer appended by run_agent.py
 # (``_format_file_mutation_failure_footer``).  It's a UI affordance — reading
 # "warning file mutation verifier, 2 files were NOT modified..." aloud is
-# noise (#40772).  The footer is a ``⚠️ File-mutation verifier:`` header line
+# noise. The footer is a ``⚠️ File-mutation verifier:`` header line
 # followed by indented ``•`` bullet lines; strip the whole block.
 _VERIFIER_FOOTER_RE = re.compile(
     r"^\s*⚠️?\s*File-mutation verifier:.*(?:\n[ \t]+•.*)*",
@@ -245,7 +245,7 @@ def flatten_newlines_for_payload(text: str) -> str:
     """Collapse newlines into sentence breaks for single-line TTS payloads.
 
     Some OpenAI-compatible backends (e.g. Kokoro) truncate synthesis at the
-    first newline (#9004).  The smoothing pass already terminates each line
+    first newline. The smoothing pass already terminates each line
     with punctuation, so newlines can safely become plain spaces.
     """
     if not text:

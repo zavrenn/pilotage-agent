@@ -266,7 +266,7 @@ class ActiveSessionLease:
     # ``release()`` runs inside a profile home override (native multiplex
     # routes turns under ``_profile_runtime_scope``), otherwise the root
     # entry survives until process exit and the session cap fills with
-    # phantom leases (#85431).
+    # phantom leases.
     state_path: Optional[Path] = None
     lock_path: Optional[Path] = None
 
@@ -346,7 +346,7 @@ def try_acquire_active_session(
 
 def release_active_session(lease: ActiveSessionLease) -> None:
     # Prefer the registry the lease was acquired against: the caller may be
-    # running under a profile PILOTAGE_HOME override (#85431).
+    # running under a profile PILOTAGE_HOME override.
     state_path = lease.state_path or _state_path()
     lock_path = lease.lock_path or _lock_path()
     try:

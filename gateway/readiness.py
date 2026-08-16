@@ -35,7 +35,7 @@ def _probe_state_db(home: Path) -> dict[str, Any]:
         # ``closing(...)`` is required: sqlite3's connection context manager
         # only commits/rolls back — it never closes, so a bare ``with
         # sqlite3.connect(...)`` leaks one connection (and its fds) per
-        # health poll in the long-running gateway (#69678/#69567 bug class).
+        # health poll in the long-running gateway / bug class).
         uri = f"file:{path.as_posix()}?mode=ro"
         with closing(sqlite3.connect(uri, uri=True, timeout=1.0)) as conn:
             conn.execute("PRAGMA query_only = ON")

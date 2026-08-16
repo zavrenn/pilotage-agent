@@ -98,7 +98,7 @@ _INSTALL_FAILED = False  # sentinel: distinct from "not yet tried"
 _install_failure_reason: str = ""  # reason tag when _resolved_path is _INSTALL_FAILED
 
 # Circuit breaker: after _CRASH_LIMIT consecutive spawn/execution failures,
-# disable tirith for the rest of the process to prevent agent hangs (#41400).
+# disable tirith for the rest of the process to prevent agent hangs.
 # Reset on successful execution (see _record_tirith_crash / check_command_security).
 #
 # Thread safety: _crash_count and _circuit_open are module-level globals
@@ -749,7 +749,7 @@ def check_command_security(command: str) -> dict:
     # stop trying for the rest of the process.  Without this, a corrupted
     # or missing binary causes every tool call to hit the same spawn failure
     # → fail-open → agent retry loop, hanging the user for 20+ minutes
-    # (issue #41400).
+    #.
     if _circuit_open:
         return {"action": "allow", "findings": [], "summary": "tirith disabled (circuit breaker)"}
 

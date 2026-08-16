@@ -3,7 +3,7 @@ pilotage fallback — manage the fallback provider chain.
 
 Fallback providers are tried in order when the primary model fails with
 rate-limit, overload, or connection errors. See:
-https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers
+
 
 Subcommands:
   pilotage fallback [list]   Show the current fallback chain (default when no subcommand)
@@ -128,7 +128,7 @@ def cmd_fallback_list(args) -> None:  # noqa: ARG001
         print(f"    {i}. {_format_entry(entry)}")
     print()
     print("  Tried in order when the primary fails (rate-limit, 5xx, connection errors).")
-    print("  Docs: https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers")
+    print(" Docs: ")
     print()
 
 
@@ -185,7 +185,7 @@ def cmd_fallback_add(args) -> None:
 
     # Picker picked the same thing that's already the primary → nothing changed,
     # and there's nothing useful to add as a fallback to itself. Identity
-    # semantics owned by agent.backend_identity (#54250/#57584/#62984): same
+    # semantics owned by agent.backend_identity //): same
     # provider+model on a DIFFERENT explicit base_url is a different backend
     # (multi-endpoint pool) and is a legitimate fallback.
     from agent.backend_identity import BackendIdentity, same_deployment

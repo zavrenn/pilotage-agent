@@ -24,7 +24,7 @@ for the full rationale):
       reachable; individual tools are discoverable only via ``tool_search``.
 * The catalog is stateless across turns and tools-array assemblies. It is
   rebuilt from the current tool-defs list every time. This is the lesson
-  from OpenClaw's cron regression (openclaw/openclaw#84141): a session-keyed
+  from OpenClaw's cron regression (openclaw/): a session-keyed
   catalog that drifts out of sync with the live tool registry produces
   silent tool dropouts.
 * Bridge tools route through ``model_tools.handle_function_call`` exactly
@@ -973,7 +973,7 @@ def validate_deferred_call_args(name: str, args: Dict[str, Any]) -> Optional[str
     that tells the model nothing about what the tool expects, and cheap
     models loop on it until the iteration budget dies.
 
-    Port of the describe-first probe-validation fix from nearai/ironclaw#5149:
+    Port of the describe-first probe-validation fix from nearai/ironclaw:
     when required arguments are missing, return the tool's parameter schema
     instead of dispatching blind — the model repairs the call in one
     round-trip. Valid calls (and any call we can't confidently validate)

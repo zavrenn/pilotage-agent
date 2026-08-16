@@ -1,8 +1,8 @@
-"""Gateway session stall notification policy (#72016 item 2).
+"""Gateway session stall notification policy item 2).
 
 Consumes the shared activity observation contract from
 ``agent.session_activity`` / ``AIAgent.get_activity_summary()``
-(#72039) as the **single progress source**. This module owns only the
+ as the **single progress source**. This module owns only the
 notify-once policy for "pending inbound + stale progress"; it does not
 invent a parallel progress clock from turn-start or inbound event
 timestamps.
@@ -61,7 +61,7 @@ def should_clear_session_stall_notification(
 
 
 def format_session_stall_notification(idle_seconds: float) -> str:
-    """User-facing stall warning (ASCII minutes; matches issue #72016 copy)."""
+    """User-facing stall warning (ASCII minutes; matches copy)."""
     mins = max(1, int(idle_seconds // 60))
     return (
         f"⚠️ Agent session appears stalled (last activity {mins} min ago). "
@@ -74,7 +74,7 @@ def resolve_session_idle_seconds_from_activity(
     *,
     now: Optional[float] = None,
 ) -> Optional[float]:
-    """Idle seconds from a shared activity snapshot only (#72039 contract).
+    """Idle seconds from a shared activity snapshot only contract).
 
     Prefers ``seconds_since_activity`` when present and finite; otherwise
     derives from ``last_activity_at`` / ``last_activity_ts``. Returns

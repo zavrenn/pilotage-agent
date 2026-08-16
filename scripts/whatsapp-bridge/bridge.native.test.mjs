@@ -353,7 +353,7 @@ import {
   console.log('  ✓ encrypted poll upserts are wrapped into Baileys aggregation shape');
 }
 
-// -- media download failure containment (port of nanoclaw#2895) -----------
+// -- media download failure containment (port of nanoclaw) -----------
 {
   assert.equal(appendMediaFailureNote('hello', []), 'hello');
   assert.equal(

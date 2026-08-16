@@ -590,7 +590,7 @@ class RelayRuntime:
         """Pop ``handle``, draining orphaned children in the same session context.
 
         Relay scopes are strict LIFO. Empty-stream retries + interrupt can
-        abandon a physical LLM scope above TURN/SESSION (#81521). Drain and
+        abandon a physical LLM scope above TURN/SESSION. Drain and
         close must run inside one ``run_in_session`` callback so ContextVar
         stack views stay consistent across pops.
         """
@@ -612,7 +612,7 @@ class RelayRuntime:
                 # current top-of-stack ScopeHandle.  Its
                 # ``get_scope_stack()`` returns a native ScopeStack object
                 # that ``scope.pop`` rejects with TypeError, so it must
-                # never be treated as a handle (#81601 review).
+                # never be treated as a handle review).
                 get_handle = getattr(
                     getattr(self.relay, "scope", None), "get_handle", None
                 )
@@ -1330,7 +1330,7 @@ class RelaySessionCoordinator:
                 # Relay scopes are stack-owned. If the newest remaining
                 # handle cannot close even after orphan drain, older
                 # handles cannot close safely either — retain the
-                # unclosed prefix for diagnostics (#81521).
+                # unclosed prefix for diagnostics.
                 for pending_request_id, pending_handle in logical_calls[
                     : index + 1
                 ]:
@@ -1425,7 +1425,7 @@ def resolve_execution_context(
         # vision_analyze auxiliary path) therefore awaits a foreign-loop
         # Future that can never complete — "attached to a different loop"
         # at best, deadlock at worst, and "Event loop is closed" during
-        # shutdown when the orphaned Future is completed late (#77244).
+        # shutdown when the orphaned Future is completed late.
         # Run nested calls unmanaged; the outer tool scope still records
         # the tool-level event for observability.
         return None, None, None

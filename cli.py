@@ -259,7 +259,7 @@ def _strip_reasoning_tags(text: str) -> str:
     Also strips tool-call XML blocks some open models leak into visible
     content (``<tool_call>``, ``<function_calls>``, Gemma-style
     ``<function name="…">…</function>``). Ported from
-    openclaw/openclaw#67318.
+    openclaw/.
     """
     cleaned = text
     for tag in _REASONING_TAGS:
@@ -284,7 +284,7 @@ def _strip_reasoning_tags(text: str) -> str:
             cleaned,
             flags=re.IGNORECASE,
         )
-    # Tool-call XML blocks (openclaw/openclaw#67318).
+    # Tool-call XML blocks (openclaw/).
     for tc_tag in ("tool_call", "tool_calls", "tool_result",
                    "function_call", "function_calls"):
         cleaned = re.sub(
@@ -993,7 +993,7 @@ _deferred_agent_startup_done = False
 # Set True once the TUI's prompt_toolkit app starts (which enables focus
 # reporting + mouse tracking). Gates the on-exit terminal reset so non-TUI
 # one-shot CLI runs — which also register _run_cleanup via atexit — don't emit
-# escape codes for modes they never enabled (#36823).
+# escape codes for modes they never enabled.
 _tui_input_modes_active = False
 
 
@@ -1067,7 +1067,7 @@ def _arm_exit_watchdog(timeout_s: float | None = None) -> None:
          stdlib ``ThreadPoolExecutor`` workers are joined unconditionally
          by ``concurrent.futures``' atexit hook even after
          ``shutdown(wait=False)``, so one tool thread wedged on a socket
-         held the process open forever (#27563 class).
+         held the process open forever class).
 
     The shared daemon pool (``tools.daemon_pool``) removes the main cause
     of (2); this watchdog is the backstop for both. It arms a daemon
@@ -1135,7 +1135,7 @@ def _arm_exit_watchdog_on_shutdown_signal() -> None:
     teardown that never returns, or an agent worker blocking the ``finally``.
     When that happens the process has NO backstop and a "dead" CLI lingers
     (observed: ``pilotage --tui`` alive ~47 min at 4% CPU after terminal close —
-    the #65998 class).
+    the class).
 
     Arming at signal time closes that window. The leash is 2× the normal
     cleanup timeout so a slow-but-progressing ``_run_cleanup`` (which arms
@@ -1180,7 +1180,7 @@ def _run_cleanup(*, notify_session_finalize: bool = True):
     # Reset terminal input modes first, before the slower resource teardown
     # below (MCP / browser / memory shutdown can take seconds). On Ctrl+C the
     # user's terminal becomes usable immediately, and a later step raising
-    # can't skip the reset (#36823). No-op unless the TUI actually ran.
+    # can't skip the reset. No-op unless the TUI actually ran.
     _reset_terminal_input_modes_on_exit()
 
     try:
@@ -1242,7 +1242,7 @@ def _run_cleanup(*, notify_session_finalize: bool = True):
                     pass
             # Forward the agent's own transcript so memory providers'
             # ``on_session_end`` hooks see the real conversation instead of
-            # an empty list (#15165). ``_session_messages`` is set on
+            # an empty list. ``_session_messages`` is set on
             # ``AIAgent.__init__`` and refreshed every turn via
             # ``_persist_session``. Fall back to no-arg on test stubs /
             # partially-initialised agents where the attribute is missing.
@@ -1358,7 +1358,7 @@ def _reset_terminal_input_modes_on_exit() -> None:
     SIGHUP and crashes can bypass its unwind, leaving the modes enabled. The
     terminal then emits raw ``ESC[I`` / ``ESC[O`` focus events and fragmented
     SGR mouse reports as visible text in whatever runs next in the same tab
-    (#36823). Called from ``_run_cleanup`` (atexit-registered + invoked on the
+. Called from ``_run_cleanup`` (atexit-registered + invoked on the
     normal / EOF / interrupt exit paths) this covers normal quit, Ctrl+C and
     SIGTERM/SIGHUP. ``kill -9`` is uncatchable, and the kanban worker's
     ``os._exit(0)`` path bypasses ``atexit``; neither runs this — but both are
@@ -1395,7 +1395,7 @@ def _reset_terminal_input_modes_on_exit() -> None:
 
 
 # =============================================================================
-# Git Worktree Isolation (#652)
+# Git Worktree Isolation
 # =============================================================================
 
 # Tracks the active worktree for cleanup on exit
@@ -1609,7 +1609,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True) -> Optional[D
     When *sync_base* is True (default), the worktree branches from the
     freshly-fetched remote tip rather than the (possibly stale) local ``HEAD``
     — see ``_resolve_worktree_base``. Set ``worktree_sync: false`` in config to
-    branch from local ``HEAD`` (the pre-#10760-followup behavior).
+    branch from local ``HEAD`` (the pre--followup behavior).
     """
     import subprocess
 
@@ -1651,7 +1651,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True) -> Optional[D
 
     # Resolve the base ref. By default branch from the freshly-fetched remote
     # tip so the worktree starts current with the project, not from the
-    # (possibly stale) local HEAD of the standalone clone (#10760 follow-up).
+    # (possibly stale) local HEAD of the standalone clone follow-up).
     if sync_base:
         base_ref, base_label = _resolve_worktree_base(repo_root)
     else:
@@ -2148,7 +2148,7 @@ def _run_state_db_auto_maintenance(session_db) -> None:
         except Exception as _prune_exc:
             logger.debug("Ghost session prune skipped: %s", _prune_exc)
 
-        # One-time finalize of orphaned compression continuations (#20001).
+        # One-time finalize of orphaned compression continuations.
         try:
             if not session_db.get_meta("orphaned_compression_finalize_v1"):
                 finalized = session_db.finalize_orphaned_compression_sessions()
@@ -2522,7 +2522,7 @@ _STREAM_PARTIAL_PREVIEW_LEN = 60  # tail of an unfinished logical line mirrored
 
 
 def _hex_to_ansi(hex_color: str, *, bold: bool = False) -> str:
-    """Convert a hex color like '#268bd2' to a true-color ANSI escape.
+    """Convert a hex color like 'bd2' to a true-color ANSI escape.
 
     Auto-remaps known dark-mode-tuned colors to readable light-mode
     equivalents when running on a light terminal (see
@@ -2604,7 +2604,7 @@ def _query_osc11_background() -> str | None:
 
     After the main read + TCSAFLUSH, a short drain window (50 ms) catches
     late-arriving bytes that slipped past the flush — a race observed on VPS
-    and container terminals under load (#40250).
+    and container terminals under load.
     """
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         return None
@@ -2831,13 +2831,13 @@ _LIGHT_MODE_REMAP: dict[str, str] = {
     "#B8860B": "#5C4500",   # dark goldenrod -> deeper brown (more contrast)
     "#DAA520": "#6B4F00",   # goldenrod -> dark olive
     "#F1E6CF": "#1A1A1A",   # cream -> near-black
-    "#c9d1d9": "#24292F",   # github-light fg
+    "#c9d1d9": "F", # github-light fg
     "#EAF7FF": "#0F1B26",   # ice
     "#F5F5F5": "#1A1A1A",
     "#FFF0D4": "#1A1A1A",
     "#CD7F32": "#8A4F1A",   # bronze -> darker bronze
     "#FFEFB5": "#3A2A00",
-    # NOTE: skipping #C0C0C0/#888888/#555555/#8B8682 — those are
+    # NOTE: skipping #C0C0C0///#8B8682 — those are
     # status-bar foregrounds paired with dark navy bg, where dark
     # remap values would become invisible.
 }
@@ -3251,7 +3251,7 @@ def _cprint(text: str):
         # Use get_running_loop() instead of get_event_loop() to avoid the
         # DeprecationWarning / RuntimeWarning emitted by Python 3.10+ when
         # get_event_loop() is called from a thread that has no current event
-        # loop set (e.g. the process_loop background thread).  Fixes #19285.
+        # loop set (e.g. the process_loop background thread). Fixes.
         current_loop = _asyncio.get_running_loop()
     except RuntimeError:
         current_loop = None
@@ -3271,7 +3271,7 @@ def _cprint(text: str):
         #   • a coroutine / Future (prompt_toolkit ≥ 3.0) — must be scheduled
         #     via ensure_future so the coroutine is actually awaited; calling
         #     it bare would leave it unawaited and silently drop the output
-        #     (fixes #23185 Bug A).
+        # (fixes Bug A).
         #   • None (some mocks / older PT builds) — just call the inner
         #     function directly since PT already executed it synchronously.
         # Do NOT fall back to a bare _pt_print when ensure_future raises,
@@ -3634,7 +3634,7 @@ def _pilotage_call_output_screen_diff(
 
     1. Inflate ``previous_screen.height`` when the new screen is taller so pt
        skips the reserve-vertical-space cursor move that stamps chrome into
-       scrollback (pt #29 / Pilotage #26137).
+       scrollback (pt #29 / Pilotage).
     2. On AttributeError/TypeError from a corrupt previous paint buffer
        (classic after tmux attach with same width), retry once with
        ``previous_screen=None`` so pt first-paints cleanly instead of crashing
@@ -3677,7 +3677,7 @@ def _apply_bracketed_paste_timeout_patch() -> None:
     This patch wraps ``Vt100Parser.feed`` so that bracketed-paste mode
     flushes buffered content as a normal ``BracketedPaste`` event after
     ``_BP_TIMEOUT_S`` seconds without an end marker, then resumes normal
-    parsing.  See upstream issue #16263.
+    parsing. See upstream.
 
     The patch is idempotent — repeated calls are no-ops via the
     ``_pilotage_bp_timeout_patched`` sentinel on the module.
@@ -3728,7 +3728,7 @@ def _apply_bracketed_paste_timeout_patch() -> None:
                             logger.warning(
                                 "Bracketed-paste timeout (%.1fs) — flushed %d bytes "
                                 "without end mark. Terminal may have dropped ESC[201~ "
-                                "(see #16263).",
+                                ".",
                                 now - bp_start,
                                 len(paste_content),
                             )
@@ -3744,7 +3744,7 @@ def _apply_bracketed_paste_timeout_patch() -> None:
 
         _vt100_mod.Vt100Parser.feed = _patched_vt100_feed
         _vt100_mod._pilotage_bp_timeout_patched = True
-        logger.debug("Applied Vt100Parser bracketed-paste timeout patch (#16263)")
+        logger.debug("Applied Vt100Parser bracketed-paste timeout patch")
     except Exception as exc:  # noqa: BLE001 — defensive: never break startup
         logger.debug("Bracketed-paste timeout patch skipped: %s", exc)
 
@@ -3753,7 +3753,7 @@ def _apply_bracketed_paste_timeout_patch() -> None:
 # prompt_toolkit's _on_resize() + renderer send ``ESC[6n`` queries to the
 # terminal; under resize storms or tab switches the terminal's reply can
 # race past the input parser and end up in the input buffer as literal
-# text (see issue #14692). Also matches the visible-form ``^[[<row>;<col>R``
+# text (see). Also matches the visible-form ``^[[<row>;<col>R``
 # that appears when the ESC byte was stripped by a prior filter.
 _DSR_CPR_ESC_RE = re.compile(r"\x1b\[\d+;\d+R")
 _DSR_CPR_VISIBLE_RE = re.compile(r"\^\[\[\d+;\d+R")
@@ -3881,7 +3881,7 @@ def _preserve_ctrl_enter_newline() -> bool:
     some thin PTYs without SSH) still need c-j bound to submit when
     display.cli_multiline_shortcuts is disabled, so we keep that legacy opt-out.
 
-    See issue #22379.
+    See.
     """
     if sys.platform == "win32":
         return True
@@ -3925,7 +3925,7 @@ def _bind_prompt_submit_keys(
     Even when the setting is disabled, environments where Ctrl+Enter is known
     to arrive as c-j (Windows, WSL, SSH, Windows Terminal, Ghostty) keep c-j
     reserved for newline; otherwise Ctrl+Enter submits instead of composing.
-    See _preserve_ctrl_enter_newline() and issue #22379.
+    See _preserve_ctrl_enter_newline and.
     """
     if multiline_shortcuts_enabled is None:
         multiline_shortcuts_enabled = _cli_multiline_shortcuts_enabled()
@@ -3951,7 +3951,7 @@ def _terminal_may_leak_cpr() -> bool:
 
     Delayed CPR replies (``ESC[<row>;<col>R`` / visible ``^[[<row>;<col>R``)
     leak into the status line and can freeze input when the reply is slow
-    (#13870 on SSH/slow PTYs). The same race hits local POSIX TTYs under
+     on SSH/slow PTYs). The same race hits local POSIX TTYs under
     heavy subagent / status-line load — see ``tests/cli/test_cpr_local_leak.py``.
 
     Policy:
@@ -3975,7 +3975,7 @@ def _build_cpr_disabled_output(stdout):
     the cursor row before painting in non-fullscreen mode; the terminal replies
     ``ESC[<row>;<col>R``. When that reply is delayed it races into the display
     as raw ``^[[39;1R`` and can stall the renderer's pending-CPR future
-    (#13870; also local POSIX under heavy subagent load).
+    (; also local POSIX under heavy subagent load).
 
     Constructing the output with ``enable_cpr=False`` marks CPR
     ``NOT_SUPPORTED`` so ``ESC[6n`` is never sent. prompt_toolkit then uses its
@@ -4473,7 +4473,7 @@ def _normalize_moa_model(model: Optional[str]) -> tuple[Optional[str], Optional[
     handles ``requested_provider == "moa"`` and ``agent_init`` builds the
     MoAClient off ``provider == "moa"``. Without this the raw ``moa:<preset>``
     string is sent to the real provider and rejected with a 401/400 "model not
-    supported" (#56828).
+    supported".
     """
     if isinstance(model, str):
         stripped = model.strip()
@@ -4495,7 +4495,7 @@ class _VoiceInputMessage:
 
     Distinguishes STT output from manually typed text while voice mode is
     active, so the concise-voice-response prefix is applied only to messages
-    that actually came from the microphone (#65827).
+    that actually came from the microphone.
     """
 
     __slots__ = ("text",)
@@ -4601,7 +4601,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # self.verbose ONLY controls global DEBUG logging (root logger level).
         # display.tool_progress="verbose" controls tool-call rendering (full args,
         # results, think blocks) and is independent — see _apply_logging_levels.
-        # Coupling the two (PR #6a1aa420e) caused all module DEBUG logs to spew
+        # Coupling the two (a1aa420e) caused all module DEBUG logs to spew
         # to console whenever a user set tool_progress: verbose in config.
         self.verbose = bool(verbose) if verbose is not None else False
         
@@ -4689,7 +4689,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # one shot (parity with interactive ``/moa`` and the model picker). Do
         # this before provider resolution so ``-Q -m moa:<preset>`` routes
         # through MoA instead of hitting the real provider with an unknown
-        # model (#56828). A ``moa:`` prefix wins over an explicit ``--provider``.
+        # model. A ``moa:`` prefix wins over an explicit ``--provider``.
         _moa_provider_override, self.model = _normalize_moa_model(self.model)
         # Read max_tokens from config (env var override: PILOTAGE_MAX_TOKENS)
         _env_mt = os.environ.get("PILOTAGE_MAX_TOKENS")
@@ -4744,7 +4744,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             or os.getenv("OPENROUTER_BASE_URL", "")
         ) or None
         # Match key to resolved base_url: OpenRouter URL → prefer OPENROUTER_API_KEY,
-        # custom endpoint → prefer OPENAI_API_KEY (issue #560).
+        # custom endpoint → prefer OPENAI_API_KEY.
         # Note: _ensure_runtime_credentials() re-resolves this before first use.
         if self.base_url and base_url_host_matches(self.base_url, "openrouter.ai"):
             self.api_key = api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
@@ -4820,7 +4820,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         
         # Reasoning config (OpenRouter reasoning effort level)
         # Per-model override > global reasoning_effort — resolved through the
-        # shared chokepoint in pilotage_constants (Closes #21256).
+        # shared chokepoint in pilotage_constants (Closes).
         from pilotage_constants import resolve_reasoning_config
         self.reasoning_config = resolve_reasoning_config(CLI_CONFIG, self.model)
         # An explicit --reasoning wins over config for this run only (never
@@ -4896,7 +4896,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             from pilotage_state import SessionDB
             self._session_db = SessionDB()
         except Exception as e:
-            # #41386: a failed session store means the transcript is NOT
+            #: a failed session store means the transcript is NOT
             # persisted to state.db — the live chat looks healthy but resume
             # later shows a truncated/empty session. A buried log line is not
             # enough; surface it prominently so the user knows persistence is
@@ -4963,13 +4963,13 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._last_turn_interrupted = False
         # When stdout/PTY raises EIO (broken pipe after a stream-stall
         # interrupt), freeze further UI paints so we don't spin the main
-        # thread at hundreds of escape-sequence writes/sec (#81521).
+        # thread at hundreds of escape-sequence writes/sec.
         self._terminal_io_broken = False
         self._should_exit = False
         # /exit --delete: when True, the current session's SQLite history and
         # on-disk transcripts are deleted during shutdown. Set by
         # process_command() when the user runs /exit --delete or /quit --delete.
-        # Ported from google-gemini/gemini-cli#19332.
+        # Ported from google-gemini/gemini-cli.
         self._delete_session_on_exit = False
         # /update: when set, run() executes relaunch() after prompt_toolkit
         # has fully exited and cleaned up terminal modes.  Set by
@@ -4994,7 +4994,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # very next bare numeric input (e.g. `3`) resolves to that session.
         # Holds the exact list used for index resolution; one-shot (cleared on
         # the next submitted input, whether it's the selection or anything
-        # else). See #34584.
+        # else). See.
         self._pending_resume_sessions = None
         # One-shot agent seed set by a slash handler (e.g. /blueprint <name>)
         # that wants its output run as the next agent turn. Consumed and cleared
@@ -5058,7 +5058,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._voice_tts_done.set()
         self._voice_tts_stop = None  # active streaming pipeline's stop event
         self._voice_barge_capture = threading.Event()  # barge monitor is capturing the interruption
-        self._voice_last_tts_text = ""  # most recently spoken TTS text (echo guard, #75780)
+        self._voice_last_tts_text = "" # most recently spoken TTS text (echo guard,)
         self._voice_barge_phase = None  # "generation" or "playback" phase of the last barge trip
 
         # Status bar visibility (toggled via /statusbar)
@@ -5072,7 +5072,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # hidden until the next user input. Set by _recover_after_resize() so a
         # SIGWINCH cannot stamp a freshly-drawn status bar on top of one that
         # the terminal just reflowed into scrollback — the cause of duplicated
-        # bars / "blank line flooding" reports (#19280, #22976).
+        # bars / "blank line flooding" reports.
         self._status_bar_suppressed_after_resize = False
         self._resize_recovery_lock = threading.Lock()
         self._resize_recovery_timer = None
@@ -5131,7 +5131,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._active_session_lease = None
 
     def _mark_terminal_io_broken(self, reason: str = "") -> None:
-        """Stop UI paints after the PTY/stdout becomes unusable (#81521)."""
+        """Stop UI paints after the PTY/stdout becomes unusable."""
         if getattr(self, "_terminal_io_broken", False):
             return
         self._terminal_io_broken = True
@@ -5140,7 +5140,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         except Exception:
             pass
         logger.warning(
-            "Terminal I/O broken%s — freezing UI paints to avoid redraw storm (#81521)",
+            "Terminal I/O broken%s — freezing UI paints to avoid redraw storm",
             f" ({reason})" if reason else "",
         )
 
@@ -5159,7 +5159,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         same way the modal key-binding handlers already do. Sending a modal's
         entry paint through this throttle lets an unrelated background repaint
         within the 250ms window — or an in-flight resize — silently drop it, so
-        the prompt never renders and times out unseen (#41098).
+        the prompt never renders and times out unseen.
         """
         if getattr(self, "_terminal_io_broken", False):
             return
@@ -5185,7 +5185,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         modal the user is actively waiting on must never be dropped — mirroring
         the direct ``event.app.invalidate()`` the modal key-binding handlers
         already use. See ``_invalidate`` for why the throttle must not gate
-        these paints (#41098).
+        these paints.
         """
         if getattr(self, "_terminal_io_broken", False):
             return
@@ -5247,7 +5247,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         or drop hidden-tab output and repaint the surface while we're
         invisible, so on regain prompt_toolkit's incremental diff stacks on
         stale content — a second copy of the composer/prompt chrome next to
-        the ghost of the old one (#60920 focus-regain variant, #25337).
+        the ghost of the old one focus-regain variant, ).
 
         The stock handling maps ``CSI I``/``CSI O`` to ``Keys.Ignore`` so the
         bytes never pollute the input buffer; this hook additionally routes
@@ -5283,7 +5283,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         return bool(raw)
 
     def _recover_terminal_after_interrupt(self) -> None:
-        """Recover the terminal after an interrupted agent turn (#33271).
+        """Recover the terminal after an interrupted agent turn.
 
         When the user interrupts a running turn by typing a new message,
         prompt_toolkit may have an in-flight ``CSI 6n`` cursor-position query
@@ -5300,7 +5300,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         Both steps are independently safe and self-guard, so a failure of one
         never prevents the other. If the PTY is already dead (EIO), skip the
-        redraw entirely — painting a broken fd is the #81521 redraw storm.
+        redraw entirely — painting a broken fd is the redraw storm.
         """
         if getattr(self, "_terminal_io_broken", False):
             return
@@ -5309,7 +5309,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             flush_stdin()
         except Exception:
             pass
-        # #60920: The interruption marker is now printed with
+        #: The interruption marker is now printed with
         # _suspend_output_history in chat(), so _OUTPUT_HISTORY only
         # contains the normal response text (no marker text). Do NOT
         # clear history here — _force_full_redraw → _replay_output_history
@@ -5368,7 +5368,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         reflow settles.  On column shrink the terminal reflows already-rendered
         status bar rows into scrollback before prompt_toolkit can erase them;
         drawing a fresh full-width bar immediately makes the old and new
-        versions look duplicated (#19280, #22976).
+        versions look duplicated.
 
         Suppression alone is not enough on a WIDTH change.  prompt_toolkit's
         ``renderer.erase()`` does ``cursor_up(_cursor_pos.y)`` + ``erase_down()``
@@ -5412,16 +5412,16 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Same-width SIGWINCH (tmux attach, benign focus/tab signals) is left
         # untouched — no clear, no replay — because a 2J without replay erases
         # the visible transcript and a replay against preserved scrollback
-        # duplicates it (#65293). The stale-previous_screen crash tmux attach
+        # duplicates it. The stale-previous_screen crash tmux attach
         # used to trigger is handled by _pilotage_call_output_screen_diff's
-        # retry-with-first-paint instead (#83874).
+        # retry-with-first-paint instead.
         try:
             new_width = self._get_tui_terminal_width()
         except Exception:
             new_width = None
         prev_width = getattr(self, "_last_resize_width", None)
         # Replay only on an OBSERVED width change.  The first signal of a
-        # session must not count as one (#65293): GNOME Terminal and friends
+        # session must not count as one: GNOME Terminal and friends
         # deliver benign SIGWINCHes (tab bar appearing, monitor-scale change,
         # focus events), and a 2J+replay against preserved scrollback
         # duplicates everything ``_OUTPUT_HISTORY`` holds — after a resume
@@ -5538,11 +5538,11 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def _install_resize_recovery(self, app) -> None:
         """Route prompt_toolkit's ``_on_resize`` through the debounced
-        ghost-clearing recovery (#5474/#49120) and record the current terminal
+        ghost-clearing recovery /) and record the current terminal
         width as the baseline for width-change detection.
 
         Seeding the baseline here is what keeps the session's FIRST SIGWINCH
-        honest (#65293): ``_recover_after_resize`` replays the transcript only
+        honest: ``_recover_after_resize`` replays the transcript only
         on an observed width change, and without a startup baseline it could
         not tell a benign signal (GNOME Terminal tab bar, monitor-scale
         change) from a real one.  An initial maximize/restore still differs
@@ -6030,11 +6030,11 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         """Return the full viewport width for printed scrollback box rules.
 
         Previously this clamped to ``max(32, min(width, 56))`` as a defense
-        against terminal-emulator reflow on column-shrink (#25975, salvaging
-        #24403).  That clamp made response/reasoning borders look stubby on
+        against terminal-emulator reflow on column-shrink (, salvaging
+       ). That clamp made response/reasoning borders look stubby on
         any modern wide terminal.  We now trust the prompt_toolkit
-        ``_output_screen_diff`` monkey-patch landed in #26137 (salvaging
-        #25981) to keep chrome out of scrollback in the first place, and
+        ``_output_screen_diff`` monkey-patch landed in (salvaging
+) to keep chrome out of scrollback in the first place, and
         accept that an aggressive column-shrink may visually reflow already
         printed Panel borders — that's a cosmetic artifact of stamped
         scrollback history, not a live-render bug.
@@ -6426,7 +6426,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         Cached at startup (see ``set_voice_record_key_cache``) rather
         than re-read per render. Two reasons (Copilot round-13 on
-        #19835):
+       ):
 
         * The prompt_toolkit binding is registered once at session
           start via ``@kb.add(_voice_key)``; re-reading config per
@@ -7133,7 +7133,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             path = Path(match.group(1))
             # Use try/except instead of path.exists() to avoid TOCTOU race:
             # the paste file may be deleted between check and read, causing
-            # the input to be silently dropped (#17666).
+            # the input to be silently dropped.
             try:
                 return path.read_text(encoding="utf-8")
             except (OSError, IOError):
@@ -8112,7 +8112,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         reads top-level ``model_config`` keys via
         ``_stored_session_runtime_overrides``) both restore the switched
         provider instead of recombining the model with the ambient default
-        (#79536). Mirrors the gateway's ``update_session_model()`` call.
+. Mirrors the gateway's ``update_session_model`` call.
         getattr: tests drive the switch paths with ``object.__new__`` stubs.
         """
         db = getattr(self, "_session_db", None)
@@ -8143,7 +8143,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # explicit None, so falsy values must be converted, not filtered.
         # Deriving the top-level from **route guarantees the two shapes
         # can never diverge — the asymmetry that caused the original
-        # stale-key bug (#85261 simplify-code review).
+        # stale-key bug simplify-code review).
         route = {
             "provider": provider or None,
             "base_url": result.base_url or None,
@@ -8203,7 +8203,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # durable custom:<name> menu key from the endpoint, else drop the
         # provider so resume keeps the ambient default. (Stricter than the
         # TUI gateway's recovery, which keeps bare "custom" when a base_url
-        # exists — the CLI's resolve path would hard-fail on it, #14676.)
+        # exists — the CLI's resolve path would hard-fail on it,.)
         if str(stored_provider or "").strip().lower() == "custom":
             try:
                 from pilotage_cli.runtime_provider import canonical_custom_identity
@@ -9005,7 +9005,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         ``/resume`` and ``pilotage sessions list``. Delegates the
         check-and-delete to ``SessionDB.delete_session_if_empty``, which
         only removes rows with no messages, no title, and no child
-        sessions. Ported from google-gemini/gemini-cli#27770.
+        sessions. Ported from google-gemini/gemini-cli.
         """
         if not self._session_db or not session_id:
             return False
@@ -9094,7 +9094,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # old session *before* rotating.  /new can be called mid-turn
             # when _flush_messages_to_session_db() has not yet run — without
             # this, messages generated during the current turn are silently
-            # lost on session rotation (#47202).
+            # lost on session rotation.
             if self.agent:
                 try:
                     self.agent._flush_messages_to_session_db(
@@ -9108,7 +9108,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             except Exception:
                 pass
             # Don't let immediately-rotated empty sessions pile up in
-            # /resume and `pilotage sessions list` (gemini-cli#27770 port).
+            # /resume and `pilotage sessions list` (gemini-cli port).
             self._discard_session_if_empty(old_session_id)
 
         self.session_start = datetime.now()
@@ -9128,8 +9128,8 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # /new is a full conversation boundary: session-scoped runtime
         # overrides (/model --session, /fast, one-turn restores) do not carry
         # forward.  Re-derive model/provider and service tier from config.yaml
-        # so a session-only switch never leaks into the next session (#48055,
-        # #23131).
+        # so a session-only switch never leaks into the next session,
+        #).
         self._pending_one_turn_model_restore = None
         self.service_tier = _parse_service_tier_config(
             CLI_CONFIG["agent"].get("service_tier", "")
@@ -9244,12 +9244,12 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # conversation. reset=True signals providers to flush accumulated
             # per-session state (_session_turns, _turn_counter, _document_id).
             # Fires BEFORE the plugin on_session_reset hook (shell hooks only
-            # see the new id; Python providers see the transition). See #6672.
+            # see the new id; Python providers see the transition). See.
             #
             # When the old session has history, end-of-session extraction
             # (LLM-bound, seconds) and this switch are queued as ONE task on
             # the memory manager's serialized worker — end strictly before
-            # switch, without blocking /new (#16454). With no history there
+            # switch, without blocking /new. With no history there
             # is nothing to extract; switch inline as before.
             try:
                 _mm = getattr(self.agent, "_memory_manager", None)
@@ -9291,7 +9291,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         Returns True if the input was consumed as a resume selection (caller
         must not treat it as chat); False otherwise. The pending state is
         always one-shot: it is cleared on the first submitted input regardless
-        of outcome. See #34584.
+        of outcome. See.
         """
         pending = self._pending_resume_sessions
         if not pending:
@@ -9424,7 +9424,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # rows (display_kind set) are role=user but are not user turns — match
         # CLI resume counting and list_recent_user_messages. Compaction
         # handoffs are excluded too (durable role=user, sometimes without
-        # display_kind on legacy sessions; #80622).
+        # display_kind on legacy sessions;).
         from agent.context_compressor import is_user_originated_turn
 
         last_user_idx = None
@@ -9478,7 +9478,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Walk backwards collecting the indices of the last N *real* user
         # messages (exclude display_kind timeline rows and compaction
         # handoffs — same predicate as list_recent_user_messages, resume
-        # turn counting, and /retry; #80622).
+        # turn counting, and /retry;).
         from agent.context_compressor import is_user_originated_turn
 
         user_indices = []
@@ -9547,7 +9547,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 except Exception:
                     pass
             # Notify memory providers — same hook /branch fires, with the
-            # rewound flag so per-turn document caches invalidate (#6672, #21910).
+            # rewound flag so per-turn document caches invalidate.
             try:
                 _mm = getattr(self.agent, "_memory_manager", None)
                 if _mm is not None and self.session_id:
@@ -9638,7 +9638,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         Mirrors the thread-aware guard in ``_run_curses_picker``: ``run_in_terminal``
         returns a coroutine that must be awaited by the prompt_toolkit event loop,
         which only exists on the main thread.  Slash commands are dispatched from
-        the ``process_loop`` daemon thread (see issue #23185), so calling
+        the ``process_loop`` daemon thread (see), so calling
         ``run_in_terminal`` from there orphans the coroutine — ``_ask`` never runs,
         and user keystrokes leak into the composer instead.  Fall back to a direct
         ``input()`` when we're off the main thread.
@@ -9654,7 +9654,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         in_main_thread = threading.current_thread() is threading.main_thread()
 
-        # Slash-worker guard (#23185 / billing auto-reload hang): when a
+        # Slash-worker guard / billing auto-reload hang): when a
         # prompt_toolkit app is running but we're on a non-main thread (the
         # process_loop / TUI slash-worker daemon thread), stdin is owned by the
         # event loop / JSON-RPC pipe.  A bare input() there blocks forever until
@@ -9704,7 +9704,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         choices visible and lets the normal Enter key binding submit the typed
         or highlighted choice.
 
-        **Platform note (Windows — issue #33961):**
+        **Platform note (Windows):**
         Earlier code bypassed the modal on ``sys.platform == "win32"`` and fell
         back to a raw ``input()`` prompt.  When the confirm was triggered from the
         ``process_loop`` daemon thread (the normal case) that ``input()`` ran off
@@ -9739,7 +9739,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         def _stdin_fallback() -> str | None:
             # On native Windows a raw input() from a non-main thread deadlocks
-            # against prompt_toolkit's stdin ownership (#33961).  With an app
+            # against prompt_toolkit's stdin ownership. With an app
             # running we cannot safely prompt off the main thread, so cancel
             # cleanly (None) rather than hang the terminal.
             if sys.platform == "win32" and not in_main_thread:
@@ -10143,7 +10143,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # so a failed in-place agent swap can roll the whole CLI back to the old
         # working model.  Otherwise the broken credentials staged below leak into
         # the next turn's resolution even though the agent itself rolled back
-        # (#50163).
+        #.
         _cli_snapshot = {
             "model": self.model,
             "provider": self.provider,
@@ -10182,7 +10182,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 # The agent rolled itself back to the old working model/client.
                 # Roll the CLI's own staged fields back too and abort the rest
                 # of the commit (note + success print) so a failed switch is a
-                # no-op rather than a dead session (#50163).
+                # no-op rather than a dead session.
                 for _k, _v in _cli_snapshot.items():
                     setattr(self, _k, _v)
                 _cprint(
@@ -10246,7 +10246,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # config.yaml. result.base_url/api_mode are always freshly
             # resolved for the target provider (see model_switch.py), so sync
             # them every time; None clears a value the new provider doesn't
-            # need (#25106).
+            # need.
             save_config_value("model.base_url", result.base_url or None)
             save_config_value("model.api_mode", result.api_mode or None)
             _cprint("    Saved to config.yaml (--global)")
@@ -10520,7 +10520,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         old_model = self.model
         _one_turn_restore_snapshot = self._snapshot_model_runtime() if one_turn else None
         # Snapshot CLI-level fields before mutation so a failed in-place swap
-        # rolls the whole CLI back to the old working model (#50163).
+        # rolls the whole CLI back to the old working model.
         _cli_snapshot = {
             "model": self.model,
             "provider": self.provider,
@@ -10558,7 +10558,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 )
             except Exception as exc:
                 # Agent rolled itself back; roll the CLI back too and abort so a
-                # failed switch is a no-op rather than a dead session (#50163).
+                # failed switch is a no-op rather than a dead session.
                 for _k, _v in _cli_snapshot.items():
                     setattr(self, _k, _v)
                 _cprint(
@@ -10629,7 +10629,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             save_config_value("model.default", result.new_model)
             save_config_value("model.provider", result.target_provider)
             # See _apply_model_switch_result above for why base_url/api_mode
-            # must be synced on every global switch (#25106).
+            # must be synced on every global switch.
             save_config_value("model.base_url", result.base_url or None)
             save_config_value("model.api_mode", result.api_mode or None)
             _cprint("    Saved to config.yaml")
@@ -10911,7 +10911,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         _cmd_def = _resolve_cmd(_base_word)
         canonical = _cmd_def.name if _cmd_def else _base_word
 
-        # pre_command observer hook (#64204): fires for every recognized
+        # pre_command observer hook: fires for every recognized
         # slash command BEFORE its handler runs. Observer-only in v1 —
         # return values are ignored (fire_pre_command_hook logs directives
         # at debug). Never raises, so a broken plugin can't break dispatch.
@@ -10930,14 +10930,14 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # A bare `/resume` prompt is one-shot: any command other than the
         # resume/sessions handlers (which manage the pending state themselves)
         # disarms it so a later number isn't swallowed as a stale selection.
-        # See #34584.
+        # See.
         if canonical not in {"resume", "sessions"}:
             self._pending_resume_sessions = None
 
         if canonical in {"quit", "exit"}:
             # Parse --delete flag: /exit --delete also removes the current
             # session's transcripts + SQLite history. Ported from
-            # google-gemini/gemini-cli#19332.
+            # google-gemini/gemini-cli.
             _rest = cmd_original.split(None, 1)
             _args = (_rest[1] if len(_rest) > 1 else "").strip().lower()
             if _args in {"--delete", "-d"}:
@@ -10959,7 +10959,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         elif canonical == "redraw":
             # Manual recovery for terminal buffer drift from multiplexer
             # tab switches, subshell ``clear``, SSH window restores, etc.
-            # See issue #8688 (cmux). Ctrl+L is bound to the same helper.
+            # See (cmux). Ctrl+L is bound to the same helper.
             self._force_full_redraw()
             _cprint(f"  {_DIM}✓ UI redrawn{_RST}")
         elif canonical == "clear":
@@ -11453,7 +11453,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                             result = subprocess.run(
                                 exec_cmd, shell=True, capture_output=True,
                                 text=True, encoding="utf-8", errors="replace", timeout=30, env=sanitized_env,
-                                # No console flash on Windows (#56747).
+                                # No console flash on Windows.
                                 creationflags=windows_hide_flags(),
                             )
                             output = result.stdout.strip() or result.stderr.strip()
@@ -11934,7 +11934,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         Called once at the end of every turn from ``process_loop``'s ``finally``
         block. Catches and swallows ``Exception`` because the drain must never
-        break the main loop. (#20271)
+        break the main loop.
         """
         try:
             while not self._interrupt_queue.empty():
@@ -12080,7 +12080,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         through here does not change ``self.verbose`` or the agent's
         ``verbose_logging`` / ``quiet_mode`` — those remain under the
         explicit ``-v``/``--verbose`` flag and the ``/verbose-logging``
-        toggle.  See PR #6a1aa420e for the history that decoupled them.
+        toggle. Seea1aa420e for the history that decoupled them.
         """
         cycle = ["off", "new", "all", "verbose"]
         try:
@@ -12115,7 +12115,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Use raw ANSI codes via _cprint so the output is routed through
         # prompt_toolkit's renderer.  self.console.print() with Rich markup
         # writes directly to stdout which patch_stdout's StdoutProxy mangles
-        # into garbled sequences like '?[33mTool progress: NEW?[0m' (#2262).
+        # into garbled sequences like '?[33mTool progress: NEW?[0m'.
         from pilotage_cli.colors import Colors as _Colors
         labels = {
             "off": f"{_Colors.DIM}Tool progress: OFF{_Colors.RESET} — silent mode, just the final response.",
@@ -12369,7 +12369,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 # Include system prompt + tool schemas in the estimate —
                 # a transcript-only number understates real request pressure
                 # and can even appear to grow after compression because a
-                # dense handoff summary replaces many short turns (#6217).
+                # dense handoff summary replaces many short turns.
                 _sys_prompt = getattr(self.agent, "_cached_system_prompt", "") or ""
                 _tools = getattr(self.agent, "tools", None) or None
                 approx_tokens = estimate_request_tokens_rough(
@@ -12392,7 +12392,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 # Passing _cached_system_prompt caused duplication because
                 # _build_system_prompt appends system_message to prompt_parts
                 # which already contain the agent identity — resulting in the
-                # identity block appearing twice (issue #15281).
+                # identity block appearing twice.
                 compressed, _ = self.agent._compress_context(
                     head,
                     None,
@@ -12741,7 +12741,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         * By default (``mcp.auto_reload_on_config_change: true``) it
           auto-triggers ``_reload_mcp()`` and informs the user — legacy
-          behaviour from #1474.
+          behaviour from.
         * When opted out (``mcp.auto_reload_on_config_change: false``) it
           does NOT reload.  Instead it notifies the user that the config
           changed and that they can apply it with ``/reload-mcp`` — while
@@ -12847,7 +12847,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     # A general escape hatch for non-interactive use (scripting/automation) and
     # for the degraded path where the modal can't be marshaled onto the app loop
     # — lets users self-serve without flipping approvals.destructive_slash_confirm
-    # in config. (Native Windows now drives the modal normally — see #33961.)
+    # in config. (Native Windows now drives the modal normally — see.)
     _DESTRUCTIVE_SKIP_TOKENS = frozenset({"now", "--yes", "-y"})
 
     @classmethod
@@ -12907,7 +12907,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         the modal is bypassed and ``"once"`` is returned immediately. This is
         an escape hatch for non-interactive use and for the degraded path where
         the modal can't be marshaled onto the app loop (native Windows itself now
-        drives the modal normally — see #33961). Callers are responsible
+        drives the modal normally — see). Callers are responsible
         for stripping the skip tokens from any remaining argument parsing
         (see :meth:`_split_destructive_skip`).
 
@@ -13498,7 +13498,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Python bool is a subclass of int, so a hand-edited
         # ``silence_threshold: true`` would otherwise be forwarded as
         # ``1`` instead of falling back to the 200 default (Copilot
-        # round-12 on #19835).
+        # round-12 on).
         _threshold = voice_cfg.get("silence_threshold")
         _duration = voice_cfg.get("silence_duration")
         self._voice_recorder._silence_threshold = (
@@ -13951,7 +13951,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     _cprint(f"\n{_DIM}Stop phrase detected — ending voice chat.{_RST}")
                     self._disable_voice_mode()
                     return
-                # Fail-closed echo guard (#75780): a playback-phase capture
+                # Fail-closed echo guard: a playback-phase capture
                 # has no acoustic echo cancellation, so speaker bleed alone
                 # can trip the barge trigger. If the transcript is a close
                 # match for what Pilotage just spoke, treat it as self-capture
@@ -13991,7 +13991,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             voice_cfg = load_config().get("voice", {})
             if isinstance(voice_cfg, dict):
                 # is_truthy_value handles quoted YAML strings like "false"
-                # which bool() would misread as True (#49883).
+                # which bool would misread as True.
                 return is_truthy_value(voice_cfg.get("beep_enabled", True), default=True)
         except Exception:
             pass
@@ -14050,7 +14050,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Use the startup-pinned cache so the advertised shortcut always
         # matches the live prompt_toolkit binding — reading live config
         # here would drift after a mid-session config edit (Copilot
-        # round-14 on #19835, same class as round-13).
+        # round-14 on, same class as round-13).
         _ptt_display = self._voice_record_key_label()
         _cprint(f"\n{_ACCENT}Voice mode enabled{tts_status}{_RST}")
         _cprint(f"  {_DIM}{_ptt_display} to start/stop recording{_RST}")
@@ -14069,7 +14069,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     def _typed_voice_stop(self, user_input) -> bool:
         """Typed bare stop phrase during an active voice chat ends the chat.
 
-        Saying "stop" ends the voice chat (PR #73106); TYPING the same bare
+        Saying "stop" ends the voice chat ; TYPING the same bare
         stop phrase while voice mode is on must behave identically instead of
         sending "stop" to the agent as a turn. Guarded on voice mode being ON
         — typed "stop" outside voice chat passes through to the agent exactly
@@ -14381,7 +14381,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         _cprint(f"  Recording: {'YES' if self._voice_recording else 'no'}")
         # Display the startup-pinned label so /voice status always
         # matches the live prompt_toolkit binding (Copilot round-14 on
-        # #19835, same class as round-13). Reading live config here
+        #, same class as round-13). Reading live config here
         # would drift after a mid-session config edit.
         _cprint(f"  Record key: {self._voice_record_key_label()}")
         _cprint(f"\n  {_BOLD}Requirements:{_RST}")
@@ -14447,7 +14447,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         # Trigger an immediate prompt_toolkit repaint from this (non-main)
         # thread. Modal prompts must paint at once and must not be gated by the
-        # _invalidate throttle / resize guard — see _paint_now / _invalidate (#41098).
+        # _invalidate throttle / resize guard — see _paint_now / _invalidate.
         self._paint_now()
 
         # Poll for the user's response. The countdown in the hint line updates
@@ -14504,7 +14504,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._sudo_deadline = _time.monotonic() + timeout
 
         # Modal prompt — paint immediately, bypassing the throttle/resize guard
-        # so the prompt can't be dropped and time out unseen (#41098).
+        # so the prompt can't be dropped and time out unseen.
         self._paint_now()
 
         while True:
@@ -14572,7 +14572,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # guard. A throttled paint here can be silently dropped (250ms
             # window collision or in-flight resize), leaving the panel unseen so
             # the command is denied on timeout without the user ever seeing it
-            # (#41098). The countdown refreshes below paint the same way.
+            # The countdown refreshes below paint the same way.
             self._paint_now()
 
             _last_countdown_refresh = _time.monotonic()
@@ -14860,7 +14860,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         thread servicing the prompt.  The result is a frozen terminal until the
         prompt's own timeout expires.  Push a terminal value onto each queue so
         any still-blocked thread unblocks cleanly, then nil the state out and
-        restore the user's pre-modal draft (#14026).
+        restore the user's pre-modal draft.
 
         Safe default per prompt: approval -> "deny", clarify/sudo/secret ->
         cancel (None / empty).  Each step is wrapped so a dead queue can't
@@ -14903,7 +14903,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._secret_state = None
         self._secret_deadline = 0
         # Modal teardown — paint directly so the secret panel clears at once and
-        # isn't held by the _invalidate throttle/resize guard (#41098).
+        # isn't held by the _invalidate throttle/resize guard.
         self._paint_now()
 
     def _cancel_secret_capture(self) -> None:
@@ -14932,7 +14932,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             message: The user's message (str or multimodal content list)
             images: Optional list of Path objects for attached images
             voice_input: True when the message came from voice transcription
-                (gates the concise voice-response prefix, #65827)
+                (gates the concise voice-response prefix,)
             
         Returns:
             The agent's response, or None on error
@@ -15075,7 +15075,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # The prior turn's override applies only to its own user dict. Clear it
         # before exposing the next staged input to close persistence; otherwise
         # a shutdown before the worker prologue can write old API-local text as
-        # this new user message (#63766).
+        # this new user message.
         persist_lock = getattr(agent, "_session_persist_lock", None)
 
         def _stage_user_message() -> None:
@@ -15190,7 +15190,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         text_queue.put(delta)
                     # Track what's actually being spoken so a playback-phase
                     # barge capture can be checked against it (echo guard,
-                    # #75780).
+                    #).
                     self._voice_last_tts_text = (self._voice_last_tts_text or "") + delta
 
             # When voice mode is active, prepend a brief instruction so the
@@ -15262,7 +15262,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 # Model/skill notes and voice instructions are API-local. Keep
                 # the original staged input as the durable transcript value so a
                 # close-path marker follows the same dict into turn setup rather
-                # than producing a second noted user row (#63766).
+                # than producing a second noted user row.
                 _persist_clean_user_message = (
                     message if (_voice_prefix or agent_message != message) else None
                 )
@@ -15388,7 +15388,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                             # left behind.  approval/clarify/sudo/secret prompts gate
                             # input (read_only condition + keypress filter) until
                             # explicitly reset — without this the CLI freezes after
-                            # an interrupt until the prompt's own timeout expires (#14026).
+                            # an interrupt until the prompt's own timeout expires.
                             self._clear_active_overlays_for_interrupt()
                             # Debug: log to file (stdout may be devnull from redirect_stdout)
                             try:
@@ -15407,7 +15407,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         # output from the agent thread.  Without this, the
                         # StdoutProxy buffer only flushes on renderer passes
                         # triggered by input events — on macOS this causes
-                        # the CLI to appear frozen until the user types. (#1624)
+                        # the CLI to appear frozen until the user types.
                         self._invalidate(min_interval=0.15)
                 else:
                     # Fallback for non-interactive mode (e.g., single-query)
@@ -15529,7 +15529,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._last_turn_interrupted = _interrupted_this_turn
             if _interrupted_this_turn:
                 pending_message = result.get("interrupt_message") or interrupt_msg
-                # #60920: Don't append the interruption marker to response so it
+                #: Don't append the interruption marker to response so it
                 # is never recorded in _OUTPUT_HISTORY by the Panel rendering
                 # below. The marker is printed separately with _suspend_output_history
                 # after the response Panel to preserve the visual while avoiding
@@ -15665,7 +15665,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     except Exception:
                         pass
 
-            # #60920: Print interruption marker with history suppressed so it
+            #: Print interruption marker with history suppressed so it
             # is never recorded in _OUTPUT_HISTORY. The marker was previously
             # appended to `response` which caused a duplicate on terminal redraw
             # when _replay_output_history replayed it. Printing it here with
@@ -15826,7 +15826,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # This snapshot must share the staging lock with ``chat()``. Without
             # it, close can retain a mutable history baseline just before chat
             # appends its pending dict; the later flush then mistakes that dict
-            # for durable history and stamps it without writing a row (#63766).
+            # for durable history and stamps it without writing a row.
             messages = getattr(agent, "_session_messages", None)
             pending_cli_message = getattr(agent, "_pending_cli_user_message", None)
             if not isinstance(messages, list):
@@ -15898,14 +15898,14 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         Args:
             clear_screen: When True (default), clear the terminal screen and
                 scrollback before printing the summary. This is appropriate for
-                interactive TUI teardown (#38252). Single-query (-q) mode should
-                pass False to preserve the printed answer (#53009).
+                interactive TUI teardown. Single-query (-q) mode should
+                pass False to preserve the printed answer.
         """
         if clear_screen:
             # Clear the screen + scrollback before printing the summary so the
             # live bottom chrome (status bar, input box, separator rules) and the
             # rest of the session transcript don't get stranded above the exit
-            # summary (#38252). By this point app.run() has returned and
+            # summary. By this point app.run has returned and
             # prompt_toolkit has restored terminal modes, so writing raw escapes
             # to stdout is safe. ESC[3J clears scrollback, ESC[2J clears the
             # visible screen, ESC[H homes the cursor — so the summary prints at a
@@ -16281,7 +16281,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 daemon=True,
             ).start()
 
-        # Redaction opt-out warning (#17691): ON by default, loud when off.
+        # Redaction opt-out warning: ON by default, loud when off.
         # The redactor snapshots its state at import time so any toggle now
         # won't affect the running process — we just want the operator to
         # see that they're running without the safety net.
@@ -16452,7 +16452,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._voice_tts_done.set()  # Initially "done" (no TTS pending)
         self._voice_tts_stop = None  # active streaming pipeline's stop event
         self._voice_barge_capture = threading.Event()  # barge monitor is capturing the interruption
-        self._voice_last_tts_text = ""  # most recently spoken TTS text (echo guard, #75780)
+        self._voice_last_tts_text = "" # most recently spoken TTS text (echo guard,)
         self._voice_barge_phase = None  # "generation" or "playback" phase of the last barge trip
 
         if os.environ.get("PILOTAGE_DEFER_AGENT_STARTUP") != "1":
@@ -16482,7 +16482,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             repaint: while the tab/window was hidden the emulator may have
             coalesced output or repainted the surface, so prompt_toolkit's
             incremental diff would stack a fresh copy of the prompt chrome
-            on top of the stale one (#60920 focus-regain variant, #25337).
+            on top of the stale one focus-regain variant, ).
             """
             try:
                 for press in getattr(event, "key_sequence", None) or ():
@@ -16665,7 +16665,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     # patch_stdout; process_command() never invalidates the
                     # app, so without this the submitted "/steer <text>" can
                     # linger in the input area (looking unsent) and invite an
-                    # accidental re-submit. See issue #34569.
+                    # accidental re-submit. See.
                     event.app.invalidate()
                     return
 
@@ -16673,7 +16673,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 # running.  Queuing it defeats the entire point of the command:
                 # process_loop is blocked inside self.chat(), so the background
                 # task would only start once the foreground turn it was meant to
-                # run alongside has already finished (#75221).  The foreground
+                # run alongside has already finished. The foreground
                 # turn is left alone: no interrupt, no steer.
                 if self._should_handle_background_command_inline(
                     text, has_images=has_images
@@ -17216,7 +17216,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # Ctrl+C press.  This fixes the case where a stale/orphaned overlay
             # (left behind by a previous interrupt) consumes the press without
             # ever reaching the agent-interrupt branch, leaving the chat frozen
-            # (#14026).
+            #.
             _overlay_cleared = bool(
                 self._sudo_state
                 or self._secret_state
@@ -17258,7 +17258,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # the keystroke reaches the application's stdin — prompt_toolkit never
         # sees it, and prompt_toolkit's key spec parser doesn't even recognise
         # 'c-S-c' anyway (the Shift modifier is meaningless on control-sequence
-        # keys). #19884 added a handler for this; #19895 patched the resulting
+        # keys). added a handler for this; patched the resulting
         # startup crash with try/except. Both were based on a misreading of how
         # terminal key events propagate. Deleting the dead handler outright.
 
@@ -17303,7 +17303,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
             # Clear all agent-blocking overlays in one shot, then fall through to
             # the agent-interrupt branch so a single Ctrl+Q both clears a stale
-            # overlay and interrupts a still-running agent (#14026).
+            # overlay and interrupts a still-running agent.
             _overlay_cleared = bool(
                 self._sudo_state
                 or self._secret_state
@@ -17417,7 +17417,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Config spellings (ctrl/control/alt/option/opt) are normalized to
         # prompt_toolkit's c-x / a-x format via ``normalize_voice_record_key_for_prompt_toolkit``
         # so the same config value binds identically in the TUI and CLI
-        # (Copilot round-9 review on #19835). ``super``/``win``/``windows``
+        # (Copilot round-9 review on). ``super``/``win``/``windows``
         # configs silently fall back to the default here since prompt_toolkit
         # has no super modifier — log a warning so users notice the
         # TUI/CLI split instead of a silent mismatch (round-11).
@@ -17449,7 +17449,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # prompt_toolkit binding below. Every status / placeholder /
         # recording-hint render reads this cached value so display can
         # never drift from the live keybinding even if the user edits
-        # voice.record_key mid-session (Copilot round-13 on #19835).
+        # voice.record_key mid-session (Copilot round-13 on).
         self.set_voice_record_key_cache(_raw_key)
 
         @kb.add(*pt_key_to_sequence(_voice_key))
@@ -17476,7 +17476,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             else:
                 # Allow disarming continuous mode even when the agent is
                 # running or transcribing — otherwise the user is stuck in
-                # an auto-restart loop until /voice off (#67545).
+                # an auto-restart loop until /voice off.
                 if cli_ref._agent_running or cli_ref._voice_processing:
                     with cli_ref._voice_lock:
                         cli_ref._voice_continuous = False
@@ -17535,7 +17535,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             """
             # Diagnostic canary: measure how long the paste handler blocks
             # the prompt_toolkit event loop. If this exceeds ~500ms we log
-            # it so recurring "CLI freezes on paste" reports (issue #16263,
+            # it so recurring "CLI freezes on paste" reports (,
             # macOS Tahoe 26 + iTerm2/Ghostty) arrive with data attached.
             _paste_handler_start = time.perf_counter()
             _paste_raw_size = len(event.data or "")
@@ -18443,10 +18443,10 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # color schemes.  (Hardcoding a near-white #FFF8DC made
             # input invisible on light backgrounds.)
             'input-area': '',
-            'placeholder': '#888888 italic',
+            'placeholder': ' italic',
             'prompt': '',
-            'prompt-working': '#888888 italic',
-            'hint': '#888888 italic',
+            'prompt-working': ' italic',
+            'hint': ' italic',
             'status-bar': 'bg:#1a1a2e #C0C0C0',
             'status-bar-strong': 'bg:#1a1a2e #FFD700 bold',
             'status-bar-dim': 'bg:#1a1a2e #8B8682',
@@ -18462,9 +18462,9 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             'image-badge': '#87CEEB bold',
             'completion-menu': 'bg:#1a1a2e #FFF8DC',
             'completion-menu.completion': 'bg:#1a1a2e #FFF8DC',
-            'completion-menu.completion.current': 'bg:#333355 #FFD700',
-            'completion-menu.meta.completion': 'bg:#1a1a2e #888888',
-            'completion-menu.meta.completion.current': 'bg:#333355 #FFBF00',
+            'completion-menu.completion.current': 'bg #FFD700',
+            'completion-menu.meta.completion': 'bg:#1a1a2e',
+            'completion-menu.meta.completion.current': 'bg #FFBF00',
             # Clarify question panel
             'clarify-border': '#CD7F32',
             'clarify-title': '#FFD700 bold',
@@ -18513,7 +18513,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # during idle, keeping wall-clock status-bar read-outs ticking.
             # Set to 0 to suppress background redraws entirely — avoids
             # fighting terminal auto-scroll in non-fullscreen mode (Xshell,
-            # iTerm2, Windows Terminal). See #48309.
+            # iTerm2, Windows Terminal). See.
             refresh_interval=float(CLI_CONFIG.get("display", {}).get("cli_refresh_interval", 0)),
             # Erase the live bottom chrome (status bar, input box, separator
             # rules) on exit instead of freezing a final copy into scrollback.
@@ -18521,7 +18521,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # the chrome one last time and leaves it stranded above the exit
             # summary — so a dead status bar + empty prompt sit between the
             # conversation transcript and the "Resume this session" block, and
-            # stack with the next session's UI on resume (#38252). The actual
+            # stack with the next session's UI on resume. The actual
             # conversation transcript is printed through patch_stdout into
             # normal scrollback and is unaffected; only the managed chrome is
             # erased. Applies to every exit path (/exit, /quit, EOF, Ctrl+C).
@@ -18544,7 +18544,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # the terminal column-shrinks, the emulator reflows the previously
         # rendered full-width rows into multiple narrower rows that get
         # pushed up — leaving ghost duplicates AND polluting scrollback.
-        # Same issue as pt #29 (open since 2014), #1675, #1933.
+        # Same issue as pt #29 (open since 2014),.
         #
         # Surgical fix: wrap _output_screen_diff so that when its internal
         # `if current_height > previous_screen.height` branch fires (the
@@ -18597,7 +18597,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             pass
 
         # Apply bracketed-paste timeout recovery so torn ESC[201~ end marks
-        # don't permanently freeze the input (issue #16263). Idempotent.
+        # don't permanently freeze the input. Idempotent.
         _apply_bracketed_paste_timeout_patch()
 
         self._install_resize_recovery(app)
@@ -18655,7 +18655,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         continue
 
                     # Voice-transcribed messages arrive wrapped in a sentinel
-                    # so only genuine STT output gets the voice prefix (#65827).
+                    # so only genuine STT output gets the voice prefix.
                     is_voice_input = isinstance(user_input, _VoiceInputMessage)
                     if is_voice_input:
                         user_input = user_input.text
@@ -18704,7 +18704,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                             )
 
                     # A bare number right after a bare `/resume` prompt selects
-                    # that session (see #34584). Checked before chat routing so
+                    # that session. Checked before chat routing so
                     # the digit isn't sent to the agent as a message.
                     if (
                         not _file_drop
@@ -18791,7 +18791,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
                         app.invalidate()  # Refresh status line
 
-                        # Post-turn terminal recovery (#33271): after an
+                        # Post-turn terminal recovery: after an
                         # interrupt the prompt_toolkit renderer may have
                         # drifted from the physical terminal state — CSI 6n
                         # cursor position reports can leak as literal text
@@ -18806,9 +18806,9 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         # while the agent was running and were never claimed by
                         # the explicit interrupt path. See
                         # _drain_interrupt_queue_to_pending_input for the full
-                        # rationale. Regression of #17666 / #18760 — the drain
-                        # block from the original PR #17939 was deferred as
-                        # "worth its own review" and never re-landed (#20271).
+                        # rationale. Regression of / — the drain
+                        # block from the original was deferred as
+                        # "worth its own review" and never re-landed.
                         self._drain_interrupt_queue_to_pending_input()
 
                         # Goal continuation: if a standing goal is active, ask
@@ -18861,7 +18861,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     if getattr(e, "errno", None) == errno.EIO:
                         self._mark_terminal_io_broken("process_loop")
                         logger.warning(
-                            "process_loop EIO — freezing UI paints (#81521): %s",
+                            "process_loop EIO — freezing UI paints: %s",
                             e,
                         )
                         continue
@@ -18870,7 +18870,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     if isinstance(e, OSError) and getattr(e, "errno", None) == errno.EIO:
                         self._mark_terminal_io_broken("process_loop")
                         logger.warning(
-                            "process_loop EIO — freezing UI paints (#81521): %s",
+                            "process_loop EIO — freezing UI paints: %s",
                             e,
                         )
                         continue
@@ -18920,19 +18920,19 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             for DEBUG) inside the handler.  That KeyError then escapes
             before ``raise KeyboardInterrupt()`` can fire, which bypasses
             prompt_toolkit's normal interrupt unwind and surfaces as the
-            EIO cascade from issue #13710.  Wrap the log in a bare
+            EIO cascade from. Wrap the log in a bare
             ``try/except`` so the handler can never raise through it.
             """
             try:
                 logger.debug("Received signal %s, triggering graceful shutdown", signum)
             except Exception:
-                pass  # never let logging raise from a signal handler (#13710 regression)
+                pass # never let logging raise from a signal handler regression)
             # Shutdown intent is now unambiguous — arm the exit backstop
             # IMMEDIATELY, before the graceful unwind below.  If any step of
             # that unwind wedges (main thread parked in a syscall, prompt_toolkit
             # teardown never returning), _run_cleanup never runs and would
             # never arm its own watchdog — leaving a "dead" CLI alive for
-            # minutes (#65998 class).  Never raises.
+            # minutes class). Never raises.
             _arm_exit_watchdog_on_shutdown_signal()
             try:
                 _signal_agent = getattr(self, "agent", None)
@@ -18955,7 +18955,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # `_poll_output_size` coroutine.  The KBI becomes a Task
             # exception, prompt_toolkit's `_handle_exception` prints
             # "Unhandled exception in event loop" + the full traceback, and
-            # parks the terminal on "Press ENTER to continue..." (#13710
+            # parks the terminal on "Press ENTER to continue.." (
             # variant — same root cause, different surface).
             #
             # `app.exit()` scheduled via `call_soon_threadsafe` lets the
@@ -19014,7 +19014,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         
         # Install a custom asyncio exception handler that suppresses the
         # "Event loop is closed" RuntimeError from httpx transport cleanup
-        # and the "0 is not registered" KeyError from broken stdin (#6393).
+        # and the "0 is not registered" KeyError from broken stdin.
         # The RuntimeError fix is defense-in-depth — the primary fix is
         # neuter_async_httpx_del which disables __del__ entirely.  The
         # KeyError fix handles macOS + uv-managed Python environments where
@@ -19024,15 +19024,15 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             if isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc):
                 return  # silently suppress
             if isinstance(exc, KeyError) and "is not registered" in str(exc):
-                return  # suppress selector registration failures (#6393)
+                return # suppress selector registration failures
             if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.EIO:
-                return  # suppress I/O errors from broken stdout on interrupt (#13710)
+                return # suppress I/O errors from broken stdout on interrupt
             # Fall back to default handler for everything else
             loop.default_exception_handler(context)
 
         # Validate stdin before launching prompt_toolkit — on macOS with
         # uv-managed Python, fd 0 can be invalid or unregisterable with the
-        # asyncio selector, causing "KeyError: '0 is not registered'" (#6393).
+        # asyncio selector, causing "KeyError: '0 is not registered'".
         try:
             os.fstat(0)
         except OSError:
@@ -19047,7 +19047,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         # On macOS with uv-managed Python, kqueue's selector cannot register
         # fd 0, raising OSError(EINVAL) from kqueue.control() when prompt_toolkit
-        # calls loop.add_reader (#6393). Probe kqueue and, if it can't watch
+        # calls loop.add_reader. Probe kqueue and, if it can't watch
         # stdin, switch to a SelectSelector-backed event loop policy.
         if sys.platform == "darwin":
             try:
@@ -19084,7 +19084,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 except Exception:
                     pass
                 # The app enables focus reporting + mouse tracking; record that
-                # so _run_cleanup resets them on exit (#36823). When multiline
+                # so _run_cleanup resets them on exit. When multiline
                 # shortcuts are on, also ask supported terminals (e.g. iTerm2)
                 # to distinguish Shift+Enter from Enter; the same cleanup reset
                 # pops kitty keyboard mode and resets modifyOtherKeys.
@@ -19097,12 +19097,12 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         except (EOFError, KeyboardInterrupt, BrokenPipeError):
             pass
         except (KeyError, OSError) as _stdin_err:
-            # Catch selector registration failures from broken stdin (#6393)
-            # and I/O errors from broken stdout during interrupt (#13710).
+            # Catch selector registration failures from broken stdin
+            # and I/O errors from broken stdout during interrupt.
             _errno = getattr(_stdin_err, "errno", None) if isinstance(_stdin_err, OSError) else None
             _msg = str(_stdin_err)
             if _errno == errno.EIO:
-                pass  # suppress broken-stdout I/O errors on interrupt (#13710)
+                pass # suppress broken-stdout I/O errors on interrupt
             elif (
                 _errno in {errno.EINVAL, errno.EBADF}
                 or "is not registered" in _msg
@@ -19169,7 +19169,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     logger.debug("Could not close session in DB: %s", e)
                 # Started-and-immediately-quit sessions never gained content;
                 # drop the empty row so /resume and `pilotage sessions list`
-                # stay clean (gemini-cli#27770 port). No-op for resumed or
+                # stay clean (gemini-cli port). No-op for resumed or
                 # titled sessions and anything with messages or children.
                 if not getattr(self, '_delete_session_on_exit', False):
                     try:
@@ -19177,7 +19177,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     except (Exception, KeyboardInterrupt) as e:
                         logger.debug("Could not prune empty session: %s", e)
                 # /exit --delete: also remove the current session's transcripts
-                # and SQLite history. Ported from google-gemini/gemini-cli#19332.
+                # and SQLite history. Ported from google-gemini/gemini-cli.
                 if getattr(self, '_delete_session_on_exit', False):
                     try:
                         from pilotage_constants import get_pilotage_home as _ghh
@@ -19384,7 +19384,7 @@ def main(
         python cli.py --list-tools               # List tools and exit
         python cli.py --resume 20260225_143052_a1b2c3  # Resume session
         python cli.py -w                         # Start in isolated git worktree
-        python cli.py -w -q "Fix issue #123"     # Single query in worktree
+        python cli.py -w -q "Fix" # Single query in worktree
     """
     global _active_worktree
 
@@ -19411,7 +19411,7 @@ def main(
 
     # Skip worktree for list commands (they exit immediately)
     if not list_tools and not list_toolsets:
-        # ── Git worktree isolation (#652) ──
+        # ── Git worktree isolation ──
         # Create an isolated worktree so this agent instance doesn't collide
         # with other agents working on the same repo.
         use_worktree = worktree or w or CLI_CONFIG.get("worktree", False)
@@ -19611,7 +19611,7 @@ def main(
         logger.debug("Received signal %s in single-query mode", signum)
         # Arm the exit backstop now that shutdown intent is unambiguous —
         # covers wedges in the unwind below that would otherwise leave the
-        # process alive with no watchdog (#65998 class). Never raises.
+        # process alive with no watchdog class). Never raises.
         _arm_exit_watchdog_on_shutdown_signal()
         try:
             _agent = getattr(cli, "agent", None)
@@ -19625,7 +19625,7 @@ def main(
                     time.sleep(_grace)
         except Exception:
             pass  # never block signal handling
-        # Kanban worker exit path (#28181): SIGTERM hits a dispatcher-spawned
+        # Kanban worker exit path: SIGTERM hits a dispatcher-spawned
         # worker that's likely in a non-daemon thread waiting on a child
         # subprocess in _wait_for_process. Raising KeyboardInterrupt only
         # unwinds the main thread; the worker thread keeps running, the
@@ -19672,7 +19672,7 @@ def main(
     if query or image:
         # One-shot mode: no between-turns MCP late-binding refresh, so the
         # agent must wait the full MCP cold-start bound before its first
-        # (and only) tool snapshot. See #51316.
+        # (and only) tool snapshot. See.
         cli._single_query_mode = True
         if not cli._claim_active_session("cli", stderr=bool(quiet)):
             sys.exit(1)

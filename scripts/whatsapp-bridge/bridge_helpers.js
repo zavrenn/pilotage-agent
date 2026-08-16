@@ -288,7 +288,7 @@ function formatPollUpdateText(update) {
 /**
  * Append a visible note for media that failed to download, so the agent knows
  * something was sent rather than silently losing the attachment. Returns
- * `content` unchanged when nothing failed. (Port of nanoclaw#2895.)
+ * `content` unchanged when nothing failed. (Port of nanoclaw.)
  */
 export function appendMediaFailureNote(content, failures) {
   if (!failures || failures.length === 0) return content;
@@ -340,7 +340,7 @@ export async function extractBridgeEvent({
       // never reject out of extractBridgeEvent — that would drop this message
       // AND every remaining message in the same upsert batch. Record the
       // failure so the agent is told media was sent instead of losing it
-      // silently. (Port of nanoclaw#2895's never-silently-drop guarantee; the
+      // silently. (Port of nanoclaw's never-silently-drop guarantee; the
       // reuploadRequest recovery half is already wired in bridge.js.)
       mediaFailures.push(type || 'media');
       try {

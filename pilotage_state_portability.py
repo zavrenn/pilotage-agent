@@ -383,7 +383,7 @@ class SessionPortabilityMixin:
         live runtime state are intentionally reset: this restores conversation
         history, not ownership of a live channel or process.
 
-        Activity contract (#76354 review S4): export INCLUDES the live
+        Activity contract review S4): export INCLUDES the live
         activity fields (``last_activity_at`` / ``last_activity_description``
         / ``last_activity_provenance``) because they are part of the durable
         row, but import deliberately RESETS them to NULL. Resurrecting a

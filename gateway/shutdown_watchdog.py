@@ -1,4 +1,4 @@
-"""Out-of-loop shutdown and event-loop liveness backstops (#66892, #69089).
+"""Out-of-loop shutdown and event-loop liveness backstops.
 
 When the asyncio loop freezes mid-drain, every asyncio-based recovery path is
 structurally unable to fire: the drain deadline, status rewrites, and forensics
@@ -42,7 +42,7 @@ from utils import atomic_json_write
 logger = logging.getLogger(__name__)
 
 # Extra leash beyond ``agent.restart_drain_timeout`` so a slow-but-progressing
-# drain is not cut short. Matches the issue #66892 suggested hardening.
+# drain is not cut short. Matches the suggested hardening.
 DEFAULT_SHUTDOWN_WATCHDOG_GRACE_S = 60.0
 DEFAULT_HEARTBEAT_INTERVAL_S = 30.0
 DEFAULT_LOOP_FLOOR_TIMER_INTERVAL_S = 5.0
@@ -322,7 +322,7 @@ def _write_watchdog_dump(
         pass
 
     # Also dump to stderr so journald/launchd capture it even if the file
-    # write failed (wedged disk was one of the #66892 hypotheses).
+    # write failed (wedged disk was one of the hypotheses).
     try:
         sys.stderr.write(
             f"Gateway shutdown watchdog fired after {delay_s:.0f}s "
@@ -400,7 +400,7 @@ def arm_shutdown_watchdog(
         # Mirror _exit_after_graceful_shutdown: release PID file + runtime
         # lock BEFORE the log drain (locks must never be stranded), then
         # drain the async log queue so the logger.critical above actually
-        # reaches the file before os._exit bypasses atexit. (#66892)
+        # reaches the file before os._exit bypasses atexit.
         try:
             from gateway.status import remove_pid_file, release_gateway_runtime_lock
             remove_pid_file()

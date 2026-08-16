@@ -1,4 +1,4 @@
-"""Auto-resume restart-loop breaker (#30719, defense-3).
+"""Auto-resume restart-loop breaker (, defense-3).
 
 Defenses 1 and 2 (the ``_PILOTAGE_GATEWAY`` guard on ``pilotage gateway
 stop|restart`` + ``terminal_tool``, and the cron-creation lifecycle
@@ -18,7 +18,7 @@ boot is a fresh process, so in-memory state is useless), and reports the
 loop as "tripped" once too many of them chain together.  Boots chain
 while consecutive gaps stay within ``max_gap_seconds``, so the breaker
 sees slow crash cycles (a wedged event loop killed by the liveness
-watchdog every ~150s, #81642) exactly as well as the fast ~10s respawn
+watchdog every ~150s,) exactly as well as the fast ~10s respawn
 loop it was originally written for.
 When tripped, the caller SKIPS auto-resume for that boot — the gateway
 still starts and serves real inbound messages, it just stops replaying
@@ -48,7 +48,7 @@ DEFAULT_MAX_RESTARTS = 3
 DEFAULT_WINDOW_SECONDS = 60
 
 # Longest gap between two consecutive restart-interrupted boots that still
-# counts them as the SAME loop (#81642).  A fixed ``window_seconds`` prune can
+# counts them as the SAME loop. A fixed ``window_seconds`` prune can
 # only see crash cycles faster than the window: a loop whose period exceeds it
 # drops its own history on every boot, so the counter never leaves 1 and the
 # breaker never trips no matter how long the loop runs.  The reported cycle was
@@ -202,8 +202,8 @@ def check_and_record(
         logger.warning(
             "Restart-loop breaker TRIPPED: %d chained restart-interrupted "
             "gateway boots (no gap wider than %ds; threshold %d). Skipping "
-            "auto-resume to break a suspected SIGTERM-respawn loop (#30719, "
-            "#81642). Restart-interrupted sessions stay resume-pending and "
+            "auto-resume to break a suspected SIGTERM-respawn loop (, "
+            "). Restart-interrupted sessions stay resume-pending and "
             "will continue on the next real user message. If this is a false "
             "positive, delete %s.",
             len(boots),

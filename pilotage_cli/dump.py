@@ -27,7 +27,7 @@ def _dotenv_key_names() -> set[str]:
     exports. ``pilotage debug share`` runs in a terminal, so ``os.getenv`` reflects
     the shell's environment, which can include exported keys the managed backend
     never sees. Comparing against this set lets the dump flag that mismatch (the
-    exact trap behind #48504-style "no web_search" reports: key exported in the
+    exact trap behind-style "no web_search" reports: key exported in the
     shell, absent from .env, invisible to the launchd backend).
     """
     try:
@@ -397,7 +397,7 @@ def run_dump(args):
             display += " (shell only — not in .env; managed/desktop backend may not see it)"
         # A credential added via `pilotage auth add openrouter` lives in the
         # credential pool, not as an env var — surface it so the dump doesn't
-        # misleadingly read "not set" while `pilotage auth list` shows it (#42130).
+        # misleadingly read "not set" while `pilotage auth list` shows it.
         if not val and label == "openrouter":
             try:
                 from agent.credential_pool import load_pool as _load_pool

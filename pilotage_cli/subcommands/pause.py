@@ -6,7 +6,7 @@ check. In-flight work is never killed. ``pilotage resume`` removes the
 sentinel and normal operation resumes on the next tick — no restart needed.
 
 Ported from: gastownhall/gastown estop.go (MIT); related prior art:
-#26778 (/panic — kill/exit semantics, different), #44617.
+ (/panic — kill/exit semantics, different),.
 """
 
 from __future__ import annotations

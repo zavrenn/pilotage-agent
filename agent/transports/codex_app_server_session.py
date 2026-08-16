@@ -482,7 +482,7 @@ class CodexAppServerSession:
         post_tool_quiet_timeout: if codex emits a tool completion and then
         goes quiet for this many seconds without emitting another item or
         `turn/completed`, fast-fail and mark the session for retirement.
-        Mirrors openclaw beta.8's post-tool completion watchdog (#81697)
+        Mirrors openclaw beta.8's post-tool completion watchdog
         so a wedged codex doesn't burn the full turn deadline.
         """
         # Pre-create the result so startup failures (codex subprocess can't

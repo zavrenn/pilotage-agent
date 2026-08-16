@@ -171,7 +171,7 @@ def reap_orphan_containers(
     debug level and the function returns whatever it managed before the
     failure. Safe to call repeatedly; idempotent.
 
-    Issue #20561 — this is the safety net for SIGKILL / OOM / crashed
+ — this is the safety net for SIGKILL / OOM / crashed
     terminal exits that bypass the ``atexit`` cleanup hook. Without it,
     even with the cleanup-fix in the prior commit, a hard-killed Pilotage
     process leaves its container behind permanently because there's no
@@ -362,7 +362,7 @@ _DEFAULT_PIDS_LIMIT = "256"
 # usage still counts against the container's --memory cgroup limit).
 # Configurable via ``terminal.docker_shm_size`` in config.yaml; an empty value
 # (or "0") omits the flag and falls back to Docker's 64 MB default.
-# Ported from nanocoai/nanoclaw#2748.
+# Ported from nanocoai/nanoclaw.
 _DEFAULT_SHM_SIZE = "1g"
 
 
@@ -1306,7 +1306,7 @@ class DockerEnvironment(BaseEnvironment):
         # must (a) skip Docker's --init (two competing PID-1 inits) and (b) mount
         # /run with exec instead of noexec, or s6 stage0 dies with exit 126
         # "Permission denied". Detected once here; defaults are kept on any
-        # inspection failure. See issue #34628.
+        # inspection failure. See.
         image_uses_s6_init = _image_uses_init_entrypoint(self._docker_exe, image)
         if image_uses_s6_init:
             logger.info(
@@ -1389,7 +1389,7 @@ class DockerEnvironment(BaseEnvironment):
             _EGRESS_LABEL_KEY: egress_label,
         }
 
-        # Cross-process container reuse (issue #20561 — docs claim "ONE long-lived
+        # Cross-process container reuse ( — docs claim "ONE long-lived
         # container shared across sessions").  If a prior Pilotage process
         # already started a container for this (task_id, profile) and it
         # still exists, attach to it instead of starting a fresh one.  This
@@ -1474,7 +1474,7 @@ class DockerEnvironment(BaseEnvironment):
         if not reused:
             # tini/catatonit as PID 1 reaps zombie children — but s6-overlay
             # images already provide their own /init PID 1, so adding --init
-            # there creates two competing inits and breaks startup (#34628).
+            # there creates two competing inits and breaks startup.
             init_args = [] if image_uses_s6_init else ["--init"]
             run_cmd = [
                 self._docker_exe, "run", "-d",
@@ -1503,7 +1503,7 @@ class DockerEnvironment(BaseEnvironment):
                 # "Created" state — which the exited-only orphan reaper
                 # (reap_orphan_containers, status=exited) never catches, so it
                 # leaks permanently. Remove it by its known name before
-                # re-raising. See #7439.
+                # re-raising. See.
                 logger.warning(
                     "docker run failed for %s, cleaning up orphaned container: %s",
                     container_name, e,
@@ -1632,7 +1632,7 @@ class DockerEnvironment(BaseEnvironment):
         return _popen_bash(cmd, stdin_data)
 
     # ------------------------------------------------------------------
-    # "No such container" recovery (issue #36266)
+    # "No such container" recovery 
     # ------------------------------------------------------------------
 
     _NO_CONTAINER_PATTERNS = (
@@ -1932,7 +1932,7 @@ class DockerEnvironment(BaseEnvironment):
           processes survive in the former, die in the latter.
 
         Resource reclamation for the persist-mode case lives in the
-        ``reap_orphan_containers()`` path (see issue #20561 commit 3): if no
+        ``reap_orphan_containers`` path (see commit 3): if no
         Pilotage process touches a labeled container for ``2 × lifetime_seconds``
         it gets ``docker rm -f``'d at the next Pilotage startup. That covers the
         SIGKILL / OOM / abandoned-laptop cases without us needing to stop the
@@ -1952,7 +1952,7 @@ class DockerEnvironment(BaseEnvironment):
         signature.
 
         Cleanup runs on a daemon thread with bounded ``subprocess.run`` calls
-        (not the racy ``Popen(... &)`` pattern from before PR #33645). The
+        (not the racy ``Popen(.. &)`` pattern from before). The
         atexit hook in ``tools/terminal_tool.py`` waits up to 15s for the
         thread to finish before the interpreter exits, so ``docker stop`` /
         ``docker rm`` actually completes when we do trigger it.
@@ -1973,7 +1973,7 @@ class DockerEnvironment(BaseEnvironment):
         #   persist_across_processes=True → no-op (leave container running)
         #   persist_across_processes=False → stop + rm (per-process isolation)
         #
-        # The persist-mode no-op is the issue-#20561 contract: the container
+        # The persist-mode no-op is the issue- contract: the container
         # outlives Pilotage processes, processes inside it stay alive, and
         # reuse on next startup is instant.
         if force_remove:

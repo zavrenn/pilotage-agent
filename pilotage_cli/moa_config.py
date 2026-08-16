@@ -111,7 +111,7 @@ def _coerce_fanout(value: Any) -> str:
     view, runtime) only ever sees one shape. ``every_n:1`` semantically means
     "run every iteration" and collapses to ``per_iteration``; anything
     unparseable falls back to ``user_turn`` (the default — cheapest cadence;
-    see #67199).
+    see).
     """
     if isinstance(value, dict):
         # Mapping form: {mode: every_n, n: 3}. Non-every_n mapping modes fall
@@ -146,7 +146,7 @@ def coerce_privacy_filter(value: Any) -> str:
       shown in the UI and the saved MoA trace records. The aggregator still
       sees raw advisor text, so answer quality is unaffected.
     - ``'full'``: additionally redact the advisor text injected into the
-      aggregator prompt (issue #59959's literal ask). A hand-edited boolean
+      aggregator prompt ('s literal ask). A hand-edited boolean
       ``true`` maps here because the issue framed the toggle as "redact
       before passing to the aggregator".
     """
@@ -251,7 +251,7 @@ def validate_moa_payload(raw: Any) -> list[str]:
     hand-edited config must degrade to defaults rather than crash the agent.
     That same tolerance at *write* time is a corruption engine — a client that
     sends a half-filled slot gets its whole preset silently replaced with the
-    hardcoded defaults (#64156). API write paths call this first and reject
+    hardcoded defaults. API write paths call this first and reject
     invalid payloads loudly instead of saving something the user never chose.
 
     Returns a list of human-readable problems; empty means safe to save.
@@ -355,7 +355,7 @@ def _normalize_preset(raw: Any) -> dict[str, Any]:
         "reference_max_tokens": _coerce_int_or_none(raw.get("reference_max_tokens")),
         # When the reference fan-out runs. "user_turn" (default) runs the
         # advisors ONCE per user turn (the original MoA shape, and the
-        # cheapest cadence — #67199): the aggregator gets their upfront
+        # cheapest cadence): the aggregator gets their upfront
         # plan-level advice, then acts alone for the rest of the tool loop.
         # "per_iteration" re-runs the advisors whenever the advisory view
         # changes — i.e. every tool iteration, so advice tracks live task
@@ -452,7 +452,7 @@ def exact_moa_preset_name(config: Any, text: str) -> str | None:
     match, so it must honor the per-preset ``enabled`` opt-out: a user who set
     ``enabled: false`` to disable a preset must not have a plain model switch
     whose name happens to collide with that preset key silently pivot the
-    session onto the MoA virtual provider (issue #55187). Explicit selection
+    session onto the MoA virtual provider. Explicit selection
     via ``--provider moa`` / the model picker does not go through here, so a
     disabled preset is still reachable when the user explicitly asks for it.
     """

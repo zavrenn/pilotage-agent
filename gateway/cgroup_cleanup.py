@@ -4,10 +4,10 @@ Runs as ``ExecStopPost=`` so it only fires after the gateway's main process
 has exited. The gateway already reaps its own tool subprocesses on a clean
 shutdown; this is the safety net for long-lived helpers it doesn't track
 (``adb``, platform bridges, etc.) that would otherwise be orphaned in the
-cgroup and block ``Restart=always`` — issue #37454.
+cgroup and block ``Restart=always``.
 
 We deliberately iterate ``cgroup.procs`` and send per-PID SIGKILLs instead
-of writing ``1`` to ``cgroup.kill``: the original failure mode in #37454
+of writing ``1`` to ``cgroup.kill``: the original failure mode in
 was the kernel returning ``EINVAL`` on the cgroup-wide kill, while per-PID
 signal delivery uses a separate code path that still works.
 """

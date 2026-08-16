@@ -5,7 +5,7 @@ Ollama instances and OpenAI-compatible reasoning endpoints (GLM-5.2 on
 Volcengine ARK, vLLM, llama.cpp). Key quirks:
   - ollama_num_ctx → extra_body.options.num_ctx (local context window)
   - reasoning_config disabled → top-level reasoning_effort="none"
-    (Ollama /v1/chat/completions ignores think=False — ollama#14820)
+    (Ollama /v1/chat/completions ignores think=False — ollama)
     + extra_body.think = False for /api/chat and proxies
   - reasoning_config enabled + effort → top-level reasoning_effort
     (the native OpenAI-compatible format GLM/ARK expect; unset omits it
@@ -56,10 +56,10 @@ class CustomProfile(ProviderProfile):
             _enabled = reasoning_config.get("enabled", True)
             if _effort == "none" or _enabled is False:
                 # Ollama's /v1/chat/completions silently ignores
-                # extra_body.think (only /api/chat honours it — ollama#14820)
+                # extra_body.think (only /api/chat honours it — ollama)
                 # but respects the top-level reasoning_effort field, so both
                 # are needed to actually stop a thinking-capable model from
-                # reasoning (#25758). Endpoints that recognize neither simply
+                # reasoning. Endpoints that recognize neither simply
                 # ignore them.
                 top_level["reasoning_effort"] = "none"
                 extra_body["think"] = False
@@ -94,7 +94,7 @@ custom = CustomProfile(
     env_vars=(),  # No fixed key — custom endpoint
     base_url="",  # User-configured
     # Without this, no max_tokens is sent and Ollama falls back to its internal
-    # num_predict=128, truncating responses after a few tokens (#39281). This is
+    # num_predict=128, truncating responses after a few tokens. This is
     # only a floor used when the user hasn't set model.max_tokens — they can
     # override per-model — so we set it generously rather than lowballing it.
     default_max_tokens=65536,

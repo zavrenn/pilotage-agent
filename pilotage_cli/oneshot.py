@@ -256,7 +256,7 @@ def run_oneshot(
                 # the real stderr instead of crashing past the redirect with a
                 # traceback that the caller never sees. A silent exit in a
                 # cron / SSH / subprocess context is the worst failure mode.
-                # See #30623.
+                # See.
                 failure = exc
     finally:
         try:
@@ -280,7 +280,7 @@ def run_oneshot(
     # Model text can contain lone UTF-16 surrogates (invalid in UTF-8). Writing
     # those to a real stdout TextIO raises UnicodeEncodeError and aborts with
     # exit 1 after the turn already completed — scrub to U+FFFD first.
-    # See #80366.
+    # See.
     if response:
         from agent.message_sanitization import _sanitize_surrogates
 
@@ -415,7 +415,7 @@ def _run_agent(
     # tool snapshot at construction time misses any MCP server that hasn't
     # registered yet.  This helper starts discovery if needed (idempotent) and
     # bounded-waits with the larger single-query bound (default 15s) because
-    # there is only ONE turn and no between-turns late-binding refresh (#38448).
+    # there is only ONE turn and no between-turns late-binding refresh.
     from pilotage_cli.mcp_startup import ensure_mcp_discovery_before_agent_build
 
     ensure_mcp_discovery_before_agent_build(

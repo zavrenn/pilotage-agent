@@ -1,4 +1,4 @@
-"""Plugin packs — declarative, shareable plugin sets (#64166).
+"""Plugin packs — declarative, shareable plugin sets.
 
 A pack is a single YAML file (``pilotage-pack.yaml``) that pins a set of
 plugins (source + exact commit SHA + optional non-secret config seeds).
@@ -32,7 +32,7 @@ Supply-chain posture:
   capability-grant keys (a pack cannot pre-consent capabilities).
 * Capability consent is NEVER bulk-granted: after each plugin installs,
   its declared capabilities ride the exact same per-plugin consent flow
-  as a normal ``pilotage plugins install`` (#64228).
+  as a normal ``pilotage plugins install``.
 
 ``skills:`` is parsed and displayed but not installed — wiring skill-hub
 ids into the skills installer is a documented follow-up seam.
@@ -511,7 +511,7 @@ def install_pack_plugins(
         _save_disabled_set(disabled)
 
         # Per-plugin capability consent — the SAME flow as a single
-        # install (#64228). A pack never bulk-grants capabilities.
+        # install. A pack never bulk-grants capabilities.
         declared = _declared_capabilities_from_manifest(manifest, installed_name)
         if declared:
             _run_capability_consent(console, installed_name, declared, context="install")

@@ -183,7 +183,7 @@ class SessionSearchMixin:
         marker mirroring :meth:`fts_rebuild_step`: each chunk deletes only
         rows after the previously-drained key, so the per-chunk scan is
         bounded instead of re-scanning from the start of the table every
-        chunk (O(n²) total on large trash tables, #79324). Compound-key
+        chunk (O(n²) total on large trash tables,). Compound-key
         trash tables (multi-column PK) cannot use a scalar high-water
         comparison, so they keep the legacy chunked ``LIMIT`` delete —
         those shadow tables are small by construction.
@@ -256,7 +256,7 @@ class SessionSearchMixin:
 
             # Compound-key or rowid trash table: legacy chunked delete.
             # These shadow tables are small, so the quadratic re-scan is
-            # not a concern (#79324 keeps the high-water path for the big
+            # not a concern keeps the high-water path for the big
             # single-key tables).
             cur = conn.execute(
                 f"DELETE FROM {tbl} WHERE ({key}) IN "
@@ -584,7 +584,7 @@ class SessionSearchMixin:
     def _repair_optimize_bookkeeping(self) -> None:
         """Heal interrupted demote/backfill bookkeeping before optimize runs.
 
-        Covers two post-#65798 failure classes:
+        Covers two post- failure classes:
 
         1. Empty external-content index with messages present and no rebuild
            markers (demote crash window after empty v23 tables landed but
@@ -915,7 +915,7 @@ class SessionSearchMixin:
             # immediately regardless of readers.
             # PASSIVE, not TRUNCATE: optimize-storage runs from a transient CLI
             # process; a TRUNCATE reset here would race a live gateway writer
-            # and tear B-tree pages (#45383). (The TRUNCATE was already refused
+            # and tear B-tree pages. (The TRUNCATE was already refused
             # SQLITE_BUSY while the gateway holds a read-mark, per the note
             # above; PASSIVE removes the reset attempt entirely.)
             try:
@@ -1121,7 +1121,7 @@ class SessionSearchMixin:
         active_clause = "" if include_inactive else " AND active = 1"
         # Match CLI/desktop: only real user turns, not timeline bookkeeping.
         display_clause = " AND (display_kind IS NULL OR display_kind = '')"
-        # Legacy standalone compaction handoffs (persisted pre-#80622) are
+        # Legacy standalone compaction handoffs (persisted pre-) are
         # durable role='user' rows with NO display_kind — SQL can't see them,
         # so fetch with headroom and drop them in the decode loop below.
         # Without this, /undo N and rewind pair an in-memory count that
@@ -1146,7 +1146,7 @@ class SessionSearchMixin:
                 break
             decoded = self._decode_content(row["content"])
             if ContextCompressor._is_context_summary_content(decoded):
-                # Compaction handoff — never a user-originated turn (#80622).
+                # Compaction handoff — never a user-originated turn.
                 continue
             if isinstance(decoded, list):
                 # Multimodal — flatten text parts.
@@ -1746,7 +1746,7 @@ class SessionSearchMixin:
         ``compacted=1``) ARE included by default: they were summarized away from
         the live context but remain part of the conversation's record, so the
         pre-compaction transcript stays discoverable after in-place compaction
-        (#38763). Pass ``include_inactive=True`` to search every row regardless.
+. Pass ``include_inactive=True`` to search every row regardless.
         """
         result_fields = self._search_message_fields(fields)
 
@@ -1800,7 +1800,7 @@ class SessionSearchMixin:
         if not include_inactive:
             # Live rows (active=1) AND compaction-archived rows (compacted=1)
             # are discoverable; only rewind/undo rows (active=0, compacted=0)
-            # are hidden. See archive_and_compact() / #38763.
+            # are hidden. See archive_and_compact /.
             where_clauses.append("(m.active = 1 OR m.compacted = 1)")
 
         if source_filter is not None:
@@ -1855,7 +1855,7 @@ class SessionSearchMixin:
             raw_query = query.strip('"').strip()
             cjk_count = self._count_cjk(raw_query)
 
-            # Per-token CJK length check (#20494): trigram needs >=3 CJK chars
+            # Per-token CJK length check: trigram needs >=3 CJK chars
             # per token. A query like "广西 OR 桂林 OR 漓江" has cjk_count=6
             # (>=3) but each individual token is only 2 chars — trigram returns 0.
             # Route to LIKE when any non-operator CJK token is <3 CJK chars.
@@ -1878,7 +1878,7 @@ class SessionSearchMixin:
             # When the bigram index is available it serves EVERY CJK query
             # shape the legacy code split between trigram (>=3 chars/token)
             # and LIKE full scans (1-2 char tokens) — the whole point of the
-            # index (PR #65544). Exceptions stay on the legacy routes:
+            # index. Exceptions stay on the legacy routes:
             #   - role_filter=['tool'] queries (tool rows aren't in the cjk
             #     index, same exclusion as trigram),
             #   - queries containing a LONE 1-char CJK run: the index stores
@@ -2063,7 +2063,7 @@ class SessionSearchMixin:
                 # <3 CJK chars. Fall back to LIKE substring search.
                 # For multi-token OR queries (e.g. "广西 OR 桂林 OR 漓江"),
                 # build one LIKE condition per non-operator token so each term
-                # is matched independently (#20494).
+                # is matched independently.
                 non_op_tokens = [
                     t for t in raw_query.split()
                     if t.upper() not in {"AND", "OR", "NOT"}
@@ -2080,7 +2080,7 @@ class SessionSearchMixin:
                 if not include_inactive:
                     # Same visibility rule as the FTS5 paths: live rows and
                     # compaction-archived rows are discoverable; rewind/undo
-                    # rows (active=0, compacted=0) are hidden (#38763).
+                    # rows (active=0, compacted=0) are hidden.
                     like_where.append("(m.active = 1 OR m.compacted = 1)")
                 if source_filter is not None:
                     like_where.append(f"s.source IN ({','.join('?' for _ in source_filter)})")
@@ -2121,7 +2121,7 @@ class SessionSearchMixin:
             except sqlite3.DatabaseError as exc:
                 # A corrupt FTS index raises the malformed / "fts5: corrupt
                 # structure record" class on the MATCH read, the same class the
-                # write path self-heals (#66296). OperationalError (query
+                # write path self-heals. OperationalError (query
                 # syntax) is a subclass caught above; this arm is the corruption
                 # parent. Rebuild the index in place once — the read context
                 # holds no writer lock, so rebuild_fts() can acquire it — and
@@ -2160,7 +2160,7 @@ class SessionSearchMixin:
         # whose tokenizer does not insert a boundary between Latin letters and
         # adjacent CJK characters: "修改youer服务端" is indexed as one token,
         # so MATCH "youer" finds nothing even though the substring is present
-        # (#54242). When the exact-token search returns nothing, retry on the
+        # When the exact-token search returns nothing, retry on the
         # substring-capable indexes. Preference order:
         #   1. messages_fts_cjk (when built): its tokenizer splits Latin runs
         #      off adjacent CJK, so "youer" is an exact ranked token match.
@@ -2396,7 +2396,7 @@ class SessionSearchMixin:
         Uses the FTS5 ``'rebuild'`` command, which rewrites the internal
         b-tree segments from the content rows. This is the documented
         recovery for a corrupt FTS index that rejects message writes while
-        reads still succeed (issue #50502). Unlike ``optimize_fts`` (which
+        reads still succeed. Unlike ``optimize_fts`` (which
         merges existing segments), ``rebuild`` discards and recreates the
         index data entirely.
 

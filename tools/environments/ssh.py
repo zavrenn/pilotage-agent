@@ -6,7 +6,7 @@ import os
 
 # Windows OpenSSH has no Unix-domain-socket ControlMaster support —
 # passing ControlPath/ControlMaster options fails the connection outright
-# ('getsockname failed: Not a socket', #73927). Skip multiplexing there;
+# ('getsockname failed: Not a socket',). Skip multiplexing there;
 # each command pays a fresh connection but the backend works.
 _SSH_MULTIPLEX = os.name != "nt"
 import shlex

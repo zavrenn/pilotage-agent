@@ -113,7 +113,7 @@ fi
 # resolves Path.home() from USERPROFILE (or HOMEDRIVE+HOMEPATH), stdlib
 # platform paths come from LOCALAPPDATA/APPDATA, ssl/sockets need SYSTEMROOT,
 # and tempfile needs TEMP/TMP. Dropping them breaks collection on native
-# Windows (issues #67385, #70813). These are location variables, not
+# Windows (issues,). These are location variables, not
 # credentials, so forwarding them keeps the isolation intent intact. Each is
 # only forwarded when actually set, so POSIX runs are byte-for-byte unchanged.
 WIN_ENV=()

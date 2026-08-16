@@ -107,7 +107,7 @@ def _drift_error(path: "Path", bak_path: str) -> Dict[str, Any]:
             f"Resolve the drift first — either rewrite the file as a clean "
             f"§-delimited list of entries, or move the extra content out — "
             f"then retry. This guard exists to prevent silent data loss "
-            f"(issue #26045)."
+            f"."
         ),
         "drift_backup": bak_path,
         "remediation": (
@@ -159,7 +159,7 @@ class MemoryStore:
     # After this many failed consolidation attempts (overflow / zero-match) in
     # ONE turn, stop instructing the model to "retry in this turn" and return a
     # terminal "save skipped" result so a fragile replace/add can't loop the
-    # turn to budget exhaustion and suppress the user's reply (issue #42405).
+    # turn to budget exhaustion and suppress the user's reply.
     _MAX_CONSOLIDATION_FAILURES_PER_TURN = 3
 
     def __init__(self, memory_char_limit: int = 2200, user_char_limit: int = 1375):
@@ -170,7 +170,7 @@ class MemoryStore:
         # Frozen snapshot for system prompt -- set once at load_from_disk()
         self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": ""}
         # Per-turn counter of failed at-capacity consolidation attempts; reset
-        # at each turn boundary by reset_consolidation_failures() (#42405).
+        # at each turn boundary by reset_consolidation_failures.
         self._consolidation_failures = 0
 
     def reset_consolidation_failures(self) -> None:
@@ -184,7 +184,7 @@ class MemoryStore:
         the model how to self-correct + retry in this turn). Once the cap is
         exceeded, drop the retry instruction and return a TERMINAL result so the
         model stops looping memory calls and proceeds to answer the user — a
-        failed memory side effect must never block the turn's reply (#42405).
+        failed memory side effect must never block the turn's reply.
         """
         self._consolidation_failures += 1
         if self._consolidation_failures <= self._MAX_CONSOLIDATION_FAILURES_PER_TURN:
@@ -404,7 +404,7 @@ class MemoryStore:
             # clobbers existing content, so round-trip mismatches from prior
             # tool-written entries in the same session are harmless.  The drift
             # guard remains active for replace/remove where full-file rewrite
-            # would discard un-roundtrippable content (issue #26045).
+            # would discard un-roundtrippable content.
             #
             # But "append never clobbers" only holds when the reload actually
             # read the file. add rewrites the WHOLE file from the parsed
@@ -702,7 +702,7 @@ class MemoryStore:
     def _success_response(self, target: str, message: str = None) -> Dict[str, Any]:
         # A successful write means the consolidation loop made progress, so the
         # per-turn failure budget resets (the cap counts consecutive failures,
-        # not lifetime ones within a turn) (#42405).
+        # not lifetime ones within a turn).
         self._consolidation_failures = 0
         entries = self._entries_for(target)
         current = self._char_count(target)
@@ -757,7 +757,7 @@ class MemoryStore:
         it just like a failed read. Read-modify-write callers must treat
         ``read_ok=False`` as "abort" rather than "empty store", or a transient
         read failure would let them persist over — and wipe — the on-disk
-        memory (issue #26045 is about the same class: never rewrite a file
+        memory ( is about the same class: never rewrite a file
         from a view that isn't the real one).
 
         No file locking needed: _write_file uses atomic rename, so readers
@@ -769,7 +769,7 @@ class MemoryStore:
             # utf-8-sig strips a leading UTF-8 BOM (Notepad-edited memory
             # files on Windows) and is byte-identical to utf-8 otherwise.
             # Plain utf-8 kept U+FEFF glued to the first entry, corrupting
-            # matching/dedup for that entry forever (#10878 / PR #10888).
+            # matching/dedup for that entry forever /).
             # Decode errors stay STRICT on purpose: errors="replace" would
             # hand read-modify-write callers a lossy view that a subsequent
             # save persists over the real bytes — the wipe class documented
@@ -835,7 +835,7 @@ class MemoryStore:
            (patch tool, shell append, manual edit, sister session) appended
            free-form content into what the tool will treat as one entry.
            Flushing would then truncate that entry to the model's new
-           content, discarding the appended bytes — issue #26045.
+           content, discarding the appended bytes.
 
         Returns the absolute path of the .bak file when drift was found and
         backed up; returns None when the file looks tool-shaped.
@@ -1033,7 +1033,7 @@ def _missing_old_text_error(store: "MemoryStore", target: str, action: str) -> s
     tests/tools/test_memory_tool_schema.py). So instead we return the current
     entry inventory plus an explicit retry instruction, letting the model reissue
     the call with ``old_text`` set to a unique substring of the entry it means.
-    Mirrors the batch path's ``_batch_error`` shape. (issues #43412, #49466)
+    Mirrors the batch path's ``_batch_error`` shape. (issues,)
     """
     entries = store._entries_for(target)
     current = store._char_count(target)
@@ -1116,7 +1116,7 @@ def memory_tool(
             # The client/model omitted old_text. Replace is inherently targeted
             # -- we can't guess which entry. Return the current inventory plus a
             # retry instruction so the model can reissue with old_text set,
-            # instead of hitting a dead-end error. (issues #43412, #49466)
+            # instead of hitting a dead-end error. (issues,)
             return _missing_old_text_error(store, target, "replace")
         return tool_error(f"{missing} is required for 'replace' action.", success=False)
     if action == "remove" and not old_text:

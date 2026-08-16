@@ -363,7 +363,7 @@ def _explicit_aux_vision_override(cfg: Optional[Dict[str, Any]]) -> bool:
     An explicit override means the user has a dedicated vision backend
     available; it's used as a *fallback* when the main model can't take
     images natively. In ``auto`` mode, native vision on a vision-capable
-    main model still wins over this fallback — see issue #29135.
+    main model still wins over this fallback — see.
     """
     if not isinstance(cfg, dict):
         return False
@@ -433,7 +433,7 @@ def _lookup_supports_vision(
     try:
         from agent.models_dev import get_model_capabilities
         # allow_network=True on purpose: vision-capability lookup runs when
-        # an image actually needs routing (not per turn), and the #31179
+        # an image actually needs routing (not per turn), and the
         # text-only-main guard depends on catalog data — a cold cache
         # returning "unknown" would fall back to attempting the call and
         # reintroduce the bug. This preserves the historical
@@ -494,7 +494,7 @@ def decide_image_input_mode(
     # auto: prefer native vision when the main model supports it. An
     # explicit auxiliary.vision config acts as a *fallback* for text-only
     # main models — it should not preempt native vision on a model that
-    # can natively inspect the pixels (issue #29135).
+    # can natively inspect the pixels.
     if requested_provider:
         supports = _lookup_supports_vision(
             provider,

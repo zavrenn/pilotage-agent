@@ -38,7 +38,7 @@ def _expand_tilde(path: str) -> str:
     from the profile-specific HOME that interactive CLI sessions use.  This
     mirrors ``pilotage_constants.get_subprocess_home()`` so that ``~`` resolves
     consistently regardless of whether the tool runs interactively or inside a
-    gateway-driven cron job (#48552).
+    gateway-driven cron job.
     """
     if not path or "~" not in path:
         return path
@@ -92,7 +92,7 @@ def _get_max_read_chars() -> int:
 def _truncate_to_char_budget(content: str, max_chars: int) -> tuple[str, int, bool]:
     """Trim line-numbered ``read_file`` content to fit a char budget.
 
-    Ported in spirit from nearai/ironclaw#5029 (dual line/byte cap on
+    Ported in spirit from nearai/ironclaw (dual line/byte cap on
     ``read_file``). Where pilotage previously hard-rejected an oversized read
     (forcing the model to guess a smaller ``limit`` and burn a round-trip
     returning nothing), this trims the content to the last *complete line*
@@ -529,7 +529,7 @@ def _is_blocked_device_path(path: str) -> bool:
         return True
     # /proc/*/environ, /proc/*/cmdline, /proc/*/maps (and the maps variants
     # smaps, smaps_rollup, numa_maps) can leak secrets, command-line args, and
-    # memory layout (ASLR bypass) from the host process (issue #4427).
+    # memory layout (ASLR bypass) from the host process.
     # /proc/*/mem exposes raw process memory; block it as defense-in-depth even
     # though it requires address knowledge to exploit usefully.
     # /proc/*/auxv leaks AT_RANDOM (stack canary seed) plus AT_BASE/AT_PHDR
@@ -718,8 +718,8 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
 # and fail closed when no human channel exists.
 #
 # Ported from: RooCodeInc/Roo-Code RooProtectedController (Apache-2.0).
-# Companion: the terminal-tool vector is covered separately (#58631); this
-# gate covers the write_file/patch vector. Symlink lesson from #41351:
+# Companion: the terminal-tool vector is covered separately; this
+# gate covers the write_file/patch vector. Symlink lesson from:
 # always realpath before matching.
 #
 # Scope decision (documented): basenames match in ANY directory, because
@@ -790,7 +790,7 @@ def _protected_instruction_reason(filepath: str, task_id: str = "default",
     agent-instruction file, else ``None``.
 
     Matching runs on BOTH the normalized input path and its realpath so
-    neither a symlink pointing AT a protected file (#41351) nor a protected
+    neither a symlink pointing AT a protected file nor a protected
     name that is itself a symlink escapes the gate. ``..`` traversal is
     neutralized by normpath/realpath before the basename compare.
     """
@@ -1062,12 +1062,12 @@ def _check_cross_profile_path(filepath: str, task_id: str = "default") -> str | 
 
     * cross-profile — writes that hit another profile's
       ``skills/plugins/cron/memories`` directory.
-    * sandbox-mirror (#32049) — writes that hit the
+    * sandbox-mirror — writes that hit the
       ``…/sandboxes/<backend>/<task>/home/.pilotage/…`` mirror created by a
       non-local terminal backend (Docker, Daytona, etc.), where the host
       Pilotage process never reads the mirror and the authoritative file is
       left untouched.
-    * container-mirror (#32049 follow-up) — writes from inside a Docker
+    * container-mirror follow-up) — writes from inside a Docker
       container whose bind-mounted home strips the ``sandboxes/`` prefix, so
       the agent sees a plain ``/root/.pilotage/…`` path.
 
@@ -1438,13 +1438,13 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
             else:
                 # Environment was cleaned up -- preserve the old cwd in the
                 # session record before invalidating the stale cache entry
-                # (fixes #26211: silent file-creation failures in long-running
+                # (fixes: silent file-creation failures in long-running
                 # conversations). Usually a no-op: every completed command
                 # already recorded its cwd.
                 #
                 # Fill-only: ``cached.cwd`` is a snapshot of the SHARED env's
                 # cwd at cache-build time, so it is not attributable to this
-                # session (same class as the interrupted-command bug, #85658).
+                # session (same class as the interrupted-command bug,).
                 # Rescue a session that has no record, but never overwrite a
                 # record the session wrote for itself.
                 old_cwd = getattr(cached, "cwd", None)
@@ -1502,13 +1502,13 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
                 recorded_cwd = None
             cwd = overrides.get("cwd") or recorded_cwd or config["cwd"]
             # Re-apply the container cwd guard that _get_env_config() already
-            # ran on config["cwd"] (see #50636).  A per-task cwd override
+            # ran on config["cwd"]. A per-task cwd override
             # registered by the gateway/TUI/ACP for workspace tracking is a
             # raw host path (e.g. a Desktop session's /Users/<me>/workspace or
             # C:\\Users\\<me>). On a container backend that reaches
             # ``docker run -w <host-path>`` and the container starts in a
             # directory that doesn't exist inside the sandbox, so search_files
-            # and friends silently return empty results (#54447).  Sanitize it
+            # and friends silently return empty results. Sanitize it
             # back to the already-validated config["cwd"] so the override can't
             # bypass the guard.  Valid in-container override paths (RL/benchmark
             # sandboxes that set cwd to /workspace, /root, etc.) are absolute
@@ -1726,7 +1726,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 2000, task_id: str =
                 content_len = len(result_dict["content"])
                 max_chars = _get_max_read_chars()
                 if content_len > max_chars:
-                    # Graceful char-budget truncation (nearai/ironclaw#5029):
+                    # Graceful char-budget truncation (nearai/ironclaw):
                     # trim to the last complete line that fits and offer a
                     # next_offset rather than rejecting the whole extraction.
                     trimmed, lines_kept, _ = _truncate_to_char_budget(
@@ -1874,7 +1874,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 2000, task_id: str =
         file_size = result_dict.get("file_size", 0)
         max_chars = _get_max_read_chars()
         if content_len > max_chars:
-            # Graceful char-budget truncation (ported from nearai/ironclaw#5029).
+            # Graceful char-budget truncation (ported from nearai/ironclaw).
             # Instead of rejecting the whole read — which forces the model to
             # guess a smaller `limit` and wastes a round-trip returning nothing
             # — trim to the last complete line that fits and offer a
@@ -2093,7 +2093,7 @@ def _update_read_timestamp(filepath: str, task_id: str) -> None:
     refreshes the stored timestamp to match the file's new state.
 
     Also invalidates the dedup cache for the written path so that
-    subsequent reads return fresh content (fixes #13144).
+    subsequent reads return fresh content (fixes).
     """
     # Invalidate dedup first (before acquiring lock for timestamp update).
     _invalidate_dedup_for_path(filepath, task_id)
@@ -2181,7 +2181,7 @@ def _check_binary_document_write(filepath: str, task_id: str = "default") -> str
     readable text, so the model plausibly believes it holds the file's
     contents and tries to write the edited text back with write_file/patch.
     A plain-text write can never produce a valid OOXML/OLE/ODF container, so
-    that write silently destroys the document (port of nearai/ironclaw#7109).
+    that write silently destroys the document (port of nearai/ironclaw).
 
     Rules:
     - Opaque container formats (.doc/.docx/.xls/.xlsx/.ppt/.pptx/.odt/.ods/

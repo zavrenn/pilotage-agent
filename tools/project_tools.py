@@ -105,7 +105,7 @@ def project_create(name: str, path: Optional[str] = None, task_id: Optional[str]
             if existing is not None:
                 # Idempotent create: the folder already belongs to a project.
                 # Re-activating it beats minting a duplicate — duplicated
-                # projects render N identical sidebar subtrees (#75820).
+                # projects render N identical sidebar subtrees.
                 pdb.set_active(conn, existing.id)
                 proj = existing
             else:

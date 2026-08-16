@@ -94,7 +94,7 @@ _DB_LOCK = threading.Lock()
 # Stale-delegation detection (progress-based, on by default)
 # ---------------------------------------------------------------------------
 # A detached runner that wedges before returning (e.g. stuck inside its first
-# model API call — #60203) never reaches its ``finally`` finalizer, so no
+# model API call) never reaches its ``finally`` finalizer, so no
 # completion event is ever published: the delegation shows "dispatched"
 # forever and the owning session looks silent until a process restart. We do
 # NOT fix this with a wall-clock timeout — legitimate heavy subagent work
@@ -192,7 +192,7 @@ def _transaction() -> Iterator[sqlite3.Connection]:
     alone therefore leaks a connection — and its WAL/SHM file descriptors — on
     every durable dispatch, completion, and delivery-claim, deferring the close
     to the garbage collector. On a long-running gateway that exhausts
-    ``RLIMIT_NOFILE`` (the cron-ledger sibling of this bug was #69567 / PR #69594).
+    ``RLIMIT_NOFILE`` (the cron-ledger sibling of this bug was /).
     """
     conn = _connect()
     try:
@@ -399,7 +399,7 @@ def restore_undelivered_completions(target_queue) -> int:
     without an ownership filter (the legacy single-session behavior) must
     leave them queued for a consumer that can positively prove ownership,
     otherwise a brand-new session adopts a dead session's delegation
-    results seconds after boot (#64484).
+    results seconds after boot.
 
     Staleness cap: a pending completion older than
     ``_MAX_COMPLETION_REPLAY_AGE_S`` is terminally dropped instead of
@@ -782,7 +782,7 @@ def dispatch_async_delegation(
         The durable ``state.db`` session id of the parent agent that spawned
         the delegation. Carried on the completion event so the gateway can
         pin routing to the spawning session instead of recovering the latest
-        ``ended_at IS NULL`` row for the peer tuple (#57498).
+        ``ended_at IS NULL`` row for the peer tuple.
     runner
         Zero-arg callable that builds + runs the child and returns the same
         result dict ``_run_single_child`` produces. Runs on the worker thread.
@@ -991,7 +991,7 @@ def _push_completion_event(
     for _k in ("scope_id", "user_id", "user_name"):
         if record.get(_k):
             evt[_k] = record[_k]
-    # Structured stall metadata (#51690) — additive, present only on
+    # Structured stall metadata — additive, present only on
     # stall-monitor finalizations.
     for _k in (
         "stalled_after_quiet_seconds",
@@ -1205,7 +1205,7 @@ def _push_batch_completion_event(
     for _k in ("scope_id", "user_id", "user_name"):
         if event_record.get(_k):
             evt[_k] = event_record[_k]
-    # Structured stall metadata (#51690) — additive, present only on
+    # Structured stall metadata — additive, present only on
     # stall-monitor finalizations.
     for _k in (
         "stalled_after_quiet_seconds",
@@ -1301,7 +1301,7 @@ def _stale_monitor_loop() -> None:
                     record["status"] = "stalling"
                     record["_interrupted_at"] = now
                     # Structured stall context for the terminal event and
-                    # status listings (#51690): how long progress was frozen,
+                    # status listings: how long progress was frozen,
                     # which threshold applied, and whether the child was
                     # inside a tool when it went quiet.
                     record["_stall_quiet_seconds"] = round(quiet_for, 2)
@@ -1359,14 +1359,14 @@ def _finalize_stalled(delegation_id: str) -> None:
         "streamed tokens), did not respond to interruption, and never "
         "produced a completion event. The worker may be wedged inside a "
         "model API call — this is a known failure mode of long-lived "
-        "gateway processes (#60203). Re-dispatch the task if it is still "
+        "gateway processes. Re-dispatch the task if it is still "
         "needed."
     )
     logger.error(
         "Async delegation %s force-finalized as stalled after %.0fs",
         delegation_id, duration,
     )
-    # Structured stall metadata (#51690): lets parents and UIs distinguish
+    # Structured stall metadata: lets parents and UIs distinguish
     # a stall-monitor kill from other failures without parsing the error
     # string, mirroring the sync path's timeout_seconds/timed_out_after_
     # seconds/timeout_phase fields.
@@ -1442,7 +1442,7 @@ def list_async_delegations() -> List[Dict[str, Any]]:
 
     Safe to call from any thread. Excludes the non-serialisable callables
     and private monitor bookkeeping, but exposes computed live-status
-    fields for UIs (#51690):
+    fields for UIs:
 
     - ``seconds_since_progress``: how long the stale monitor has seen a
       frozen progress token (running/stalling records).
@@ -1540,7 +1540,7 @@ def interrupt_for_session(
     that session ends, its in-flight background subagents must end with it —
     a completed orphan would otherwise sit on the shared completion queue
     with no live owner, either leaking into another chat or burning tokens
-    with no one listening (#55578).
+    with no one listening.
 
     Selectors (any matching field claims the record):
     - ``origin_ui_session_id``: the live TUI tab/window that commissioned it.

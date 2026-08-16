@@ -16,7 +16,7 @@ def add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, ddl
 
     Returns ``True`` when this call added the column. Swallows the
     ``duplicate column name`` error a concurrent migrator may have run first
-    (issue #21708). ``column`` is the human-readable name for the call site;
+    . ``column`` is the human-readable name for the call site;
     ``ddl`` carries the actual definition.
     """
     try:

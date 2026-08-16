@@ -14,11 +14,11 @@ Historically the desktop/dashboard endpoints (PUT/DELETE ``/api/env``) and the
 TUI-gateway RPCs only mutated store 1. That divergence is the root cause of a
 whole bug family:
 
-    * #51071 / #59761 — deleting a key removes it from ``.env`` but the stale
+    * / — deleting a key removes it from ``.env`` but the stale
       ``credential_pool`` entry (and ``provider_models_cache.json`` row)
       survives, so the provider keeps appearing in the model picker, even
       across restarts (the pool loader is additive-only).
-    * #62269 — updating a key rewrites ``.env`` but leaves the OLD key in a
+    * — updating a key rewrites ``.env`` but leaves the OLD key in a
       higher-precedence ``config.yaml`` mirror (``model.api_key`` wins over
       env at client construction), producing persistent 401s with a key the
       UI no longer shows.
@@ -182,7 +182,7 @@ def purge_env_credential_references(
 
     Prunes ``credential_pool`` env-seeded entries and (optionally) the
     affected providers' rows in ``provider_models_cache.json`` so the model
-    picker stops advertising a provider whose key is gone (#59761).
+    picker stops advertising a provider whose key is gone.
     """
     pruned = _prune_env_pool_entries(env_var)
     providers = sorted(set(pruned) | set(_providers_for_env_var(env_var)))
@@ -215,7 +215,7 @@ def save_provider_env_credential(env_var: str, value: str) -> Dict[str, Any]:
 
     After the ``.env`` write, any config.yaml mirror that held the PREVIOUS
     value of this var (``model.api_key`` etc.) is updated to the new value so
-    a stale higher-precedence copy cannot shadow the rotation (#62269).
+    a stale higher-precedence copy cannot shadow the rotation.
     Suppressed ``env:<VAR>`` pool sources are re-enabled so a deliberate
     re-add through the UI behaves like ``pilotage auth add``.
     """

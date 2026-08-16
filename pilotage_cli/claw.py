@@ -597,7 +597,7 @@ def _cmd_cleanup(args):
         return
 
     # Warn if OpenClaw is still running — archiving while the service is
-    # active causes it to recreate an empty skeleton directory (#8502).
+    # active causes it to recreate an empty skeleton directory.
     running = _detect_openclaw_processes()
     if running:
         print()

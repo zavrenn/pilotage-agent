@@ -9,9 +9,9 @@ The ``ddgs`` package is an optional dependency. ``is_available()`` reflects
 whether the package is importable; the plugin still registers either way so
 ``pilotage tools`` can prompt the user to install it.
 
-Isolation note (#68096): ``ddgs``/``primp`` can block inside native code while
+Isolation note: ``ddgs``/``primp`` can block inside native code while
 holding the Python GIL. A ``ThreadPoolExecutor`` + ``future.result(timeout=…)``
-cap (see #52118) cannot fire in that state — the waiter never reacquires the
+cap cannot fire in that state — the waiter never reacquires the
 GIL — so the whole Pilotage process freezes through Ctrl+C/SIGTERM. Each search
 therefore runs in a disposable child process the parent can terminate/kill.
 """
@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 # Overall wall-clock cap for a single ddgs search. The DDGS constructor's
 # ``timeout`` only bounds individual HTTP requests; ddgs's multi-engine retry
 # loop has no overall cap, so a slow/rate-limited DuckDuckGo response can hang
-# the (single, shared) agent loop indefinitely (#36776). Enforce a hard cap
-# here by killing a disposable worker process (#68096).
+# the (single, shared) agent loop indefinitely. Enforce a hard cap
+# here by killing a disposable worker process.
 _SEARCH_TIMEOUT_SECS = 30
 
 # How often the parent polls stdout / interrupt flag while waiting.
@@ -55,7 +55,7 @@ def _run_ddgs_search(query: str, safe_limit: int) -> list[dict[str, Any]]:
     Module-level (not a closure) so the child worker can import it and so
     tests can patch it for in-process unit tests. ``DDGS(timeout=…)`` bounds
     each individual HTTP request; the overall wall-clock cap is enforced by
-    the parent via process timeout (#68096).
+    the parent via process timeout.
     """
     from ddgs import DDGS  # type: ignore
 
@@ -175,7 +175,7 @@ def _run_ddgs_search_bounded(query: str, safe_limit: int) -> list[dict[str, Any]
     worker_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_search_worker.py")
     # Platform-only spawn knobs — stdin/stdout/stderr must stay as explicit
     # keyword args on the Popen call so scripts/check_subprocess_stdin.py can
-    # see them (TUI gateway inherits stdin; #14036).
+    # see them (TUI gateway inherits stdin;).
     extra_kwargs: dict[str, Any] = {}
     if sys.platform == "win32":
         # New process group so terminate/kill reach the worker cleanly on Windows.
@@ -305,7 +305,7 @@ class DDGSWebSearchProvider(WebSearchProvider):
 
         The synchronous ``ddgs`` call runs in a disposable child process with
         a hard wall-clock timeout (``_SEARCH_TIMEOUT_SECS``) so a hung native
-        ``primp`` call cannot freeze the Pilotage process (#36776, #68096).
+        ``primp`` call cannot freeze the Pilotage process.
         """
         try:
             import ddgs  # type: ignore  # noqa: F401 — availability probe

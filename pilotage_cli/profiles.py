@@ -236,7 +236,7 @@ _DEFAULT_EXPORT_EXCLUDE_ROOT = frozenset({
 # Sensitive runtime infrastructure (``state.db``, ``logs/``, ``auth.*``,
 # other profiles) is intentionally *not* in this list so the export stays
 # a portable, credential-free snapshot of the user-facing surface
-# (#58394). Add new artifacts here when introduced in ``pilotage_constants``.
+# Add new artifacts here when introduced in ``pilotage_constants``.
 _DEFAULT_EXPORT_INCLUDE_ROOT = frozenset({
     # Configuration / persona
     "config.yaml", "SOUL.md", "MEMORY.md", "USER.md", "todo.json",
@@ -313,7 +313,7 @@ def normalize_profile_name(name: str) -> str:
     Named profiles are stored lowercase under ``profiles/<id>/``. The special
     alias ``default`` is matched case-insensitively (``Default`` → ``default``).
     Dashboards and tools may pass title-cased display labels; normalize before
-    validation, assignment, and subprocess spawn (see issue #18498).
+    validation, assignment, and subprocess spawn (see).
     """
     if not isinstance(name, str):
         name = str(name)
@@ -332,7 +332,7 @@ def validate_profile_name(name: str) -> None:
     mixed-case or title-cased input from users (dashboard UI, CLI args) should
     call :func:`normalize_profile_name` first. This separation keeps validate
     honest about what the on-disk directory name must look like, while
-    ingress-point normalization handles UX flexibility (see #18498).
+    ingress-point normalization handles UX flexibility.
 
     Also rejects names in :data:`_RESERVED_NAMES` (``pilotage``, ``test``,
     ``tmp``, ``root``, ``sudo``) that would create confusing on-disk
@@ -876,7 +876,7 @@ def write_profile_meta(
         existing["description_auto"] = bool(description_auto)
     # Atomic write: bare open("w") truncates before the dump, and the read
     # path above swallows parse errors as {}, so a crashed write would
-    # silently drop unspecified fields on the next call (#51356, #16743).
+    # silently drop unspecified fields on the next call.
     from utils import atomic_yaml_write
 
     atomic_yaml_write(path, existing, sort_keys=False)
@@ -1270,7 +1270,7 @@ def backfill_profile_envs(quiet: bool = False) -> List[str]:
     """Give every named profile that predates per-profile ``.env`` files one.
 
     Profiles created before the dashboard/CLI started seeding a ``.env``
-    (PR #44792) have none, so once the Channels/Keys endpoints became
+     have none, so once the Channels/Keys endpoints became
     profile-scoped those profiles stopped inheriting the root install's
     credentials and showed everything as unconfigured. To avoid breaking
     anyone on update, copy the DEFAULT install's ``.env`` into each named
@@ -1670,7 +1670,7 @@ def _maybe_register_gateway_service(profile_name: str) -> None:
     from that profile's environment — ``API_SERVER_PORT`` (or
     ``platforms.api_server.extra.port`` in the profile's
     ``config.yaml``), defaulting to 8642. There is no ``[gateway] port``
-    key and no Python-side allocator (PR #30136 review item I5 retired
+    key and no Python-side allocator ( review item I5 retired
     the SHA-256-derived range [9200, 9800) as dead code), so two
     profiles that both leave the port at its default will both try to
     bind 8642 — give each profile a distinct ``API_SERVER_PORT`` in its
@@ -1911,7 +1911,7 @@ def _default_export_ignore(root_dir: Path):
       an unrelated ``x11-dev/`` directory in a Docker deployment where
       PILOTAGE_HOME equals the cwd) is excluded. Blacklisting was tried
       first and proved unable to anticipate every non-Pilotage file the
-      user may have lying alongside PILOTAGE_HOME (#58394).
+      user may have lying alongside PILOTAGE_HOME.
     * **Universal exclusions at any depth** — ``__pycache__``, sockets,
       temp files; plus npm lockfiles, which may appear at the root.
 

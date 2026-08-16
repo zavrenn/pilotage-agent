@@ -872,7 +872,7 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
     # _send_telegram now owns text chunking internally — it formats the full
     # message (MarkdownV2/HTML) and then splits the *formatted* text on UTF-16
     # length so escaping inflation can't push a chunk over Telegram's 4096
-    # limit (issue #28557). Pass the whole message in one call; media attaches
+    # limit. Pass the whole message in one call; media attaches
     # after all text chunks.
     if platform == Platform.TELEGRAM:
         disable_link_previews = bool(getattr(pconfig, "extra", {}) and pconfig.extra.get("disable_link_previews"))
@@ -889,7 +889,7 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
     # --- WhatsApp: native media attachment support via the registry's
     # standalone_sender_fn (plugins/platforms/whatsapp/adapter.py::_standalone_send).
     # The plugin uploads each file through the local Baileys bridge /send-media
-    # endpoint so images/videos/audio arrive as native bubbles, not documents. #41112
+    # endpoint so images/videos/audio arrive as native bubbles, not documents.
     if platform == Platform.WHATSAPP and media_files:
         from gateway.platform_registry import platform_registry as _pr_wa
         from pilotage_cli.plugins import discover_plugins as _dp_wa
@@ -999,7 +999,7 @@ def _is_telegram_thread_not_found(error: Exception) -> bool:
     """Check if a Telegram error is a thread-not-found failure.
 
     Matches the gateway adapter's ``_is_thread_not_found_error`` for
-    the standalone ``_send_telegram`` path (issue #27012).
+    the standalone ``_send_telegram`` path.
     """
     return "thread not found" in str(error).lower()
 
@@ -1017,7 +1017,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
         from telegram.constants import ParseMode
 
         # Auto-detect HTML tags — if present, skip MarkdownV2 and send as HTML.
-        # Inspired by github.com/ashaney — PR #1568.
+        # Inspired by github.com/ashaney.
         _has_html = bool(re.search(r'<[a-zA-Z/][^>]*>', message))
 
         if _has_html:
@@ -1063,7 +1063,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
         )
 
         # Telegram accepts a numeric chat_id OR an @username string; normalize
-        # rather than force-int so username home channels don't crash (#13206).
+        # rather than force-int so username home channels don't crash.
         int_chat_id = normalize_telegram_chat_id(chat_id)
         media_files = media_files or []
         thread_kwargs = {}
@@ -1075,7 +1075,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
             # not found". The adapter's helper maps "1" to None for that
             # reason; the send_message tool needs the same mapping or a
             # send to a forum group's General topic always errors out
-            # (see issue #22267).
+            # (see).
             try:
                 from plugins.platforms.telegram.adapter import TelegramAdapter
                 effective_thread_id = TelegramAdapter._message_thread_id_for_send(
@@ -1091,7 +1091,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                 thread_kwargs["message_thread_id"] = effective_thread_id
         # disable_web_page_preview is only valid for send_message, not
         # send_photo/send_video/etc.  Keep it separate so media sends
-        # don't inherit an invalid parameter (issue #27012).
+        # don't inherit an invalid parameter.
         text_kwargs = dict(thread_kwargs)
         if disable_link_previews:
             text_kwargs["disable_web_page_preview"] = True
@@ -1122,7 +1122,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
             # so a message that fit under 4096 UTF-16 units raw can exceed the
             # Telegram limit once formatted and get rejected as "Message is too
             # long". Sizing on the formatted text in UTF-16 units guarantees
-            # every chunk is deliverable. (issue #28557)
+            # every chunk is deliverable. 
             from gateway.platforms.base import BasePlatformAdapter, utf16_len
 
             text_chunks = BasePlatformAdapter.truncate_message(
@@ -1138,7 +1138,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                 except Exception as md_error:
                     # Thread not found — retry without message_thread_id so the
                     # message still delivers (matching the gateway adapter's
-                    # fallback behaviour, issue #27012).
+                    # fallback behaviour,).
                     if _is_telegram_thread_not_found(md_error) and text_kwargs.get("message_thread_id") is not None:
                         logger.warning(
                             "Thread %s not found in _send_telegram, retrying without message_thread_id",
@@ -1237,7 +1237,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                     except Exception as media_err:
                         if _is_telegram_thread_not_found(media_err) and media_kwargs.get("message_thread_id"):
                             # Thread not found for media — retry without
-                            # message_thread_id (issue #27012).
+                            # message_thread_id.
                             logger.warning(
                                 "Thread %s not found for media send, retrying without message_thread_id",
                                 media_kwargs["message_thread_id"],
@@ -1329,7 +1329,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
 async def _registry_standalone_send(platform_name, pconfig, chat_id, message, thread_id=None):
     """Dispatch a one-shot send through a migrated platform plugin's
     standalone_sender_fn (registry hook).  Used for platforms whose adapter
-    moved out of gateway/platforms/ into plugins/platforms/<name>/ (#41112):
+    moved out of gateway/platforms/ into plugins/platforms/<name>/:
     the legacy inline ``_send_<platform>`` helper now lives in the plugin as
     ``_standalone_send`` and is reached via the platform registry.
     """
@@ -1343,7 +1343,7 @@ async def _registry_standalone_send(platform_name, pconfig, chat_id, message, th
 
 
 # _send_whatsapp moved to plugins/platforms/whatsapp/adapter.py::_standalone_send,
-# wired via standalone_sender_fn and reached through _registry_standalone_send. #41112.
+# wired via standalone_sender_fn and reached through _registry_standalone_send.
 
 
 def _check_send_message():

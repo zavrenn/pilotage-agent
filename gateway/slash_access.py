@@ -26,7 +26,7 @@ commands via the live registry. Gating slash commands does not affect
 plain chat — non-admin users can still talk to the agent normally,
 they just can't trigger commands outside ``user_allowed_commands``.
 
-Authored as a slimmed-down salvage of PR #4443's permission tiers
+Authored as a slimmed-down salvage of's permission tiers
 (co-authored by @ReqX). The full tier system, audit log, usage
 tracking, rate limiting, and tool filtering from that PR are not
 included here — only the slash-command access split.

@@ -137,7 +137,7 @@ def suppress_platform_ver_console() -> None:
       UTF-8 mode (which we enable above) the ``ver`` output — OEM code page
       bytes on localized Windows — is strict-utf-8 decoded and raises,
       crashing ``platform.platform()`` in any process that inherits
-      ``PYTHONUTF8=1`` (issue #69413).
+      ``PYTHONUTF8=1``.
 
     Stubbing ``_syscmd_ver`` to return its inputs makes ``win32_ver()`` hit
     its documented fallback and read the version from

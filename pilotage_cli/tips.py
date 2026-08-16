@@ -65,7 +65,7 @@ TIPS = [
     # --- CLI Flags ---
     "pilotage -c resumes your most recent CLI session. pilotage -c \"project name\" resumes by title.",
     "pilotage -w creates an isolated git worktree — perfect for parallel agent workflows.",
-    "pilotage -w -q \"Fix issue #42\" combines worktree isolation with a one-shot query.",
+    "pilotage -w -q \"Fix\" combines worktree isolation with a one-shot query.",
     "pilotage chat -t web,terminal enables only specific toolsets for a focused session.",
     "pilotage chat -s github-pr-workflow preloads a skill at launch.",
     "pilotage chat -q \"query\" runs a single non-interactive query and exits.",

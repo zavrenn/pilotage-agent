@@ -742,7 +742,7 @@ def migrate_goal_to_session(old_session_id: str, new_session_id: str, *, reason:
     Context compression rotates ``session_id`` to a fresh child session,
     but ``load_goal`` does a flat ``goal:<session_id>`` lookup with no
     parent-lineage walk — so an active goal silently dies at the
-    compaction boundary (#33618). Copy the goal onto the new session and
+    compaction boundary. Copy the goal onto the new session and
     archive the old row as ``cleared`` so exactly one active goal row
     exists per logical conversation (avoids the "two active goals"
     hazard of a pure copy).
@@ -1106,7 +1106,7 @@ def judge_goal(
     try:
         # Route through call_llm so auxiliary.goal_judge.* config
         # (provider/model/base_url, extra_body, reasoning_effort, retries)
-        # all apply — the direct-create path dropped extra_body (#35566).
+        # all apply — the direct-create path dropped extra_body.
         resp = call_llm(
             task="goal_judge",
             messages=[
@@ -1176,7 +1176,7 @@ def draft_contract(objective: str, *, timeout: float = DEFAULT_JUDGE_TIMEOUT) ->
         return None
 
     try:
-        # Route through call_llm — same #35566 fix as the judge call above.
+        # Route through call_llm — same fix as the judge call above.
         resp = call_llm(
             task="goal_judge",
             messages=[

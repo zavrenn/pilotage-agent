@@ -1,6 +1,6 @@
 """Runtime-backed validation behind ``pilotage plugins doctor``.
 
-The Doctor originated in #46456 / contributor PR #46457 by 峯岸 亮
+The Doctor originated in / contributor by 峯岸 亮
 (@zapabob).  This core command keeps that contribution's manifest/import/
 registration validation intent while routing every check through the current
 runtime contracts instead of maintaining a parallel scanner.
@@ -219,7 +219,7 @@ def _accepts_var_kwargs(callback: Any) -> bool:
 
 
 def _check_manifest_v2(report: "DoctorReport", manifest: Any) -> None:
-    """Manifest v2 (#64165) checks: versions, deps, pip declarations, schema."""
+    """Manifest v2 checks: versions, deps, pip declarations, schema."""
     import importlib.metadata
     import re as _re
 

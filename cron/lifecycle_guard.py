@@ -1,4 +1,4 @@
-"""Gateway lifecycle guard for cron job creation (#30719).
+"""Gateway lifecycle guard for cron job creation.
 
 An agent running inside a gateway can schedule a cron job that calls
 ``pilotage gateway restart`` (or ``launchctl kickstart ai.pilotage.gateway``
@@ -69,7 +69,7 @@ _GATEWAY_LIFECYCLE_PATTERN = re.compile(
     # <helper-script>` (or `launchctl bootstrap gui/<uid> <plist>`) creates
     # a NEW keepalive job wrapping an arbitrary helper, which is how a
     # blocked direct restart/kill gets laundered into a persistent restart
-    # loop instead (#62891) — same foot-gun, indirect shape. Neutral-label
+    # loop instead — same foot-gun, indirect shape. Neutral-label
     # submissions that dodge this text anchor are caught separately by
     # `contains_launchctl_submit_command` (execution-aware, label-independent).
     r"|(?:launchctl\s+(?:kickstart|unload|load|stop|restart|submit|bootstrap)\b[^\n]*\bpilotage[.\-]?gateway)"
@@ -88,7 +88,7 @@ _GATEWAY_LIFECYCLE_PATTERN = re.compile(
 # match can't span unrelated lines of a longer cron prompt/script, but that
 # also means a real multi-line shell invocation split across continuation
 # lines (e.g. `launchctl submit \` / `  -l ai.pilotage.gateway-... \` / `  -- ...`,
-# the exact reported shape in #62891) would otherwise slip past. Collapse
+# the exact reported shape in) would otherwise slip past. Collapse
 # continuations to a single space before matching, mirroring what the shell
 # itself does, rather than loosening `[^\n]*` and risking false positives
 # across genuinely separate lines.
@@ -193,7 +193,7 @@ def contains_launchctl_submit_command(command: str) -> bool:
 
     Label-independent by design: the label of a submitted/bootstrapped job is
     chosen by whoever writes it, so a neutral name (``ai.pilotage.svc-reload-tmp``)
-    defeats any label-anchored regex (#62891, second reproduction). Both verbs
+    defeats any label-anchored regex (, second reproduction). Both verbs
     register a NEW persistent launchd job (``submit`` jobs get KeepAlive
     semantics; ``bootstrap`` loads an arbitrary plist), which is never safe to
     do from inside the gateway process.
@@ -317,7 +317,7 @@ def _expand_candidate_path(candidate: str) -> Optional[Path]:
     determine home directory`` when HOME is unset under launchd, OSError
     for over-long paths). Rejecting here — once, before any OS call — is
     the whole-class fix; catching per-syscall was the whack-a-mole that
-    produced #76762, #77703, #77780, and #78256.
+    produced,, and.
 
     Returns ``None`` for candidates that cannot be a real path (nothing to
     scan), otherwise the ``expanduser()``-expanded ``Path``.
@@ -393,7 +393,7 @@ def _iter_referenced_shell_scripts(
         # (e.g. `Path.home() / ".pilotage"`), not an executable reference.
         # Resolving it walks to the filesystem root and fails the
         # regular-file check below, hard-blocking innocent .py scripts
-        # (#77131). Skip pure-separator tokens.
+        # Skip pure-separator tokens.
         if executable.strip("/"):
             if "/" in executable or executable.endswith((".sh", ".bash", ".zsh")):
                 resolved = _resolve_terminal_script_path(executable, cwd)
@@ -433,7 +433,7 @@ def _read_referenced_script(path: Path) -> tuple[Optional[str], bool]:
     except (OSError, ValueError):
         # OSError: unreadable / missing / over-long paths. ValueError: an
         # embedded NUL byte in *path* itself — a binary's decoded bytes
-        # tokenized into a bogus script path by the recursion (#77703). A
+        # tokenized into a bogus script path by the recursion. A
         # guarded read must never crash the guard, so treat either as
         # "nothing to scan" (mirrors the resolve() ValueError guard below).
         return None, False
@@ -445,7 +445,7 @@ def _read_referenced_script(path: Path) -> tuple[Optional[str], bool]:
         # binaries (executable magic, or NUL bytes in the head) are never
         # shell scripts, so skip them WITHOUT reading the rest — reading a
         # megabyte of machine code just to discard it wastes the guard's
-        # budget and (pre-#77703) fed decoded garbage into the recursion.
+        # budget and (pre-) fed decoded garbage into the recursion.
         data = os.read(descriptor, _BINARY_SNIFF_BYTES)
         if data.startswith(_BINARY_MAGIC_PREFIXES) or b"\x00" in data:
             return None, False
@@ -466,7 +466,7 @@ def _read_referenced_script(path: Path) -> tuple[Optional[str], bool]:
     # PE), not a shell script — scanning its decoded contents would
     # tokenize machine code and feed junk paths into the recursion
     # (including a `ValueError: embedded null byte` from Path.resolve,
-    # #76762). Treat it as "nothing to scan" rather than unsafe: a binary
+    #). Treat it as "nothing to scan" rather than unsafe: a binary
     # executed by the user is not a referenced *shell script*.
     if b"\x00" in data:
         return None, False
@@ -482,8 +482,8 @@ def _sanitize_remote_script_text(text: Optional[str]) -> tuple[Optional[str], bo
     Modal, Daytona, or a future one) can hand back raw binary bytes decoded
     as text, or arbitrarily large output. Mirror
     ``_read_referenced_script``'s semantics exactly — NUL bytes mean binary
-    (nothing to scan, checked first, #77703), oversized text fails closed
-    like an oversized local file (#76762) — so remote and local reads can
+    (nothing to scan, checked first,), oversized text fails closed
+    like an oversized local file — so remote and local reads can
     never diverge again. The size check re-encodes to compare *bytes*
     (matching the local read and the ``head -c`` wire bound): a >1 MiB
     multibyte file truncated at the byte cap decodes to fewer characters
@@ -530,7 +530,7 @@ def _contains_unsafe_gateway_action(
         except (OSError, ValueError):
             # OSError: unreadable/long paths. ValueError: embedded NUL byte
             # from a binary's decoded contents tokenized as a path — a
-            # guarded path must never crash the guard (#76762).
+            # guarded path must never crash the guard.
             resolved = script_path
         if resolved in visited:
             continue
@@ -579,10 +579,10 @@ def contains_gateway_lifecycle_command_or_referenced_script(
     defense-in-depth — any unexpected failure inside it is logged and
     treated as "walk found nothing" rather than crashing the caller.
 
-    This is the contract #76762 established ("a guarded path must never
+    This is the contract established ("a guarded path must never
     crash the guard") enforced at the boundary instead of per-syscall: a
     guard crash propagates out of ``tools/terminal_tool.py`` and breaks
-    every terminal command until the gateway restarts (#77780, #78256),
+    every terminal command until the gateway restarts,
     which is strictly worse than either verdict.
     """
     try:
@@ -692,7 +692,7 @@ def check_gateway_lifecycle(
         # shell: the shell-script reference walk is a false-positive
         # generator on Python sources (pathlib's "/" operator resolves to
         # the filesystem root and trips the regular-file check, blocking
-        # every innocent .py cron script, #77131). The direct command
+        # every innocent.py cron script,). The direct command
         # regex below still scans the full text, so a literal
         # `pilotage gateway restart` embedded in a .py script is still
         # blocked. Non-regular/oversized script files still fail closed
@@ -709,6 +709,6 @@ def check_gateway_lifecycle(
             "Blocked: cron job contains a gateway lifecycle command or persistent "
             "launchctl submit operation. This is blocked to prevent agent-driven "
             "SIGTERM-respawn loops under launchd/systemd supervision "
-            "(#30719). Run `pilotage gateway restart` from a shell outside "
+            ". Run `pilotage gateway restart` from a shell outside "
             "the running gateway instead."
         )

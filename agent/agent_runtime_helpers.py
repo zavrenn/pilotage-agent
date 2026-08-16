@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 # on a persistent auth failure before we give up and let the fallback chain
 # activate. A single-entry OAuth pool can re-mint a fresh token indefinitely
 # even when the upstream keeps rejecting it, so without this cap the retry loop
-# spins forever and never reaches ``_try_activate_fallback``. See #26080.
+# spins forever and never reaches ``_try_activate_fallback``. See.
 _MAX_AUTH_REFRESH_ATTEMPTS = 2
 
 
@@ -311,7 +311,7 @@ def sanitize_tool_call_arguments(
     repair, undo, and steer paths replace or reorder message dicts, which
     breaks the identity match and forces a re-scan.  Holding strong
     references (the objects themselves, not ``id()``s) makes address reuse
-    aliasing (#50372-style) impossible.
+    aliasing -style) impossible.
     """
     log = logger or logging.getLogger(__name__)
     if not isinstance(messages, list):
@@ -383,14 +383,14 @@ def sanitize_tool_call_arguments(
                 # on the same id the rest of the pipeline uses. Keying on bare
                 # ``id`` here would fail to find a result built with ``call_id``
                 # (Codex Responses format) and insert a duplicate stub that
-                # itself becomes an orphan (#58168).
+                # itself becomes an orphan.
                 tool_call_id = _ra().AIAgent._get_tool_call_id_static(tool_call) or None
                 function_name = function.get("name", "?")
                 # Log the FULL original argument string (bounded), not an
                 # 80-char preview: this branch is about to overwrite the
                 # only copy of these bytes in the transcript with "{}", and
                 # for a truncated write_file/patch call the destroyed
-                # arguments contain real user content (#80498 — streamed
+                # arguments contain real user content — streamed
                 # file content survived only as a log preview). A corrupted
                 # call is rare, so the oversized WARNING is a fair price for
                 # making the data recoverable from agent.log.
@@ -452,7 +452,7 @@ def sanitize_tool_call_arguments(
 # second chat/topic, CLI-continuity rebinding, async-delegation pinning,
 # topic-binding tip-walks).  Two routing keys mapped to one session_id run
 # concurrent turns on two different agent objects, which per-agent state can
-# never see (#64934).  Keyed by session_id so that route produces the same
+# never see. Keyed by session_id so that route produces the same
 # named warning.  Process-local by design — same visibility scope as the
 # per-agent marker it extends.
 _INFLIGHT_TURNS_BY_SESSION: Dict[str, Tuple[str, float]] = {}
@@ -574,7 +574,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
          shape is produced by recovery/continuation paths that append an
          interim assistant turn (thinking-prefill, codex
          incomplete-continuation) or by host-fed / legacy-persisted /
-         resumed histories. Refs #29148, #49147.
+         resumed histories. Refs,.
       1. Stray ``tool`` messages whose ``tool_call_id`` doesn't match
          any preceding assistant tool_call — dropped.
       2. Consecutive ``user`` messages — merged with newline separator
@@ -638,7 +638,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
             # verification_required / verify_hook_continue), the later
             # response supersedes it for model replay — replace rather than
             # union. Both remain durable in state.db; this only affects the
-            # in-memory sequence sent to the model. (#65919 §7)
+            # in-memory sequence sent to the model. §7)
             if _is_verification_candidate(prev):
                 collapsed[-1] = msg
                 repairs += 1
@@ -662,8 +662,8 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
                 # turn survives in the live/persisted trajectory returned to
                 # callers (gateway/WebUI transcripts, session resume,
                 # subagents, cron) and is replayed on the next turn — which
-                # is how #58755 kept reproducing after the chokepoint fix
-                # (#77921).  Popping is non-destructive: an empty array
+                # is how kept reproducing after the chokepoint fix
+                # Popping is non-destructive: an empty array
                 # carries no information.
                 prev.pop("tool_calls", None)
             # Concatenate plain-text content; leave multimodal (list)
@@ -705,7 +705,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
     # producing an HTTP 400 on strict providers (DeepSeek, Kimi). Matching
     # on the *superset* of both keys achieves the same tolerance as
     # ``_get_tool_call_id_static``'s ``call_id || id`` — a match set must
-    # accept every legitimate reference, not just the canonical one (#58168).
+    # accept every legitimate reference, not just the canonical one.
     known_tool_ids: set = set()
     filtered: List[Dict] = []
     for msg in collapsed:
@@ -731,7 +731,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
                 # tool_call_id (duplicate from a retry/crash/session-resume
                 # glitch) falls into the drop branch below instead of being
                 # replayed — strict providers (DeepSeek) reject a duplicate
-                # tool_call_id with HTTP 400 (#58327). Credit: #55436.
+                # tool_call_id with HTTP 400. Credit:.
                 known_tool_ids.discard(tc_id)
             else:
                 repairs += 1
@@ -784,7 +784,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
 
 def repair_message_sequence_with_cursor(agent, messages: List[Dict]) -> int:
     """Run :func:`repair_message_sequence` and keep the SessionDB flush
-    cursor consistent with the compacted list (#44837).
+    cursor consistent with the compacted list.
 
     ``repair_message_sequence`` merges/drops messages in place, shrinking
     the list. ``_last_flushed_db_idx`` (the DB-write cursor) indexes into
@@ -848,7 +848,7 @@ def strip_think_blocks(agent, content: str) -> str:
       * ``<function_call>…</function_call>``
       * ``<function_calls>…</function_calls>``
       * ``<function name="…">…</function>`` (Gemma style)
-    Ported from openclaw/openclaw#67318. The ``<function>`` variant is
+    Ported from openclaw/. The ``<function>`` variant is
     boundary-gated (only strips when the tag sits at start-of-line or
     after punctuation and carries a ``name="..."`` attribute) so prose
     mentions like "Use <function> in JavaScript" are preserved.
@@ -893,7 +893,7 @@ def strip_think_blocks(agent, content: str) -> str:
     #    the unterminated-tag pass and take trailing content with them.
     for _pattern in _REASONING_BLOCK_PATTERNS:
         content = _pattern.sub('', content)
-    # 1b. Tool-call XML blocks (openclaw/openclaw#67318). Handle the
+    # 1b. Tool-call XML blocks (openclaw/). Handle the
     #     generic tag names first — they have no attribute gating since
     #     a literal <tool_call> in prose is already vanishingly rare.
     for _pattern in _TOOL_CALL_BLOCK_PATTERNS:
@@ -906,7 +906,7 @@ def strip_think_blocks(agent, content: str) -> str:
     content = _NAMED_FUNCTION_BLOCK_PATTERN.sub('', content)
     # 2. Unterminated reasoning block — open tag at a block boundary
     #    (start of text, or after a newline) with no matching close.
-    #    Strip from the tag to end of string.  Fixes #8878 / #9568
+    # Strip from the tag to end of string. Fixes /
     #    (MiniMax M2.7 leaking raw reasoning into assistant content).
     content = _UNTERMINATED_REASONING_BLOCK_PATTERN.sub('', content)
     # 3. Stray orphan open/close tags that slipped through.
@@ -963,7 +963,7 @@ def recover_with_credential_pool(
     "out of extra usage".
 
     `billing_unverified` marks a billing verdict that rests on an ambiguous
-    body (``ClassifiedError.billing_unverified``, #82154): the pool persists
+    body (``ClassifiedError.billing_unverified``,): the pool persists
     it as ``billing_unverified`` so the exhausted entry gets a short cooldown
     instead of the one-hour billing bench — the same 400 can be a
     content-filter rejection that leaves the credential healthy.
@@ -975,9 +975,9 @@ def recover_with_credential_pool(
     # Defensive guard: if a fallback provider is active and its provider name
     # doesn't match the pool's provider, the pool belongs to the PRIMARY
     # provider.  Mutating it based on fallback errors would corrupt the
-    # primary's credential state (see #33088) and, via _swap_credential,
+    # primary's credential state and, via _swap_credential,
     # overwrite the agent's base_url back to the primary's endpoint — every
-    # subsequent request then goes to the wrong host and 404s (see #33163).
+    # subsequent request then goes to the wrong host and 404s.
     # The pool should only act when the agent is still on the same provider
     # that seeded the pool.
     current_provider = (getattr(agent, "provider", "") or "").strip().lower()
@@ -1025,7 +1025,7 @@ def recover_with_credential_pool(
     # pool reset it to None — so by the time recovery runs it routinely points
     # at a DIFFERENT, healthy entry. Marking that entry exhausted copies this
     # request's error/reset time onto it and can take the whole pool offline
-    # from a single rate-limited key (#43747). ``_swap_credential`` keeps
+    # from a single rate-limited key. ``_swap_credential`` keeps
     # ``agent.api_key`` in sync with the entry in use, so it identifies the
     # failing entry exactly; fall back to current()'s key only when the agent
     # carries no key at all.
@@ -1061,7 +1061,7 @@ def recover_with_credential_pool(
         if effective_reason is not None:
             _failure_reason = effective_reason.value
             if effective_reason == FailoverReason.billing and billing_unverified:
-                # Ambiguous billing body (#82154): persist the ambiguity so
+                # Ambiguous billing body: persist the ambiguity so
                 # the cooldown is sized as transient, not a 1-hour bench.
                 from agent.credential_pool import FAILURE_REASON_BILLING_UNVERIFIED
                 _failure_reason = FAILURE_REASON_BILLING_UNVERIFIED
@@ -1182,13 +1182,13 @@ def recover_with_credential_pool(
         # same unsubscribed account and the main agent loop spins re-issuing
         # the same 403 until the user Ctrl+C's.
         #
-        # Defense-in-depth for #26847: xAI's backend has been seen to 403
+        # Defense-in-depth for: xAI's backend has been seen to 403
         # standard SuperGrok subscribers with bodies that don't match the
         # existing entitlement keyword set in ``_is_entitlement_failure``.
         # Any 403 against ``xai-oauth`` is treated as entitlement here so
         # the refresh loop can't spin in those cases either.
         #
-        # Exception (#29344): xAI's ``[WKE=unauthenticated:...]`` suffix and
+        # Exception: xAI's ``[WKE=unauthenticated:..]`` suffix and
         # the ``OAuth2 access token could not be validated`` phrasing are
         # xAI's authoritative "this is a stale token, not entitlement"
         # signal.  When either fires we must NOT apply the catch-all
@@ -1246,7 +1246,7 @@ def recover_with_credential_pool(
             # so a bare "refreshed → retry" loop spins forever on the same dead
             # token and the configured fallback never activates. Cap consecutive
             # same-entry refreshes and fall through to fallback once exceeded.
-            # See #26080.
+            # See.
             refreshed_id = getattr(refreshed, "id", None)
             if refreshed_id is not None:
                 refresh_counts = getattr(agent, "_auth_pool_refresh_counts", None)
@@ -1323,7 +1323,7 @@ def try_recover_primary_transport(
         return False
 
     try:
-        # Retire the existing client to release stale connections. #70773:
+        # Retire the existing client to release stale connections.:
         # never hard-close the shared client here — this runs on the
         # conversation-loop thread while workers from stale-killed streaming
         # attempts may still be unwinding their SSL BIOs on the old pool.
@@ -1364,7 +1364,7 @@ def try_recover_primary_transport(
             # MoA is a virtual provider with empty client_kwargs — rebuilding
             # via _create_openai_client would raise "api_key client option
             # must be set". Recreate the facade through the shared factory so
-            # the reference_callback relay survives recovery (#53802).
+            # the reference_callback relay survives recovery.
             from agent.moa_loop import build_moa_facade
 
             agent.client = build_moa_facade(agent, agent.model)
@@ -1503,7 +1503,7 @@ def restore_primary_runtime(agent) -> bool:
         # configured) leaves _fallback_index >= len(_fallback_chain) while
         # _fallback_activated stays False.  The next turn skips this block
         # entirely, stranding the index and silently blocking all future
-        # fallback attempts for the session.  Fixes #20465.
+        # fallback attempts for the session. Fixes.
         agent._fallback_index = 0
         return False
 
@@ -1589,7 +1589,7 @@ def restore_primary_runtime(agent) -> bool:
         )
         # If the operator has disabled caching via config (cache_ttl is
         # falsy → _cache_disabled flag is set), the disable must survive
-        # runtime snapshot restoration (#33555).
+        # runtime snapshot restoration.
         if getattr(agent, "_cache_disabled", False):
             agent._use_prompt_caching = False
             agent._use_native_cache_layout = False
@@ -1601,7 +1601,7 @@ def restore_primary_runtime(agent) -> bool:
             # the facade, not call OpenAI() with an empty api_key.  Use the
             # shared factory so the restored facade keeps the reference_callback
             # relay wired at init — a bare MoAClient() would silently stop
-            # emitting moa.reference/moa.aggregating display events (#53802).
+            # emitting moa.reference/moa.aggregating display events.
             from agent.moa_loop import build_moa_facade
 
             agent.client = build_moa_facade(agent, agent.model)
@@ -1683,7 +1683,7 @@ def restore_primary_runtime(agent) -> bool:
         # pool entries before cross-provider fallback even gets a chance.  Ask
         # the pool for its current best entry and swap the live credential in.
         # When the pool is absent, empty, or the entry has no usable key, we
-        # keep the snapshot key (the existing behavior).  Fixes #25205.
+        # keep the snapshot key (the existing behavior). Fixes.
         agent._credential_pool_entry_id = None
         pool = getattr(agent, "_credential_pool", None)
         if pool is not None and pool.has_available():
@@ -1698,7 +1698,7 @@ def restore_primary_runtime(agent) -> bool:
                 # against the entry's key — this mirrors the sibling guard in
                 # ``recover_with_credential_pool`` (see above) and correctly
                 # disambiguates multiple custom providers that share one gateway
-                # base_url. Fixes #56885.
+                # base_url. Fixes.
                 from agent.credential_pool import CUSTOM_POOL_PREFIX
                 if (
                     primary_provider == "custom"
@@ -1722,7 +1722,7 @@ def restore_primary_runtime(agent) -> bool:
                 if entry_key and entry_matches_primary:
                     # ``_swap_credential`` rebuilds the OpenAI/Anthropic client,
                     # reapplies base-url-scoped headers, and carries the
-                    # accumulated base_url / OAuth-detection fixes (#33163).
+                    # accumulated base_url / OAuth-detection fixes.
                     agent._swap_credential(entry)
                     logger.info(
                         "Restore re-selected pool entry %s (%s)",
@@ -1750,7 +1750,7 @@ def restore_primary_runtime(agent) -> bool:
         agent._fallback_index = 0
         agent._rate_limit_backoff_count = 0  # reset exponential backoff counter
 
-        # Reset the stale-call circuit breaker (#58962): the streak measured
+        # Reset the stale-call circuit breaker: the streak measured
         # the FALLBACK provider we're leaving; the restored primary deserves
         # a fresh stream attempt before the breaker can trip again.
         from agent.chat_completion_helpers import _reset_stale_streak
@@ -1832,7 +1832,7 @@ def extract_reasoning(agent, assistant_message) -> Optional[str]:
         #   [{"type": "thinking", "thinking": "..."}, {"type": "output", ...}]
         # Without this branch the thinking text is silently dropped and the
         # next turn fails with HTTP 400 ("thinking must be passed back").
-        # Refs #21944.
+        # Refs.
         for block in content:
             if isinstance(block, dict) and block.get("type") == "thinking":
                 thinking_text = block.get("thinking") or block.get("text") or ""
@@ -1981,7 +1981,7 @@ def cache_ttl_means_disabled(ttl: Any) -> bool:
     Single source of truth for the disable-synonym detection shared by
     ``agent_init`` (live-agent ``_cache_disabled`` flag) and the stub policy
     paths below. Keeping one predicate prevents the two sites from drifting
-    (a synonym added in only one place would recreate #76085).
+    (a synonym added in only one place would recreate).
 
     Unknown values (e.g. ``"2h"``, integers) are NOT a disable — callers keep
     caching enabled with the default TTL, matching ``agent_init``.
@@ -2013,7 +2013,7 @@ def prompt_caching_disabled_from_config() -> bool:
     Same disable detection as ``agent_init`` (via ``cache_ttl_means_disabled``)
     so stub-based policy paths (MoA slot decoration, auxiliary fallback
     replan) honor the same config contract without holding a live
-    ``AIAgent`` (#76085 / #33555).
+    ``AIAgent`` / ).
     """
     try:
         ttl = _raw_cache_ttl_from_config()
@@ -2028,7 +2028,7 @@ def configured_cache_ttl() -> Optional[str]:
     Mirrors ``agent_init``'s reading of the same key (``5m``/``1h`` accepted,
     anything else ignored) so stub-based paths without a live ``AIAgent``
     (auxiliary fallback replan) stop regressing a configured ``1h`` to the
-    5m default (#84733). Returns ``None`` for unset/disabled/unknown values;
+    5m default. Returns ``None`` for unset/disabled/unknown values;
     ``effective_cache_ttl`` resolves ``None`` to ``5m`` downstream.
     """
     try:
@@ -2044,7 +2044,7 @@ def blank_cache_policy_stub(cache_disabled: Optional[bool] = None):
     Single sanctioned constructor for that stub. Callers that resolve cache
     policy against a destination identified out-of-band (not a live
     ``AIAgent``) must go through here so ``_cache_disabled`` is never left
-    off a hand-rolled ``SimpleNamespace`` (#76085).
+    off a hand-rolled ``SimpleNamespace``.
 
     When ``cache_disabled`` is omitted, falls back to the global config so
     stub paths without an agent snapshot still honor an operator disable.
@@ -2089,11 +2089,11 @@ def plan_cache_sections_for_destination(
     ``cache_disabled`` threads the operator's ``prompt_caching.cache_ttl``
     disable into the blank policy stub. When omitted, the live config is
     consulted so MoA/auxiliary paths cannot re-enable markers after the
-    user turned caching off (#76085).
+    user turned caching off.
 
     ``cache_ttl`` threads the operator's configured tier (default ``5m``)
     into the destination plan so MoA/auxiliary requests stop regressing to
-    the 5m default while the main loop honors ``1h`` (#84733); it is
+    the 5m default while the main loop honors ``1h``; it is
     clamped per-destination by :func:`effective_cache_ttl` (Qwen → 5m).
     ``static_system_prefix`` threads the builder-declared stable prefix so
     the destination system prompt receives the same early breakpoint the
@@ -2173,8 +2173,8 @@ def anthropic_prompt_cache_policy(
 
     Qwen / Alibaba-family models on OpenCode, OpenCode Go, and direct
     Alibaba (DashScope) also honour Anthropic-style ``cache_control``
-    markers on OpenAI-wire chat completions. Upstream pi-mono #3392 /
-    pi #3393 documented this for opencode-go Qwen. Without markers
+    markers on OpenAI-wire chat completions. Upstream pi-mono /
+    pi documented this for opencode-go Qwen. Without markers
     these providers serve zero cache hits, re-billing the full prompt
     on every turn.
 
@@ -2182,7 +2182,7 @@ def anthropic_prompt_cache_policy(
     (``false``, ``null``, ``"off"``, etc.) in config.yaml, prompt caching
     is fully disabled — this early return ensures the disable survives
     ``/model`` switches, fallback re-derivation, and runtime snapshot
-    restoration (#33555). We check ``"_cache_disabled"`` (set by
+    restoration. We check ``"_cache_disabled"`` (set by
     init_agent when the disable is detected) rather than ``_cache_ttl``
     directly, because ``_cache_ttl`` is not yet set when the policy runs
     during the initial ``init_agent`` call.
@@ -2246,7 +2246,7 @@ def anthropic_prompt_cache_policy(
     # moonshotai/kimi-k2.6 falls through to (False, False), serving ~1%
     # cache hits on 64K-token prompts and re-billing the full prompt on
     # every turn.  Observed within-turn progression with cache enabled:
-    # 1% → 67% → 84% → 97% (#25970).  Reuses the canonical family matcher
+    # 1% → 67% → 84% → 97%. Reuses the canonical family matcher
     # (covers bare k1./k2./k25 release slugs the substring check missed).
     from agent.anthropic_adapter import _model_name_is_kimi_family
     is_kimi = (
@@ -2356,10 +2356,10 @@ def anthropic_prompt_cache_policy(
     # NOTE: DeepSeek models on OpenCode are intentionally excluded.
     # OpenCode Zen's relay rejects the Anthropic-style content block
     # format that cache markers produce (content becomes a block array
-    # instead of a plain string), causing HTTP 400 (#77217).
+    # instead of a plain string), causing HTTP 400.
     # Single source of truth for the family set and the qwen-model
     # predicate — shared with the effective_cache_ttl clamp so the
-    # opt-in and the TTL clamp can never desync (#84733).
+    # opt-in and the TTL clamp can never desync.
     from agent.prompt_caching import ALIBABA_FAMILY_PROVIDERS, is_qwen_model
 
     model_is_qwen = is_qwen_model(model_lower)
@@ -2379,7 +2379,7 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     from agent.ssl_verify import resolve_httpx_verify
     # Treat client_kwargs as read-only. Callers pass agent._client_kwargs (or shallow
     # copies of it) in; any in-place mutation leaks back into the stored dict and is
-    # reused on subsequent requests. #10933 hit this by injecting an httpx.Client
+    # reused on subsequent requests. hit this by injecting an httpx.Client
     # transport that was torn down after the first request, so the next request
     # wrapped a closed transport and raised "Cannot send a request, as the client
     # has been closed" on every retry. The revert resolved that specific path; this
@@ -2390,10 +2390,10 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # *is* the client. Rebuilding a native OpenAI client while
     # agent.provider == "moa" (client replacement, stream-retry pool cleanup,
     # credential rotation, fallback+restore) drops the facade: the next primary
-    # call either raises a `_moa_prepared_request` TypeError (#78382) or, when
+    # call either raises a `_moa_prepared_request` TypeError or, when
     # _client_kwargs carry an unrelated relay base_url, leaks the request to a
     # foreign gateway. Rebuild the facade instead (build_moa_facade also
-    # re-wires the reference relay, see #53802).
+    # re-wires the reference relay, see).
     if (getattr(agent, "provider", "") or "").strip().lower() == "moa":
         from agent.moa_loop import build_moa_facade
         return build_moa_facade(agent, getattr(agent, "model", None) or "default")
@@ -2437,13 +2437,13 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
             )
             return client
     # Inject TCP keepalives so the kernel detects dead provider connections
-    # instead of letting them sit silently in CLOSE-WAIT (#10324).  Without
+    # instead of letting them sit silently in CLOSE-WAIT. Without
     # this, a peer that drops mid-stream leaves the socket in a state where
     # epoll_wait never fires, ``httpx`` read timeout may not trigger, and
     # the agent hangs until manually killed.  Probes after 30s idle, retry
     # every 10s, give up after 3 → dead peer detected within ~60s.
     #
-    # Safety against #10933: the ``client_kwargs = dict(client_kwargs)``
+    # Safety against: the ``client_kwargs = dict(client_kwargs)``
     # above means this injection only lands in the local per-call copy,
     # never back into ``agent._client_kwargs``.  Each ``_create_openai_client``
     # invocation therefore gets its OWN fresh ``httpx.Client`` whose
@@ -2463,7 +2463,7 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # which honors Retry-After and applies adaptive/jittered backoff. The OpenAI
     # SDK default (max_retries=2) uses its own 1-2s backoff that ignores
     # Retry-After and double-retries inside our loop — the same deadlock the
-    # Anthropic clients hit (#26293). This is the single chokepoint every primary
+    # Anthropic clients hit. This is the single chokepoint every primary
     # OpenAI/aggregator client passes through (init, switch_model, recovery,
     # restore, request-scoped); auxiliary_client builds its own clients and keeps
     # SDK retries because it is NOT wrapped by the conversation loop.
@@ -2577,7 +2577,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     # live dict doesn't poison the rollback target.
     _snapshot["_client_kwargs"] = dict(getattr(agent, "_client_kwargs", {}) or {})
     # Snapshot the credential pool reference so a failed client rebuild can
-    # restore the original pool (issue #52727: pool reload is part of this
+    # restore the original pool (: pool reload is part of this
     # switch and must be reversible on rollback).
     _snapshot["_credential_pool"] = getattr(agent, "_credential_pool", _MISSING)
     _snapshot["_credential_pool_entry_id"] = getattr(
@@ -2617,7 +2617,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         # value here means resolution failed upstream, not that the
         # provider genuinely has none. Re-selecting the SAME provider with
         # an empty base_url (e.g. a credential-only refresh) is still fine
-        # to keep the current URL. See #47828.
+        # to keep the current URL. See.
         old_norm_provider = (old_provider or "").strip().lower()
         new_norm_provider = (new_provider or "").strip().lower()
         if base_url:
@@ -2635,7 +2635,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         if api_key:
             agent.api_key = api_key
 
-        # ── Reload credential pool for the new provider (issue #52727) ──
+        # ── Reload credential pool for the new provider  ──
         # Without this, ``recover_with_credential_pool`` sees a
         # ``pool.provider != agent.provider`` mismatch and short-circuits,
         # leaving the new provider with no rotation/recovery on 401/429 and
@@ -2733,7 +2733,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
                 # Read custom_providers from live config (not the init-time
                 # snapshot on ``agent._custom_providers``) so ssl_ca_cert /
                 # ssl_verify edits are honored when switching mid-session,
-                # matching the context-length reload below (#15779).
+                # matching the context-length reload below.
                 apply_custom_provider_tls_to_client_kwargs(
                     agent._client_kwargs,
                     str(effective_base or ""),
@@ -2868,7 +2868,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     # ── Invalidate cached system prompt so it rebuilds next turn ──
     agent._cached_system_prompt = None
 
-    # ── Reset the cross-turn stale-call circuit breaker (#58962) ──
+    # ── Reset the cross-turn stale-call circuit breaker ──
     # The breaker's error text tells the user to "switch models ... then
     # retry"; without this reset the streak stays latched and the freshly
     # selected (healthy) provider would keep short-circuiting before any
@@ -2936,7 +2936,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     # (tests, bare agents without a session DB, etc.).  This ensures the
     # dashboard Model cards show the actual provider after a mid-session
     # /model switch instead of the stale session-creation provider.
-    # See #48248 for the full bug description.
+    # See for the full bug description.
     _session_db = getattr(agent, "_session_db", None)
     _session_id = getattr(agent, "session_id", None)
     if _session_db is not None and _session_id:
@@ -3184,7 +3184,7 @@ def repair_tool_call(agent, tool_name: str) -> str | None:
        suffixes like ``TodoTool_tool`` reduce all the way.
     5. Fuzzy match (difflib, cutoff=0.7).
 
-    See #14784 for the original reports (TodoTool_tool, Patch_tool,
+    See for the original reports (TodoTool_tool, Patch_tool,
     BrowserClick_tool were all returning "Unknown tool" before).
 
     Returns the repaired name if found in valid_tool_names, else None.
@@ -3195,7 +3195,7 @@ def repair_tool_call(agent, tool_name: str) -> str | None:
     if not tool_name:
         return None
 
-    # VolcEngine api/plan workaround (issue #33007): the endpoint's
+    # VolcEngine api/plan workaround : the endpoint's
     # protocol-translation layer occasionally leaks raw XML attribute
     # fragments into tool_use.name, e.g.
     #   `terminal" parameter="command" string="true`
@@ -3421,11 +3421,11 @@ def sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     # message with no tool calls, but strict OpenAI-compatible providers reject
     # the empty array outright: DeepSeek v4 returns HTTP 400 "Invalid
     # 'messages[N].tool_calls': empty array. Expected an array with minimum
-    # length 1, but got an empty array instead." (#58755, follow-up to #56980).
+    # length 1, but got an empty array instead." (, follow-up to).
     # Empty arrays reach here from session resume, host-fed histories, or the
     # consecutive-assistant merge in ``repair_message_sequence`` (which
     # preserves a pre-existing ``[]`` on the surviving turn). This is the final
-    # pre-API chokepoint, so normalize defensively — and, per the #56980
+    # pre-API chokepoint, so normalize defensively — and, per the
     # review, do it HERE on the per-call copy rather than in
     # ``repair_message_sequence``, which would destructively rewrite the
     # persisted trajectory. Shallow-copy the message before dropping the key so
@@ -3459,7 +3459,7 @@ def sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     #
     # We do NOT drop the call: pilotage' own dispatch loop intentionally keeps an
     # empty-name call paired with a synthesized anti-priming tool result
-    # ("tool name was empty", see #47967) so weak models self-correct instead of
+    # ("tool name was empty", see) so weak models self-correct instead of
     # being fed the full tool catalog. Dropping the call here would (a) orphan
     # that result and strip the anti-priming signal, and (b) still leave any
     # provider-side orphan. Instead, rename the blank name to a non-empty
@@ -3549,7 +3549,7 @@ def sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
     # 3. Deduplicate tool_call_ids. Strict providers (DeepSeek) reject a
     # payload where the same tool_call_id appears more than once with HTTP 400
-    # "Duplicate value for 'tool_call_id'" (#58327). Duplicates can arise from
+    # "Duplicate value for 'tool_call_id'". Duplicates can arise from
     # retries, crash/resume glitches, or a compression window that re-emits a
     # tool result. This is the final pre-API chokepoint, so dedup defensively
     # here even though repair_message_sequence also consumes matched ids.
@@ -3773,7 +3773,7 @@ def reapply_reasoning_echo_for_provider(agent, api_messages: list) -> int:
       primary carry a ``reasoning_content`` pad (often a single space ``" "``),
       and the strict provider rejects it with HTTP 400/422 ("Extra inputs are
       not permitted").  Strip the field.  This is the exact cross-provider
-      fallback bug from #45655 — a DeepSeek primary pads history with ``" "``,
+      fallback bug from — a DeepSeek primary pads history with ``" "``,
       the request falls back to Mistral, and Mistral 422s on the stale pad.
 
     Calling this immediately before building the request kwargs reconciles the
@@ -3793,13 +3793,13 @@ def reapply_reasoning_echo_for_provider(agent, api_messages: list) -> int:
 def _iter_httpx_pool_objects(http_client: Any):
     """Yield httpcore pool objects reachable from an httpx client.
 
-    Pilotage' keepalive client (#10324 / ``_build_keepalive_http_client``) and
+    Pilotage' keepalive client / ``_build_keepalive_http_client``) and
     any ``HTTP(S)_PROXY`` configuration put live connections on *mounted*
     transports (``client._mounts``), not only on the default
     ``client._transport``. Walking the default transport alone makes
     ``force_close_tcp_sockets`` return 0 while a stream is still mid-recv —
     the interrupt logs success and the provider keeps burning the slot
-    (#72975).
+.
     """
     seen_pools: set[int] = set()
 
@@ -3865,7 +3865,7 @@ def _iter_pool_sockets(client: Any):
 
     Also walks ``httpx`` mount transports — see ``_iter_httpx_pool_objects``
     — and in-flight httpcore ``PoolRequest.connection`` objects, which stay
-    reachable even when ``_connections`` is empty during checkout (#85252).
+    reachable even when ``_connections`` is empty during checkout.
     """
     try:
         http_client = getattr(client, "_client", None)
@@ -4149,7 +4149,7 @@ def force_close_tcp_sockets(client: Any) -> int:
         the kanban dispatcher opening ``kanban.db``.
       * The owning worker thread then unwinds httpx, the SSL layer flushes a
         pending TLS record, and the encrypted bytes get written into the
-        wrong file (issue #29507: 24-byte TLS application-data record
+        wrong file (: 24-byte TLS application-data record
         clobbering SQLite header bytes 5..28).
 
     The fix is to let the owning thread own the close. ``shutdown()`` from any
@@ -4171,7 +4171,7 @@ def force_close_tcp_sockets(client: Any) -> int:
                 # Clear a blocking timeout first so a hung SSL_read on the
                 # owner thread notices the shutdown. Some stacks ignore
                 # SHUT_RDWR alone while recv is blocked with timeout=None
-                # (#85252). Still no close() — that is the #29507 race.
+                # Still no close — that is the race.
                 settimeout = getattr(sock, "settimeout", None)
                 if callable(settimeout):
                     try:
@@ -4182,7 +4182,7 @@ def force_close_tcp_sockets(client: Any) -> int:
             except OSError:
                 # Already shut down / not connected / FD invalid — all benign.
                 pass
-            # IMPORTANT (#29507): do NOT call sock.close() here. See docstring.
+            # IMPORTANT: do NOT call sock.close here. See docstring.
             shutdown_count += 1
     except Exception as exc:
         _ra().logger.debug("Force-close TCP sockets sweep error: %s", exc)

@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 # Cron fires build session_id as ``cron_<job_id>_<YYYYMMDD_HHMMSS>`` (see
 # cron/scheduler.py). The trailing timestamp is per-fire noise; stripped so
-# repeat fires of the same job share a cache scope (see #51395/#52295).
+# repeat fires of the same job share a cache scope (see/).
 _CRON_SESSION_ID_RE = re.compile(r"^(cron_.+)_\d{8}_\d{6}$")
 
 
@@ -60,7 +60,7 @@ def _xai_prefers_native_web_search() -> bool:
     ``web.search_backend`` / ``web.backend`` from config) and checks whether
     the resolved provider is xAI. Falls back to the legacy ``_get_search_backend``
     probe when the registry has no providers loaded. On any resolution failure,
-    returns True (fail-closed to native — preserves the #48108 incomplete-hang
+    returns True (fail-closed to native — preserves the incomplete-hang
     fix rather than risk reintroducing it).
     """
     try:
@@ -150,9 +150,9 @@ def _content_cache_key(
     ``scope_id`` (pass ``_cache_scope_from_session_id(session_id)``) keeps
     unrelated sessions — independent conversations, main vs. child/subagent,
     sibling children — from concentrating onto the same bucket merely because
-    their static prefix matches (see #78941), while still letting recurring
+    their static prefix matches, while still letting recurring
     cron fires of one job share a stable key across their timestamped
-    session_ids (the original #51395/#52295 fix this built on). Sorting tools
+    session_ids (the original/ fix this built on). Sorting tools
     by name keeps the hash insertion-order independent.
     """
     if not instructions and not tools:
@@ -351,7 +351,7 @@ class ResponsesApiTransport(ProviderTransport):
                 content hash and the xAI x-grok-conv-id header; the Codex
                 x-client-request-id header mirrors the resulting body key.
                 Keeps the cache warm across context-compression session
-                rotation (#79017)
+                rotation
             max_tokens: int | None — max_output_tokens
             timeout: float | None — per-request timeout forwarded to the SDK
             request_overrides: dict | None — extra kwargs merged in
@@ -455,7 +455,7 @@ class ResponsesApiTransport(ProviderTransport):
         # ``web_search`` collides with that engine: declared as a plain
         # ``function`` rather than ``{"type": "web_search"}``, the search
         # dispatches but never reconciles → incomplete turn + 3 retries.
-        # Verified live against grok-composer-2.5-fast (2026-06); see #48108.
+        # Verified live against grok-composer-2.5-fast (2026-06); see.
         #
         # Two modes, chosen by the user's web-search backend config:
         #
@@ -491,7 +491,7 @@ class ResponsesApiTransport(ProviderTransport):
         # ``TypeError: 'NoneType' object is not iterable`` before any HTTP
         # request is issued (openai==2.24.0).  Reported for the
         # ``openai-codex`` / ``gpt-5.5`` combo on chatgpt.com/backend-api/codex
-        # (#32892) when the agent runs without external tools registered.
+        # when the agent runs without external tools registered.
         kwargs = {
             "model": model,
             "instructions": instructions,
@@ -526,7 +526,7 @@ class ResponsesApiTransport(ProviderTransport):
         # (compression-lineage root — agent/prompt_cache_scope.py): legacy
         # ``compression.in_place: false`` compaction rotates session_id
         # mid-conversation, and scoping by the physical id went cache-cold at
-        # every rotation boundary (#79017).
+        # every rotation boundary.
         _cache_scope = _cache_scope_from_session_id(
             params.get("cache_scope_id") or session_id
         )
@@ -589,7 +589,7 @@ class ResponsesApiTransport(ProviderTransport):
         # Older xAI Responses models reject ``service_tier`` (HTTP 400
         # "Argument not supported: service_tier"). Grok 4.6 accepts Priority
         # Processing, but continue stripping stale or unsupported tier values
-        # on every other xAI path. See #28490 and #84799.
+        # on every other xAI path. See and.
         if is_xai_responses:
             from agent.model_metadata import is_grok_46_family
 
@@ -618,9 +618,9 @@ class ResponsesApiTransport(ProviderTransport):
             # HTTP 400, but the OpenAI SDK's ``extra_headers`` kwarg maps
             # to actual HTTP request headers (not body fields).  ``session_id``
             # carries the raw physical session id — transcript/identity, per
-            # the #57012 contract — while ``x-client-request-id`` mirrors the
+            # the contract — while ``x-client-request-id`` mirrors the
             # body's effective ``prompt_cache_key`` so header and body always
-            # agree on the same routing bucket instead of diverging (#78941).
+            # agree on the same routing bucket instead of diverging.
             final_cache_key = kwargs.get("prompt_cache_key") or _bounded_prompt_cache_key(_cache_scope)
             if session_id or final_cache_key:
                 existing_extra_headers = kwargs.get("extra_headers")
@@ -656,7 +656,7 @@ class ResponsesApiTransport(ProviderTransport):
                 )
             # Scoped like the body cache key below — otherwise cron's
             # per-fire timestamp in session_id (cron_<id>_<ts>) pins every
-            # fire of the same job to a different xAI backend server (#78941).
+            # fire of the same job to a different xAI backend server.
             merged_extra_headers["x-grok-conv-id"] = _cache_scope
             kwargs["extra_headers"] = merged_extra_headers
 
@@ -667,7 +667,7 @@ class ResponsesApiTransport(ProviderTransport):
             # A caller's request_overrides={"prompt_cache_key": ...} lands on
             # the top-level kwarg set above — read it back here so an explicit
             # override actually governs the field xAI reads, instead of being
-            # silently outrun by the auto-derived cache_key (#78941).
+            # silently outrun by the auto-derived cache_key.
             existing_extra_body = kwargs.get("extra_body")
             merged_extra_body: Dict[str, Any] = {}
             if isinstance(existing_extra_body, dict):

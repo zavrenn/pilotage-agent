@@ -4,7 +4,7 @@ Both callers need to run the same core ``.[all]`` reinstall:
 
 - ``pilotage_cli._early_recovery.recover_if_needed`` — stdlib-only, runs BEFORE
   ``pilotage_cli.main``'s third-party imports, so it can complete a pending
-  update while no native extension is mapped yet (#83569).
+  update while no native extension is mapped yet.
 - ``pilotage_cli.main._recover_core_update_marker_locked`` — the historical
   post-import recovery path. Kept as a fallback for installs the early pass
   could not complete (marker left in place on failure).
@@ -106,7 +106,7 @@ def _venv_scripts_dir(root: Path) -> Path | None:
     if not venv_dir.is_dir():
         return None
     # pilotage_constants is stdlib-only, so the canonical layout helper is safe
-    # to use from this corrupted-venv repair path (#76105: never open-code
+    # to use from this corrupted-venv repair path (: never open-code
     # the Scripts/bin split).
     from pilotage_constants import venv_bin_dir
 

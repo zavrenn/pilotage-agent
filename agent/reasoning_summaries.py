@@ -20,7 +20,7 @@ metadata, and consumers that concatenate deltas glue the parts together:
 That ``****`` run is neither a bold close nor a bold open to a markdown parser,
 so the whole trace renders as one unbroken, unspaced, half-bold paragraph.
 
-The AI SDK hit exactly this (vercel/ai#6742) and fixed it upstream by starting
+The AI SDK hit exactly this (vercel/ai) and fixed it upstream by starting
 a new reasoning part per ``summary_index``. That route needs the index, which
 this wire does not give us, so we re-derive the boundary from the one signal it
 does carry: a delta opening a bold heading. Pilotage' own Responses adapter

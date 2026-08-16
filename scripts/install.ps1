@@ -5,7 +5,7 @@
 # Uses uv for fast Python provisioning and package management.
 #
 # Usage:
-#   iex (irm https://hermes-agent.nousresearch.com/install.ps1)
+#   iex (irm https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent/raw/main/scripts/install.ps1)
 #
 # Or download and run with options:
 #   .\install.ps1 -NoVenv -SkipSetup
@@ -356,8 +356,8 @@ $script:ResolvedPathReport = @{
 # Configuration
 # ============================================================================
 
-$RepoUrlSsh = "git@github.com:NousResearch/hermes-agent.git"
-$RepoUrlHttps = "https://github.com/NousResearch/hermes-agent.git"
+$RepoUrlSsh = "git@github.com:REPLACE-WITH-PILOTAGE-REPO/pilotage-agent.git"
+$RepoUrlHttps = "https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent.git"
 $PythonVersion = "3.11"
 # Minor versions the installer accepts when the requested $PythonVersion isn't
 # available, in preference order.  uv discovers both uv-managed and system
@@ -513,7 +513,7 @@ function Discard-LockfileChurn {
 # certificate chain" / UNABLE_TO_GET_ISSUER_CERT_LOCALLY -- most commonly while
 # Electron's install.js postinstall downloads the Electron binary. The reporter
 # usually misreads this as an admin-rights or generic install failure (see
-# issue #38016), so detect it once here and route every npm stage through this
+#), so detect it once here and route every npm stage through this
 # hint. Returns $true when a cert error was detected (caller may adjust its own
 # messaging), $false otherwise.
 function Show-NpmCertHint {
@@ -642,8 +642,8 @@ function Install-AgentBrowser {
         throw "npm not found"
     }
 
-    # agent-browser itself is intentionally NOT installed here (#43564 /
-    # PR #44772 review): it resolves lazily via `npx agent-browser` instead,
+    # agent-browser itself is intentionally NOT installed here /
+    # review): it resolves lazily via `npx agent-browser` instead,
     # which every consumer (tools/browser_tool.py, `pilotage update`'s npx
     # cache warm) already goes through. Eagerly npm-installing a second,
     # separately version-pinned copy here -- only reachable via this
@@ -746,7 +746,7 @@ function Install-Uv {
         # Rungs 1 + 2: run the uv installer -- astral.sh first, then the
         # byte-identical copy published on GitHub releases.  Corporate
         # proxies and AV products frequently block astral.sh while
-        # github.com is reachable (issue #69216), so a second source turns
+        # github.com is reachable , so a second source turns
         # a hard failure into a working install.  Capture the installer
         # output (Tee-Object) instead of discarding it: when every source
         # fails, the real error (download blocked, AV quarantine,
@@ -842,7 +842,7 @@ function Sync-EnvPath {
 # still sees a PATH without node.exe's directory (nvm4w shims, App Paths
 # aliases, stale cross-process PATH).  Prepend the resolved node.exe parent
 # directory so postinstall hooks (electron-winstaller, native modules, etc.)
-# can find ``node``.  Regression for #48130.
+# can find ``node``. Regression for.
 function Ensure-NodeExeOnPath {
     $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
     if (-not $nodeCmd) { return $false }
@@ -951,7 +951,7 @@ function Update-ManagedNpm {
     # In-app updates run while the desktop app's Node processes are alive.
     # The managed npm lives inside the very tree they execute from, so an
     # in-place upgrade would hit WinError 5 (Access denied) on npm.cmd
-    # (#80926).  Defer; the next update with the app closed retries.
+    # Defer; the next update with the app closed retries.
     if (Test-ManagedNodeInUse $NodeDir) {
         Write-Warn "Pilotage-managed Node.js is in use by a running app; skipping the bundled npm upgrade (applies on a later update with the app closed)."
         return $false
@@ -1000,7 +1000,7 @@ function Test-ManagedNodeInUse {
     # Windows locks files that running processes execute from.  During an
     # in-app update the desktop app's Node processes may hold the managed
     # tree open, and rewriting it then fails with WinError 5 (Access denied)
-    # on npm.cmd (#80926).  Cheap pre-check used to skip destructive steps;
+    # on npm.cmd. Cheap pre-check used to skip destructive steps;
     # the rename/move itself remains the authoritative guard.
     #
     # Check the executable path AND the command line: a cmd.exe wrapper
@@ -1076,7 +1076,7 @@ function Resolve-AvailablePythonVersion {
     # ``python`` stage settled on (e.g. 3.12 when 3.11 is absent) does NOT
     # survive into the ``venv`` stage's process -- there $PythonVersion is back
     # at its "3.11" default.  Consumers re-resolve here instead of trusting that
-    # default, which is exactly the propagation gap behind issue #50769.
+    # default, which is exactly the propagation gap behind.
     $candidates = @($PythonVersion) + $PythonFallbackVersions
     $seen = @{}
     foreach ($ver in $candidates) {
@@ -1623,7 +1623,7 @@ function Test-Node {
                 # Windows permits renaming a tree with running executables,
                 # but if a process holds it without FILE_SHARE_DELETE the
                 # rename fails with WinError 5 -- that refusal means the tree
-                # is in use, so defer instead of forcing the write (#80926).
+                # is in use, so defer instead of forcing the write.
                 # Best-effort sweep of staging/backup litter from interrupted
                 # runs; locked files simply stay for the next attempt.  Only
                 # dirs older than 10 minutes are removed so a concurrent
@@ -2000,7 +2000,7 @@ function Install-Repository {
                 # commit. rev-parse/status still succeed there, but the update
                 # path's `git stash` (and later `git checkout`) abort with
                 # "You do not have the initial commit yet" and fail the install
-                # (#40998). Require a resolvable HEAD so such partial checkouts
+                # Require a resolvable HEAD so such partial checkouts
                 # are treated as broken and re-cloned fresh below.
                 $global:LASTEXITCODE = 0
                 $null = & git -c windows.appendAtomically=false rev-parse --verify HEAD 2>&1
@@ -2038,7 +2038,7 @@ function Install-Repository {
                 # Preserve any real local changes before the checkout instead of
                 # discarding them with `reset --hard HEAD`. The old hard reset
                 # silently destroyed agent-edited source on managed clones (the
-                # #38542 data-loss class). Stash + restore mirrors install.sh:
+                # data-loss class). Stash + restore mirrors install.sh:
                 # nothing is lost, and a failed restore leaves the work in a
                 # git stash for manual recovery. Untracked files are included so
                 # agent-created dirs (e.g. tinker-atropos/) survive too.
@@ -2052,7 +2052,7 @@ function Install-Repository {
                     # failure. Clear the conflict markers with `git reset` first:
                     # working-tree changes are kept (and stashed just below); only
                     # the index conflict state is dropped. Mirrors the `pilotage
-                    # update` path (#4735).
+                    # update` path.
                     $unmergedOut = git -c windows.appendAtomically=false ls-files --unmerged 2>$null
                     if (-not [string]::IsNullOrWhiteSpace(($unmergedOut -join "`n"))) {
                         Write-Info "Clearing unmerged index entries from a previous conflict..."
@@ -2195,7 +2195,7 @@ function Install-Repository {
             $didUpdate = $true
         } else {
             # Directory exists but isn't a usable git repo -- e.g. an
-            # interrupted clone with no initial commit (#40998), or a leftover
+            # interrupted clone with no initial commit, or a leftover
             # ``.git`` stub from a partial uninstall that used to lock the
             # installer into the "update" branch forever. Move it aside rather
             # than deleting it -- never destroy a directory the user might still
@@ -2254,13 +2254,13 @@ function Install-Repository {
                 # for.  GitHub supports archive URLs for commits, tags, and
                 # branches; we honour Commit > Tag > Branch.
                 if ($Commit) {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/$Commit.zip"
+                    $zipUrl = "https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent/archive/$Commit.zip"
                     $zipLabel = $Commit
                 } elseif ($Tag) {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/tags/$Tag.zip"
+                    $zipUrl = "https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent/archive/refs/tags/$Tag.zip"
                     $zipLabel = $Tag
                 } else {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/heads/$Branch.zip"
+                    $zipUrl = "https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent/archive/refs/heads/$Branch.zip"
                     $zipLabel = $Branch
                 }
                 $zipPath = "$env:TEMP\pilotage-agent-$zipLabel.zip"
@@ -2280,7 +2280,7 @@ function Install-Repository {
                     # Initialize git repo so updates work later. A bare
                     # `git init` leaves NO HEAD -- desktop's write-build-stamp
                     # then hard-fails with "could not determine git commit"
-                    # (#50823 / #61657). Fetch the requested ref and force-check
+                    # / ). Fetch the requested ref and force-check
                     # it out (-f) so untracked ZIP files cannot block checkout.
                     Push-Location $InstallDir
                     git -c windows.appendAtomically=false init 2>$null
@@ -2398,7 +2398,7 @@ function Install-Venv {
     # stage picked (e.g. 3.12 when 3.11 is absent) did NOT propagate into this
     # fresh process -- $PythonVersion is back at its "3.11" default.  Trusting it
     # here made `uv venv venv --python 3.11` fail with exit 2 on machines without
-    # 3.11 even though the `python` stage reported success (issue #50769).
+    # 3.11 even though the `python` stage reported success.
     $resolved = Resolve-AvailablePythonVersion
     if ($resolved -and $resolved -ne $PythonVersion) {
         Write-Info "Python $PythonVersion not available; using detected Python $resolved"
@@ -2505,7 +2505,7 @@ function Install-Venv {
         # Move the old venv aside before creating its replacement. A directory
         # rename is atomic on the same volume and does not require deleting
         # files mapped as DLLs. NEVER fall back to deleting the live venv
-        # (#83149): Remove-Item -Recurse can delete most of site-packages and
+        #: Remove-Item -Recurse can delete most of site-packages and
         # then fail on one locked .pyd, leaving a gutted venv with no usable
         # interpreter and no rollback source. Abort with the previous install
         # intact so the user can close holders and retry.
@@ -2551,7 +2551,7 @@ function Install-Venv {
     # bootstrap runs the stages as separate processes, and every dependency
     # tier (or the import validation) can still fail after this stage
     # succeeds. Record the parked backup so the dependency stage can restore
-    # it on failure and commit its cleanup only after validation (#83149).
+    # it on failure and commit its cleanup only after validation.
     if ($venvParked) {
         Set-Content -LiteralPath (Join-Path $InstallDir "venv.pending-backup") -Value $venvBackupName -Encoding ascii
         Write-Info "Previous venv parked at $venvBackupName until the dependency install is verified"
@@ -2631,7 +2631,7 @@ function Install-Venv {
 }
 
 function Get-PendingVenvBackup {
-    # Rollback source recorded by Install-Venv (#83149). Returns the parked
+    # Rollback source recorded by Install-Venv. Returns the parked
     # directory name, or $null when there is nothing to roll back to. A marker
     # pointing at a directory that no longer exists is stale -- drop it.
     $markerPath = Join-Path $InstallDir "venv.pending-backup"
@@ -2662,7 +2662,7 @@ function Complete-VenvTransaction {
 function Restore-VenvBackup {
     # Rollback: the dependency stage failed after Install-Venv replaced the
     # venv. Park the unusable replacement and restore the previous working
-    # venv so Pilotage (and the venv-blocker probe) stay usable (#83149).
+    # venv so Pilotage (and the venv-blocker probe) stay usable.
     $backupName = Get-PendingVenvBackup
     if (-not $backupName) { return }
     try {
@@ -2715,7 +2715,7 @@ function Install-Dependencies {
     # current extras spec, NOT because they're equivalent in posture.
     #
     # Everything through the baseline-import gate runs inside the venv
-    # transaction opened by Install-Venv (#83149): on any failure the parked
+    # transaction opened by Install-Venv: on any failure the parked
     # previous venv is restored before the error propagates, and the parked
     # tree is deleted only after the imports prove the replacement usable.
     try {
@@ -2862,7 +2862,7 @@ except Exception:
 
     # Commit the venv transaction: the dependency install completed and the
     # baseline imports passed, so the previous venv is no longer needed as a
-    # rollback source (#83149).
+    # rollback source.
     Complete-VenvTransaction
     } catch {
         # Dependency install or import validation failed: restore the previous
@@ -2969,7 +2969,7 @@ function Set-PathVariable {
         # venv\Scripts directory. venv\Scripts contains python.exe /
         # pythonw.exe / pip.exe, and putting it on the user PATH silently
         # hijacks the `python` command in every terminal on the machine
-        # (#83797): unrelated projects start resolving python to Pilotage'
+        #: unrelated projects start resolving python to Pilotage'
         # runtime interpreter. A dedicated bin dir with copies of the
         # launcher exes keeps `pilotage` globally available without
         # shadowing anything. (Launcher exes embed the venv interpreter
@@ -3139,7 +3139,7 @@ function Install-NodeDeps {
 
     # npm lifecycle scripts need node.exe on the PATH visible to child
     # cmd.exe processes.  Stage-Node may have run in a prior process, so
-    # re-apply here before any npm install (regression #48130).
+    # re-apply here before any npm install (regression).
     Ensure-NodeExeOnPath | Out-Null
 
     # Resolve npm explicitly to npm.cmd, NOT npm.ps1.  Node.js on Windows
@@ -3173,9 +3173,9 @@ function Install-NodeDeps {
 
     # Wall-clock ceiling for each npm / Playwright invocation in this stage.
     # scripts/install.sh has time-boxed the same work with
-    # ``run_with_timeout "$NODE_DEPS_TIMEOUT"`` (600s default) since #39219;
+    # ``run_with_timeout "$NODE_DEPS_TIMEOUT"`` (600s default) since;
     # Windows never got the guard, so a stalled registry fetch or a wedged
-    # Chromium extraction (#76222, #84614) froze the installer forever -- one
+    # Chromium extraction (,) froze the installer forever -- one
     # user left it running 12+ hours overnight.  Same env override as bash
     # for very slow links.
     $nodeDepsTimeoutSec = 600
@@ -3242,7 +3242,7 @@ function Install-NodeDeps {
             # file, so the user watches real progress instead of a frozen
             # "Installing..." line (on a fresh VM the install is 1-3 minutes;
             # total silence is indistinguishable from a hang) -- and the
-            # wall-clock ceiling turns a genuinely stalled install (#76222
+            # wall-clock ceiling turns a genuinely stalled install (
             # class) into a diagnosable failure instead of an overnight freeze.
             #
             # Relax EAP around the invocation: with EAP=Stop (set at the top
@@ -3354,12 +3354,12 @@ function Install-NodeDeps {
                     # the returned exit code instead, which is the reliable
                     # signal.
                     #
-                    # The wall-clock ceiling is the #76222 / #84614 fix: the
+                    # The wall-clock ceiling is the / fix: the
                     # Chromium download reaches 100% and the extraction wedges
                     # (or the registry fetch stalls), and without a bound the
                     # installer sits on this line forever.  bash has carried
                     # the same 600s guard via run_playwright_install since
-                    # #39219.
+                    #
                     $ErrorActionPreference = "Continue"
                     $pwCode = _Invoke-NativeWithTimeout $npxExe "--yes playwright install chromium" `
                         $InstallDir $pwLog $nodeDepsTimeoutSec
@@ -4109,7 +4109,7 @@ try {
     Write-Err "Installation failed: $_"
     Write-Host ""
     Write-Info "If the error is unclear, try downloading and running the script directly:"
-    Write-Host "  Invoke-WebRequest -Uri 'https://hermes-agent.nousresearch.com/install.ps1' -OutFile install.ps1" -ForegroundColor Yellow
+    Write-Host "  Invoke-WebRequest -Uri 'https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent/raw/main/scripts/install.ps1' -OutFile install.ps1" -ForegroundColor Yellow
     Write-Host "  .\install.ps1" -ForegroundColor Yellow
     Write-Host ""
 }

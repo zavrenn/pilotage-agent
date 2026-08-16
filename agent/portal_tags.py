@@ -19,7 +19,7 @@ request picks up the new tag on the next process start.
 
 Why one helper instead of inlining the literal at each site:
 * Four call sites (main loop profile, aux client, run_agent compression
-  fallback, web_tools fallback) used to drift apart — see PR #24194 which
+  fallback, web_tools fallback) used to drift apart — see which
   only got the aux site, leaving the main loop sending a different tag set.
 * Tests should assert the same tag list everywhere; centralizing makes that
   assertion a one-liner against this module.

@@ -91,7 +91,7 @@ def _browser_available() -> bool:
                 return True
     except Exception:
         pass
-    # agent-browser resolves lazily via npx on the default install (#43564),
+    # agent-browser resolves lazily via npx on the default install,
     # invisible to the PATH/node_modules probes above. Mirror the rung
     # pilotage_cli.doctor uses so this probe can't diverge from it, including
     # the Termux carve-out (bare npx is too fragile to advertise as ready

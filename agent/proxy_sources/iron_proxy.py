@@ -160,7 +160,7 @@ _BEARER_PROVIDERS: Dict[str, Tuple[str, ...]] = {
 # Providers whose API authenticates with a NON-Authorization header.
 # iron-proxy v0.39's ``secrets.replace.match_headers`` targets arbitrary
 # header names (case-insensitive; confirmed by the iron-proxy author on
-# PR #30179 and verified in the pinned v0.39.0 source — ``swapHeaders``
+# and verified in the pinned v0.39.0 source — ``swapHeaders``
 # + ``parseHeaderMatchers``), so these are first-class swapped providers,
 # not "uncovered".
 #

@@ -34,7 +34,7 @@ def _is_pure_tool_call_tail(msg: dict) -> bool:
     """An assistant row with ``tool_calls`` but no visible text content of its own.
 
     Such a row satisfies the role check (``tail role == "assistant"``) while
-    carrying none of the delivered answer — see the #43849/#44100 invariant
+    carrying none of the delivered answer — see the/ invariant
     block in :func:`finalize_turn`. Uses :func:`flatten_message_text` so that
     multimodal (list-type) content is evaluated by its text parts, not just
     its type.
@@ -48,7 +48,7 @@ def _is_pure_tool_call_tail(msg: dict) -> bool:
 # inject a synthetic user nudge to keep the agent going one more turn.
 # These nudges must be stripped from returned/live history to avoid
 # role-alternation breaks and poisoning the resumed transcript. The
-# assistant response is real content and is not flagged. (#65919 §7)
+# assistant response is real content and is not flagged. §7)
 _VERIFICATION_CONTINUATION_FLAGS = (
     "_verification_stop_synthetic",
     "_pre_verify_synthetic",
@@ -119,7 +119,7 @@ def finalize_turn(
         # guard: unrelated error/recovery exits can never enter this branch.
         final_response = _pending_verification_response
         # Mark the turn as previewed only when the reused candidate was
-        # actually streamed to the user as interim content. (#65919 review:
+        # actually streamed to the user as interim content. review:
         # response-loss blocker)
         if _pending_verification_response_previewed:
             agent._response_was_previewed = True
@@ -152,7 +152,7 @@ def finalize_turn(
         #
         # We route through ``_record_task_failure(outcome="timed_out")``
         # rather than ``kanban_block`` so this counts toward the dispatcher's
-        # consecutive-failure circuit breaker (#29747 gap 2).
+        # consecutive-failure circuit breaker gap 2).
         _kanban_task = os.environ.get("PILOTAGE_KANBAN_TASK")
         if _kanban_task:
             try:
@@ -240,7 +240,7 @@ def finalize_turn(
     # SQLite writes (_persist_session).  A raise from any of them used to
     # propagate straight out of run_conversation, discarding the partial
     # final_response the caller is waiting for (subprocess wrappers saw an
-    # empty stdout with no traceback — #8049).  Each step is now guarded
+    # empty stdout with no traceback). Each step is now guarded
     # independently so one failure can't skip the others, and any errors
     # are surfaced on the result dict via ``cleanup_errors`` rather than
     # killing the turn.
@@ -271,7 +271,7 @@ def finalize_turn(
         # Drop verification-continuation nudges (synthetic user messages)
         # from the live history before the tail-assistant check — only the
         # nudges need stripping; the assistant candidate persists in
-        # state.db. (#65919 §7)
+        # state.db. §7)
         _drop_verification_continuation_scaffolding(messages)
 
         # When the turn was interrupted and the last message is a tool
@@ -279,7 +279,7 @@ def finalize_turn(
         # tool-call sequence. Without this, the session persists a
         # ``tool → user`` alternation that strict providers (Gemini,
         # Claude) reject, causing them to hallucinate a continuation of
-        # the user's message on the next turn (#48879).
+        # the user's message on the next turn.
         #
         # ``_drop_trailing_empty_response_scaffolding`` only rewinds the
         # tool tail when an empty-response scaffolding flag is present; a
@@ -302,11 +302,11 @@ def finalize_turn(
         # "unanswered" message. Close the durable turn at the source, at the
         # single chokepoint every recovery ``break`` flows through, so the
         # invariant "delivered final_response ⇒ assistant row in transcript"
-        # holds regardless of which path produced it. (#43849 / #44100)
+        # holds regardless of which path produced it. / )
         #
         # Compare content (not just role) so a verification candidate that
         # matches the final response is not duplicated at budget
-        # exhaustion. (#65919 §7)
+        # exhaustion. §7)
         if final_response and not interrupted:
             try:
                 _tail = messages[-1] if messages else None
@@ -315,7 +315,7 @@ def finalize_turn(
             _tail_role = _tail.get("role") if isinstance(_tail, dict) else None
             if _tail_role != "assistant":
                 # Tail is not an assistant row — append the final response
-                # so the durable turn closes with the answer (#43849/#44100).
+                # so the durable turn closes with the answer /).
                 append_message(
                     messages,
                     {"role": "assistant", "content": final_response},
@@ -323,7 +323,7 @@ def finalize_turn(
             elif isinstance(_tail, dict) and _tail.get("content") != final_response and _is_pure_tool_call_tail(_tail):
                 # The tail IS an assistant row, but a *pure tool-call turn*:
                 # tool_calls with no text of its own. The role check alone
-                # leaves the #43849/#44100 invariant unmet — the user saw a
+                # leaves the/ invariant unmet — the user saw a
                 # response that never reached the transcript, and the next turn
                 # replays the user backlog and re-answers it (the very symptom
                 # this block was added for). Fill that row's empty content
@@ -334,7 +334,7 @@ def finalize_turn(
                 # The ``content != final_response`` guard prevents filling when
                 # the tail already carries the final response text (verification
                 # candidate collapse — the provisional answer was persisted and
-                # reused as the terminal response, #65919 §7).
+                # reused as the terminal response, §7).
                 _tail["content"] = final_response
                 # The normal assistant builder already stamps this row. Cover
                 # legacy/exceptional pure-tool tails before they become a
@@ -360,7 +360,7 @@ def finalize_turn(
         # final durable snapshot and returning the continuation history. Earlier
         # turn-start flushes use the DB-only override because their messages are
         # still needed for the API request; this finalizer runs after that request
-        # is complete (#48677 / #63766).
+        # is complete / ).
         _apply_override = getattr(agent, "_apply_persist_user_message_override", None)
         if callable(_apply_override):
             _apply_override(messages)
@@ -477,7 +477,7 @@ def finalize_turn(
     # If one or more ``write_file`` / ``patch`` calls failed during this
     # turn and were never superseded by a successful write to the same
     # path, append an advisory footer to the assistant response.  This
-    # catches the specific case — reported by Ben Eng (#15524-adjacent)
+    # catches the specific case — reported by Ben Eng -adjacent)
     # — where a model issues a batch of parallel patches, half of them
     # fail with "Could not find old_string", and the model summarises
     # the turn claiming every file was edited.  The user then has to
@@ -503,7 +503,7 @@ def finalize_turn(
     # after retries, a partial/truncated stream, a still-pending tool
     # result, or an iteration/budget limit — the user otherwise gets a
     # blank or fragmentary response box with no consolidated reason why
-    # the agent stopped (#34452).  Surface a single user-visible
+    # the agent stopped. Surface a single user-visible
     # explanation derived from ``_turn_exit_reason``, mirroring the
     # file-mutation verifier footer pattern above.
     #
@@ -521,7 +521,7 @@ def finalize_turn(
                 _is_empty_terminal = _stripped == "" or _stripped == "(empty)"
                 # A short fragment that is not a normal text_response exit
                 # and lacks sentence-ending punctuation is treated as a
-                # truncated partial (the "The" case from #34452).
+                # truncated partial (the "The" case from).
                 _is_partial_fragment = (
                     not _is_empty_terminal
                     and not preserved_verification_fallback
@@ -634,7 +634,7 @@ def finalize_turn(
     # Extract reasoning from the CURRENT turn only.  Walk backwards
     # but stop at the user message that started this turn — anything
     # earlier is from a prior turn and must not leak into the reasoning
-    # box (confusing stale display; #17055).  Within the current turn
+    # box (confusing stale display;). Within the current turn
     # we still want the *most recent* non-empty reasoning: many
     # providers (Claude thinking, DeepSeek v4, Codex Responses) emit
     # reasoning on the tool-call step and leave the final-answer step
@@ -648,7 +648,7 @@ def finalize_turn(
             last_reasoning = msg["reasoning"]
             break
 
-    # Class-level surrogate chokepoint (#80366, #55143, #55309, #19819):
+    # Class-level surrogate chokepoint :
     # ``final_response`` is often the RAW SDK content
     # (``assistant_message.content``), not the sanitized copy stored in
     # history by ``build_assistant_message``. Any lone UTF-16 surrogate
@@ -716,7 +716,7 @@ def finalize_turn(
             )
     # Surface any post-loop cleanup failures so the caller can distinguish a
     # clean turn from one whose trajectory/session/resource teardown raised
-    # (the response is still returned either way — #8049).
+    # (the response is still returned either way).
     if _cleanup_errors:
         result["cleanup_errors"] = _cleanup_errors
     # If a /steer landed after the final assistant turn (no more tool

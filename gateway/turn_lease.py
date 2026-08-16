@@ -1,6 +1,6 @@
 """Per-session turn lease — serializes the [load history → run → flush] region.
 
-Why this exists (#64934): the gateway's busy guards are keyed by ROUTING KEY
+Why this exists: the gateway's busy guards are keyed by ROUTING KEY
 (``_active_sessions`` in the adapter, ``_running_agents`` in the runner), but
 the durable transcript is owned by SESSION_ID — and ``switch_session()`` makes
 the key→id mapping many-to-one (``/resume`` of a named session from a second
@@ -29,7 +29,7 @@ Safety properties:
 - **Generation-scoped, identity-checked release.** A token records its owner
   (routing key, run generation) and release only frees the lease when that
   exact token is the current holder — a stale unwind can never release a
-  newer turn's lease (the #28686 ownership lesson applied). Release is
+  newer turn's lease (the ownership lesson applied). Release is
   idempotent.
 - **Fail-closed on timeout.** A timed-out waiter raises
   :class:`TurnLeaseTimeoutError` and must be rejected by the dispatch layer
@@ -38,7 +38,7 @@ Safety properties:
 - **Bounded registry.** The per-session lease map is size-capped; eviction
   only ever removes idle (unheld, uncontended) entries, never a live lease.
 
-Known limits (deliberate, flagged on #64934):
+Known limits (deliberate, flagged on):
 
 - A CLI process sharing the session via CLI-continuity is outside any
   in-process lock — that pair needs a DB-level lease (separate design).
@@ -215,7 +215,7 @@ class SessionTurnLeaseRegistry:
                 "turn lease contention on session %s: routing key %s (gen %s) "
                 "waiting behind in-flight turn held by routing key %s (gen %s, "
                 "held %.0fs) — two routing keys are mapped to one session_id "
-                "(#64934); serializing this turn behind the previous turn's "
+                "; serializing this turn behind the previous turn's "
                 "flush",
                 session_id,
                 owner_key,
@@ -272,7 +272,7 @@ class SessionTurnLeaseRegistry:
         must follow it, or an alias routing key resolving the new id (e.g. a
         topic tip-walk landing on the fresh child) could start a concurrent
         turn the lease never sees. This closes the rotation-alias window
-        flagged on #64934.
+        flagged on.
 
         Mechanism: the SAME ``_SessionLease`` object is registered under the
         new id (the old mapping stays until it goes idle and is evicted), so
@@ -305,7 +305,7 @@ class SessionTurnLeaseRegistry:
                 "(holder: routing key %s gen %s) but the target session's "
                 "lease is already live (holder: routing key %s gen %s) — "
                 "keeping the lease on the old id; transcript writes on %s "
-                "may interleave (#64934 rotation-alias edge)",
+                "may interleave rotation-alias edge)",
                 token.session_id,
                 new_session_id,
                 token.owner_key,

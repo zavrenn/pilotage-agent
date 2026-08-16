@@ -26,7 +26,7 @@ State lives in two places, both durable across scheduler restarts:
   text, kept only so the next change can render a diff.
 
 Inspired by: ChatGPT Work monitor tasks (idea-level, docs-only);
-enabler: #80774.
+enabler:.
 """
 
 from __future__ import annotations

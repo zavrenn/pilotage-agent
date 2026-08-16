@@ -69,7 +69,7 @@ def sanitize_display_text(text: str) -> str:
     able to clear the screen, retitle the window, move the cursor, or
     restyle adjacent UI when replayed. Rich's ``Text()`` does NOT
     neutralize raw escape bytes, so sanitization has to happen before
-    display. Mirrors openai/codex#31494 (``sanitize_user_text``).
+    display. Mirrors openai/codex (``sanitize_user_text``).
     """
     if not text or not _HAS_CONTROL.search(text):
         return text

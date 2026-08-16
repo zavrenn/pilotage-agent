@@ -176,7 +176,7 @@ def specify_task(
     try:
         # Route through call_llm so auxiliary.triage_specifier.* config
         # (provider/model/base_url, extra_body, reasoning_effort, retries)
-        # all apply — the direct-create path dropped extra_body (#35566).
+        # all apply — the direct-create path dropped extra_body.
         resp = call_llm(
             task="triage_specifier",
             messages=[

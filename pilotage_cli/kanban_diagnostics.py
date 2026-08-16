@@ -885,7 +885,7 @@ def _rule_block_unblock_cycling(task, events, runs, now, cfg) -> list[Diagnostic
 
     ``_rule_stuck_in_blocked`` resets its timer on any ``commented`` /
     ``unblocked`` event, so a task that cycles every few minutes is
-    invisible to it regardless of how many times it cycles (#29747
+    invisible to it regardless of how many times it cycles (
     gap 1). This rule complements that one by counting block→unblock
     cycles in a sliding window.
 

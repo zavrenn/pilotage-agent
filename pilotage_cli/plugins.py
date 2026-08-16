@@ -201,7 +201,7 @@ VALID_HOOKS: Set[str] = {
     # callbacks), then the first valid result in registration order wins —
     # on conflict the first-registered plugin is the tie-break, and every
     # additional valid-but-losing result is reported with a runtime warning
-    # (the #64714 skipped-transform rule). Invalid dicts and unknown
+    # (the skipped-transform rule). Invalid dicts and unknown
     # reasons are skipped; a broken plugin can never break error
     # classification. Cold path: fires only on API failure.
     # Privacy: error_message/error_body may carry an unredacted provider
@@ -279,8 +279,8 @@ VALID_HOOKS: Set[str] = {
     "kanban_task_completed",
     "kanban_task_blocked",
     # Kanban worker-lifecycle, task-mutation, and dispatcher-tick observers
-    # (RFC #58548, accepted as the design basis in the #64231 batch
-    # disposition; on_kanban_dispatch_tick is the re-port of PR #56066).
+    # (RFC, accepted as the design basis in the batch
+    # disposition; on_kanban_dispatch_tick is the re-port of).
     # All five are observers only: return values are ignored, and every fire
     # site is fully best-effort, so a broken callback can never break
     # dispatch or a task mutation. Cost rule: every call site short-circuits
@@ -333,8 +333,8 @@ VALID_HOOKS: Set[str] = {
     "on_kanban_task_updated",
     # on_kanban_dispatch_tick fires once per dispatcher tick in
     # dispatch_once, strictly AFTER the board's single-writer dispatch lock
-    # has been released (the #56066 original fired inside the lock — the
-    # #64231 disposition mandates the post-lock re-port), so a slow
+    # has been released (the original fired inside the lock — the
+    # disposition mandates the post-lock re-port), so a slow
     # subscriber can never extend the writer critical section.
     # Kwargs: board: str | None, profile_name: str, dry_run: bool,
     #   outcome: "ok" | "skipped_locked" | "idle",
@@ -345,9 +345,9 @@ VALID_HOOKS: Set[str] = {
     #     skipped_nonspawnable, skipped_locked).
     #   Privacy: result carries task ids, assignees, and workspace paths.
     "on_kanban_dispatch_tick",
-    # Gateway platform-boundary observer hooks (#64176). Observer-only; each
+    # Gateway platform-boundary observer hooks. Observer-only; each
     # callback isolated by invoke_hook. Payloads are normalized envelopes only,
-    # never raw platform SDK objects (per #64176 / #64182 ground rule). This
+    # never raw platform SDK objects (per / ground rule). This
     # surface grants no adapter handles or platform actions.
     #
     #   gateway_platform_event: inbound platform event as a normalized envelope.
@@ -360,14 +360,14 @@ VALID_HOOKS: Set[str] = {
     #       payload contracts; no inert VALID_HOOKS surface is registered
     #       ahead of implementation.
     "gateway_platform_event",
-    # Slash-command dispatch observer (#64204, observer-first per #64182
+    # Slash-command dispatch observer (, observer-first per
     # ground rule 3). Fired when a recognized slash command is about to be
     # dispatched, BEFORE the handler runs, on both the interactive CLI
     # (cli.py process_command) and the gateway canonical-command dispatch
     # (gateway/run.py _handle_message). Return values are IGNORED in v1 —
     # a plugin returning a directive-shaped dict gets a debug log so future
     # block/rewrite adopters are discoverable once the middleware variant
-    # ships against the #64231 taxonomy.
+    # ships against the taxonomy.
     #
     # Deliberately NOT fired for the gateway's running-agent intercept path
     # (/stop, /approve, busy_policy dispatch while a turn is live): those are
@@ -643,7 +643,7 @@ def _display_author(value: object) -> str:
     return "" if value is None else str(value)
 
 
-# ── Manifest v2 (#64165) parsing helpers ──────────────────────────────────
+# ── Manifest v2 parsing helpers ──────────────────────────────────
 
 # Fields the current parser understands. Anything else in plugin.yaml is
 # forward-compat surface: warn (once per manifest, at debug for v1 files to
@@ -654,7 +654,7 @@ _KNOWN_MANIFEST_FIELDS: Set[str] = {
     "provides_tools", "provides_hooks", "kind", "hooks", "label",
     "optional_env", "platforms", "external_dependencies", "pip_dependencies",
     "provides_browser_providers", "provides_web_providers",
-    # v2 (#64165)
+    # v2
     "manifest_version", "api_version", "requires_plugins",
     "python_dependencies", "config_schema", "license", "homepage", "tags",
     # owned by sibling sub-issues but reserved so their manifests don't warn
@@ -681,7 +681,7 @@ _CONFIG_SCHEMA_TYPES: Dict[str, tuple] = {
 
 
 def _parse_manifest_v2_fields(data: Mapping, key: str) -> Dict[str, Any]:
-    """Validate and normalize the manifest v2 fields (#64165).
+    """Validate and normalize the manifest v2 fields.
 
     Returns kwargs for :class:`PluginManifest`. Every problem is a warning,
     never a load failure — v2 metadata is advisory and additive.
@@ -819,7 +819,7 @@ def validate_config_schema(
     """Validate a plugin's config entry against its declared config_schema.
 
     Returns a list of human-actionable warning strings. Never raises;
-    schema mismatches must not block plugin load (#64165).
+    schema mismatches must not block plugin load.
     """
     warnings: List[str] = []
     if not isinstance(schema, Mapping) or not isinstance(settings, Mapping):
@@ -854,7 +854,7 @@ def validate_config_schema(
 def resolve_plugin_load_order(
     manifests: Mapping[str, "PluginManifest"],
 ) -> List[str]:
-    """Return plugin keys in dependency-respecting load order (#64165).
+    """Return plugin keys in dependency-respecting load order.
 
     When A requires B, B sorts before A (so B's ``register()`` runs first).
     Ties break alphabetically for determinism. Dependency cycles are
@@ -1065,13 +1065,13 @@ class PluginManifest:
     portable: bool = False
     skill_namespace: str = ""
     # Declared capability ids from the manifest ``capabilities:`` list
-    # (#64228). Normalized to KNOWN ids only — see
+    # Normalized to KNOWN ids only — see
     # ``pilotage_cli.plugin_capabilities.CAPABILITY_REGISTRY``. Declaration is
     # consent metadata, not a grant: a capability is live only when the user
     # granted it (``plugins.entries.<id>.granted_capabilities``) or the
     # deprecated legacy ``allow_*`` key is set.
     capabilities: List[str] = field(default_factory=list)
-    # ── Manifest v2 fields (#64165) — all optional and additive ──────────
+    # ── Manifest v2 fields — all optional and additive ──────────
     # Manifest SCHEMA version. Absent (v1) manifests are fully supported
     # forever. This versions the *file format* only; it is deliberately
     # independent from ``api_version`` (the runtime plugin API generation).
@@ -1086,7 +1086,7 @@ class PluginManifest:
     requires_plugins: List[Dict[str, Any]] = field(default_factory=list)
     # Declared pip dependencies. VALIDATED AND SURFACED ONLY — Pilotage never
     # auto-installs these (isolation design for the install seam is a
-    # deferred follow-up; see #64165 round-2 review and #15220).
+    # deferred follow-up; see round-2 review and ).
     python_dependencies: List[str] = field(default_factory=list)
     # JSON-schema-ish mapping describing keys under
     # ``plugins.entries.<id>.settings``. Validated at load; mismatches are
@@ -1217,7 +1217,7 @@ def _plugin_relative_segments(key: str) -> tuple[str, ...]:
 
     The public API accepts only relative keys (``endpoint`` or
     ``retry.policy``).  Full Pilotage paths, traversal syntax, and the security-
-    sensitive core roots called out in #64227 are rejected before any config
+    sensitive core roots called out in are rejected before any config
     read occurs.
     """
     if not isinstance(key, str):
@@ -1395,7 +1395,7 @@ class PluginContext:
         self._llm: Any = None
         self._subagent_lifecycle: Any = None
         self._state: PluginState | None = None
-        # Lazy-built capability-gated platform action facade (#64176).
+        # Lazy-built capability-gated platform action facade.
         self._platform_actions: Any = None
 
     @property
@@ -1404,7 +1404,7 @@ class PluginContext:
         return self.manifest.key or self.manifest.name
 
     def has_plugin(self, plugin_id: str) -> bool:
-        """Return True when another plugin is loaded and enabled (#64165).
+        """Return True when another plugin is loaded and enabled.
 
         Companion to the advisory ``requires_plugins`` manifest field: a
         missing dependency never blocks load, so plugins probe availability
@@ -1512,7 +1512,7 @@ class PluginContext:
 
     @property
     def platform_actions(self):
-        """Capability-gated platform action facade (#64176, v1).
+        """Capability-gated platform action facade (, v1).
 
         Minimal verb set (``add_reaction``, ``set_thread_title``) routed
         through the live gateway adapter registry. Every call re-checks the
@@ -1720,7 +1720,7 @@ class PluginContext:
         ``override=True`` against a built-in tool requires the operator to
         opt in via ``plugins.entries.<plugin_id>.allow_tool_override: true``
         in config.yaml — mirrors the trust gate pattern used for
-        ``ctx.llm`` provider/model overrides (#23194). Without that gate,
+        ``ctx.llm`` provider/model overrides. Without that gate,
         any enabled plugin could silently replace a privileged built-in
         like ``shell_exec`` or ``write_file`` and exfiltrate everything
         the model invokes through it.
@@ -1788,7 +1788,7 @@ class PluginContext:
         )
         return handle
 
-    # -- capability probing (#64228) -----------------------------------------
+    # -- capability probing -----------------------------------------
 
     def has_capability(self, capability: str) -> bool:
         """Return True when *capability* is live for this plugin.
@@ -1815,7 +1815,7 @@ class PluginContext:
         arguments: Optional[Dict[str, Any]] = None,
         timeout: float = 30,
     ) -> Dict[str, Any]:
-        """Call a tool on a configured MCP server (#64204, capability-gated).
+        """Call a tool on a configured MCP server (, capability-gated).
 
         Synchronous; safe to call from plugin hooks and tools. Routes through
         the EXISTING native MCP client machinery in :mod:`tools.mcp_tool`
@@ -1834,7 +1834,7 @@ class PluginContext:
         Calls to unlisted servers raise :class:`PermissionError`. This is a
         per-server grant, deliberately not ambient authority over every
         configured server.
-        # TODO(#64228): swap the per-server allowlist for the declared
+        # TODO: swap the per-server allowlist for the declared
         # capability model once it lands (per-tool grants, expiry, ro/rw).
 
         Args:
@@ -1942,7 +1942,7 @@ class PluginContext:
         ``tools.override`` capability — satisfied by EITHER the consent-flow
         grant (``plugins.entries.<plugin_id>.granted_capabilities``) OR the
         deprecated legacy key ``allow_tool_override: true`` (still honored
-        for backward compatibility; #64228 reference migration).
+        for backward compatibility; reference migration).
         """
         source = getattr(self.manifest, "source", "") or ""
         if source == "bundled":
@@ -1960,7 +1960,7 @@ class PluginContext:
         # Fail-closed by construction: any failure to read consent state
         # inside plugin_capability_granted returns False. The profile-scoped
         # config is passed through so a multi-profile process consults THIS
-        # manager's home, never the active profile's (#65593 constraint).
+        # manager's home, never the active profile's constraint).
         return plugin_capability_granted(plugin_id, "tools.override", config=cfg)
 
     # -- message injection --------------------------------------------------
@@ -2483,7 +2483,7 @@ class PluginContext:
         NOTE ON TIMING: ``load_pilotage_dotenv()`` usually runs at import
         *before* plugin discovery.  After discovery completes, the plugin
         manager re-pulls enabled plugin secret sources (``reset_secret_source_cache``
-        + ``load_pilotage_dotenv``) so the first process sees them (#64177).
+        + ``load_pilotage_dotenv``) so the first process sees them.
         Child processes that load env after plugins still work without that
         re-pull.  Failed re-pulls never block startup.
 
@@ -2548,12 +2548,12 @@ class PluginContext:
            (``edge``, ``openai``, ``elevenlabs``, …). Built-ins always
            win — the registry rejects shadowing names with a warning.
         2. There is NO ``tts.providers.<name>: type: command`` entry
-           with the same name. Command-providers (PR #17843) win on
+           with the same name. Command-providers  win on
            name collision because config is more local than plugin
            install.
 
         Coexists with the command-provider registry rather than
-        replacing it — see issue #30398 for the full design rationale.
+        replacing it — see for the full design rationale.
         """
         from agent.tts_provider import TTSProvider
         from agent.tts_registry import (
@@ -3258,7 +3258,7 @@ class PluginManager:
         # Registration handles are kept both per plugin (ownership lookup) and
         # globally (reverse-order teardown for overrides spanning plugins).
         #
-        # Multi-profile constraint (#65593): several process-global registries
+        # Multi-profile constraint: several process-global registries
         # (tools, platforms, providers) are shared across profiles while
         # multiple PluginManager instances may coexist in one process (keyed
         # by resolved pilotage home). The ledger is therefore keyed per manager
@@ -3267,7 +3267,7 @@ class PluginManager:
         # clear another profile's registrations. Registry overlays keyed by
         # scope_key (see tools/registry.py and gateway/platform_registry.py)
         # carry the profile dimension; anything still process-global is
-        # guarded by the identity checks. TODO(#64178): extend explicit
+        # guarded by the identity checks. TODO: extend explicit
         # profile keying to any remaining process-global slots when the
         # symmetric force-reload lands.
         self._ownership_ledger: Dict[str, List[PluginRegistration]] = {}
@@ -3499,8 +3499,8 @@ class PluginManager:
             # Symmetric sweep for tools: names in _plugin_tool_names that no
             # ledger registration covers (pre-ledger state, or set manually)
             # would survive in the process-global tools.registry as zombie
-            # entries after a force reload (#60050; tracking #64178 —
-            # extracted from PR #64188). Ledger-owned names are excluded:
+            # entries after a force reload (; tracking —
+            # extracted from). Ledger-owned names are excluded:
             # their handles were already disposed above with precise
             # previous-entry restoration, and blanket deregistration here
             # would remove entries the ledger just restored.
@@ -3611,14 +3611,14 @@ class PluginManager:
                 self._discover_and_load_inner()
                 # Plugin secret sources register during discover; the initial
                 # load_pilotage_dotenv() already ran at import time. Re-pull so the
-                # first process sees plugin backends (tracking #64177).
+                # first process sees plugin backends (tracking).
                 self._refresh_secret_sources_after_discovery()
                 if force:
                     # config.yaml shell hooks live in ``_hooks`` but are
                     # config-owned, not plugin-owned — the ledger-driven
                     # unload() above wiped them and cannot restore them.
-                    # Re-register so force-reload is symmetric (#60036;
-                    # tracking #64178 — salvaged from PR #64188).
+                    # Re-register so force-reload is symmetric ;
+                    # tracking — salvaged from).
                     self._re_register_shell_hooks_after_force()
             except BaseException:
                 self._discovered = False
@@ -3714,7 +3714,7 @@ class PluginManager:
             winners[manifest.key or manifest.name] = manifest
         # Standalone/user plugins that pass the gates below are collected
         # here and loaded AFTER the sweep in dependency-respecting order
-        # (requires_plugins topological sort, #64165).
+        # (requires_plugins topological sort,).
         to_load: Dict[str, PluginManifest] = {}
         for manifest in winners.values():
             lookup_key = manifest.key or manifest.name
@@ -4197,7 +4197,7 @@ class PluginManager:
         discovery; ``providers/`` lazy directory discovery). Both are
         directory-based today, so a pip-only provider is recorded for
         introspection but not activatable until those systems gain
-        entry-point discovery (tracked for memory: #40644). That is not
+        entry-point discovery (tracked for memory:). That is not
         a regression: pre-change such a provider was equally
         unactivatable — it was merely imported first, at full cost
         (e.g. fastembed -> onnxruntime), and logged
@@ -4351,7 +4351,7 @@ class PluginManager:
         ``pilotage tools`` checklist, and even an explicit ``platform_toolsets``
         entry is dropped because the key is unknown. The same tools work in
         gateway/web processes only because those materialize every platform at
-        startup (issue #78050).
+        startup.
 
         Client tools that live in a dedicated ``tools`` submodule can be
         registered at discovery time instead: importing ``<plugin>/tools.py``
@@ -4362,7 +4362,7 @@ class PluginManager:
 
         Opting in is explicit: the manifest must declare ``provides_tools``
         (the field the plugin list and web server already read to name a
-        plugin's tools, per #78538). Keying off the mere presence of a
+        plugin's tools, per). Keying off the mere presence of a
         ``tools.py`` would opt a plugin in by accident — a platform is free to
         put internal helpers there — and would leave the contract invisible to
         anyone reading the manifest. ``tools.py`` remains where the code is
@@ -4377,7 +4377,7 @@ class PluginManager:
         if plugin_dir is None or not (plugin_dir / "tools.py").is_file():
             # Declared but undeliverable. Staying quiet here reproduces the
             # exact symptom this path exists to fix — tools the manifest
-            # promises, silently absent from the session (#78050) — so say so.
+            # promises, silently absent from the session — so say so.
             logger.warning(
                 "Plugin '%s' declares provides_tools %s but has no tools.py; "
                 "those tools will not be available in CLI/TUI sessions.",
@@ -4435,7 +4435,7 @@ class PluginManager:
 
             # Never let a client-tool import break discovery — the platform
             # stays deferred and behaves exactly as it did before. But a
-            # broken tools.py produces the #78050 symptom itself (declared
+            # broken tools.py produces the symptom itself (declared
             # tools missing from the session), so this has to be visible
             # without turning on debug logging to find it.
             #
@@ -4461,13 +4461,13 @@ class PluginManager:
             )
 
     def _warn_python_dependencies(self, manifest: PluginManifest) -> None:
-        """Surface declared pip dependencies (#64165).
+        """Surface declared pip dependencies.
 
         python_dependencies is a declaration seam ONLY: Pilotage validates and
         prints the requirements with an install hint but NEVER auto-installs
         them. The isolation design (constraints installs vs. vendored dirs
         vs. conflict-detection-and-refusal) is an explicitly deferred
-        follow-up — see the round-2 review on #64165 and #15220.
+        follow-up — see the round-2 review on and.
         """
         deps = manifest.python_dependencies
         if not deps:
@@ -4500,7 +4500,7 @@ class PluginManager:
             )
 
     def _validate_plugin_config_schema(self, manifest: PluginManifest) -> None:
-        """Check plugins.entries.<id> settings against config_schema (#64165).
+        """Check plugins.entries.<id> settings against config_schema.
 
         Mismatches log actionable warnings naming the key and expected type;
         they never block the plugin from loading.
@@ -4589,7 +4589,7 @@ class PluginManager:
         try:
             # A deferred platform whose client tools were already registered at
             # discovery time has its package imported too — reuse it so the
-            # module body doesn't execute twice (#78050).
+            # module body doesn't execute twice.
             preloaded = self._predeclared_modules.pop(plugin_key, None)
             if preloaded is not None:
                 module = preloaded
@@ -4618,7 +4618,7 @@ class PluginManager:
                 # Tools this plugin already contributed at discovery time were
                 # registered before ``registration_start``, so the ledger slice
                 # above cannot see them and `pilotage plugins list` would
-                # under-report once the deferred adapter materializes (#78050).
+                # under-report once the deferred adapter materializes.
                 # Credit them back to the plugin that actually registered them.
                 _predeclared = [
                     t for t in self._predeclared_tools.pop(plugin_key, [])
@@ -4688,7 +4688,7 @@ class PluginManager:
         # survives it. There is no live tool left to credit — attribution and
         # the registry agree at zero. Only the success path pops
         # _predeclared_tools, so drop the entry here rather than let the
-        # bookkeeping outlive the load attempt (#78050).
+        # bookkeeping outlive the load attempt.
         if not loaded.enabled:
             self._predeclared_tools.pop(plugin_key, None)
         self._plugins[manifest.key or manifest.name] = loaded
@@ -4911,7 +4911,7 @@ class PluginManager:
         # Most legacy observer hooks carry the shared telemetry marker. Gateway
         # platform events define event-local additive envelopes instead: injecting
         # a bus-wide version here would turn unrelated adapter payloads into one
-        # monolithic compatibility contract (#64176).
+        # monolithic compatibility contract.
         if hook_name != "gateway_platform_event":
             kwargs.setdefault("telemetry_schema_version", OBSERVER_SCHEMA_VERSION)
         callbacks = self._hooks.get(hook_name, [])
@@ -4950,7 +4950,7 @@ class PluginManager:
         callback, so removing an owner also cancels callbacks already snapshotted
         by an event that has not reached that subscriber yet.
 
-        TODO(#64229): when the central plugin ownership ledger / registration
+        TODO: when the central plugin ownership ledger / registration
         handles land, route this owner-tagged bookkeeping through that ledger
         so per-plugin unload cancels event subscriptions alongside every other
         registration surface. This method is the integration seam.
@@ -5626,8 +5626,8 @@ def _delivery_manager() -> PluginManager:
     dashboards, TUI slash workers, query mode, and cron delivery paths never
     import ``model_tools`` (whose import side-effect is the discovery trigger
     on the interactive CLI path), so hooks registered by user plugins were
-    silently dead on those surfaces (#50776, #67597, #67890, #50937;
-    tracking #64178 — salvaged from PR #64188).
+    silently dead on those surfaces (,,
+    tracking — salvaged from).
 
     ``getattr`` with a ``True`` default so test doubles that monkeypatch
     ``get_plugin_manager()`` with a bare namespace are invoked untouched.
@@ -5645,7 +5645,7 @@ def invoke_hook(hook_name: str, **kwargs: Any) -> List[Any]:
     Ensures plugins are discovered on first invocation so callers in
     processes that never explicitly call ``discover_plugins()`` (gateway
     platform events, TUI slash workers, query mode, cron) still fire
-    callbacks registered by user plugins (tracking #64178).
+    callbacks registered by user plugins (tracking).
 
     Returns a list of non-``None`` return values from plugin callbacks.
     """
@@ -5663,7 +5663,7 @@ def invoke_middleware(kind: str, **kwargs: Any) -> List[Any]:
     """Invoke registered middleware callbacks.
 
     Lazy-discovers plugins on first use — same delivery-parity guarantee as
-    :func:`invoke_hook` (tracking #64178).
+    :func:`invoke_hook` (tracking).
 
     Returns a list of non-``None`` return values from middleware callbacks.
     """
@@ -5675,7 +5675,7 @@ def has_middleware(kind: str) -> bool:
 
     Lazy-discovers first: callers use this as a gate before
     :func:`invoke_middleware`, so a pre-discovery ``False`` here would
-    silently skip delivery on surfaces that never ran discovery (#64178).
+    silently skip delivery on surfaces that never ran discovery.
     """
     manager = get_plugin_manager()
     if not getattr(manager, "_discovered", True):
@@ -5690,7 +5690,7 @@ def has_hook(hook_name: str) -> bool:
     """Return True when a loaded plugin handles a hook.
 
     Lazy-discovers first — same gate-before-invoke rationale as
-    :func:`has_middleware` (tracking #64178).
+    :func:`has_middleware` (tracking).
     """
     return _delivery_manager().has_hook(hook_name)
 
@@ -5709,12 +5709,12 @@ def fire_pre_command_hook(
     session_key: Optional[str] = None,
     platform: Optional[str] = None,
 ) -> None:
-    """Fire the ``pre_command`` observer hook (#64204). Never raises.
+    """Fire the ``pre_command`` observer hook. Never raises.
 
     Observer-only in v1: return values are ignored. If a plugin returns a
     directive-shaped dict (``action``/``decision`` keys), a debug line is
     logged so future block/rewrite adopters are discoverable when the
-    middleware variant ships against the #64231 command-event taxonomy.
+    middleware variant ships against the command-event taxonomy.
     """
     try:
         manager = get_plugin_manager()
@@ -5736,7 +5736,7 @@ def fire_pre_command_hook(
                 logger.debug(
                     "pre_command is observer-only in v1: ignoring directive "
                     "%r for /%s (surface=%s). Block/rewrite will arrive with "
-                    "the command middleware variant (#64204/#64231).",
+                    "the command middleware variant /).",
                     result, command, surface,
                 )
     except Exception as exc:  # pragma: no cover - defensive
@@ -6046,7 +6046,7 @@ def get_plugin_error_classification(
     :func:`get_pre_tool_call_block_message`, invalid or irrelevant returns
     are silently ignored so a misbehaving plugin degrades to a no-op.
     When more than one callback returns a valid classification, the losing
-    results are skipped with a runtime warning (the #64714
+    results are skipped with a runtime warning (the
     skipped-transform rule) so conflicting provider plugins are visible in
     logs instead of silently shadowed.
 

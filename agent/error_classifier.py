@@ -107,7 +107,7 @@ class ClassifiedError:
         """True when a ``billing`` verdict rests on an ambiguous body.
 
         Anthropic's "out of extra usage" 400 can also be a content-filter
-        rejection (#82154); surfaces must hedge rather than assert exhaustion.
+        rejection; surfaces must hedge rather than assert exhaustion.
         """
         return bool(self.error_context.get("billing_unverified"))
 
@@ -143,7 +143,7 @@ _BILLING_PATTERNS = [
 # Billing-pattern matches that are NOT proof of billing exhaustion. Anthropic
 # returns the identical "out of extra usage" body on a subscription OAuth
 # token both when the overage bucket is genuinely depleted AND when its
-# server-side content filter rejects part of the request (#82154) — the two
+# server-side content filter rejects part of the request — the two
 # are indistinguishable from the response. Classification stays ``billing``
 # (rotation + fallback remain the right recovery either way), but the
 # ambiguity is carried in ``error_context`` so downstream surfaces hedge
@@ -202,7 +202,7 @@ _RATE_LIMIT_PATTERNS = [
     # context-overflow list (which contains "too many tokens") and the retry
     # loop compresses a healthy session instead of backing off.  Matched
     # BEFORE _CONTEXT_OVERFLOW_PATTERNS in the message-only path, so the
-    # throttle wins.  (port of anomalyco/opencode#37848's exclusion guard)
+    # throttle wins. (port of's exclusion guard)
     "throttling",
 ]
 
@@ -215,7 +215,7 @@ _RATE_LIMIT_PATTERNS = [
 # status path matches the body against this list before falling through to
 # the rate_limit default.  Phrases are kept narrow and overload-flavoured so a
 # normal rate-limit message ("you have been rate-limited") doesn't hit this
-# bucket. (#14038, #15297)
+# bucket.
 _OVERLOADED_PATTERNS = [
     "overloaded",
     "temporarily overloaded",
@@ -260,7 +260,7 @@ _PAYLOAD_TOO_LARGE_PATTERNS = [
     # Anthropic's structured 413 error type.  Normally arrives with an HTTP
     # 413 status (handled by the status path), but aggregators/proxies can
     # re-wrap it into a plain message with no status attribute — route it to
-    # the same compression recovery.  (port of anomalyco/opencode#37848)
+    # the same compression recovery. (port of)
     "request_too_large",
     "request exceeds the maximum size",
 ]
@@ -292,7 +292,7 @@ _IMAGE_TOO_LARGE_PATTERNS = [
 # messages in-place, record the (provider, model) for the rest of the
 # session so we don't waste another call learning the same lesson, retry.
 #
-# See: https://github.com/NousResearch/hermes-agent/issues/27344
+# See:
 _MULTIMODAL_TOOL_CONTENT_PATTERNS = [
     # Xiaomi MiMo: {"error":{"code":"400","message":"Param Incorrect","param":"text is not set"}}
     "text is not set",
@@ -351,7 +351,7 @@ _CONTEXT_OVERFLOW_PATTERNS = [
     "exceeds the maximum number of input tokens",
     # Together/Fireworks-style: "Input length 131393 exceeds the maximum
     # allowed input length of 131040 tokens."  No other pattern in this list
-    # matches that wording.  (port of anomalyco/opencode#37848)
+    # matches that wording. (port of)
     "maximum allowed input length",
 ]
 
@@ -372,7 +372,7 @@ _MODEL_NOT_FOUND_PATTERNS = [
     # pattern falls through to ``unknown`` with ``retryable=True``, the
     # retry loop burns all attempts on the same deterministic rejection,
     # and the error surfaces as a confusing "model not found" message
-    # instead of automatically failing over.  See PR #58446.
+    # instead of automatically failing over. See.
     "no endpoints found that support tool use",
 ]
 
@@ -494,13 +494,13 @@ _PROVIDER_POLICY_BLOCKED_PATTERNS = [
 # Patterns are intentionally narrow — each phrase is a verbatim string from
 # a specific provider's safety pipeline, not a generic word like "policy" or
 # "violation" that could collide with billing/auth/format errors:
-#   • OpenAI Codex cybersecurity refusal (gpt-5.5, the case from #18028)
+# • OpenAI Codex cybersecurity refusal (gpt-5.5, the case from)
 #   • OpenAI moderation refusal ("violates our usage policies", with
 #     "usage policies" disambiguating from billing's "exceeded ... policy")
 #   • Anthropic safety refusal ("prompt was flagged by ... safety system")
 #   • OpenAI Responses content filter
 _CONTENT_POLICY_BLOCKED_PATTERNS = [
-    # OpenAI Codex (#18028) — message may arrive without an HTTP status
+    # OpenAI Codex — message may arrive without an HTTP status
     "flagged for possible cybersecurity risk",
     "trusted access for cyber",
     # OpenAI moderation — chat completions / responses
@@ -525,7 +525,7 @@ _CONTENT_POLICY_BLOCKED_PATTERNS = [
     # large tool-call argument block) trips the upstream safety filter and
     # the SSE stream is truncated mid-flight. ``new_sensitive`` is the
     # filter name and is narrow enough that billing / format / auth error
-    # strings will not collide. See #32421.
+    # strings will not collide. See.
     "new_sensitive",
 ]
 
@@ -811,7 +811,7 @@ def classify_api_error(
     # before status-based classification so a 400 safety block isn't
     # downgraded to a generic ``format_error`` and a status-less block
     # (OpenAI Codex SDK can raise without one) isn't left in the retryable
-    # ``unknown`` bucket. See issue #18028.
+    # ``unknown`` bucket. See.
     if any(p in error_msg for p in _CONTENT_POLICY_BLOCKED_PATTERNS):
         return _result(
             FailoverReason.content_policy_blocked,
@@ -964,7 +964,7 @@ def classify_api_error(
 
     # Local MoA streaming compatibility errors are adapter-shape bugs, not a
     # provider outage. Falling back to another model would silently switch the
-    # user's selected MoA route to a single-model answer (#55933 follow-up).
+    # user's selected MoA route to a single-model answer follow-up).
     if provider_lower == "moa" and (
         "'types.SimpleNamespace' object is not iterable" in str(error)
         or "'types.SimpleNamespace' object has no attribute 'index'" in str(error)
@@ -1044,14 +1044,14 @@ def classify_api_error(
         # conversation history on a phantom context-length error.
         # Reasoning models have multi-minute thinking phases that
         # routinely exceed the cloud gateway's idle window (NVIDIA
-        # NIM ~120s — first-party repro at NVIDIA/NemoClaw#4846;
+        # NIM ~120s — first-party repro at NVIDIA/NemoClaw;
         # OpenAI worker / Anthropic stream-idle similar).  The
         # per-reasoning-model stale-timeout floor in
         # agent/reasoning_timeouts.py raises the stale-detector
         # threshold to tolerate long thinking, so a true
         # transport-layer failure here is recoverable via the retry
         # path — not via context compression.  Reclassify as timeout.
-        # (Part 1 of Fixes #52310.)
+        # (Part 1 of Fixes.)
         from agent.reasoning_timeouts import get_reasoning_stale_timeout_floor
         if get_reasoning_stale_timeout_floor(model) is not None:
             return _result(FailoverReason.timeout, retryable=True)
@@ -1191,7 +1191,7 @@ def _classify_by_status(
         # is a malformed model id, not a routing glitch — NVIDIA NIM answers
         # one with a naked ``404 page not found`` that names nothing, so the
         # generic branch below burns three retries and reports what looks
-        # like an outage (#78796). Deterministic: don't retry, and let the
+        # like an outage. Deterministic: don't retry, and let the
         # model_not_found surface carry the real cause.
         if _model_id_missing_known_prefix(model, provider):
             return result_fn(
@@ -1226,7 +1226,7 @@ def _classify_by_status(
         # NOT "rotate the credential" (which exhausts the pool while the
         # endpoint is still busy, and does nothing for a single-key user).
         # Disambiguate on the error body so an overload 429 takes the
-        # transient-overload path instead of burning the pool. (#14038)
+        # transient-overload path instead of burning the pool.
         if any(p in error_msg for p in _OVERLOADED_PATTERNS):
             return result_fn(
                 FailoverReason.overloaded,
@@ -1540,7 +1540,7 @@ def _classify_400(
             should_rotate_credential=True,
             should_fallback=True,
             # "out of extra usage" on a 400 is ambiguous — it can also be a
-            # content-filter rejection (#82154). Mark the verdict unverified
+            # content-filter rejection. Mark the verdict unverified
             # so downstream hedges and the pool skips the 1-hour bench.
             error_context=_billing_ambiguity_context(error_msg),
         )
@@ -1726,7 +1726,7 @@ def _classify_by_message(
             should_fallback=True,
             # Status-less path: adapters can strip the HTTP status from the
             # Anthropic "out of extra usage" 400, so the same ambiguity
-            # marking applies here (#82154).
+            # marking applies here.
             error_context=_billing_ambiguity_context(error_msg),
         )
 

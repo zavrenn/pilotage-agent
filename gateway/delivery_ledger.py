@@ -4,7 +4,7 @@ A final agent response that was generated but not yet confirmed-delivered
 to the messaging platform is the one artifact the gateway can lose without
 a trace: the turn already burned its tokens, the text exists only in a
 Python local, and a crash / planned restart between finalize and platform
-ACK drops it silently (#58818, #41696, #63695).
+ACK drops it silently.
 
 This module records a small durable row per outbound final response in the
 shared ``state.db`` (same file and conventions as
@@ -19,7 +19,7 @@ bounded retention). The gateway writes three checkpoints around the send:
 On startup, ``sweep_recoverable()`` claims rows whose owning process is
 dead and hands them to the gateway for redelivery. Crash semantics are
 explicit about ambiguity (the contract review of the earlier
-delivery-outbox attempt, #61790, closed it for silently resending
+delivery-outbox attempt,, closed it for silently resending
 ambiguous sends):
 
 - ``pending``     — the send never started: redeliver plainly, no dup risk.
@@ -121,7 +121,7 @@ def _transaction() -> Iterator[sqlite3.Connection]:
     alone therefore leaks a connection — and its WAL/SHM file descriptors — on
     every call, deferring the close to the garbage collector. On a long-running
     gateway that exhausts ``RLIMIT_NOFILE`` (the cron-ledger sibling of this
-    bug was #69567 / PR #69594). ``record_obligation`` runs on every outbound
+    bug was /). ``record_obligation`` runs on every outbound
     final response, so this ledger is the highest-frequency leaker.
     """
     conn = _connect()

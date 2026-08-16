@@ -25,7 +25,7 @@ Three concerns live here:
 (``self._compress_context(...)``) keep working.  Tests that exercise
 these paths see no behavioural change.
 
-Thread-safety contract for extension points (#76354 review)
+Thread-safety contract for extension points review)
 ------------------------------------------------------------
 
 When the host-level progress-aware timeout is enabled (the default:
@@ -151,7 +151,7 @@ COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE = (
 )
 
 # FAILURE-CLASS notice — a deliberate carve-out from routine-compression
-# silence (#16775 class): the context is over the compression threshold but
+# silence class): the context is over the compression threshold but
 # compression is blocked (summary-LLM cooldown / anti-thrash breaker), so the
 # session will keep growing until the hard provider token limit kills it.
 # This MUST stay visible on chat gateways. Do NOT add it to
@@ -459,7 +459,7 @@ class CompressionCommitFence:
         self._lock = threading.Lock()
         self._cancelled = False
         self._commit_started = False
-        # Lock-free commit-phase marker (#76354 review F1). ``begin_commit``
+        # Lock-free commit-phase marker review F1). ``begin_commit``
         # RETAINS ``self._lock`` until ``finish_commit``, so any host-side
         # observation that needs the lock (``try_cancel_before_commit``)
         # blocks/space-outs for the whole commit. This Event is set inside
@@ -468,15 +468,15 @@ class CompressionCommitFence:
         # flight" even while the commit itself is hung — which is exactly when
         # the overrun warning must be able to fire.
         self._commit_phase = threading.Event()
-        # Lock-free admission revocation (#76354 review F2). Set by
+        # Lock-free admission revocation review F2). Set by
         # :meth:`revoke_commit_admission` on ANY host unwind (KeyboardInterrupt,
         # cancellation, unexpected exception) without touching the fence lock,
         # so a host that cannot afford to block behind an in-flight commit can
         # still guarantee no FUTURE commit is admitted. Plain bool store —
         # atomic in CPython.
         self._admission_revoked = False
-        # Holder-qualified durable-lock release hook (#76354 review F4;
-        # transplanted from PR #71569 by @ciabata-git). The worker publishes an
+        # Holder-qualified durable-lock release hook review F4;
+        # transplanted from by @ciabata-git). The worker publishes an
         # idempotent, holder-scoped release callable once it owns the durable
         # compression lock; a timed-out host invokes it to free the lease
         # without racing a NEW holder (DB release is holder-qualified, so a
@@ -594,7 +594,7 @@ class CompressionCommitFence:
     def revoke_commit_admission(self) -> None:
         """Revoke FUTURE commit admission without blocking on the fence lock.
 
-        #76354 review F2: every host unwind path (KeyboardInterrupt, task
+        review F2: every host unwind path (KeyboardInterrupt, task
         cancellation, unexpected exception while waiting) must guarantee a
         detached worker cannot later enter the commit boundary and mutate
         durable/session state. The flag store is lock-free: a commit that is
@@ -631,8 +631,8 @@ class CompressionCommitFence:
         # _admission_revoked and perform the release once no commit can be
         # mid-mutation.
 
-    # ── Holder-qualified durable-lease cancellation (#76354 F4) ──────────
-    # Transplanted from PR #71569 (@ciabata-git): the worker publishes an
+    # ── Holder-qualified durable-lease cancellation F4) ──────────
+    # Transplanted from (@ciabata-git): the worker publishes an
     # idempotent, holder-scoped release hook once it owns the durable
     # compression lock, and the host invokes it after winning cancellation.
     # ABA safety comes from SessionDB.release_compression_lock being
@@ -714,7 +714,7 @@ _compress_timeout_executor_lock = threading.Lock()
 # ceilings so overrun reporting stays observable at test timescales.
 _COMMIT_OVERRUN_WAIT_SLICE_SECONDS = 30.0
 
-# Bounded admission for the shared compress-timeout pool (#76354 review F6).
+# Bounded admission for the shared compress-timeout pool review F6).
 # The stdlib executor queue is unbounded: with all four workers wedged in hung
 # summaries, a fifth compression would queue silently, wait out its whole
 # timeout without ever starting, and remain eligible to run as a stale job
@@ -883,7 +883,7 @@ def run_compress_context_with_progress_timeout(
     from tools.thread_context import propagate_context_to_thread
 
     executor = _get_compress_timeout_executor()
-    # Bounded admission (#76354 F6): refuse rather than queue when every pool
+    # Bounded admission F6): refuse rather than queue when every pool
     # slot is occupied. A queued job would silently wait out its whole budget
     # without starting and stay eligible to run as a stale cancelled job when
     # a worker recovers. Fail fast: continue without compression this cycle.
@@ -945,7 +945,7 @@ def run_compress_context_with_progress_timeout(
             remaining_ceiling = ceiling - waited
             if remaining_ceiling <= 0:
                 break
-            # #76354 S3 analogue for this wait: charge the idle budget from
+            # S3 analogue for this wait: charge the idle budget from
             # the LAST PROGRESS event, not from the start of this wait slice.
             # Waiting a full ``idle`` after progress that landed early in the
             # previous slice would allow silence to approach 2x the budget.
@@ -1190,7 +1190,7 @@ def _emit_compression_attempt_telemetry(
 
 
 def compression_skipped_due_to_lock(agent: Any) -> bool:
-    """Type-pinned read of the #69870 lock-skip signal.
+    """Type-pinned read of the lock-skip signal.
 
     ``agent._compression_skipped_due_to_lock`` is set by ``compress_context``
     when a compression pass no-ops because another path holds the per-session
@@ -1201,7 +1201,7 @@ def compression_skipped_due_to_lock(agent: Any) -> bool:
     bare truthiness: MagicMock test-double agents auto-create truthy
     attributes, and a bare ``if getattr(agent, ...)`` would hijack every
     mocked agent in sibling suites into the lock-skip branch (the
-    #69870 × #69840 type-ahead incident).
+    × type-ahead incident).
     """
     _sig = getattr(agent, "_compression_skipped_due_to_lock", None)
     return _sig is True or isinstance(_sig, str)
@@ -1221,7 +1221,7 @@ def _adopt_live_compression_child(
     Resolution uses the canonical transitive walk ``get_compression_tip`` so a
     lineage with >=2 compression hops (root -> mid -> tip) recovers to the live
     tip — the depth-1 ``find_live_compression_child`` lookup this used to call
-    finds no live *direct* child in that shape and skipped recovery (#82001).
+    finds no live *direct* child in that shape and skipped recovery.
     The tip walk returns the input id when no continuation exists, and a
     resolved tip is adopted only while its row is still live — both cases fail
     closed exactly as before.
@@ -1758,7 +1758,7 @@ def check_compression_model_feasibility(agent: Any) -> None:
                 )
             safe_pct = int((aux_context / main_ctx) * 100) if main_ctx else 50
             # The "lower the threshold" suggestion must survive the built-in
-            # trigger recomputation (#67422): _effective_threshold_percent()
+            # trigger recomputation: _effective_threshold_percent
             # raises sub-75% values back up for main windows under 512K, and
             # _compute_threshold_tokens() further applies the output-token
             # reservation, the 64K floor, and the degenerate-window guard.
@@ -1766,7 +1766,7 @@ def check_compression_model_feasibility(agent: Any) -> None:
             # and this warning would reappear every session — so mirror the
             # compressor's own math and only offer the option when the
             # recomputed trigger actually fits the auxiliary model's context.
-            # External engines own compaction policy (#44439); the built-in
+            # External engines own compaction policy; the built-in
             # floor doesn't apply to them, so keep the plain suggestion.
             from agent.context_compressor import ContextCompressor as _CC
 
@@ -1979,7 +1979,7 @@ def _strip_stale_todo_snapshot(content: Any) -> Any:
     append the block at the end of the trailing user turn, so a surviving
     header marks stale todo state from an earlier compaction boundary.
     Stripping before re-injection keeps repeated boundaries from
-    accumulating outdated snapshots (#26981).
+    accumulating outdated snapshots.
     """
     from tools.todo_tool import TODO_INJECTION_HEADER
 
@@ -2003,7 +2003,7 @@ def _strip_stale_todo_snapshot(content: Any) -> Any:
     return content
 
 
-# Retention-parity notice (#84718): compaction re-injects the todo list
+# Retention-parity notice: compaction re-injects the todo list
 # verbatim while skill instructions are pruned to [SKILL_PRUNED: ...] markers,
 # so the imperative crosses the boundary without the policy that governed it.
 # When BOTH happen at the same boundary, couple them: the re-injected snapshot
@@ -2119,7 +2119,7 @@ def _insert_real_user_anchor(messages: list, anchor: dict) -> None:
         messages.append(anchor)
         return
     # Trailing user-role scaffolding (e.g. the todo snapshot): merge instead
-    # of inserting a consecutive same-role message (#55677 strict templates).
+    # of inserting a consecutive same-role message strict templates).
     _merge_anchor_into_user_message(messages[-1], anchor)
 
 
@@ -2291,11 +2291,11 @@ def compress_context(
     agent._last_compression_attempt_in_place = None
     # Clear the lock-skip signal at the VERY TOP, before the codex route and
     # the breaker gates below can early-return (per-attempt state rule,
-    # #58630/#69853). A stale ``True``/holder value from a prior lock-skip
+    #/). A stale ``True``/holder value from a prior lock-skip
     # must never make a later breaker/codex no-op look like lock contention
-    # to the automatic-path consumers (compression_deferred, #49874) — the
+    # to the automatic-path consumers (compression_deferred,) — the
     # second clear before lock acquisition below stays for the same reason
-    # it was added in #69870 and is simply idempotent now.
+    # it was added in and is simply idempotent now.
     agent._compression_skipped_due_to_lock = None
 
     _attempt_started_at = time.monotonic()
@@ -2313,7 +2313,7 @@ def compress_context(
 
     # Codex app-server sessions: the codex agent owns the real thread context;
     # Pilotage' summarizer would only rewrite a local mirror without shrinking
-    # the actual thread (#36801). Route compaction to the app server's own
+    # the actual thread. Route compaction to the app server's own
     # thread/compact mechanism. Behavior is controlled by
     # ``compression.codex_app_server_auto`` (native|pilotage|off).
     # The memory-provider context handoff below is intentionally Pilotage-only:
@@ -2379,14 +2379,14 @@ def compress_context(
         agent._compression_feasibility_checked = True
 
     _pre_msg_count = len(messages)
-    # In-place compaction (config: compression.in_place, see #38763). When True,
+    # In-place compaction (config: compression.in_place, see). When True,
     # this compaction rewrites the message list and refreshes the system prompt
     # when necessary, but keeps the SAME session_id — no end_session, no
     # parent_session_id child, no
     # `name #N` renumber, no contextvar/env/logging re-sync, no memory/context-
     # engine session-switch. The conversation keeps one durable id for life,
     # eliminating the session-rotation bug cluster. Default True (2107b86024).
-    # Default True matches DEFAULT_CONFIG / #38763. A missing attribute must
+    # Default True matches DEFAULT_CONFIG /. A missing attribute must
     # NOT fall back to rotation mode — that re-enables the pre-lease drift
     # path and can wedge busy sessions that never set the flag.
     in_place = bool(getattr(agent, "compression_in_place", True))
@@ -2489,7 +2489,7 @@ def compress_context(
         _lock_ttl = 300.0
     _lock_refresh_interval = getattr(agent, "_compression_lock_refresh_interval", None)
     _lock_refresher: Optional[_CompressionLockLeaseRefresher] = None
-    # F4 (#76354, transplanted from PR #71569 by @ciabata-git): fence the
+    # F4 (, transplanted from by @ciabata-git): fence the
     # durable-lock acquisition + release-hook publication so a host timeout
     # can never win in the gap between acquiring the durable lock and having
     # a holder-qualified way to release it.
@@ -2628,7 +2628,7 @@ def compress_context(
     def _release_lock_holder_only() -> None:
         """Stop this holder's refresher and release only its durable lock.
 
-        Holder-qualified and idempotent (#76354 F4, from PR #71569): safe for
+        Holder-qualified and idempotent F4, from): safe for
         the HOST to invoke after a timeout without an ABA race — the DB
         release is scoped to this worker's holder token, so a NEW holder's
         lease can never be deleted by this stale release.
@@ -2800,7 +2800,7 @@ def compress_context(
             # Cancellation may release the holder after hook publication but
             # before this refresher starts. Serialize that check/start with
             # the idempotent release path so a refresher is never started for
-            # an already-released lock (#76354 F4 / PR #71569).
+            # an already-released lock F4 /).
             with _lock_release_guard:
                 if not _lock_released:
                     _lock_refresher = _candidate_refresher
@@ -2814,7 +2814,7 @@ def compress_context(
         # mutation of past turns is legal (multimodal compression, retry
         # history replacement, think-tag stripping), and a content-equality
         # abort would permanently wedge compression on such sessions — the
-        # #14694 failure shape.
+        # failure shape.
         # Rotation-only: in-place compaction (archive_and_compact) is
         # non-destructive — pre-compaction rows are soft-archived (active=0,
         # compacted=1), stay searchable and recoverable, so snapshot/durable
@@ -2838,7 +2838,7 @@ def compress_context(
                     # _persist_user_message_idx) that the durable snapshot read
                     # above does not contain yet. Flush that tail through the
                     # normal rotation-boundary path (conversation_history = the
-                    # already-durable prefix, #68196 boundary) BEFORE adopting,
+                    # already-durable prefix, boundary) BEFORE adopting,
                     # then re-read the durable parent so the adopted snapshot
                     # includes the live input. If the flush fails (or the
                     # anchor is unknown), skip adoption entirely: replacing
@@ -2975,7 +2975,7 @@ def compress_context(
             commit_fence.touch_progress if commit_fence is not None
             else (lambda: None)
         )
-        # F4 state-ordering (#76354): a LATE successful summary must not undo
+        # F4 state-ordering: a LATE successful summary must not undo
         # the timeout cooldown the host recorded. Install a cancellation
         # check the compressor consults BEFORE clearing the failure cooldown;
         # removed in the finally below so it cannot leak into later attempts
@@ -2988,7 +2988,7 @@ def compress_context(
             except Exception:
                 pass
         # Incoming-message interrupts and active-turn redirects must not tear an
-        # atomic summary in half (#23975). Explicit stop surfaces set a separate
+        # atomic summary in half. Explicit stop surfaces set a separate
         # Event atomically; never infer cause from the racy message fields.
         _hard_cancel_event = getattr(agent, "_hard_interrupt_requested", None)
         try:
@@ -3240,7 +3240,7 @@ def compress_context(
 
         todo_snapshot = agent._todo_store.format_for_injection()
         if todo_snapshot:
-            # Retention parity (#84718): the snapshot below re-injects the
+            # Retention parity: the snapshot below re-injects the
             # imperative verbatim. If this same boundary pruned skill bodies
             # to [SKILL_PRUNED: ...] markers, the policy that governed those
             # tasks is gone — couple a reload instruction to the snapshot so
@@ -3254,10 +3254,10 @@ def compress_context(
             # compression never introduces a synthetic user/user pair. Any
             # snapshot merged at an earlier boundary is stripped first so
             # repeated compactions refresh rather than accumulate todo state
-            # (#26981). Scaffolding tails (continuation marker, summary
+            # Scaffolding tails (continuation marker, summary
             # handoff, a bare stale snapshot row) must never absorb the
             # snapshot: merging would upgrade them to "real user" evidence
-            # and break zero-user provenance (#69292), so those keep the
+            # and break zero-user provenance, so those keep the
             # flagged standalone append and the real-user preservation pass
             # continues to see todo scaffolding, not human intent.
             from agent.context_compressor import _append_text_to_content
@@ -3355,7 +3355,7 @@ def compress_context(
                 # (both rough estimates of the same message shape) so an
                 # "actual vs estimate" measurement mismatch cannot produce a
                 # false verdict. The gateway has a rotation-path-only guard
-                # (#83339), but in-place compaction commits inside this method
+                #, but in-place compaction commits inside this method
                 # via archive_and_compact — before the gateway can inspect the
                 # result — so the guard must live here to protect both paths.
                 # On growth, treat the attempt as a no-op: the original
@@ -3411,7 +3411,7 @@ def compress_context(
                     # the compacted set; the original turns remain under the SAME id
                     # for search/recovery (Teknium review — keep one durable id
                     # WITHOUT destroying history, unlike a hard replace_messages).
-                    # See #38763.
+                    # See.
                     from agent.context_compressor import (
                         PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY,
                     )
@@ -3438,10 +3438,10 @@ def compress_context(
                     # ── Rotation (legacy): end this session, fork a continuation ─
                     # Flush any un-persisted current-turn messages to the OLD
                     # session before ending it, so they survive in the preserved
-                    # parent transcript (#47202). (In-place skips this — see above.)
+                    # parent transcript. (In-place skips this — see above.)
                     #
                     # Pass the already-durable prefix as conversation_history so
-                    # the flush skips it by identity (#68196). Preflight
+                    # the flush skips it by identity. Preflight
                     # compression runs BEFORE the normal turn flush has stamped
                     # the cold-resumed history dicts with _DB_PERSISTED_MARKER, so
                     # without a boundary _flush_messages_to_session_db treats every
@@ -3517,7 +3517,7 @@ def compress_context(
                     # Carry a persistent /goal onto the continuation session.
                     # Compression mints a fresh child id; load_goal does a flat
                     # per-session lookup with no parent walk, so without this an
-                    # active goal silently dies at the boundary (#33618).
+                    # active goal silently dies at the boundary.
                     try:
                         from pilotage_cli.goals import migrate_goal_to_session
                         migrate_goal_to_session(old_session_id, agent.session_id, reason="compression")
@@ -3707,7 +3707,7 @@ def compress_context(
         # Notify memory providers of the compaction boundary so provider-cached
         # per-session state (Hindsight's _document_id, accumulated turn buffers,
         # counters) refreshes. reset=False because the logical conversation
-        # continues. See #6672. Fires in BOTH modes: in-place uses the same id as
+        # continues. See. Fires in BOTH modes: in-place uses the same id as
         # parent (the conversation didn't fork, but the buffer must still be told
         # the transcript was compacted so it doesn't double-count dropped turns).
         try:
@@ -3726,7 +3726,7 @@ def compress_context(
         # so the warning reaches the TUI / Telegram / Discord via status_callback,
         # not just CLI stdout. _emit_status still _vprints for the CLI, and
         # storing it on _compression_warning lets replay_compression_warning
-        # re-deliver it once a late-bound gateway status_callback is wired (#36908).
+        # re-deliver it once a late-bound gateway status_callback is wired.
         _cc = agent.context_compressor.compression_count
         if _cc >= 2:
             _cc_msg = (
@@ -3755,7 +3755,7 @@ def compress_context(
         # Surface the compaction mode to the caller (run_conversation / gateway)
         # via a rotation-independent flag. The gateway uses this — NOT an
         # id-change diff — to re-baseline transcript handling (history_offset=0 +
-        # rewrite on the same id) when compaction happened in place. See #38763.
+        # rewrite on the same id) when compaction happened in place. See.
         agent._last_compression_attempt_in_place = compacted_in_place
         agent._last_compaction_in_place = compacted_in_place
 
@@ -4069,7 +4069,7 @@ def try_shrink_image_parts_in_messages(
         # smaller raster with LANCZOS resampling noise compresses worse than a
         # larger smooth one).  Rejecting a pixel-correct downscale purely
         # because its bytes grew permanently wedges sessions on the Anthropic
-        # many-image 2000px path (#48013).
+        # many-image 2000px path.
         needs_shrink = len(url) > target_bytes  # over byte budget
         triggered_by = "bytes" if needs_shrink else None
         if not needs_shrink:

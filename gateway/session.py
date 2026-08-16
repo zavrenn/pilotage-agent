@@ -578,7 +578,7 @@ class SessionEntry:
     # reuse was_auto_reset for this because that flag fires the "session
     # expired due to inactivity" user-facing notice and a misleading
     # context-note prepend — both wrong for an explicit manual reset.
-    # See issue #6508.
+    # See.
     is_fresh_reset: bool = False
     
     # Set by the background expiry watcher after it finalizes an expired
@@ -589,7 +589,7 @@ class SessionEntry:
 
     # When True the next call to get_or_create_session() will auto-reset
     # this session (create a new session_id) so the user starts fresh.
-    # Set by /stop to break stuck-resume loops (#7536).
+    # Set by /stop to break stuck-resume loops.
     suspended: bool = False
 
     # When True the session was interrupted by a gateway restart/shutdown
@@ -598,7 +598,7 @@ class SessionEntry:
     # the user stays on the same transcript and the agent auto-continues
     # from where it left off.  Cleared after the next successful turn.
     # Escalation to ``suspended`` is handled by the existing
-    # ``.restart_failure_counts`` stuck-loop counter (#7536), not by a
+    # ``.restart_failure_counts`` stuck-loop counter, not by a
     # parallel counter on this entry.
     resume_pending: bool = False
     resume_reason: Optional[str] = None  # e.g. "restart_timeout"
@@ -1012,7 +1012,7 @@ class SessionStore:
     def _ensure_loaded_locked(self) -> None:
         """Load the routing index. Must be called with self._lock held.
 
-        Read order (#9006 follow-up): the ``gateway_routing`` table in
+        Read order follow-up): the ``gateway_routing`` table in
         state.db is the primary source; sessions.json is the legacy import
         path for pre-migration installs (its entries are folded in for keys
         the DB doesn't have, then persisted to the DB on the next _save).
@@ -1067,7 +1067,7 @@ class SessionStore:
                     # bare bool or string where a dict is expected). Without
                     # this, from_dict raises TypeError on `"origin" in data`
                     # which escapes the inner except (ValueError, KeyError) and
-                    # aborts loading ALL remaining sessions (#46994).
+                    # aborts loading ALL remaining sessions.
                     if not isinstance(entry_data, dict):
                         logger.warning(
                             "Skipping invalid session entry %r: "
@@ -1096,7 +1096,7 @@ class SessionStore:
         # shutdown path, so sessions.json is never cleared and is left pointing
         # at ended sessions. On the next startup those stale entries act as live
         # routing keys. get_or_create_session() only consulted end_reason at
-        # startup (here) until #54878 added a routing-time guard for the
+        # startup (here) until added a routing-time guard for the
         # live-gateway case; this startup prune still self-heals crash-left
         # entries before the first message arrives. Pruning here (lock already
         # held) is cheap: one lookup per routing key, once at startup.
@@ -1735,7 +1735,7 @@ class SessionStore:
     ) -> None:
         """Mark a session entry expiry-finalized in memory, sessions.json, AND state.db.
 
-        Single write-path for the expiry watcher (#9006): keeps the durable
+        Single write-path for the expiry watcher: keeps the durable
         state.db flag in sync with the JSON routing index so the flag
         survives sessions.json pruning/loss.
 
@@ -1863,7 +1863,7 @@ class SessionStore:
         ended in the DB while the gateway stays alive (any path that finalizes
         the row without clearing sessions.json) would otherwise be reused as a
         live routing key and silently swallow every subsequent message until
-        the next restart (#54878 — the live-gateway variant of #52804/FM9).
+        the next restart — the live-gateway variant of /FM9).
         DB errors are non-fatal — never block routing on a failed lookup.
         """
         db = getattr(self, "_db", None)
@@ -2097,12 +2097,12 @@ class SessionStore:
             elif _entry_for_checks.resume_pending:
                 _reset_reason = self._should_reset(_entry_for_checks, source)
                 if not _reset_reason:
-                    # Freshness-gate stale resume_pending zombies (#46934) —
+                    # Freshness-gate stale resume_pending zombies —
                     # but honor an explicit ``session_reset.mode: none``: the
                     # user opted out of ALL automatic resets, so an expired
                     # resume marker must fall through to a normal resume of
                     # the preserved transcript, never a silent fresh session
-                    # (#61052).
+                    #.
                     _policy = self.config.get_reset_policy(
                         platform=source.platform,
                         session_type=source.chat_type,
@@ -2145,7 +2145,7 @@ class SessionStore:
                 )
 
                 if _is_stale and entry.session_id == _stale_session_id:
-                    # Stale routing self-heal (#54878): the in-memory entry
+                    # Stale routing self-heal: the in-memory entry
                     # points at a session that has ALREADY been ended in
                     # state.db.  Drop it and fall through to recovery/create.
                     # Recovery finder reopens ``agent_close`` and mistaken
@@ -2156,7 +2156,7 @@ class SessionStore:
                         "gateway.session: routing key %r -> %s is ended in "
                         "state.db but still live in sessions.json; dropping "
                         "stale entry and recovering/recreating the session "
-                        "(#54878)",
+                        "",
                         session_key, entry.session_id,
                     )
                     self._entries.pop(session_key, None)
@@ -2274,9 +2274,9 @@ class SessionStore:
                     "chat_type": source.chat_type,
                     "thread_id": source.thread_id,
                     "profile_name": source.profile,
-                    # Identity lands atomically in the INSERT (#82616): a
+                    # Identity lands atomically in the INSERT: a
                     # crash after this write can no longer strand the row
-                    # unroutable, and lineage survives resets (#12857).
+                    # unroutable, and lineage survives resets.
                     "origin_json": _origin_json,
                     "display_name": source.chat_name,
                     "parent_session_id": prev_session_id,
@@ -2304,7 +2304,7 @@ class SessionStore:
                 # already be ended with a recoverable accidental reason
                 # (agent_close / ws_orphan_reap), which first-reason-wins
                 # end_session would preserve — leaving the reset session
-                # resurrectable by stale-route recovery (#61220, #61993).
+                # resurrectable by stale-route recovery.
                 _promote = getattr(self._db, "promote_to_session_reset", None)
                 if callable(_promote):
                     _promote(db_end_session_id, _db_end_reason)
@@ -2313,7 +2313,7 @@ class SessionStore:
             except Exception as e:
                 # A failed end-write leaves a zombie open row still holding
                 # this chat's session_key: restart recovery will resolve the
-                # chat to it and time-travel the conversation (#82616). Say
+                # chat to it and time-travel the conversation. Say
                 # so loudly — this was a silent logger.debug for months.
                 logger.warning(
                     "Failed to end predecessor session row %s for %s: %s — "
@@ -2334,7 +2334,7 @@ class SessionStore:
             except Exception as e:
                 # The row will be self-healed with full identity by the next
                 # per-turn peer refresh (record_gateway_session_peer now
-                # INSERTs on missing row, #82616) — but the failure itself is
+                # INSERTs on missing row,) — but the failure itself is
                 # a routing hazard and must be visible, not a bare print.
                 logger.warning(
                     "Failed to create session row %s for %s: %s — deferring "
@@ -2410,7 +2410,7 @@ class SessionStore:
         Metadata writes are internal bookkeeping and deliberately do NOT
         advance ``updated_at``: it is the user-activity clock that drives
         idle/daily reset policy and the restart-resume freshness gate
-        (#85709), and a background write must not make an idle session look
+, and a background write must not make an idle session look
         fresh.
         """
         with self._lock:
@@ -2457,7 +2457,7 @@ class SessionStore:
         """Mark a session as suspended so it auto-resets on next access.
 
         Used by ``/stop`` to prevent stuck sessions from being resumed
-        after a gateway restart (#7536).  Returns True if the session
+        after a gateway restart. Returns True if the session
         existed and was marked.
         """
         with self._lock:
@@ -2708,7 +2708,7 @@ class SessionStore:
 
         Called on gateway startup after a crash or fast restart to preserve
         in-flight sessions instead of destroying their conversation history
-        (#7536).  Only marks sessions updated within *max_age_seconds* to
+. Only marks sessions updated within *max_age_seconds* to
         avoid touching long-idle sessions.  Sets ``resume_pending=True`` so
         the next incoming message on the same session_key auto-resumes from
         the existing transcript.
@@ -2786,8 +2786,8 @@ class SessionStore:
                 "chat_type": old_entry.origin.chat_type if old_entry.origin else None,
                 "thread_id": old_entry.origin.thread_id if old_entry.origin else None,
                 "profile_name": old_entry.origin.profile if old_entry.origin else None,
-                # Identity + lineage land atomically in the INSERT (#82616,
-                # #12857) — see the get_or_create twin path.
+                # Identity + lineage land atomically in the INSERT,
+                #) — see the get_or_create twin path.
                 "origin_json": _reset_origin_json,
                 "display_name": old_entry.display_name,
                 "parent_session_id": db_end_session_id,
@@ -2799,14 +2799,14 @@ class SessionStore:
                 # Promote (not plain end_session): an accidental
                 # agent_close/ws_orphan_reap end must not survive an explicit
                 # user reset, or recovery resurrects the reset session
-                # (#61993 — the user's /new was silently undone).
+                # — the user's /new was silently undone).
                 _promote = getattr(self._db, "promote_to_session_reset", None)
                 if callable(_promote):
                     _promote(db_end_session_id, "session_reset")
                 else:
                     self._db.end_session(db_end_session_id, "session_reset")
             except Exception as e:
-                # Zombie hazard — see the get_or_create twin path (#82616).
+                # Zombie hazard — see the get_or_create twin path.
                 logger.warning(
                     "Failed to end predecessor session row %s for %s during "
                     "reset: %s — the old row remains open and may win restart "
@@ -2868,7 +2868,7 @@ class SessionStore:
             # Compression repoint is store bookkeeping, not user activity —
             # leave ``updated_at`` alone so a background compression on an
             # idle session cannot make it look fresh to reset policy or the
-            # restart-resume freshness gate (#85709).
+            # restart-resume freshness gate.
             self._save()
             return entry
 
@@ -2918,7 +2918,7 @@ class SessionStore:
                 # Promote (not plain end_session): a stale agent_close /
                 # ws_orphan_reap end on the outgoing session must be upgraded
                 # to the explicit switch boundary, or recovery can resurrect
-                # it over the user's /resume choice (#61220 bug class).
+                # it over the user's /resume choice bug class).
                 _promote = getattr(self._db, "promote_to_session_reset", None)
                 if callable(_promote):
                     _promote(db_end_session_id, "session_switch")
@@ -3021,7 +3021,7 @@ class SessionStore:
             skip_db: When True, skip the SQLite write. Used when the agent
                      already persisted messages to SQLite via its own
                      _flush_messages_to_session_db(), preventing the
-                     duplicate-write bug (#860).
+                     duplicate-write bug.
         """
         with self._transcript_retry_lock:
             pending = self._dirty_transcripts.setdefault(session_id, [])
@@ -3030,7 +3030,7 @@ class SessionStore:
             # growth when the DB is persistently broken. Spool the evicted
             # oldest message to the on-disk pending spool (same machinery
             # flush_pending_to_file uses at shutdown) so a runtime cap
-            # rotation does not silently discard it (#78182); it is
+            # rotation does not silently discard it; it is
             # replayed on the next successful transcript flush.
             if len(pending) > self._MAX_PENDING_PER_SESSION:
                 dropped = pending.pop(0)
@@ -3184,7 +3184,7 @@ class SessionStore:
                 if queue_empty:
                     # DB write just succeeded and the in-memory backlog is
                     # clear: replay any cap-dropped messages spooled to disk
-                    # for this session (#78182).
+                    # for this session.
                     self._drain_spooled_drops(session_id)
                     return
                 continue
@@ -3238,7 +3238,7 @@ class SessionStore:
             api_content=extract_api_content_sidecar(message),
             # Presentation typing (e.g. "internal_notification" for
             # self-injected async-delegation/background notification turns,
-            # #82888). DB-only; stripped from provider-bound payloads.
+            #). DB-only; stripped from provider-bound payloads.
             display_kind=message.get("display_kind"),
             display_metadata=message.get("display_metadata"),
         )
@@ -3310,7 +3310,7 @@ class SessionStore:
 
         Thin wrapper over SessionDB.has_platform_message_id(). Returns False
         when no DB is available (in-memory sessions). Used by the gateway's
-        transient-failure dedupe guard (#47237).
+        transient-failure dedupe guard.
         """
         if not self._db:
             return False
@@ -3337,7 +3337,7 @@ class SessionStore:
         DESTRUCTIVE by default: ``replace_messages(active_only=False)``
         DELETEs every row for the session, including the soft-archived
         compaction history that archive_and_compact() keeps on disk
-        (#38763). Callers rewriting the live transcript of a session that
+. Callers rewriting the live transcript of a session that
         may carry archived rows must pass ``active_only=True`` so only the
         live rows are replaced.
 
@@ -3365,7 +3365,7 @@ class SessionStore:
         in spec 002 — pre-DB sessions on existing disks have already been
         migrated (their DB row holds the full message history).
 
-        Reads follow the same routing writes use (#82616): the in-memory
+        Reads follow the same routing writes use: the in-memory
         reroute map installed after a compression rotation, then the durable
         compression tip in state.db. Before this, writes followed the reroute
         chain while reads queried the stale id directly — the transcript
@@ -3400,7 +3400,7 @@ class SessionStore:
         except Exception as e:
             # A failed read must be distinguishable from an empty transcript:
             # downstream guards treat [] as "nothing persisted" and may make
-            # routing decisions on it (#82616). WARNING, not DEBUG.
+            # routing decisions on it. WARNING, not DEBUG.
             logger.warning(
                 "Transcript read failed for session %s (returning empty; "
                 "downstream must not treat this as data loss): %s",

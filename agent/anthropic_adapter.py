@@ -206,7 +206,7 @@ def _get_anthropic_max_output(model: str) -> int:
 
 def _resolve_positive_anthropic_max_tokens(value) -> Optional[int]:
     """Return ``value`` floored to a positive int, or ``None`` if it is not a
-    finite positive number. Ported from openclaw/openclaw#66664.
+    finite positive number. Ported from openclaw/.
 
     Anthropic's Messages API rejects ``max_tokens`` values that are 0,
     negative, non-integer, or non-finite with HTTP 400. Python's ``or``
@@ -247,7 +247,7 @@ def _resolve_anthropic_messages_max_tokens(
     not, to keep the positive-value contract independent of endpoint
     specifics.
 
-    Ported from openclaw/openclaw#66664 (resolveAnthropicMessagesMaxTokens).
+    Ported from openclaw/ (resolveAnthropicMessagesMaxTokens).
     """
     resolved = _resolve_positive_anthropic_max_tokens(requested)
     if resolved is not None:
@@ -531,7 +531,7 @@ def _is_kimi_family_endpoint(base_url: str | None, model: str | None = None) -> 
 
     Used to decide whether to drop Anthropic's ``thinking`` kwarg and to
     preserve unsigned reasoning_content-derived thinking blocks on replay.
-    See hermes-agent#13848, #17057.
+,.
     """
     if _is_kimi_coding_endpoint(base_url):
         return True
@@ -560,7 +560,7 @@ def _is_deepseek_anthropic_endpoint(base_url: str | None) -> bool:
     policy used for Kimi's ``/coding`` endpoint.  The match is pinned to
     the ``/anthropic`` path so the OpenAI-compatible ``api.deepseek.com``
     base URL (which never reaches this adapter) is not misclassified.
-    See hermes-agent#16748.
+
     """
     if not base_url_host_matches(base_url or "", "api.deepseek.com"):
         return False
@@ -756,7 +756,7 @@ def _build_anthropic_client_with_bearer_hook(
         "timeout": timeout_obj,
         "http_client": http_client,
         # Delegate retry to pilotage's outer loop (honors Retry-After); the SDK
-        # default max_retries=2 ignores it and double-retries. (#26293)
+        # default max_retries=2 ignores it and double-retries.
         "max_retries": 0,
         # The SDK requires *something* for api_key/auth_token. Our
         # event hook overrides Authorization per request so this value
@@ -850,7 +850,7 @@ def build_anthropic_client(
         # loop, which honors Retry-After. The SDK default (max_retries=2) uses
         # its own 1-2s backoff that ignores Retry-After and double-retries
         # inside our loop — burning request slots against a bucket that won't
-        # refill for minutes. (#26293)
+        # refill for minutes.
         "max_retries": 0,
     }
     if normalized_base_url:
@@ -878,7 +878,7 @@ def build_anthropic_client(
         # HTTP-Referer + X-Title + PilotageAgent User-Agent.
         kwargs["api_key"] = api_key
         kwargs["default_headers"] = {
-            "HTTP-Referer": "https://hermes-agent.nousresearch.com",
+            "HTTP-Referer": "https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent",
             "X-Title": "Pilotage Agent",
             "User-Agent": f"PilotageAgent/{_PILOTAGE_VERSION}",
             **( {"anthropic-beta": ",".join(common_betas)} if common_betas else {} )
@@ -925,7 +925,7 @@ def build_anthropic_client(
         # route builds its client right here and never sees the profile. Merge
         # the same set on top of whatever auth branch ran above.
         headers = dict(kwargs.get("default_headers") or {})
-        headers.setdefault("HTTP-Referer", "https://hermes-agent.nousresearch.com")
+        headers.setdefault("HTTP-Referer", "https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent")
         headers.setdefault("X-Title", "Pilotage Agent")
         headers.setdefault("User-Agent", f"PilotageAgent/{_PILOTAGE_VERSION}")
         kwargs["default_headers"] = headers
@@ -975,7 +975,7 @@ def build_anthropic_bedrock_client(region: str):
         aws_region=region,
         timeout=Timeout(timeout=900.0, connect=10.0),
         # Delegate retry to pilotage's outer loop (honors Retry-After); the SDK
-        # default max_retries=2 ignores it and double-retries. (#26293)
+        # default max_retries=2 ignores it and double-retries.
         max_retries=0,
         default_headers={"anthropic-beta": ",".join([*_COMMON_BETAS, _CONTEXT_1M_BETA])},
     )
@@ -1284,8 +1284,8 @@ def _write_claude_code_credentials(
             # both the temp file and the destination briefly inherited the
             # process umask (commonly 0o644 = world-readable), exposing
             # Claude Code OAuth tokens to other local users between create
-            # and chmod. Mirrors agent/google_oauth.py (#19673) and
-            # tools/mcp_oauth.py (#21148). Parent dir (~/.claude/) is
+            # and chmod. Mirrors agent/google_oauth.py and
+            # tools/mcp_oauth.py. Parent dir (~/.claude/) is
             # owned by Claude Code itself, so we leave its mode alone.
             fd = os.open(
                 str(_tmp_cred),
@@ -1716,12 +1716,12 @@ def normalize_model_name(model: str, preserve_dots: bool = False) -> str:
     if not preserve_dots:
         # Bedrock model IDs use dots as namespace separators
         # (e.g. "anthropic.claude-opus-4-7", "us.anthropic.claude-*").
-        # These must not be converted to hyphens.  See issue #12295.
+        # These must not be converted to hyphens. See.
         if _is_bedrock_model_id(model):
             return model
         # Only convert dots to hyphens for Anthropic/Claude models.
         # Non-Anthropic models (gpt-5.4, gemini-2.5, etc.) use dots
-        # as part of their canonical names.  See issue #17171.
+        # as part of their canonical names. See.
         _lower = model.lower()
         if _lower.startswith("claude-") or _lower.startswith("anthropic/"):
             model = model.replace(".", "-")
@@ -1793,7 +1793,7 @@ def convert_tools_to_anthropic(tools: List[Dict]) -> List[Dict]:
         name = fn.get("name", "")
         # Defensive dedup: Anthropic rejects requests with duplicate tool
         # names.  Upstream injection paths already dedup, but this guard
-        # converts a hard API failure into a warning.  See: #18478
+        # converts a hard API failure into a warning. See:
         if name and name in seen_names:
             logger.warning(
                 "convert_tools_to_anthropic: duplicate tool name '%s' "
@@ -2000,7 +2000,7 @@ def _safe_text(text: Any) -> str:
     subsequent turn, permanently wedging the session. Coercing to a
     non-whitespace placeholder is self-healing: the next API call recovers.
 
-    Mirrors ``bedrock_adapter._safe_text`` (#9486); ref #69512.
+    Mirrors ``bedrock_adapter._safe_text``; ref.
     """
     if text is None:
         return _EMPTY_TEXT_PLACEHOLDER
@@ -2028,7 +2028,7 @@ def _sanitize_replay_block(b: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if btype == "text":
         text_val = b.get("text", "")
         # Bedrock and strict Anthropic-compatible endpoints reject text
-        # blocks where "text" is empty or whitespace-only (#69512). Drop the
+        # blocks where "text" is empty or whitespace-only. Drop the
         # blank block (the caller relocates any cache_control it carried and
         # falls back to a non-whitespace placeholder when nothing survives)
         # rather than coercing in place — a coerced "(empty)" block would be
@@ -2106,13 +2106,13 @@ def _convert_assistant_message(m: Dict[str, Any]) -> Dict[str, Any]:
         # than the captured block. The ordered-blocks list captures tool_use
         # input from the RAW API response (normalize_response), which is NOT
         # credential-redacted; tool_calls[].function.arguments IS redacted at
-        # storage time (build_assistant_message, #19798). Replaying the raw
+        # storage time (build_assistant_message,). Replaying the raw
         # block input would resurrect a secret the model inlined into a tool
         # call (e.g. terminal(command="curl -H 'Authorization: Bearer sk-...'")
         # onto the wire, even though the same value is redacted everywhere else
         # in history. Keying by sanitized tool id preserves interleave order
         # (the reason this channel exists) while swapping in the redacted
-        # input. Adapted from #36071 (replay-time tool-input re-sourcing).
+        # input. Adapted from (replay-time tool-input re-sourcing).
         redacted_input_by_id: Dict[str, Any] = {}
         for tc in m.get("tool_calls", []) or []:
             if not isinstance(tc, dict):
@@ -2148,7 +2148,7 @@ def _convert_assistant_message(m: Dict[str, Any]) -> Dict[str, Any]:
         # When every text block was blank and nothing cacheable survived
         # (e.g. signed thinking + a blank text block, or a SOLE blank
         # cache-marked block), emit the non-whitespace placeholder so the
-        # replayed message stays schema-valid (#69512) and a relocated cache
+        # replayed message stays schema-valid and a relocated cache
         # marker still has a carrier instead of being silently lost.
         _has_cacheable_replay = any(
             isinstance(b, dict) and b.get("type") in {"text", "tool_use"}
@@ -2172,7 +2172,7 @@ def _convert_assistant_message(m: Dict[str, Any]) -> Dict[str, Any]:
             # branch rebuilds the message from ordered_blocks and never reads
             # ``content``, so that marker would be dropped -- and because
             # _can_carry_marker already counted this message as a carrier, the
-            # breakpoint is burned rather than relocated. #56195 covered the
+            # breakpoint is burned rather than relocated. covered the
             # complementary shape (blank content -> top-level marker); this is
             # the interleaved thinking + preamble-text + tool_use shape.
             _inline_cc = None
@@ -2247,7 +2247,7 @@ def _convert_assistant_message(m: Dict[str, Any]) -> Dict[str, Any]:
     # Kimi's /coding endpoint (Anthropic protocol) requires assistant
     # tool-call messages to carry reasoning_content when thinking is
     # enabled server-side.  Preserve it as a thinking block so Kimi
-    # can validate the message history.  See hermes-agent#13848.
+    # can validate the message history.
     #
     # Accept empty string "" — _copy_reasoning_content_for_api()
     # injects "" as a tier-3 fallback for Kimi tool-call messages
@@ -2275,7 +2275,7 @@ def _convert_assistant_message(m: Dict[str, Any]) -> Dict[str, Any]:
     # the blank/whitespace-only payload the filtering above just removed
     # (a sole blank text block, or scalar whitespace with no tool_calls).
     # `blocks or content` there would silently restore the invalid provider
-    # payload this function exists to prevent (#69512).
+    # payload this function exists to prevent.
     effective = blocks if blocks else [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
     # Applied here (after the empty-fallback resolution) rather than
     # earlier against `blocks` directly, so a cache_control relocated from
@@ -2520,8 +2520,8 @@ def _manage_thinking_signatures(
     and will reject them outright.  Kimi's /coding and DeepSeek's /anthropic
     endpoints speak the Anthropic protocol upstream but require unsigned
     thinking blocks (synthesised from ``reasoning_content``) to round-trip on
-    replayed assistant tool-call messages.  See hermes-agent#13848 (Kimi) and
-    hermes-agent#16748 (DeepSeek).
+    replayed assistant tool-call messages. (Kimi) and
+ (DeepSeek).
 
     Nous Portal's ``/v1/messages`` route is the exception among third-party
     hosts: it proxies Claude to Anthropic/Vertex/Bedrock and validates the
@@ -2663,7 +2663,7 @@ def _ensure_leading_user_turn(result: List[Dict[str, Any]]) -> None:
     lives outside messages[] or is extracted into the separate ``system``
     param), so messages[0] ends up assistant and the Messages API rejects
     the request with HTTP 400 — often masked by a misleading
-    "tool_use ids were found without tool_result blocks" error (#52160).
+    "tool_use ids were found without tool_result blocks" error.
 
     Mirror the Bedrock Converse adapter, which unconditionally prepends a
     minimal user turn when the first message is not user
@@ -2672,7 +2672,7 @@ def _ensure_leading_user_turn(result: List[Dict[str, Any]]) -> None:
     The inserted text block must be non-whitespace: Anthropic separately
     rejects any text content block whose text is empty or whitespace-only
     ("text content blocks must contain non-whitespace text"), so a single
-    space here traded the "leading assistant turn" 400 for that one (#69512
+    space here traded the "leading assistant turn" 400 for that one (
     class). Uses the same placeholder as every other synthesized filler
     block in this module for consistency.
     """
@@ -2821,7 +2821,7 @@ def convert_messages_to_anthropic(
                     # same HTTP 400 as message blocks ("text content blocks
                     # must contain non-whitespace text"), and a blank block
                     # carrying a cache_control breakpoint cannot simply be
-                    # dropped (#70909).
+                    # dropped.
                     system = []
                     for p in content:
                         if not isinstance(p, dict):
@@ -2929,7 +2929,7 @@ def build_anthropic_kwargs(
     # effective_max_tokens = output cap for this call (≠ total context window)
     # Use the resolver helper so non-positive values (negative ints,
     # fractional floats, NaN, non-numeric) fail locally with a clear error
-    # rather than 400-ing at the Anthropic API. See openclaw/openclaw#66664.
+    # rather than 400-ing at the Anthropic API. See openclaw/.
     effective_max_tokens = _resolve_anthropic_messages_max_tokens(
         max_tokens, model, context_length=context_length
     )
@@ -3040,9 +3040,9 @@ def build_anthropic_kwargs(
     # Anthropic-compatible endpoints (api.moonshot.cn/anthropic,
     # api.kimi.com/coding) accept ``thinking.type="adaptive"`` +
     # ``output_config.effort``, and the replay-validation 400s that
-    # originally motivated dropping the parameter (#13848) no longer
+    # originally motivated dropping the parameter no longer
     # occur.  (Kimi on chat_completions enables thinking via extra_body
-    # in the ChatCompletionsTransport — see #13503.)
+    # in the ChatCompletionsTransport — see.)
     #
     # On 4.7+ the `thinking.display` field defaults to "omitted", which
     # silently hides reasoning text that Pilotage surfaces in its CLI. We
@@ -3117,7 +3117,7 @@ _RESPONSES_ONLY_KWARGS = frozenset(
 def sanitize_anthropic_kwargs(api_kwargs: Any, *, log_prefix: str = "") -> Any:
     """Drop Responses-API-only keys before an Anthropic Messages SDK call.
 
-    Defensive boundary guard for #31673: under rare api_mode-flip races
+    Defensive boundary guard for: under rare api_mode-flip races
     (e.g. a concurrent auxiliary call mutating a shared agent between the
     kwargs build and the stream dispatch), a Responses-shaped payload
     carrying ``instructions=`` can reach ``messages.stream()`` /
@@ -3137,7 +3137,7 @@ def sanitize_anthropic_kwargs(api_kwargs: Any, *, log_prefix: str = "") -> Any:
             api_kwargs.pop(_key, None)
         logger.warning(
             "%sStripped Responses-only kwarg(s) %s from an Anthropic Messages "
-            "call (api_mode flip race — see #31673). The call will proceed; "
+            "call (api_mode flip race — see). The call will proceed; "
             "this breadcrumb means a kwargs build ran under a Responses "
             "api_mode while dispatch ran under anthropic_messages.",
             log_prefix,

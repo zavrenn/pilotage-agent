@@ -65,7 +65,7 @@ def _ensure_croniter() -> bool:
 # Configuration
 # =============================================================================
 
-# Cron is per-profile by design (issue #4707). Each profile owns its own cron
+# Cron is per-profile by design. Each profile owns its own cron
 # store under its own PILOTAGE_HOME, and a profile-scoped gateway runs that
 # profile's jobs under that same PILOTAGE_HOME — so a job authored in profile
 # `coder` lives in `~/.pilotage/profiles/coder/cron/jobs.json` and executes with
@@ -74,7 +74,7 @@ def _ensure_croniter() -> bool:
 # (the shared root). Anchoring at the root would funnel every profile's jobs
 # into one shared `jobs.json` and run them under whatever PILOTAGE_HOME the
 # ticker process happens to have — leaking config/credentials/skills across
-# profiles (the security boundary #4707 was filed for). Do NOT change this to
+# profiles (the security boundary was filed for). Do NOT change this to
 # the default root: that re-breaks per-profile isolation. See also the dynamic
 # `_get_pilotage_home()` / `_get_lock_paths()` resolution in cron/scheduler.py.
 PILOTAGE_DIR = get_pilotage_home().resolve()
@@ -87,7 +87,7 @@ JOBS_FILE = CRON_DIR / "jobs.json"
 # gateway process and the (separate) ``pilotage cron status`` process share it
 # so status can tell whether the ticker THREAD is alive, not just whether the
 # gateway PROCESS exists — a ticker that dies silently inside a live gateway
-# would otherwise report healthy (#32612, #32895).
+# would otherwise report healthy.
 TICKER_HEARTBEAT_FILE = CRON_DIR / "ticker_heartbeat"
 # Last tick that completed WITHOUT raising. Distinguishing this from the plain
 # heartbeat lets status detect a ticker that is alive but failing every tick.
@@ -106,7 +106,7 @@ _jobs_lock_state = threading.local()
 _fire_fence_locks: Dict[str, threading.RLock] = {}
 _fire_fence_locks_guard = threading.Lock()
 
-# Upper bound on waiting for the cross-process .jobs.lock flock (#60703).
+# Upper bound on waiting for the cross-process.jobs.lock flock.
 # Every cron function in the process funnels through _jobs_lock(), and the
 # flock is taken while holding the process-wide RLock — so an unbounded wait
 # on a lock held by a wedged sibling process silently freezes the ticker
@@ -191,7 +191,7 @@ def get_cron_output_dir() -> Path:
     return _current_cron_store().output_dir
 
 
-# Fallback stale-recovery window for a one-shot's running-claim (#59229) when
+# Fallback stale-recovery window for a one-shot's running-claim when
 # the cron inactivity timeout is disabled (PILOTAGE_CRON_TIMEOUT=0 → unlimited),
 # in which case no finite run bound exists to derive from. Also acts as the
 # floor for the derived value so a very short configured timeout can't make the
@@ -241,7 +241,7 @@ def _oneshot_run_claim_ttl_seconds() -> float:
 def _job_running_in_this_process(job_id: str) -> bool:
     """Return True when the scheduler in THIS process is still running ``job_id``.
 
-    Direct liveness signal for stale-entry recovery (#62002): the run_claim
+    Direct liveness signal for stale-entry recovery: the run_claim
     TTL alone cannot distinguish "the claiming tick died" from "the run is
     alive but slow" — a run stalled on network I/O (or a laptop that slept
     mid-run) legitimately outlives the TTL. The in-process ticker and the run
@@ -300,7 +300,7 @@ def _jobs_lock():
 
     with _jobs_file_lock:
         _jobs_lock_state.depth = 1
-        # Stamp of jobs.json as of this section's load_jobs() (#80703's
+        # Stamp of jobs.json as of this section's load_jobs 's
         # fast-path, credit @JoaoMarcos44): lets _save_jobs_unlocked skip the
         # shrink-merge parse when the file provably hasn't changed since this
         # section read it. Reset on entry/exit so stale stamps from unlocked
@@ -313,7 +313,7 @@ def _jobs_lock():
                 lock_fd = open(_jobs_lock_file(), "a+", encoding="utf-8")
                 lock_fd.seek(0)
                 if fcntl is not None:
-                    # Bounded acquisition (#60703): a plain blocking
+                    # Bounded acquisition: a plain blocking
                     # fcntl.flock(LOCK_EX) here has NO timeout, and it is
                     # taken while holding the process-wide _jobs_file_lock
                     # RLock above.  If another process wedges while holding
@@ -338,7 +338,7 @@ def _jobs_lock():
                                     "Timed out after %.0fs waiting for the cron "
                                     "jobs lock (%s) — another process is holding "
                                     "it. Proceeding with in-process locking only "
-                                    "so the scheduler stays alive (#60703).",
+                                    "so the scheduler stays alive.",
                                     _JOBS_LOCK_TIMEOUT_SECONDS,
                                     _jobs_lock_file(),
                                 )
@@ -627,7 +627,7 @@ def _preserve_file_ownership(path: Path, before: Optional[os.stat_result]) -> No
     command (``docker exec pilotage pilotage cron create ...`` — ``docker exec``
     defaults to root) against a store owned by the unprivileged gateway user,
     the replace flips ``jobs.json`` to ``root:root`` mode 600 and the gateway's
-    ticker (uid 1000) is silently locked out of every subsequent tick (#68483).
+    ticker (uid 1000) is silently locked out of every subsequent tick.
 
     Root can always hand ownership back, so do exactly that: when the euid is 0
     and the pre-replace owner differs, chown the new file to the previous
@@ -652,7 +652,7 @@ def _preserve_file_ownership(path: Path, before: Optional[os.stat_result]) -> No
         logger.warning(
             "Could not restore ownership of %s to uid=%s gid=%s after rewrite: %s "
             "— if the gateway runs as a different user, its cron ticker may now "
-            "be locked out (see issue #68483).",
+            "be locked out (see).",
             path, before.st_uid, before.st_gid, e,
         )
 
@@ -758,7 +758,7 @@ def parse_schedule(schedule: str) -> Dict[str, Any]:
             # off from the user's wall-clock intent — far enough that one-shots
             # never become due and recurring jobs fire at the wrong time. Using
             # the configured zone makes "20:07" mean 20:07 on the same clock the
-            # scheduler checks against (#51021).
+            # scheduler checks against.
             if dt.tzinfo is None:
                 pilotage_tz = _pilotage_now().tzinfo
                 dt = dt.replace(tzinfo=pilotage_tz)
@@ -1003,11 +1003,11 @@ def record_ticker_heartbeat(success: bool = False) -> None:
     `pilotage cron status` can tell a thread that is merely *alive and looping*
     (heartbeat fresh, success stale) from one that is actually *firing jobs*
     (both fresh) — a ticker stuck failing every tick would otherwise keep the
-    plain heartbeat fresh and falsely report healthy (#32612, #32895).
+    plain heartbeat fresh and falsely report healthy.
 
     Resolution uses ``_current_cron_store()`` so the heartbeat is correctly
     scoped to the active profile's store — critical under multiplex_profiles
-    where each profile needs its own liveness signal (#69377).
+    where each profile needs its own liveness signal.
 
     Best-effort: a write failure must never disrupt the tick loop.
     """
@@ -1039,7 +1039,7 @@ def get_ticker_heartbeat_age() -> Optional[float]:
 
     Resolution uses ``_current_cron_store()`` so the heartbeat is correctly
     scoped to the active profile — critical under multiplex_profiles where
-    ``pilotage cron status`` must report per-profile liveness (#69377).
+    ``pilotage cron status`` must report per-profile liveness.
     """
     store = _current_cron_store()
     return _epoch_file_age(store.cron_dir / "ticker_heartbeat")
@@ -1050,7 +1050,7 @@ def get_ticker_success_age() -> Optional[float]:
 
     Resolution uses ``_current_cron_store()`` so the heartbeat is correctly
     scoped to the active profile — critical under multiplex_profiles where
-    ``pilotage cron status`` must report per-profile liveness (#69377).
+    ``pilotage cron status`` must report per-profile liveness.
     """
     store = _current_cron_store()
     return _epoch_file_age(store.cron_dir / "ticker_last_success")
@@ -1075,7 +1075,7 @@ def record_ticker_error(message: str) -> None:
     The ticker thread lives inside the gateway process; ``pilotage cron
     status``/``list`` run in a separate process and previously could only
     infer "ticks may be failing" from marker staleness, with no clue WHY.
-    A root-owned ``jobs.json`` (#68483) failed every tick for ~14h with the
+    A root-owned ``jobs.json`` failed every tick for ~14h with the
     reason visible only in the gateway's errors.log. Writing the last error
     next to the heartbeat markers gives the CLI something concrete to show.
 
@@ -1253,7 +1253,7 @@ def _record_load_stamp(stamp: Optional[Tuple[int, int, int]]) -> None:
 
     No-op outside a critical section. Lets the save path skip the
     shrink-merge parse when the file provably hasn't changed since this
-    section loaded it (#80703's fast-path). The caller must capture the
+    section loaded it 's fast-path). The caller must capture the
     stamp BEFORE reading the file: a sibling landing mid-read then leaves
     the recorded stamp OLDER than disk — a mismatch, so the merge runs
     (fail-safe direction). Stamping after the read would let that sibling's
@@ -1270,9 +1270,9 @@ def _merge_unexpected_disk_jobs(
     *,
     removed_ids: Optional[Collection[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Return *jobs* plus any on-disk jobs missing from the save payload (#80624).
+    """Return *jobs* plus any on-disk jobs missing from the save payload.
 
-    Under ``_jobs_lock()``'s degraded flock-timeout path (#60703), two
+    Under ``_jobs_lock``'s degraded flock-timeout path, two
     processes can both believe they own the store. A writer that loaded an
     older/smaller snapshot then calls ``save_jobs`` and would otherwise
     clobber concurrent creates (the filed ``no_agent`` watchdog pattern:
@@ -1321,7 +1321,7 @@ def _merge_unexpected_disk_jobs(
     logger.warning(
         "Preserved %d cron job(s) present on disk but missing from the "
         "in-memory save payload (concurrent create under degraded lock "
-        "or stale writer) (#80624): %s",
+        "or stale writer): %s",
         len(recovered),
         [j.get("id") for j in recovered],
     )
@@ -1344,7 +1344,7 @@ def _save_jobs_unlocked(
     ensure_dirs()
     # Snapshot the current owner BEFORE the atomic replace so a privileged
     # writer (root CLI in Docker) can hand ownership back to the gateway user
-    # afterwards instead of locking its ticker out (#68483). When the file is
+    # afterwards instead of locking its ticker out. When the file is
     # being created for the first time, inherit the cron dir's owner — in the
     # Docker image that is the PUID/PGID gateway user who must be able to
     # read the store on the next tick.
@@ -1356,7 +1356,7 @@ def _save_jobs_unlocked(
         except OSError:
             _stat_before = None
 
-    # Shrink-merge + rewrite loop (#80624): under the degraded flock-timeout
+    # Shrink-merge + rewrite loop: under the degraded flock-timeout
     # path another process can create a job between our load and our write.
     # Merge unexpected disk ids into the payload, stage the write, then
     # re-peek; if new ids appeared, merge again and restage before replace.
@@ -1471,7 +1471,7 @@ def save_jobs(
     """Save all jobs to storage.
 
     See ``_save_jobs_unlocked`` for ``removed_ids`` / ``replace`` semantics
-    (shrink-merge guard against concurrent-create clobber, #80624).
+    (shrink-merge guard against concurrent-create clobber,).
     """
     with _jobs_lock():
         _save_jobs_unlocked(jobs, removed_ids=removed_ids, replace=replace)
@@ -1517,7 +1517,7 @@ def _resolve_default_model_snapshot() -> Optional[str]:
     read ``config.yaml`` ``model.default`` (or the ``model`` alias / bare string
     form), applying the managed-scope overlay and env expansion. Used by
     ``create_job`` to snapshot the default model for unpinned jobs so a later
-    swap of the global default is detected at fire time (#44585).
+    swap of the global default is detected at fire time.
 
     Returns the resolved model string, or ``None`` if config is missing/empty
     or resolution fails (fail-open — caller treats ``None`` as "no snapshot").
@@ -1787,7 +1787,7 @@ def create_job(
 
     # Reject cron jobs that schedule gateway-lifecycle commands. Prevents
     # agent-driven SIGTERM-respawn loops under launchd/systemd KeepAlive
-    # (#30719). Enforced here (not only in the CLI layer) so the agent's
+    # Enforced here (not only in the CLI layer) so the agent's
     # `cronjob` model tool — which calls create_job directly — is also
     # covered, not just `pilotage cron create`.
     from cron.lifecycle_guard import check_gateway_lifecycle
@@ -1825,7 +1825,7 @@ def create_job(
         "model": normalized_model,
         "provider": normalized_provider,
         # Provider/model resolution captured at creation for unpinned jobs
-        # (#44585). None for pinned axes, no_agent jobs, resolution failures, and
+        # None for pinned axes, no_agent jobs, resolution failures, and
         # any pre-existing job written before these fields existed (back-compat).
         "provider_snapshot": provider_snapshot,
         "model_snapshot": model_snapshot,
@@ -2017,7 +2017,7 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     # Same guard as create_job: an UPDATE that sets a one-shot
                     # to a time >ONESHOT_GRACE_SECONDS in the past would store
                     # next_run_at=None with state="scheduled", re-creating the
-                    # ghost job that never fires (#59395). Reject it here too so
+                    # ghost job that never fires. Reject it here too so
                     # the bug can't re-enter through the update door.
                     if (
                         updated_next_run is None
@@ -2188,9 +2188,9 @@ def _set_alert_flag(job_id: str, field: str, value: bool) -> bool:
     The marker records that the operator was already alerted about this
     job's condition, so the scheduler alerts exactly once and stays silent
     on subsequent ticks until the condition heals (same alert-once shape as
-    the dead-pin auto-pause in #73506). Persisted on the job record so the
+    the dead-pin auto-pause in). Persisted on the job record so the
     dedup survives gateway restarts. Fields: ``preflight_alerted`` (blocked
-    config, T1-26) and ``drift_alerted`` (#44585 drift-guard skip).
+    config, T1-26) and ``drift_alerted`` drift-guard skip).
     """
     with _jobs_lock():
         jobs = load_jobs()
@@ -2277,7 +2277,7 @@ def _mark_job_run_locked(
                 # A healthy run means the configuration validates again — drop
                 # the preflight alert-dedup marker so a FUTURE config break
                 # re-alerts instead of being silently swallowed. Same contract
-                # for the drift marker (#44585 alert-once): a run that made it
+                # for the drift marker alert-once): a run that made it
                 # through the guard means resolution matches again.
                 if success:
                     job.pop("preflight_alerted", None)
@@ -2287,7 +2287,7 @@ def _mark_job_run_locked(
                 # Clear any external-fire claim so a re-armed recurring job can
                 # be claimed again on its next fire (Phase 4C CAS).
                 job["fire_claim"] = None
-                # Clear the one-shot running-claim (#59229): the run is over, so
+                # Clear the one-shot running-claim: the run is over, so
                 # a re-armed recurring job or a re-dispatched one-shot recovery
                 # is claimable again. No-op if the job never carried a claim.
                 if job.get("run_claim") is not None:
@@ -2295,7 +2295,7 @@ def _mark_job_run_locked(
                 
                 # Increment completed count.  Finite one-shot jobs are
                 # pre-claimed by claim_dispatch() BEFORE the side effect runs
-                # (issue #38758), which already incremented completed — do not
+                #, which already incremented completed — do not
                 # double-count them here.  Recurring jobs and direct callers
                 # with no pre-run claim still get the legacy increment.
                 if job.get("repeat"):
@@ -2339,7 +2339,7 @@ def _mark_job_run_locked(
                 # compute — e.g. 'croniter' missing from the runtime env).
                 # Recurring jobs must NEVER be silently disabled: that turns a
                 # missing runtime dep into "job completed" and the user's
-                # schedule quietly goes off. See issue #16265.
+                # schedule quietly goes off. See.
                 if job["next_run_at"] is None:
                     kind = job.get("schedule", {}).get("kind")
                     if kind in {"cron", "interval"}:
@@ -2376,7 +2376,7 @@ def _write_wedged_oneshot_diagnostic(job: Dict[str, Any]) -> None:
     A finite one-shot whose dispatch was claimed (``repeat.completed`` >=
     ``repeat.times``) but which never reached ``mark_job_run`` (``last_run_at``
     is null) was interrupted mid-run — scheduler restart, gateway kill, or a
-    non-Exception escape (#73973). The recovery guards remove such jobs so
+    non-Exception escape. The recovery guards remove such jobs so
     they stop appearing due, but a silent removal leaves the user with no
     output, no error, and no job record. Write a small diagnostic file into
     the job's output directory so the removal is observable and debuggable.
@@ -2422,7 +2422,7 @@ def claim_dispatch(job_id: str) -> bool:
     (gateway kill, OOM, segfault, hard-timeout) the dispatch is not lost.
     This converts finite one-shot jobs from *at-least-once* to *at-most-times*
     semantics — a job that self-destructs fires at most ``repeat.times`` times
-    instead of infinitely (issue #38758).
+    instead of infinitely.
 
     Returns ``True`` if the caller may proceed to run the job, ``False`` if the
     dispatch limit is already reached (in which case the stale job is removed).
@@ -2464,7 +2464,7 @@ def claim_dispatch(job_id: str) -> bool:
                     )
                     return False
                 # A prior tick claimed the dispatch then died before the run
-                # completed (#73973) — a genuinely wedged claim. Remove it so
+                # completed — a genuinely wedged claim. Remove it so
                 # it stops appearing as due, and leave an operator-visible
                 # diagnostic instead of vanishing silently.
                 jobs.pop(i)
@@ -2499,7 +2499,7 @@ def claim_dispatch(job_id: str) -> bool:
 def heartbeat_run_claim(job_id: str, *, expected_owner: str) -> bool:
     """Refresh a one-shot's ``run_claim`` timestamp while its run is alive.
 
-    Called periodically from the scheduler's run monitor (#62002) so a
+    Called periodically from the scheduler's run monitor so a
     legitimately long run keeps its claim fresh: an expired claim then really
     does mean "the claiming process died", and neither another process's tick
     nor this process's own next tick will re-dispatch or stale-remove the job
@@ -2663,7 +2663,7 @@ def _claim_job_for_fire_locked(
             if existing:
                 try:
                     claimed_at = _ensure_aware(datetime.fromisoformat(existing["at"]))
-                    # Bounded on BOTH sides (#60703): a claim stamped in the
+                    # Bounded on BOTH sides: a claim stamped in the
                     # future (clock/TZ skew across a restart, or a corrupted
                     # timestamp) would otherwise have a negative age and stay
                     # "fresh" forever — the job becomes permanently unfireable
@@ -2730,7 +2730,7 @@ def _sweep_completed_oneshots(
 
     Mutates *raw_jobs* in place; returns True when anything was removed (the
     caller persists). Ids removed are added to *removed_ids* when provided so
-    ``save_jobs``'s shrink-merge guard (#80624) allows the intentional delete.
+    ``save_jobs``'s shrink-merge guard allows the intentional delete.
     Only one-shot (``schedule.kind == "once"``) records in the terminal
     completed state are candidates; recurring jobs and non-terminal one-shots
     are never touched. Age is measured from ``last_run_at`` — a completed
@@ -2821,7 +2821,7 @@ def get_due_jobs() -> List[Dict[str, Any]]:
     long-running previous execution overran the interval), the accumulated
     missed runs are collapsed — ``next_run_at`` is fast-forwarded to the next
     future occurrence so a backlog does NOT burst-fire on restart — but the job
-    still fires ONCE now. This prevents the perpetual-defer loop (#33315) where
+    still fires ONCE now. This prevents the perpetual-defer loop where
     a job whose runtime exceeds ``interval + grace`` would be skipped forever.
 
     Note: firing once on catch-up flows through ``mark_job_run``, so a job with
@@ -2981,7 +2981,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                     break
                 continue
 
-            # Cross-process running-claim guard (#59229): if another scheduler
+            # Cross-process running-claim guard: if another scheduler
             # process already claimed this one-shot and its run is still in flight
             # (claim younger than the TTL), skip it — do NOT re-dispatch. The
             # claim is stamped just before we return the job as due (below) and
@@ -2996,7 +2996,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                     )
                     # 0 <= age: a future-dated claim (clock/TZ skew across a
                     # restart) must be treated as stale, not eternally fresh,
-                    # or the one-shot is skipped forever (#60703).
+                    # or the one-shot is skipped forever.
                     _age = (now - claimed_at).total_seconds()
                     if 0 <= _age < _run_claim_ttl:
                         continue  # a fresh claim is held by an in-flight run
@@ -3062,7 +3062,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
             # catch-up) rather than fire it. Accepted: in the pure-migration case
             # the recompute lands on the same wall-clock time later the same period,
             # and DST-boundary collisions with a still-future stored wall clock are
-            # rare relative to the double-fire bug this prevents (#28934).
+            # rare relative to the double-fire bug this prevents.
             if (
                 kind == "cron"
                 and next_run_dt <= now
@@ -3123,7 +3123,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                         record_catch_up_occurrence()
                         # Fall through to due.append(job) — execute once now
 
-                # One-shot dispatch-limit guard (issue #38758): a finite one-shot
+                # One-shot dispatch-limit guard : a finite one-shot
                 # claimed via claim_dispatch() but whose tick died before
                 # mark_job_run could remove it will have completed >= times while
                 # still looking due (last_run_at was never written, so the
@@ -3135,7 +3135,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                         completed = repeat.get("completed", 0)
                         if times is not None and times > 0 and completed >= times:
                             # A live run must never have its job record deleted
-                            # underneath it (#62002): a run that outlives the
+                            # underneath it: a run that outlives the
                             # run_claim TTL (stream stall, laptop asleep
                             # mid-run) satisfies the same completed >= times +
                             # expired-claim condition as a dead tick, but
@@ -3169,7 +3169,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                             # The claimed run never completed here by
                             # definition (last_run_at unwritten is what made
                             # the entry look due) — leave an operator-visible
-                            # diagnostic instead of vanishing silently (#73973).
+                            # diagnostic instead of vanishing silently.
                             _write_wedged_oneshot_diagnostic(job)
                             continue
 
@@ -3177,7 +3177,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                 # returning it as due, so a second scheduler process (gateway +
                 # desktop both run in-process 60s tickers on one PILOTAGE_HOME)
                 # cannot re-dispatch it while the first run is still in flight
-                # (#59229). A plain one-shot's due-state is not resolved until
+                # A plain one-shot's due-state is not resolved until
                 # mark_job_run() completes it minutes later, so advancing
                 # next_run_at by a fixed window is not enough — a job that outlives
                 # one tick (e.g. a 2.5-min research prompt) would simply re-fire on
@@ -3215,7 +3215,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
 # Per-run cron output (`cron/output/<job>/<timestamp>.md`) is written once per
 # execution. Unlike the quick-snapshot store (`pilotage_cli.backup`, capped at 20)
 # it had no retention, so a frequently-scheduled job on a long-running deploy
-# accumulated one file per run forever and could fill the disk (#52383). Keep the
+# accumulated one file per run forever and could fill the disk. Keep the
 # most recent N files per job; a non-positive value disables pruning (opt-out).
 _CRON_OUTPUT_DEFAULT_KEEP = 50
 
@@ -3285,7 +3285,7 @@ def save_job_output(job_id: str, output: str):
             pass
         raise
 
-    # Bound per-job output growth so long-running deploys don't fill the disk (#52383).
+    # Bound per-job output growth so long-running deploys don't fill the disk.
     _prune_job_output(job_output_dir, _cron_output_keep())
 
     return output_file

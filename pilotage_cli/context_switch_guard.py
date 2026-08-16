@@ -1,6 +1,6 @@
 """Warn when an in-session model switch will trigger preflight compression on the next turn.
 
-Addresses part of #23767 ("user-facing guardrail when switching from a
+Addresses part of ("user-facing guardrail when switching from a
 high-context provider to a substantially lower-context provider"). The other
 proposed fixes from that issue (hard preflight token guard, metadata cache
 invalidation on switch, compression safety invariant, oversized tool-output

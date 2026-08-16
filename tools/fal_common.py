@@ -21,7 +21,7 @@ existing test suites (``tests/tools/test_image_generation.py``,
 caches here would silently defeat ``monkeypatch.setattr(image_tool,
 "_managed_fal_client", None)`` because the lookups would go against
 ``fal_common``'s namespace instead. See the per-rule walkthrough at
-issue #26241 for details.
+ for details.
 """
 
 from __future__ import annotations

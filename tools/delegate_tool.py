@@ -985,7 +985,7 @@ DEFAULT_MAX_SUMMARY_CHARS = 24000
 # Fraction of the parent's *remaining* context headroom that the whole batch
 # of subagent summaries is allowed to consume. The per-summary budget is this
 # slice divided across the batch, so N children can't collectively blow the
-# parent's window (the compression/429 death-spiral in issue/PR #9126).
+# parent's window (the compression/429 death-spiral in issue/).
 _SUMMARY_HEADROOM_FRACTION = 0.5
 # Floor so a single summary always gets a usable slice even when the parent is
 # already nearly full — below this we'd be truncating to noise.
@@ -1646,7 +1646,7 @@ def _build_child_agent(
     if not override_base_url:
         effective_base_url = _inherit_parent_base_url(parent_agent, effective_base_url)
     effective_api_key = override_api_key or parent_api_key
-    # Bug #20558 / PR #20563: api_mode must NOT be inherited when the child uses a
+    # Bug /: api_mode must NOT be inherited when the child uses a
     # different provider than the parent — each provider has its own API surface
     # (e.g. MiniMax uses anthropic_messages, DeepSeek uses chat_completions).
     # Inheriting the parent's mode causes 404 errors when the child routes to the
@@ -1695,7 +1695,7 @@ def _build_child_agent(
     # When override_provider is set (e.g. delegation.provider: minimax-cn),
     # the subagent must use direct API calls — not the parent's ACP transport.
     # Inheriting acp_command unconditionally causes run_agent.py to initialize
-    # CopilotACPClient, bypassing override credentials entirely (issue #16816).
+    # CopilotACPClient, bypassing override credentials entirely.
     if override_provider and not override_acp_command:
         effective_acp_command = None
         effective_acp_args = []
@@ -1777,7 +1777,7 @@ def _build_child_agent(
     # (cron run_job's finally block, gateway session end, /new) and can be
     # closed while a fire-and-forget background child is still flushing on a
     # daemon thread — every subsequent flush then hits the closed handle and
-    # the child's transcript is silently dropped (#81267). A dedicated handle
+    # the child's transcript is silently dropped. A dedicated handle
     # can't be closed out from under the child; it is released by the child's
     # own close() via the owned flag set below. It MUST point at the same
     # database FILE as the parent's handle: parents can hold non-default
@@ -1863,7 +1863,7 @@ def _build_child_agent(
     child._print_fn = getattr(parent_agent, "_print_fn", None)
     # Ownership transfer for the dedicated handle: the child's close() must
     # release it (nothing else holds a reference), and no parent teardown can
-    # close it out from under a background child (#81267).
+    # close it out from under a background child.
     if child_session_db is not None:
         child._owns_session_db = True
     # Now the child exists, its session id can ride on every relayed event
@@ -1954,7 +1954,7 @@ def _dump_subagent_timeout_diagnostic(
     """Write a structured diagnostic dump for a subagent that timed out
     before making any API call.
 
-    See issue #14726: users hit "subagent timed out after 300s with no response"
+    See: users hit "subagent timed out after 300s with no response"
     with zero API calls and no way to inspect what happened. This helper
     writes a dedicated log under ``~/.pilotage/logs/subagent-<sid>-<ts>.log``
     capturing the child's config, system-prompt / tool-schema sizes, activity
@@ -1984,7 +1984,7 @@ def _dump_subagent_timeout_diagnostic(
         def _w(line: str = "") -> None:
             lines.append(line)
 
-        _w("# Subagent timeout diagnostic — issue #14726")
+        _w("# Subagent timeout diagnostic —")
         _w(f"# Generated: {_dt.datetime.now().isoformat()}")
         _w("")
         _w("## Timeout")
@@ -2077,7 +2077,7 @@ def _dump_subagent_timeout_diagnostic(
         # All other live threads. The conversation worker's own stack often
         # shows it parked waiting on a nested helper thread (interrupt worker,
         # daemon-pool sibling) — without the full picture, a pre-HTTP wedge
-        # (#60203/#62151) is indistinguishable from a slow provider. Best
+        # /) is indistinguishable from a slow provider. Best
         # effort and bounded: names + stacks for up to 40 threads.
         _w("## All thread stacks at timeout")
         try:
@@ -2109,7 +2109,7 @@ def _dump_subagent_timeout_diagnostic(
         _w("  This file is written ONLY when a subagent times out with 0 API calls.")
         _w("  0-API-call timeouts mean the child never reached its first LLM request.")
         _w("  Common causes: oversized prompt rejected by provider, transport hang,")
-        _w("  credential resolution stuck. See issue #14726 for context.")
+        _w(" credential resolution stuck. See for context.")
 
         dump_path.write_text("\n".join(lines), encoding="utf-8")
         return str(dump_path)
@@ -2253,7 +2253,7 @@ def _apply_summary_budget(results: List[Dict[str, Any]], parent_agent) -> None:
 
     When a summary exceeds the cap, its full text is written to a file and the
     in-context summary becomes a head slice plus a pointer to that file. This
-    addresses issue/PR #9126: batch fan-out returned N full summaries verbatim,
+    addresses issue/: batch fan-out returned N full summaries verbatim,
     blowing the parent context and (on rate-limited providers) triggering a
     compression/429 death spiral.
     """
@@ -2600,7 +2600,7 @@ def _run_single_child(
             initargs=(_get_subagent_approval_callback(),),
         )
         # Capture the worker thread so the timeout diagnostic can dump its
-        # Python stack (see #14726 — 0-API-call hangs are opaque without it).
+        # Python stack (see — 0-API-call hangs are opaque without it).
         _worker_thread_holder: Dict[str, Optional[threading.Thread]] = {"t": None}
 
         def _relay_child_text(delta: str) -> None:
@@ -2658,7 +2658,7 @@ def _run_single_child(
 
             # When a subagent times out BEFORE making any API call, dump a
             # diagnostic to help users (and us) see what the child was doing.
-            # See #14726 — without this, 0-API-call hangs are black boxes.
+            # See — without this, 0-API-call hangs are black boxes.
             diagnostic_path: Optional[str] = None
             child_api_calls = 0
             try:
@@ -2941,7 +2941,7 @@ def _run_single_child(
             "_child_role": getattr(child, "_delegate_role", None),
             # Captured before child.close() so the parent aggregator can fold
             # the child's total spend into the parent's session cost.  Port of
-            # Kilo-Org/kilocode#9448 — previously the footer only reflected the
+            # Kilo-Org/kilocode — previously the footer only reflected the
             # parent's direct API calls and under-counted subagent-heavy runs.
             # Stripped before the dict is serialised back to the model.
             "_child_cost_usd": (
@@ -3370,7 +3370,7 @@ def _recover_tasks_from_json_string(
 # single-word brackets are left alone because legitimate coding goals are
 # full of them: generics (`Vec<T>`, `Result<String>`), HTML tags (`<div>`),
 # JSON/dict snippets (`{"key": 1}`), glob braces (`{a,b}`), and f-string
-# style (`{i}`) must never be rejected (post-merge audit of #81141).
+# style (`{i}`) must never be rejected (post-merge audit of).
 _PLACEHOLDER_GOAL_RE = re.compile(r"^(todo|task\s*\d+)$", re.IGNORECASE)
 _TEMPLATE_MARKER_RE = re.compile(
     r"<[A-Za-z][A-Za-z0-9]*(?:[ _-][A-Za-z0-9]+)+>"
@@ -3388,7 +3388,7 @@ def _validate_batch_tasks(task_list: List[Dict[str, Any]]) -> Optional[str]:
 
     Duplicate goals are deliberately NOT rejected: identical-goal fan-outs
     are a legitimate pattern (best-of-N / ensemble sampling), and blocking
-    them broke real workflows (post-merge audit of #81141).
+    them broke real workflows (post-merge audit of).
     """
     if len(task_list) < 2:
         return (
@@ -3866,7 +3866,7 @@ def delegate_task(
         # Cap subagent summaries against the parent's remaining context
         # headroom (split across the batch) before they enter the parent's
         # conversation. Full text is spilled to disk so nothing is lost.
-        # Covers both the single-task and batch paths. See PR #9126.
+        # Covers both the single-task and batch paths. See.
         _finalize_child_results(results, task_list, children, parent_agent)
 
         total_duration = round(time.monotonic() - overall_start, 2)
@@ -3912,7 +3912,7 @@ def delegate_task(
 
         # Finite sessions cannot route a detached subagent result back to the
         # agent after their turn/process ends. This includes stateless HTTP
-        # requests (#10760) and one-shot Kanban workers (#63169). Fall back to
+        # requests and one-shot Kanban workers. Fall back to
         # SYNCHRONOUS execution so the result returns in this same turn instead
         # of handing out a handle with no durable consumer. Mirrors the
         # pool-at-capacity inline fallback below.
@@ -3987,12 +3987,12 @@ def delegate_task(
         if not _session_key:
             # CLI (single-process) path: the approval contextvar is only bound
             # during gateway/TUI turns and PILOTAGE_SESSION_KEY is not in the CLI
-            # environment, so the key resolves empty here. Since #64240 the CLI
+            # environment, so the key resolves empty here. Since the CLI
             # drains completions through a positive-ownership filter keyed on
             # the durable AIAgent.session_id — an empty session_key would fail
             # closed and the CLI could never claim its own completions, while
             # a restored foreign event with an empty key could leak into any
-            # unfiltered consumer (#64484). Stamp the parent's durable session
+            # unfiltered consumer. Stamp the parent's durable session
             # id instead; compression rotations are handled on the drain side
             # via resolve_resume_session_id lineage resolution.
             _agent_session_id = str(getattr(parent_agent, "session_id", "") or "")
@@ -4038,9 +4038,9 @@ def delegate_task(
             # transition, and every API-call start/completion — so a child
             # streaming a long response is alive even though api_call_count
             # only advances when the call completes (same liveness signal as
-            # the compaction inactivity budget, PR #71508). A fully frozen
+            # the compaction inactivity budget,). A fully frozen
             # token past the stale threshold means the detached batch is
-            # wedged (e.g. stuck inside the first model API call — #60203).
+            # wedged (e.g. stuck inside the first model API call).
             # in_tool=True while ANY child is inside a tool so legitimately
             # slow tools get the higher staleness ceiling, mirroring the
             # sync-path heartbeat monitor.
@@ -4169,7 +4169,7 @@ def _resolve_child_credential_pool(
     runtime collapses to ``provider="custom"``, so bare provider equality would
     treat two *different* custom endpoints as interchangeable and let the child
     inherit the parent's pool. Leasing from that pool then overwrites the
-    child's delegated ``base_url`` with the parent's endpoint (issue #7833).
+    child's delegated ``base_url`` with the parent's endpoint.
     We therefore resolve custom runtimes by endpoint identity (the
     ``custom:<name>`` pool key derived from the base_url) and only share the
     parent's pool when both resolve to the *same* custom endpoint.
@@ -4287,7 +4287,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
         # /anthropic suffix — Azure AI Foundry, MiniMax, Zhipu GLM, LiteLLM
         # proxies — pick the right transport automatically. Without this,
         # subagents would default to chat_completions and hit 404s on endpoints
-        # that only speak the Anthropic Messages protocol. Fixes #10213.
+        # that only speak the Anthropic Messages protocol. Fixes.
         from pilotage_cli.runtime_provider import _detect_api_mode_for_url
 
         base_lower = configured_base_url.lower()

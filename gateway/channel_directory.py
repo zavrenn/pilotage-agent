@@ -205,7 +205,7 @@ def _normalize_adapter_channels(raw_channels: Any) -> List[Dict[str, Any]]:
 def _build_from_sessions(platform_name: str) -> List[Dict[str, str]]:
     """Pull known channels/contacts from gateway session origin data.
 
-    state.db is the primary source (#9006): gateway session rows persist
+    state.db is the primary source: gateway session rows persist
     origin_json.  Falls back to sessions.json for pre-migration databases.
     """
     entries = _build_from_sessions_db(platform_name)

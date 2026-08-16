@@ -97,7 +97,7 @@ def _env_value(name: str) -> str:
     through Pilotage' config/.env layer (``pilotage config set``, ``pilotage tools``)
     are honored here too — not just raw process-env exports. Without this,
     a config-only ``SEARXNG_URL`` (or any provider key) leaves the backend
-    auto-detect cascade and ``check_web_api_key()`` blind to it. See #34290.
+    auto-detect cascade and ``check_web_api_key`` blind to it. See.
     """
     try:
         from pilotage_cli.config import get_env_value
@@ -278,7 +278,7 @@ def _is_backend_available(backend: str) -> bool:
     single chokepoint through which ``_get_backend``,
     ``_get_capability_backend``, and ``check_web_api_key`` all resolve
     availability — fixing custom-provider discovery for every caller at once
-    (issues #28651, #31873, #32698). Built-in backends keep their cheap
+    (issues,). Built-in backends keep their cheap
     hardcoded probes below.
     """
     backend = (backend or "").lower().strip()
@@ -318,7 +318,7 @@ def _ddgs_package_importable() -> bool:
 # ─── Firecrawl Client ────────────────────────────────────────────────────────
 
 # ─── Firecrawl Client ────────────────────────────────────────────────────────
-# After PR #25182, the firecrawl client, lazy SDK proxy, dual-auth config
+# After, the firecrawl client, lazy SDK proxy, dual-auth config
 # resolution, response normalizers, and check_firecrawl_api_key() all live
 # in plugins.web.firecrawl.provider and are re-exported at the top of this
 # module so external callers (integration tests, tool-registry gating) and
@@ -351,7 +351,7 @@ def _web_requires_env() -> list[str]:
 
 
 # ─── Parallel / Tavily / Firecrawl helpers — moved into plugins ──────────────
-# After PR #25182, the per-vendor client construction, request helpers, and
+# After, the per-vendor client construction, request helpers, and
 # response normalizers all live in plugins.web.<vendor>.provider:
 #   - parallel: plugins/web/parallel/provider.py
 #   - tavily:   plugins/web/tavily/provider.py
@@ -534,7 +534,7 @@ def _truncate_with_footer(
 
 
 # ─── Exa / Parallel inline helpers — moved into plugins ──────────────────────
-# After PR #25182, the exa client + search/extract and parallel client +
+# After, the exa client + search/extract and parallel client +
 # search/extract helpers all live in their respective plugins:
 #   - plugins/web/exa/provider.py
 #   - plugins/web/parallel/provider.py
@@ -553,7 +553,7 @@ def _ensure_web_plugins_loaded() -> None:
     registry is empty and ``get_provider('firecrawl')`` returns ``None`` even
     when the user has ``web.extract_backend: firecrawl`` configured and
     ``FIRECRAWL_API_KEY`` set. The symptom is a misleading "No web extract
-    provider configured" error (issue #27580).
+    provider configured" error.
 
     Mirrors :func:`tools.browser_tool._ensure_browser_plugins_loaded` exactly:
     the underlying discovery call is idempotent and cheap on subsequent
@@ -853,7 +853,7 @@ async def web_extract_tool(
                     # user explicitly disabled, the backend is set correctly
                     # and the real fix is to re-enable the plugin — say so
                     # instead of telling them to set web.extract_backend
-                    # (which they already did). #40190 follow-up.
+                    # (which they already did). follow-up.
                     disabled_key = _disabled_web_plugin_for(capability="extract")
                     if disabled_key:
                         _vendor = disabled_key.split("/", 1)[-1]
@@ -1008,7 +1008,7 @@ def check_web_api_key() -> bool:
     Used as the ``check_fn`` gate for the ``web_search`` and ``web_extract``
     tool registry entries — so a plugin-registered provider that reports
     ``is_available()`` must light the tools up even when no built-in backend
-    has credentials (issues #28651, #31873). Resolution funnels through
+    has credentials (issues,). Resolution funnels through
     :func:`_is_backend_available`, which delegates non-legacy names to the
     registry.
     """

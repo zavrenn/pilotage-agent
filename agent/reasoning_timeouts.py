@@ -11,7 +11,7 @@ stale detectors:
 
 For NVIDIA Nemotron 3 Ultra on the hosted NIM gateway the empirical
 upstream idle kill is ~120s (first-party reproduction at
-NVIDIA/NemoClaw#4846 — TTFB ~31s, stream dies at 120s). The same
+NVIDIA/NemoClaw — TTFB ~31s, stream dies at 120s). The same
 failure mode exists on OpenAI o1/o3, Anthropic Opus 4.x thinking,
 DeepSeek R1, Qwen QwQ, xAI Grok reasoning — every cloud reasoning
 model hits upstream-proxies / load-balancers with idle timeouts
@@ -47,7 +47,7 @@ position 11 of the slug, not at position 0.  The previous substring-
 with-trailing-hyphen design would have over-matched here, which is
 why start-of-slug anchoring is the right shape.
 
-Fixes #52217.
+Fixes.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ from typing import Optional
 # below.  Order is irrelevant — the first regex match wins.
 _REASONING_STALE_TIMEOUT_FLOORS: tuple[tuple[str, int], ...] = (
     # NVIDIA Nemotron — reasoning models behind hosted NIM with
-    # documented 60-180s upstream idle kill (NVIDIA/NemoClaw#4846:
+    # documented 60-180s upstream idle kill (NVIDIA/NemoClaw:
     # 120s measured).
     ("nemotron-3-ultra", 600),
     ("nemotron-3-super", 600),

@@ -8,10 +8,10 @@ Tool dispatch inside such a thread therefore silently loses:
   * the approval *session/platform* ContextVars (``tools.approval`` /
     ``gateway.session_context``) — so gateway sessions fall into
     ``check_dangerous_command``'s non-interactive auto-approve branch and
-    dangerous commands run without prompting (#33057, #30882);
+    dangerous commands run without prompting ;
   * the thread-local CLI approval/sudo callbacks (``tools.terminal_tool``) —
     so ``prompt_dangerous_approval`` cannot reach the user
-    (GHSA-qg5c-hvr5-hjgr, #15216).
+    (GHSA-qg5c-hvr5-hjgr,).
 
 This helper factors out that capture/install/clear lifecycle so the several
 places that fan tool dispatch onto worker threads (``agent.tool_executor`` and

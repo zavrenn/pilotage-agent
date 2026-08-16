@@ -776,7 +776,7 @@ def sync_skills(quiet: bool = False) -> dict:
         if skill_name in external_index:
             # An external_dirs source already provides this skill. Writing it
             # into the profile-local tree would create a name collision the
-            # loader refuses to resolve (#28126). Defer to the external copy
+            # loader refuses to resolve. Defer to the external copy
             # for ALL manifest states (new, previously-synced, user-deleted).
             shadowed_by_external.append(skill_name)
             skipped += 1
@@ -955,9 +955,9 @@ def _rmtree_writable(path: Path) -> None:
     preserve read-only permissions on copied files *and* directories
     (``r-xr-xr-x``).  Removing a child requires write permission on its
     parent directory, so the retry handler makes the failing path **and its
-    parent** writable before re-attempting.  See #34860, #34972.
+    parent** writable before re-attempting. See,.
     """
-    # Defense in depth (#48200): refuse to rmtree anything outside
+    # Defense in depth: refuse to rmtree anything outside
     # ``PILOTAGE_HOME/skills/`` to prevent the catastrophic wipe of
     # ``~/.pilotage/`` (``.env``, ``MEMORY.md``, ``kanban.db``, custom
     # skills, scripts, …) that an earlier incident observed. Five call
@@ -980,7 +980,7 @@ def _rmtree_writable(path: Path) -> None:
     if skills_root not in target.parents:
         raise ValueError(
             f"refusing to rmtree {target!r}: not strictly under {skills_root!r} "
-            f"(scope guard — see #48200)"
+            f"(scope guard — see)"
         )
     import stat
 
@@ -1042,7 +1042,7 @@ def reset_bundled_skill(name: str, restore: bool = False) -> dict:
 
     # Step 1 (optional): delete the user's copy so next sync re-copies bundled.
     # Must happen BEFORE manifest deletion so that a failed rmtree does not
-    # leave the skill in a manifest-less limbo state (see #34972).
+    # leave the skill in a manifest-less limbo state.
     deleted_user_copy = False
     if restore:
         if not is_bundled:

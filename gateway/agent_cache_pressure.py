@@ -18,7 +18,7 @@ This module supplies the missing signal: the process's own anonymous RSS,
 compared against a budget derived from the cgroup limit the gateway actually
 runs under.  ``GatewayRunner._sweep_agent_cache_under_pressure`` uses it to
 shed LRU transcripts through the existing soft-eviction path, which rebuilds
-from the persisted session on the next turn (#80764).
+from the persisted session on the next turn.
 
 Everything here is pure or read-only so it can be tested without a gateway.
 Config lives under ``agent.agent_cache`` in ``config.yaml``.

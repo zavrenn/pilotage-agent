@@ -163,7 +163,7 @@ def resolve_provider_secret(
 ) -> str:
     """Resolve a voice-provider API key. Single owner for STT/TTS key lookup.
 
-    Resolution order (fixes #68003 — keys added via ``pilotage auth add
+    Resolution order (fixes — keys added via ``pilotage auth add
     <provider>`` were invisible to the voice tools, which only consulted
     env/.env):
 
@@ -266,7 +266,7 @@ def resolve_openai_audio_api_key() -> str:
 
     Outside a multiplexed turn, ``OPENAI_API_KEY`` additionally falls back to
     the credential pool (``pilotage auth add openai-api``) via
-    ``resolve_provider_secret`` — same #68003 fix as the other voice
+    ``resolve_provider_secret`` — same fix as the other voice
     providers. The dedicated voice-tools override remains env/scope-only.
     """
     return (

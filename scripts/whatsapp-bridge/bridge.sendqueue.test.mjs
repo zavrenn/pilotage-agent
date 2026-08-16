@@ -1,5 +1,5 @@
 /**
- * Regression tests for the WhatsApp bridge send queue (#33360).
+ * Regression tests for the WhatsApp bridge send queue.
  *
  * The bridge must serialise all sock.sendMessage() calls through a
  * promise-based queue so that concurrent HTTP /send requests never

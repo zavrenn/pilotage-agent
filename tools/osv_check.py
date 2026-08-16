@@ -27,7 +27,7 @@ _TIMEOUT = 10  # seconds
 # Result cache: (ecosystem, package, version) -> (expiry_monotonic, result).
 # MCP reconnect ladders, stdio recycles, and parked-server self-probes re-run
 # the preflight for the SAME package on every spawn attempt. Without a cache,
-# a flapping server turns into a sustained OSV query/DNS stream — the #75485
+# a flapping server turns into a sustained OSV query/DNS stream — the
 # incident logged 779K api.osv.dev DNS queries in 16h from revival loops.
 # Malware advisories don't appear or vanish on second-to-second timescales,
 # so a successful verdict (clean OR blocked) is reusable. Network failures

@@ -2,19 +2,19 @@
 
 Context-compression rotation (legacy ``compression.in_place: false`` mode)
 mints a new physical ``session_id`` mid-conversation to segment the
-transcript. The prompt-cache scope introduced by #79161 was derived from that
+transcript. The prompt-cache scope introduced by was derived from that
 physical id, so every rotation moved the conversation into a fresh cache
 bucket even though it is logically the same conversation continuing
-(issue #79017).
+.
 
 ``resolve_prompt_cache_scope()`` maps the physical session id to the ROOT of
 its *compression lineage* — the pre-rotation session id — using
 ``SessionDB.get_compression_lineage()``, whose fork-aware semantics
-(hardened in #79193) give exactly the scope boundaries the cache key needs.
+(hardened in) give exactly the scope boundaries the cache key needs.
 NOT ``SessionDB.get_conversation_root`` / ``run_agent._conversation_root_id``
 (the Portal-attribution walk): that one follows ``parent_session_id`` blindly,
 collapsing /branch children and whole delegate trees into one id, which would
-violate the #79161 isolation this scope must preserve. The two resolvers are
+violate the isolation this scope must preserve. The two resolvers are
 intentionally different — do not "deduplicate" them.
 
 - compression-rotation children walk back to the original segment
@@ -23,7 +23,7 @@ intentionally different — do not "deduplicate" them.
 - ``/branch`` children (``_branched_from``), delegate subagents
   (``_delegate_from``), and tool-tagged children (``source="tool"``) are
   explicit fork children and keep their own isolated scope, preserving the
-  sibling/subagent isolation #79161 established;
+  sibling/subagent isolation established;
 - cron fires keep their physical ``cron_<job>_<ts>`` id here — the per-fire
   timestamp is stripped later by ``_cache_scope_from_session_id`` exactly as
   before.
@@ -31,7 +31,7 @@ intentionally different — do not "deduplicate" them.
 The resolution is memoized per (agent, session_id): the lineage walk runs
 once per transcript segment — NOT per API call — and re-runs only when
 rotation actually changes ``agent.session_id`` (per the no-DB-on-the-hot-path
-constraint recorded on #79017). Default installs compact in place and never
+constraint recorded on). Default installs compact in place and never
 rotate, so they hit the memo forever and behave byte-identically to before.
 """
 
@@ -113,7 +113,7 @@ def resolve_prompt_cache_scope_safe(agent: Any) -> Optional[str]:
 
     Returns None on any failure (or when there is no scope). Consumers treat
     None/empty as "fall back to the physical session_id", so a resolution
-    failure degrades to pre-#79017 behavior instead of blocking the caller —
+    failure degrades to pre- behavior instead of blocking the caller —
     important at turn_context's call site, where an exception raised inside
     the ``set_runtime_main(...)`` argument list would otherwise skip the whole
     runtime binding, not just the cache scope.

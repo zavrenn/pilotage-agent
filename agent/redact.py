@@ -24,7 +24,7 @@ from agent.file_safety import _BLOCKED_PROJECT_ENV_BASENAMES as _ENV_FILE_BASENA
 logger = logging.getLogger(__name__)
 
 # Sensitive query-string parameter names (case-insensitive exact match).
-# Ported from nearai/ironclaw#2529 — catches tokens whose values don't match
+# Ported from nearai/ironclaw — catches tokens whose values don't match
 # any known vendor prefix regex (e.g. opaque tokens, short OAuth codes).
 _SENSITIVE_QUERY_PARAMS = frozenset({
     "access_token",
@@ -47,7 +47,7 @@ _SENSITIVE_QUERY_PARAMS = frozenset({
 
 # Sensitive form-urlencoded / JSON body key names (case-insensitive exact match).
 # Exact match, NOT substring — "token_count" and "session_id" must NOT match.
-# Ported from nearai/ironclaw#2529.
+# Ported from nearai/ironclaw.
 _SENSITIVE_BODY_KEYS = frozenset({
     "access_token",
     "refresh_token",
@@ -67,7 +67,7 @@ _SENSITIVE_BODY_KEYS = frozenset({
 
 # Snapshot at import time so runtime env mutations (e.g. LLM-generated
 # `export PILOTAGE_REDACT_SECRETS=false`) cannot disable redaction
-# mid-session.  ON by default — secure default per issue #17691. Users who
+# mid-session. ON by default — secure default per. Users who
 # need raw credential values in tool output (e.g. working on the redactor
 # itself) can opt out via `security.redact_secrets: false` in config.yaml
 # (bridged to this env var in pilotage_cli/main.py, gateway/run.py, and
@@ -121,7 +121,7 @@ _PREFIX_PATTERNS = [
     r"fpk_[A-Za-z0-9]{30,}",            # Fireworks AI project key
     # GitLab token families (each pattern keeps a full literal prefix so the
     # _PREFIX_SUBSTRINGS pre-screen stays false-negative-free). Ported from
-    # openclaw/openclaw#112954; follow-up invited in #4541.
+    # openclaw/; follow-up invited in.
     r"glpat-[A-Za-z0-9_\-]{10,}",       # GitLab personal access token
     r"gloas-[A-Za-z0-9_\-]{10,}",       # GitLab OAuth application secret
     r"gldt-[A-Za-z0-9_\-]{10,}",        # GitLab deploy token
@@ -143,7 +143,7 @@ _PREFIX_PATTERNS = [
 # Uppercase keys tolerate spaces around "=" (e.g. ``FOO_SECRET = bar``) because
 # an all-caps key is almost never prose/code.
 # Bare ``KEY`` / ``PASS`` / ``PW`` suffixes are included (``FAL_KEY=…``,
-# ``MYSQL_PASS=…``, ``DB_PW=…``) — issue #77484. The regex is IGNORECASE so
+# ``MYSQL_PASS=…``, ``DB_PW=…``). The regex is IGNORECASE so
 # lowercase env names (``openai_key=…``) are caught here too. The secret name
 # must sit at a word boundary (``_``-delimited or whole-word) so generic
 # prose words (``password=``, ``token=``, ``KEYBOARD=``, ``PASSAGE=``) do not
@@ -157,7 +157,7 @@ _ENV_ASSIGN_RE = re.compile(
 )
 # Lowercase env names: only underscore-boundary forms (``openai_key=…``,
 # ``FAL_KEY=…``, ``db_pw=…``) — NOT bare ``password=``/``token=``/``secret=``,
-# which appear in prose, URLs, and form bodies (issue #77484).
+# which appear in prose, URLs, and form bodies.
 _ENV_ASSIGN_LOWER_RE = re.compile(
     rf"([a-z0-9_]+(?:_|^)(?:key|pass|pw|token|secret|password|passwd|credential|auth)(?=[^a-z0-9_]|$))\s*=\s*(['\"]?)(\S+)\2",
     re.IGNORECASE,
@@ -166,10 +166,10 @@ _ENV_ASSIGN_LOWER_RE = re.compile(
 # Lowercase / dotted / hyphenated config keys from config files
 # (application.properties, .env, YAML-ish dumps): ``spring.datasource.password=secret``,
 # ``app.api.key=xyz``, ``password=secret``. The uppercase _ENV_ASSIGN_RE above
-# never matched these, so config-file passwords leaked verbatim (issue #16413).
+# never matched these, so config-file passwords leaked verbatim.
 #
 # These run only in a config-file context, NOT in prose, code, or URLs — three
-# carve-outs preserved from the original design (#4367 + the documented
+# carve-outs preserved from the original design + the documented
 # web-URL passthrough below):
 #   1. The value is bounded by ``[^\s&]`` (stops at whitespace AND ``&``) so
 #      form-urlencoded bodies are handled pair-by-pair (by _redact_form_body),
@@ -191,7 +191,7 @@ _CFG_SECRET_WORD_RE = re.compile(_SECRET_CFG_NAMES, re.IGNORECASE)
 # Programmatic env lookups (``os.getenv(...)``, ``os.environ[...]``,
 # ``os.environ.get(...)``, ``process.env.X``, ``$ENV{X}``) reference variable
 # *names*, not secret values. When one appears as the VALUE of a KEY=... match
-# it's a code snippet, not a leaked secret — skip redaction (issue #2852).
+# it's a code snippet, not a leaked secret — skip redaction.
 _ENV_LOOKUP_VALUE_RE = re.compile(
     r"^(?:os\.(?:getenv|environ)|process\.env|\$ENV\{)"
 )
@@ -238,7 +238,7 @@ _YAML_ASSIGN_RE = re.compile(
 # ``tokenizer: cl100k_base`` (token), ``author=Smith`` (auth) — mangling
 # legitimate content on the surfaces that run these passes (browser snapshots,
 # log lines, kanban summaries, CLI-echoed command output). Ported from
-# nearai/ironclaw#6129, where the same substring false positive ("Secretary of
+# nearai/ironclaw, where the same substring false positive ("Secretary of
 # the Treasury" matching the ``secret`` marker) scrubbed legitimate tool
 # results from the replayed transcript and sent the model into a re-fetch
 # loop.
@@ -305,7 +305,7 @@ def _key_has_secret_keyword(key: str) -> bool:
         # never prose. Exception: a bare ``KEY``/``PASS``/``PW`` embedded in
         # a longer all-caps word (``KEYBOARD``, ``PASSAGE``) is prose, not a
         # credential — only a word-bounded compound (``API_KEY``,
-        # ``MYSQL_PASSWORD``, ``FAL_KEY``, ``DB_PW``) counts (issue #77484).
+        # ``MYSQL_PASSWORD``, ``FAL_KEY``, ``DB_PW``) counts.
         for m in _KEY_KEYWORD_RE.finditer(key):
             if _is_word_start(key, m.start()) and _is_word_end(key, m.end()):
                 return True
@@ -333,7 +333,7 @@ _JSON_FIELD_RE = re.compile(
 # that quote into the match, or masking turns value corruption into *syntax*
 # corruption — the closing quote vanishes and the command/string no longer parses
 # (unterminated quote → shell EOF / Python SyntaxError). Real credentials never
-# contain ``"`` or ``'``, so excluding them is safe. See #43083.
+# contain ``"`` or ``'``, so excluding them is safe. See.
 _AUTH_HEADER_RE = re.compile(
     r"((?:Proxy-)?Authorization:\s*)([A-Za-z][\w.+-]*\s+)?([^\s\"']+)",
     re.IGNORECASE,
@@ -369,7 +369,7 @@ _PRIVATE_KEY_RE = re.compile(
 # whitespace; without this bound the greedy [^@]+ would scan past the end of a
 # code line to the next stray "@" (e.g. a Python decorator), swallowing
 # intervening lines and corrupting tool OUTPUT for any source containing a
-# postgresql:// f-string template. See issue #33801.
+# postgresql:// f-string template. See.
 _DB_CONNSTR_RE = re.compile(
     r"((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:\s]+:)([^@\s]+)(@)",
     re.IGNORECASE,
@@ -377,13 +377,13 @@ _DB_CONNSTR_RE = re.compile(
 
 # Bare-token credential in a web/transport URL: ``scheme://TOKEN@host``.
 # This is the ``git remote set-url origin https://PASSWORD@github.com/...``
-# shape from issue #6396 — a single opaque credential in the userinfo position
+# shape from — a single opaque credential in the userinfo position
 # with NO ``user:pass`` colon. It is unambiguously a secret: legitimate
 # round-trip URLs (OAuth callbacks, magic links, pre-signed shares — see the
 # "Web-URL redaction is intentionally OFF" note in redact_sensitive_text) carry
 # their tokens in the QUERY STRING, never in bare userinfo. The colon form
 # ``user:pass@`` is deliberately left to pass through (commit "pass web URLs
-# through unchanged", #34029) and is NOT matched here — the token class forbids
+# through unchanged",) and is NOT matched here — the token class forbids
 # ``:``. DB schemes are handled by _DB_CONNSTR_RE above and excluded here.
 #
 # Guards against false positives:
@@ -410,7 +410,7 @@ _SIGNAL_PHONE_RE = re.compile(r"(\+[1-9]\d{6,14})(?![A-Za-z0-9])")
 
 # URLs containing query strings — matches `scheme://...?...[# or end]`.
 # Used to scan text for URLs whose query params may contain secrets.
-# Ported from nearai/ironclaw#2529.
+# Ported from nearai/ironclaw.
 _URL_WITH_QUERY_RE = re.compile(
     r"(https?|wss?|ftp)://"          # scheme
     r"([^\s/?#]+)"                    # authority (may include userinfo)
@@ -468,7 +468,7 @@ _FORM_BODY_RE = re.compile(
 
 # Control / zero-width characters that can split a token body: a secret
 # smuggled as ``sk-abc\x1bdef…`` or ``ghp_abc\n123…`` escapes the contiguous
-# prefix regexes (issue #77484). Used by _mask_control_split_tokens.
+# prefix regexes. Used by _mask_control_split_tokens.
 _CONTROL_CHARS_RE = re.compile(
     r"[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202f\u2060\ufeff]"
 )
@@ -492,7 +492,7 @@ def _mask_control_split_tokens(text: str, mask_fn) -> str:
 
     A credential like ``sk-abc\\x1bdef456…`` or ``ghp_abc\\n123def…`` has its
     token body interrupted, so the contiguous _PREFIX_RE cannot match it and
-    the secret leaks verbatim (issue #77484). Strategy: build a copy with all
+    the secret leaks verbatim. Strategy: build a copy with all
     control chars removed (the token is contiguous again, matching even when
     each fragment alone is too short), match on that, then mask the
     corresponding span in the *original* — but only when the original span
@@ -542,7 +542,7 @@ def _mask_control_split_tokens(text: str, mask_fn) -> str:
 # Display-mask strip for mask_secret: EVERY control char incl. \n/\t, C1,
 # DEL, and zero-width/format chars — a masked secret must never emit
 # multiline, tabbed, or invisible bytes into config/status/dump display
-# output (#55319, #55321).
+# output.
 _DISPLAY_CONTROL_RE = re.compile(
     r"[\x00-\x1f\x7f\x80-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2064]"
 )
@@ -591,7 +591,7 @@ def mask_secret(
     if not value:
         return empty
     # Visible head/tail must not carry control bytes (newline, NUL, DEL, C1)
-    # into config/status/dump output (#55319, #55321). Strip them before
+    # into config/status/dump output. Strip them before
     # slicing — the length check below then sees the displayable length.
     value = _DISPLAY_CONTROL_RE.sub("", value)
     if not value:
@@ -752,7 +752,7 @@ def _mask_token_nonreusable(token: str) -> str:
 
     * cannot be mistaken for a usable-but-truncated key, so an agent that
       reads it from a config file and writes it back does NOT corrupt the
-      stored credential into a dead 13-char string (issue #35519); and
+      stored credential into a dead 13-char string ; and
     * still does not leak the secret material (no head/tail chars).
 
     The vendor prefix label is preserved for debuggability so the agent can
@@ -802,7 +802,7 @@ def redact_sensitive_text(
     (``«redacted:ghp_…»``) instead of a head/tail-preserving mask
     (``ghp_S1...Pn2T``). The old mask looked like a real-but-truncated key, so
     an agent reading it from config.yaml and writing it back silently corrupted
-    the stored credential into a dead 13-char value → 401 (issue #35519). The
+    the stored credential into a dead 13-char value → 401. The
     sentinel is syntactically invalid as a token, so it can't be mistaken for a
     usable key or written back as one. Implies code_file=True (config/data
     files shouldn't trigger the source-code ENV/JSON false-positive paths).
@@ -835,7 +835,7 @@ def redact_sensitive_text(
         _prefix_sub = _mask_token_nonreusable if file_read else _mask_token
         # Control/zero-width chars (\\n, \\r, ESC, U+200B, …) split a token
         # body so _PREFIX_RE cannot match across them — a secret smuggled as
-        # ``sk-abc\\x1bdef…`` leaks verbatim (issue #77484). Mask such runs by
+        # ``sk-abc\\x1bdef…`` leaks verbatim. Mask such runs by
         # first matching on a control-stripped copy, then re-masking the
         # corresponding span in the original (the stripped copy and the
         # original are aligned 1:1 for non-control chars).
@@ -849,12 +849,12 @@ def redact_sensitive_text(
                 name, quote, value = m.group(1), m.group(2), m.group(3)
                 # Programmatic env lookups reference variable *names*, not
                 # secret values — masking them corrupts code snippets in
-                # prose/log contexts (issue #2852): ``KEY=os.getenv('X')``.
+                # prose/log contexts : ``KEY=os.getenv('X')``.
                 if _ENV_LOOKUP_VALUE_RE.match(value):
                     return m.group(0)
                 # Keyword must sit at a word boundary within the key —
                 # ``author=Smith`` / ``press.secretary=…`` are prose, not
-                # credentials (ported from nearai/ironclaw#6129). All-caps
+                # credentials (ported from nearai/ironclaw). All-caps
                 # keys (the _ENV_ASSIGN_RE shape) short-circuit to legacy
                 # embedded matching inside the helper.
                 if not _key_has_secret_keyword(name):
@@ -866,10 +866,10 @@ def redact_sensitive_text(
             # intentionally passed through (see note near the bottom of this
             # function; _redact_strict_url_credentials handles the opt-in
             # case). The uppercase regex above is all-caps-only, so it never
-            # matches URL params; the lowercase one would (issue #77484).
+            # matches URL params; the lowercase one would.
             if "://" not in text:
                 text = _ENV_ASSIGN_LOWER_RE.sub(_redact_env, text)
-            # Lowercase/dotted config keys (issue #16413). Skip URLs entirely —
+            # Lowercase/dotted config keys. Skip URLs entirely —
             # web-URL query params are intentionally passed through (see note
             # near the bottom of this function); _DB_CONNSTR_RE still guards
             # connection-string passwords.
@@ -890,7 +890,7 @@ def redact_sensitive_text(
             def _redact_json(m):
                 key, value = m.group(1), m.group(2)
                 # Same programmatic-env-lookup exception as _redact_env above
-                # (issue #2852): "apiKey": "os.getenv('X')" is a code snippet,
+                # : "apiKey": "os.getenv('X')" is a code snippet,
                 # not a leaked secret value.
                 if _ENV_LOOKUP_VALUE_RE.match(value):
                     return m.group(0)
@@ -904,13 +904,13 @@ def redact_sensitive_text(
             def _redact_yaml(m):
                 key, sep, value = m.group(1), m.group(2), m.group(3)
                 # Same programmatic-env-lookup exception as _redact_env above
-                # (issue #2852): api_key: os.getenv('X') is a code snippet,
+                # : api_key: os.getenv('X') is a code snippet,
                 # not a leaked secret value.
                 if _ENV_LOOKUP_VALUE_RE.match(value):
                     return m.group(0)
                 # Keyword must sit at a word boundary within the key —
                 # ``Secretary: J.Smith`` / ``tokenizer: cl100k_base`` are
-                # document text, not credentials (nearai/ironclaw#6129).
+                # document text, not credentials (nearai/ironclaw).
                 if not _key_has_secret_keyword(key):
                     return m.group(0)
                 return f"{key}{sep}{_mask_token(value)}"
@@ -950,7 +950,7 @@ def redact_sensitive_text(
     # reference (e.g. f"postgresql://{user}:{pass}@{host}"), not a literal
     # credential — preserve it. Literal passwords are still redacted. The regex
     # forbids whitespace in the password group, so a single-line template's
-    # group(2) is exactly the brace expression. See issue #33801.
+    # group(2) is exactly the brace expression. See.
     if "://" in text:
         if code_file:
             def _redact_db(m):
@@ -963,7 +963,7 @@ def redact_sensitive_text(
             text = _DB_CONNSTR_RE.sub(lambda m: f"{m.group(1)}***{m.group(3)}", text)
 
         # Bare-token userinfo in web/transport URLs: ``scheme://TOKEN@host``.
-        # The git-remote-with-embedded-password shape from #6396. Only the
+        # The git-remote-with-embedded-password shape from. Only the
         # colon-less bare-token form is redacted — ``user:pass@`` and
         # query-string tokens are left to pass through (see the web-URL note
         # below). See _URL_BARE_TOKEN_RE for the false-positive guards.
@@ -984,11 +984,11 @@ def redact_sensitive_text(
     # Known credential shapes (sk-, ghp_, JWTs, etc.) inside URLs are still
     # caught by _PREFIX_RE and _JWT_RE above. DB connection-string passwords
     # are still caught by _DB_CONNSTR_RE. The ONE userinfo case still redacted
-    # is the colon-less bare-token form ``scheme://TOKEN@host`` (#6396, handled
+    # is the colon-less bare-token form ``scheme://TOKEN@host`` (, handled
     # by _URL_BARE_TOKEN_RE in the ``://`` block above): a bare credential in
     # userinfo is never a round-trip workflow token (those live in the query
     # string), so masking it can't break a skill. The ``user:pass@`` form is
-    # left to pass through per #34029.
+    # left to pass through per.
 
     if redact_url_credentials:
         text = _redact_strict_url_credentials(text)
@@ -1015,7 +1015,7 @@ def redact_sensitive_text(
 # vendor prefix (e.g. ``MY_SERVICE_TOKEN=abc123randomstring``) are still
 # masked. For all other commands, code_file=True is used to avoid mangling
 # legitimate source/config dumps (``MAX_TOKENS=100``, ``"apiKey": "x"``
-# fixtures, ``postgresql://{user}`` f-string templates). See issue #43025.
+# fixtures, ``postgresql://{user}`` f-string templates). See.
 _ENV_DUMP_COMMANDS = frozenset({"env", "printenv", "set", "export", "declare"})
 
 # Commands that read file contents to stdout. When the target is a ``.env``
@@ -1276,7 +1276,7 @@ def _has_known_prefix_substring(text: str) -> bool:
 # plugin patterns exactly as it does to built-ins.
 
 # Keyed by registration source (e.g. "plugin:my-plugin") so the plugin
-# lifecycle/ownership-ledger work (#64229) has a clean seam to drop ONE
+# lifecycle/ownership-ledger work has a clean seam to drop ONE
 # plugin's patterns on unload. There is deliberately no public removal
 # API — additive-only stands; unload is a host-owned lifecycle concern.
 _PLUGIN_PREFIX_PATTERNS: dict = {}

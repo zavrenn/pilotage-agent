@@ -136,7 +136,7 @@ def _get_process_pilotage_home() -> Path:
     ``get_pilotage_home()`` honors ``_PILOTAGE_HOME_OVERRIDE`` contextvar used for
     per-session profile dispatch, which would route these files into the wrong
     profile directory when a profile-context task happens to be active at write
-    time.  See issue #56986.
+    time. See.
     """
     val = os.environ.get("PILOTAGE_HOME", "").strip()
     if val:
@@ -767,7 +767,7 @@ def _pid_exists(pid: int) -> bool:
         # PID to die (it never does, until its parent reaps it), then abort
         # with exit 1 — a silent crash loop under systemd ``Restart=always``,
         # which respawns the gateway before reaping the previous process
-        # (issue #42126). Report zombies as dead so the takeover proceeds.
+        # Report zombies as dead so the takeover proceeds.
         # Best-effort: any failure to read status (partial/stub psutil,
         # access denied, transient race) falls through to the authoritative
         # ``pid_exists()`` below rather than raising.
@@ -817,7 +817,7 @@ def _pid_exists(pid: int) -> bool:
             return False
     else:
         # psutil missing (stripped install / scaffold phase). Catch the same
-        # zombie case as the psutil path above (issue #42126): a zombie
+        # zombie case as the psutil path above : a zombie
         # answers os.kill(pid, 0) successfully, so without this check
         # ``--replace`` would wait on a dead PID and abort with exit 1.
         try:
@@ -1201,7 +1201,7 @@ def resolve_gateway_liveness(
     is not running."  Three deployments hit it: a cross-container gateway
     (only ``/api/status`` ran the HTTP health probe), a profile-scoped
     dashboard (only ``/api/status`` passed the profile's paths, so messaging
-    borrowed another profile's runtime state — issue #71211), and a
+    borrowed another profile's runtime state), and a
     launch-service-managed gateway with no PID file (only some callers used
     the runtime-status fallback).
 
@@ -1411,7 +1411,7 @@ def acquire_scoped_lock(scope: str, identity: str, metadata: Optional[dict[str, 
         # rejects reconnects when the on-disk record has ``start_time: null``
         # (older writers / psutil failure at first write) while the freshly
         # built record has a real value — the gateway then reports itself as
-        # the foreign squatter of its own token (#81468).
+        # the foreign squatter of its own token.
         if existing_pid == os.getpid():
             _write_json_file(lock_path, record)
             return True, existing
@@ -1527,7 +1527,7 @@ def release_scoped_lock(scope: str, identity: str) -> None:
     # Same PID as the live process means we own the lock. Do not require
     # start_time equality: on-disk null vs a live fingerprint (macOS/psutil
     # timing) would otherwise leave the lock stuck across Discord/Telegram
-    # reconnects (#81468). start_time only guards PID reuse for *other* PIDs.
+    # reconnects. start_time only guards PID reuse for *other* PIDs.
     try:
         lock_path.unlink(missing_ok=True)
     except OSError:
@@ -1582,7 +1582,7 @@ def release_all_scoped_locks(
 # ── --replace takeover marker ─────────────────────────────────────────
 #
 # When a new gateway starts with ``--replace``, it SIGTERMs the existing
-# gateway so it can take over the bot token. PR #5646 made SIGTERM exit
+# gateway so it can take over the bot token. made SIGTERM exit
 # the gateway with code 1 so ``Restart=on-failure`` can revive it after
 # unexpected kills — but that also means a --replace takeover target
 # exits 1, which tricks systemd into reviving it 30 seconds later,
@@ -1658,7 +1658,7 @@ def _consume_pid_marker_for_self(
             pass
         return False
 
-    # Cross-profile guard (#29092): new markers explicitly name the verified
+    # Cross-profile guard: new markers explicitly name the verified
     # TARGET home.  That permits a deliberate cross-PILOTAGE_HOME --replace while
     # ensuring a marker accidentally written into another profile's directory
     # is ignored.  Legacy markers have no target field, so retain the original
@@ -1690,7 +1690,7 @@ def _consume_pid_marker_for_self(
     # either is unknown, fall back to PID equality alone (bounded by the
     # marker's short TTL). This mirrors ``planned_stop_marker_targets_self``
     # so the watcher's non-destructive probe and this authoritative
-    # consume agree on every platform (issue #34597).
+    # consume agree on every platform.
     if target_pid != our_pid:
         matches = False
     elif target_start_time is not None and our_start_time is not None:
@@ -2160,7 +2160,7 @@ def planned_stop_marker_targets_self() -> bool:
     # sides actually have it: ``_get_process_start_time`` returns None on
     # platforms without ``/proc`` (macOS, native Windows — the very
     # platform this watcher exists for). Requiring a non-None match there
-    # would make the watcher never fire and re-break the #33778 Windows
+    # would make the watcher never fire and re-break the Windows
     # session-resume path. So: when both start_times are known they must
     # match; when either is unknown, fall back to PID equality alone
     # (the marker is short-lived under a 60s TTL, bounding reuse risk).

@@ -19,8 +19,8 @@ A corrupt or empty file still counts as engaged (fail safe): the pause must
 hold even if the file was created by ``touch ~/.pilotage/ESTOP``.
 
 Ported from: gastownhall/gastown estop.go (MIT). Related prior art:
-#26778 (/panic — kill/exit semantics; deliberately different, ours is
-resumable) and #44617 (interrupting in-flight cron; deliberately out of
+ (/panic — kill/exit semantics; deliberately different, ours is
+resumable) and (interrupting in-flight cron; deliberately out of
 scope here).
 """
 

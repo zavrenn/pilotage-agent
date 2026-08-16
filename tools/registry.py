@@ -253,7 +253,7 @@ class _PluginOverridePolicy:
 # or live credential file changes propagate within a turn or two without
 # requiring any explicit invalidation.
 #
-# Transient-failure suppression (issue #21658 / #5304): these probes can flap.
+# Transient-failure suppression ( /): these probes can flap.
 # A single ``subprocess.run([docker, "version"], timeout=5)`` that times out
 # under load returns False for one call, which would silently strip the entire
 # terminal+file toolset from whatever agent is being built at that instant —
@@ -903,7 +903,7 @@ class ToolRegistry:
                 # still owned by the ``pilotage_plugins.pkg`` package — exact
                 # string equality would wrongly block root-module cleanup code
                 # from removing tools registered by a submodule of the same
-                # plugin (egilewski review on #55840).
+                # plugin (egilewski review on).
                 same_plugin = bool(owner and caller_owner == owner)
                 if (
                     caller_owner is not None

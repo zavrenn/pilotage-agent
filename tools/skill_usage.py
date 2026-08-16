@@ -217,7 +217,7 @@ def _read_hub_installed_names() -> Set[str]:
         # JSONDecodeError) so it escapes the handler below and 500s the whole
         # /api/skills endpoint. errors="replace" degrades the offending byte to
         # U+FFFD, keeping the (structurally valid) JSON — and every other
-        # skill — readable. See #68053.
+        # skill — readable. See.
         data = json.loads(lock_path.read_text(encoding="utf-8", errors="replace"))
         if isinstance(data, dict):
             installed = data.get("installed") or {}
@@ -485,7 +485,7 @@ def is_curation_eligible(skill_name: str, skill_path: Optional[Path] = None) -> 
 def _is_curator_managed_record(record: Any) -> bool:
     """Return True when a usage record opts a skill into curator management.
 
-    NAMING (issue #67140): the on-disk field is ``created_by``, which reads
+    NAMING : the on-disk field is ``created_by``, which reads
     like provenance but is consumed as a **curator-management opt-in policy
     flag**. The two are not the same question:
 

@@ -1,4 +1,4 @@
-"""Capability-gated platform action facade for plugins (#64176, action half).
+"""Capability-gated platform action facade for plugins (, action half).
 
 ``ctx.platform_actions`` gives a plugin a *minimal*, versioned verb set for
 acting on connected chat platforms through the live gateway adapter registry —
@@ -8,7 +8,7 @@ Gating (fail closed, default OFF)
 ---------------------------------
 Every verb checks ``plugin_capability_granted(plugin_id,
 "gateway.platform_actions")`` at call time. The capability maps to the
-``plugins.entries.<id>.allow_platform_actions`` legacy key and the #64228
+``plugins.entries.<id>.allow_platform_actions`` legacy key and the
 consent registry (``granted_capabilities``). No grant → structured
 ``capability_not_granted`` error, never an exception.
 
@@ -25,8 +25,8 @@ raise into hook dispatch. Error codes are part of the v1 contract:
 ``unsupported_platform_action``, ``action_failed``.
 
 Raw SDK payload/handle access is deliberately NOT part of this surface; per
-the #64176 round-2 correction it requires its own capability
-(``gateway.raw_events``, #64228) and design.
+the round-2 correction it requires its own capability
+(``gateway.raw_events``,) and design.
 """
 
 from __future__ import annotations
@@ -194,7 +194,7 @@ class PlatformActions:
         return result
 
     def _audit(self, verb: str, platform: str, result: Dict[str, Any]) -> None:
-        """Every platform action is logged (the #64176 'all actions logged' rule)."""
+        """Every platform action is logged (the 'all actions logged' rule)."""
         logger.info(
             "platform_action plugin=%s verb=%s platform=%s ok=%s%s",
             self._plugin_id,

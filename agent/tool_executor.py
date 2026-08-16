@@ -82,7 +82,7 @@ def _budget_for_agent(agent) -> BudgetConfig:
     Large-context models keep the historical 100K/200K char defaults; small
     models (e.g. a 65K-token local model switched into mid-session) get a budget
     proportional to their window so a single large tool result can't push the
-    request past the model's limit (#23767). Falls back to the default budget
+    request past the model's limit. Falls back to the default budget
     when the context length isn't resolvable.
     """
     try:
@@ -120,7 +120,7 @@ def _authorization_gate_lock_timeout() -> float:
     drift. Long enough that serialization is never broken while a legitimate
     approval prompt is still answerable; short enough that a wedged holder
     (hanging ``pre_tool_call`` plugin, dead approval client) cannot park other
-    workers forever (#79719). Resolved once per gate (per batch), so a
+    workers forever. Resolved once per gate (per batch), so a
     mid-process ``approvals.timeout`` change applies from the next batch.
     """
     try:
@@ -161,7 +161,7 @@ def _parse_tool_arguments(raw_arguments: Any) -> tuple[dict, Optional[str]]:
 def _resolve_concurrent_tool_timeout() -> float | None:
     """Resolve the per-batch concurrent tool deadline.
 
-    Delegates to the unified resolver (#85125): ``timeouts.tools.concurrent_batch``
+    Delegates to the unified resolver: ``timeouts.tools.concurrent_batch``
     in config.yaml wins, the legacy ``PILOTAGE_CONCURRENT_TOOL_TIMEOUT_S`` env var
     remains the back-compat bridge, and ``0``/negative still disables the bound.
     """
@@ -401,7 +401,7 @@ class _ConcurrentToolAuthorizationGate:
     that went away) must not park every other worker forever. On expiry the
     worker runs its prompt unserialized — worst case is interleaved prompts,
     strictly better than permanent starvation (same tradeoff as the
-    start-order gate, #79705).
+    start-order gate,).
 
     Deadline exclusion is measured at the SOURCE of the human wait
     (``tools.approval.human_wait_seconds``: the CLI prompt and the gateway
@@ -409,7 +409,7 @@ class _ConcurrentToolAuthorizationGate:
     this gate. Gate residency is arbitrary code — using it as the exclusion
     signal let a wedged plugin grow the exclusion 1:1 with wall clock, keeping
     the batch deadline's ``remaining`` constant so it never fired and the turn
-    hung forever (#79719). A wedged plugin now contributes nothing to the
+    hung forever. A wedged plugin now contributes nothing to the
     exclusion and the batch times out normally, while a genuine approval wait
     (which can legitimately exceed any fixed bound) is still excluded in full.
     """
@@ -658,7 +658,7 @@ def _run_agent_tool_execution_middleware(
 
         # Keep the gateway turn-inactivity watchdog from abandoning a turn
         # whose tool call runs silently for longer than the inactivity
-        # timeout (#84491): stamp activity periodically while the tool is
+        # timeout: stamp activity periodically while the tool is
         # in flight, not just at start/completion. Both the sequential and
         # the concurrent paths funnel through here, so a single heartbeat
         # covers every tool.
@@ -731,7 +731,7 @@ def _run_agent_tool_execution_middleware(
 
 
 def _resolve_sequential_tool_timeout() -> float | None:
-    """Deadline for one sequential tool call (#85125 Phase 2a).
+    """Deadline for one sequential tool call Phase 2a).
 
     ``timeouts.tools.sequential_call`` in config.yaml wins; when unset, the
     sequential path inherits the concurrent batch deadline (same value, same
@@ -1059,7 +1059,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                 _underlying, _underlying_args, _err = _ts.resolve_underlying_call(function_args)
                 if not _err and _underlying:
                     if _underlying in _tool_search_scoped_names(agent):
-                        # Probe-validate before unwrapping (ironclaw#5149):
+                        # Probe-validate before unwrapping (ironclaw):
                         # missing required args return the parameter schema
                         # instead of dispatching into an opaque failure.
                         _probe_err = _ts.validate_deferred_call_args(_underlying, _underlying_args)
@@ -1208,7 +1208,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             pass
         # Approval/sudo callbacks (thread-local) and the agent turn's
         # ContextVars are propagated by propagate_context_to_thread() at the
-        # submit site below (GHSA-qg5c-hvr5-hjgr, #13617).
+        # submit site below (GHSA-qg5c-hvr5-hjgr,).
         start = time.time()
         blocked = False
         dispatched = False
@@ -1906,7 +1906,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 _underlying, _underlying_args, _err = _ts.resolve_underlying_call(function_args)
                 if not _err and _underlying:
                     if _underlying in _tool_search_scoped_names(agent):
-                        # Probe-validate before unwrapping (ironclaw#5149):
+                        # Probe-validate before unwrapping (ironclaw):
                         # missing required args return the parameter schema
                         # instead of dispatching into an opaque failure.
                         _probe_err = _ts.validate_deferred_call_args(_underlying, _underlying_args)

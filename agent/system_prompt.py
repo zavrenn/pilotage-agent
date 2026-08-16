@@ -134,7 +134,7 @@ def _plugin_session_info(agent: Any) -> Dict[str, str]:
     try:
         # Prefer the agent's own home (override-aware, session_db fallback) —
         # ambient get_active_profile_name() misreports on threads that lost
-        # the PILOTAGE_HOME ContextVar (#86313 class; plugin half per @helix4u).
+        # the PILOTAGE_HOME ContextVar class; plugin half per @helix4u).
         _home = _agent_home(agent)
         if _home is not None:
             profile_name = _profile_name_for_home(_home)
@@ -250,7 +250,7 @@ def _agent_home(agent: Any) -> Optional[Path]:
        binds the profile home per turn via ``_profile_runtime_scope`` +
        ``copy_context``) would otherwise have the db-derived launch home
        STOMP the correctly-bound profile — inverting the leak this helper
-       exists to fix (found by @kshitijk4poor's post-merge probe on #86313).
+       exists to fix (found by @kshitijk4poor's post-merge probe on).
     2. Fallback: the home containing the agent's ``_session_db.db_path``
        (``<home>/state.db``) — ground truth on threads that lost the
        ContextVar (ContextVars don't propagate into ``threading.Thread``),
@@ -348,7 +348,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if agent.load_soul_identity or not agent.skip_context_files:
         # Scope the SOUL.md read to the agent's OWN home (see _agent_home) —
         # ambient resolution on a thread that lost the PILOTAGE_HOME ContextVar
-        # reads the launch profile's SOUL.md instead (#50233).
+        # reads the launch profile's SOUL.md instead.
         _soul_content = _r.load_soul_md(_ctx_len, home_override=_agent_home(agent))
         if _soul_content:
             stable_parts.append(_soul_content)
@@ -593,7 +593,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # ALREADY <root>/profiles/<name> — that is exactly how both
         # _profile_name_for_home() and _resolve_active_profile_name() derive
         # it. So the profile home is the session home itself; appending
-        # /profiles/<name> again doubled it (#72894). The default profile's
+        # /profiles/<name> again doubled it. The default profile's
         # data sits at the ROOT (get_default_pilotage_root()), which in ambient
         # profile mode is NOT get_pilotage_home().
         profile_home = _home_str
@@ -675,7 +675,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # user's shell cwd, so an in-tree fallback is a deliberate choice
         # (developing Pilotage). Every other surface (desktop chat panel,
         # gateway daemons) self-spawns into the install tree, where the
-        # fallback would inject this repo's contributor AGENTS.md (#64590).
+        # fallback would inject this repo's contributor AGENTS.md.
         context_files_prompt = _r.build_context_files_prompt(
             cwd=resolve_context_cwd(), skip_soul=_soul_loaded,
             context_length=_ctx_len,
@@ -735,7 +735,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # on every rebuild path (compression boundary, fresh-agent gateway turns,
     # session resume without a stored prompt).  The model can still query the
     # exact wall-clock time via tools when it actually needs it.
-    # Credit: @iamfoz (PR #20451).
+    # Credit: @iamfoz.
     timestamp_line = f"Conversation started: {now.strftime('%A, %B %d, %Y')}"
     if agent.pass_session_id and agent.session_id:
         timestamp_line += f"\nSession ID: {agent.session_id}"
@@ -806,7 +806,7 @@ def reconstruct_static_prefix(
     The static prefix is not persisted (only the full prompt is), so any
     path that adopts a stored/kept ``_cached_system_prompt`` — session
     restore, the compression keep-prompt path, or a failover to a cache-on
-    provider mid-turn (#72626) — must rebuild the stable tier to regain the
+    provider mid-turn — must rebuild the stable tier to regain the
     two-block ``[static, volatile]`` system layout.
 
     Safety: the rebuilt stable tier is used ONLY when the stored prompt

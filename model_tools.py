@@ -57,7 +57,7 @@ def suppress_post_tool_call_hook():
         _post_tool_call_hook_suppressed.reset(token)
 
 # Tracks platform-bundle names already flagged in disabled_toolsets so the
-# advisory (#33924) is logged once per name, not on every tool recompute.
+# advisory is logged once per name, not on every tool recompute.
 _WARNED_DISABLED_BUNDLES: set = set()
 
 
@@ -234,7 +234,7 @@ discover_builtin_tools()
 # internally uses a blocking future.result(timeout=120) wait, and the
 # gateway lazy-imports this module from inside the asyncio event loop on
 # the first user message — freezing Discord/Telegram heartbeats for up to
-# 120s whenever any configured MCP server was slow or unreachable (#16856).
+# 120s whenever any configured MCP server was slow or unreachable.
 #
 # Each entry point now runs discovery explicitly at its own startup:
 #   - gateway/run.py            -> start_gateway() uses run_in_executor
@@ -308,7 +308,7 @@ _tool_defs_cache_lock = threading.Lock()
 # (per-session toolset sets, config edits, kanban-task toggles); without a
 # bound the cache grows unboundedly. 8 comfortably covers the warm working
 # set (the handful of distinct platform/toolset combos a gateway actually
-# serves) while keeping the cap small. (#19251)
+# serves) while keeping the cap small.
 _TOOL_DEFS_CACHE_MAX = 8
 
 
@@ -395,10 +395,10 @@ def get_tool_definitions(
         # long-lived Gateway process accumulates duplicate tool names across
         # agent inits and providers that enforce unique tool names
         # (DeepSeek, Xiaomi MiMo, Moonshot Kimi) reject the request with
-        # HTTP 400. Mirrors the cache-hit path above. (issue #17335)
+        # HTTP 400. Mirrors the cache-hit path above. 
         # Bound the cache with LRU eviction so a long-lived Gateway process
         # doesn't accumulate entries unboundedly across the many distinct
-        # toolset/config fingerprints it sees over its lifetime (#19251).
+        # toolset/config fingerprints it sees over its lifetime.
         with _tool_defs_cache_lock:
             # Another thread may have populated this exact key while this
             # thread computed. Reuse it and serialize capacity eviction.
@@ -460,7 +460,7 @@ def _compute_tool_definitions(
     # Always apply disabled toolsets as a subtraction step at the end.
     # This ensures that even if a composite toolset (like pilotage-cli)
     # is enabled, any tools belonging to a disabled toolset are strictly
-    # stripped out. See issue #17309.
+    # stripped out. See.
     if disabled_toolsets:
         for toolset_name in disabled_toolsets:
             if validate_toolset(toolset_name):
@@ -470,7 +470,7 @@ def _compute_tool_definitions(
                     # posture toolsets (`posture: True`, e.g. `coding`) re-list
                     # those same core tools without owning them, so subtracting
                     # the whole toolset would strip core tools shared by other
-                    # enabled toolsets and empty the tool list (#33924, #57315).
+                    # enabled toolsets and empty the tool list.
                     # Subtract only the non-core delta; keep core.
                     to_remove = bundle_non_core_tools(toolset_name)
                     tools_to_include.difference_update(to_remove)
@@ -483,7 +483,7 @@ def _compute_tool_definitions(
                             "name '%s'; core tools are preserved and only its "
                             "platform-specific tools (%s) are removed. Bundle "
                             "names usually belong in `toolsets:`, not "
-                            "`disabled_toolsets` (#33924).",
+                            "`disabled_toolsets`.",
                             toolset_name,
                             ", ".join(resolved) if resolved else "none",
                         )
@@ -518,7 +518,7 @@ def _compute_tool_definitions(
     # Rebuild execute_code schema to only list sandbox tools that are actually
     # available.  Without this, the model sees "web_search is available in
     # execute_code" even when the API key isn't configured or the toolset is
-    # disabled (#560-discord).
+    # disabled -discord).
     if "execute_code" in available_tool_names:
         from tools.code_execution_tool import SANDBOX_ALLOWED_TOOLS, build_execute_code_schema, _get_execution_mode
         sandbox_enabled = SANDBOX_ALLOWED_TOOLS & available_tool_names
@@ -646,7 +646,7 @@ def _resolve_active_context_length() -> int:
         # Honor explicit `model.context_length` in config.yaml — short-circuits
         # the OpenRouter /models probe at get_model_context_length step 0, so
         # non-OpenRouter providers don't pay the ~2-3s OpenRouter fetch at every
-        # CLI startup.  See issue #46620.
+        # CLI startup. See.
         raw_ctx = model_cfg.get("context_length")
         config_ctx = raw_ctx if isinstance(raw_ctx, int) and raw_ctx > 0 else None
         # Provider-aware resolution: providers like Codex OAuth enforce a
@@ -730,7 +730,7 @@ _READ_SEARCH_TOOLS = {"read_file", "search_files"}
 # becomes part of the conversation. It's defense-in-depth — the json layer
 # already prevents framing escape — but cheap and worth having.
 #
-# Ported from ironclaw#1639.
+# Ported from ironclaw.
 _TOOL_ERROR_ROLE_TAG_RE = re.compile(
     r'</?(?:tool_call|function_call|result|response|output|input|system|assistant|user)>',
     re.IGNORECASE,
@@ -911,7 +911,7 @@ def _normalize_json_strings_for_schema(value: Any, schema: Any) -> Any:
     matching schema position actually expects an array or object, so
     legitimate JSON-looking string fields (``type: string``) are preserved.
 
-    Ported from cline/cline#11803, adapted to pilotage-agent's coercion layer.
+    Ported from cline/cline, adapted to pilotage-agent's coercion layer.
     Returns the original value object when nothing changed (identity preserved
     so callers can cheaply detect no-ops).
     """
@@ -1291,7 +1291,7 @@ def handle_function_call(
                         "Use tool_search to find tools you can call."
                     )
                 )
-            # Probe-validate against the deferred tool's schema (ironclaw#5149):
+            # Probe-validate against the deferred tool's schema (ironclaw):
             # a blind call missing required arguments returns the parameter
             # schema instead of dispatching into an opaque downstream failure.
             _probe_err = _ts_mod.validate_deferred_call_args(underlying_name, underlying_args)

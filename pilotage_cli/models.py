@@ -630,7 +630,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     # Model IDs use the "google/" publisher prefix Vertex's openapi
     # endpoint expects (see pilotage_cli/model_setup_flows.py).
     # Entries validated live against a GCP project (global region,
-    # HTTP 200) as of 2026-07-21 (PR #68767).
+    # HTTP 200) as of 2026-07-21.
     "vertex": [
         "google/gemini-3.1-pro-preview",
         "google/gemini-3-pro-preview",
@@ -1526,7 +1526,7 @@ def _openrouter_model_supports_tools(item: Any) -> bool:
     so the picker doesn't silently empty for those users. Only hide models
     whose ``supported_parameters`` is an explicit list that omits ``tools``.
 
-    Ported from Kilo-Org/kilocode#9068.
+    Ported from Kilo-Org/kilocode.
     """
     if not isinstance(item, dict):
         return True
@@ -1556,7 +1556,7 @@ def parse_openrouter_reasoning_capabilities(item: Any) -> Optional[dict[str, Any
         ``None`` when capability can't be determined from the entry
         (missing/malformed ``supported_parameters``).
 
-    Ported from PrimeIntellect-ai/prime-agent#1258 (derive reasoning levels
+    Ported from PrimeIntellect-ai/prime-agent (derive reasoning levels
     from provider metadata instead of hardcoded model-family lists).
     """
     if not isinstance(item, dict):
@@ -1724,7 +1724,7 @@ def clamp_reasoning_effort_to_supported(
     ``high``; requesting ``minimal`` against ``[low, medium]`` yields
     ``low`` because no lower level exists).
 
-    Ported from PrimeIntellect-ai/prime-agent#1258's thinking-level-map
+    Ported from PrimeIntellect-ai/prime-agent's thinking-level-map
     normalization.
     """
     requested = str(effort or "").strip().lower()
@@ -1814,7 +1814,7 @@ def fetch_openrouter_models(
             continue
         # Hide models that don't advertise tool-calling support — pilotage-agent
         # requires it and surfacing them leads to immediate runtime failures
-        # when the user selects them. Ported from Kilo-Org/kilocode#9068.
+        # when the user selects them. Ported from Kilo-Org/kilocode.
         if not _openrouter_model_supports_tools(live_item):
             continue
         if preferred_id == silent_default:
@@ -2616,10 +2616,10 @@ _BORROWED_MODEL_PROVIDERS: frozenset[str] = frozenset()
 # Providers whose live /v1/models endpoint is the authoritative catalog, so the
 # curated list is a discovery-only fallback. For these, the picker merges
 # live-first (live entries lead, curated-only entries append). Every OTHER
-# provider keeps curated-first (commit 658ac1d86, #46309) so a deliberately
+# provider keeps curated-first (commit 658ac1d86,) so a deliberately
 # surfaced newest model stays at the top even when the live API lags. OpenCode
 # Zen / Go re-expose dozens of upstream vendors and rotate them frequently, so
-# their stale curated entries must not pollute the top of the picker. (#49129)
+# their stale curated entries must not pollute the top of the picker.
 _LIVE_FIRST_PICKER_PROVIDERS: frozenset[str] = frozenset(
     {"opencode-zen", "opencode-go"}
 )
@@ -2740,7 +2740,7 @@ def detect_static_provider_for_model(
     # If the current provider is a custom endpoint (custom or custom:*), never
     # auto-switch away from it based on a static catalog match — the user
     # explicitly configured their own endpoint and the same model name may be
-    # served there (#48305).
+    # served there.
     _is_custom_current = (
         current_provider == "custom"
         or current_provider.startswith("custom:")
@@ -3335,10 +3335,10 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                     #
                     # Single providers (kimi, zai) use curated-first
                     # (commit 658ac1d86) to surface newest models even when live
-                    # API lags (#46309). OpenCode Zen / Go are different: their
+                    # API lags. OpenCode Zen / Go are different: their
                     # live API is the authoritative catalog, so they merge
                     # live-first — live entries lead and stale curated entries
-                    # no longer pollute the top of the picker. (#49129)
+                    # no longer pollute the top of the picker.
                     #
                     # Plugin providers with no static _PROVIDER_MODELS entry fall
                     # back to the profile's curated fallback_models so their
@@ -4299,7 +4299,7 @@ _COPILOT_MODEL_ALIASES = {
     # hyphens (anthropic native format), but Copilot's API only accepts
     # dot-notation.  Accept both so users who configure copilot + a
     # default hyphenated Claude model don't hit HTTP 400
-    # "model_not_supported".  See issue #6879.
+    # "model_not_supported". See.
     "claude-sonnet-5": "claude-sonnet-5",
     "claude-opus-4-6": "claude-opus-4.6",
     "claude-sonnet-4-6": "claude-sonnet-4.6",
@@ -5102,7 +5102,7 @@ def cached_fetch_api_models(
         if age < _PROVIDER_MODELS_STALE_SERVE_MAX:
             # Stale-while-revalidate: serve the expired entry immediately so
             # picker opens never block on a live /v1/models round-trip
-            # (#72762's stall class, which a plain TTL would reintroduce an
+            # 's stall class, which a plain TTL would reintroduce an
             # hour into the session); refresh off-thread for the next open.
             def _refresh_custom():
                 live = fetch_api_models(
@@ -5461,7 +5461,7 @@ def validate_requested_model(
             if suggestions:
                 suggestion_text = "\n  Similar models: " + ", ".join(f"`{s}`" for s in suggestions)
             provider_label = "OpenAI Codex" if normalized == "openai-codex" else "xAI Grok OAuth (SuperGrok / Premium+)"
-            # Plausibility gate (#45006): the soft-accept (#16172 / #19729) exists
+            # Plausibility gate: the soft-accept /) exists
             # for entitlement-gated *hidden* slugs the curated listing hasn't
             # caught up with — but those are always the provider's own family
             # (openai-codex -> gpt-*; xai-oauth -> grok-*). Accepting an
@@ -5639,7 +5639,7 @@ def validate_requested_model(
         # prefixed with "models/" (e.g. "models/gemini-2.5-flash") — native
         # Gemini-API convention.  Our curated list and user input both use
         # the bare ID, so a direct set-membership check drops every known
-        # Gemini model.  Strip the prefix before comparison.  See #12532.
+        # Gemini model. Strip the prefix before comparison. See.
         if normalized == "gemini":
             api_models = [
                 m[len("models/"):] if isinstance(m, str) and m.startswith("models/") else m
@@ -5679,7 +5679,7 @@ def validate_requested_model(
             # before rejecting.  Providers may omit models from their live
             # listing that are still valid (stale cache, partial rollout,
             # gated previews).  Use the pure-catalog helper (no extra live
-            # fetch) so we only accept models Pilotage actually ships.  (#46850)
+            # fetch) so we only accept models Pilotage actually ships.
             #
             # EXCEPTION: official OpenAI hosts (canonical api.openai.com and
             # the data-residency regional hosts).  Their /v1/models listing is

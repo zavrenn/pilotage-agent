@@ -1,6 +1,6 @@
 """Spill oversized hook-injected context to disk with a preview placeholder.
 
-Ported from openai/codex PR #21069 (``Spill large hook outputs from context``).
+Ported from openai/codex (``Spill large hook outputs from context``).
 
 Background
 ----------

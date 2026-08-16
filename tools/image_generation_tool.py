@@ -1504,7 +1504,7 @@ def _read_configured_image_provider():
     for other features but never asked for OpenAI image gen). ``"fal"``
     explicitly routes through ``plugins/image_gen/fal/`` (which delegates
     back into this module's pipeline via call-time indirection — see
-    issue #26241).
+).
     """
     try:
         from pilotage_cli.config import load_config

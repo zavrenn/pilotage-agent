@@ -380,7 +380,7 @@ def _safe_copy_db(src: Path, dst: Path) -> bool:
 def is_zeroed_sqlite_file(
     path: Path, *, probe_bytes: int = 100, force: bool = False
 ) -> bool:
-    """True when *path* looks like the #68474 zeroed-state.db signature.
+    """True when *path* looks like the zeroed-state.db signature.
 
     Signature: size > 0, first *probe_bytes* are all NUL (no ``SQLite format 3``
     header). Used at SessionDB open and for snapshot diagnostics so a silent
@@ -415,7 +415,7 @@ _SQLITE_HEADER = b"SQLite format 3\0"
 # of the (O(1)) header + structural probe. ``integrity_check`` walks every
 # b-tree page in the file, so its cost scales with database size: on a 30 GB
 # state.db it runs for many minutes of pegged CPU with no output, which reads
-# to the user as a hung `pilotage update` (#70553 follow-up). Sessions databases
+# to the user as a hung `pilotage update` follow-up). Sessions databases
 # in the tens of GB are normal for heavy users, so the size-unbounded check is
 # never an acceptable default on the update path.
 DEFAULT_INTEGRITY_CHECK_MAX_BYTES = 2 << 30  # 2 GiB
@@ -498,7 +498,7 @@ def verify_sqlite_integrity(
         # Too large to page through PRAGMA integrity_check (which is O(file
         # size) and would peg a CPU for minutes on a multi-GB state.db).
         # Fall back to a cheap O(1) structural probe: the header check above
-        # catches the #68474 zeroed signature, and opening the DB read-only
+        # catches the zeroed signature, and opening the DB read-only
         # plus reading sqlite_master + the page geometry catches the
         # malformed-schema and truncated-header-page classes. Both are
         # constant-time — they parse the schema, they do not walk the data.
@@ -898,7 +898,7 @@ def _extract_member_atomically(
     ``atomic_replace`` rather than a bare ``os.replace``: it resolves a
     symlinked target first, so a deployment that links ``config.yaml`` into a
     dotfiles repo keeps the link instead of having it silently swapped for a
-    regular file (GitHub #16743), and it falls back to copy/fsync/unlink on
+    regular file (GitHub), and it falls back to copy/fsync/unlink on
     ``EXDEV``/``EBUSY`` for cross-device and bind-mount installs.  That
     fallback uses ``shutil.copyfile``, which does truncate in place, so on the
     cross-device path the guarantee above degrades to today's behaviour rather
@@ -1230,7 +1230,7 @@ def run_import(args) -> None:
 # recursively; missing entries are silently skipped.  Pairing data lives in
 # platform-specific JSON blobs outside state.db, so it's listed here explicitly
 # — `pilotage update` snapshots this set before pulling so approved-user lists
-# are recoverable if anything goes wrong (issue #15733).
+# are recoverable if anything goes wrong.
 _QUICK_STATE_FILES = (
     "state.db",
     "config.yaml",
@@ -1245,7 +1245,7 @@ _QUICK_STATE_FILES = (
     "gateway/discord_message_recovery.db",  # Discord reconnect replay ledger
     # Per-profile user-created stores that live outside the git checkout and
     # are therefore destroyed if the update flow removes/replaces the file and
-    # the post-update schema-init re-creates an empty one (issue #52889). All
+    # the post-update schema-init re-creates an empty one. All
     # are at $PILOTAGE_HOME/<name> for the default/root profile; on non-root
     # profiles the real path is outside PILOTAGE_HOME and the entry is silently
     # skipped (best-effort, same as the pairing stores). SQLite DBs are copied
@@ -1352,7 +1352,7 @@ def _create_quick_snapshot_locked(
 
     manifest: Dict[str, int] = {}  # rel_path -> file size
     failed_dbs: list[str] = []  # present *.db that could not be snapshotted
-    # #68805: track protected DB files skipped for size — they are snapshot
+    #: track protected DB files skipped for size — they are snapshot
     # incompleteness just like a failed copy, so pruning must be suppressed
     # to preserve the older complete snapshot that may contain the only
     # recoverable database.
@@ -1440,7 +1440,7 @@ def _create_quick_snapshot_locked(
     if failed_dbs:
         # Critical: update path used to log-and-continue with exit 0, so a
         # missing state.db backup looked like a successful pre-update snapshot
-        # (#68474). Surface this on stdout where operators actually look.
+        # Surface this on stdout where operators actually look.
         print(
             "  ⚠ CRITICAL: could not snapshot DB file(s): "
             + ", ".join(failed_dbs)
@@ -1483,7 +1483,7 @@ def _create_quick_snapshot_locked(
     # Auto-prune. Defaults preserve historical manual /snapshot behavior; callers
     # with known high-churn safety snapshots (for example pre-update) can pass a
     # smaller keep value so large state.db copies do not accumulate indefinitely.
-    # #68805 review: skip pruning when a present DB failed to capture OR was
+    # review: skip pruning when a present DB failed to capture OR was
     # skipped for size — either way the snapshot is incomplete and the older
     # snapshot may contain the only recoverable database.
     incomplete = failed_dbs or oversized_skipped
@@ -1661,9 +1661,9 @@ def restore_cron_jobs_if_emptied(
 
     Config-version migrations have been observed to leave ``cron/jobs.json``
     valid-but-empty after an update, silently dropping every scheduled job
-    (issue #34600). The desktop scheduler can also overwrite the file with its
+    . The desktop scheduler can also overwrite the file with its
     own small set of internally-tracked crons, causing partial loss (issue
-    #52144).
+   ).
 
     This compares the *current* job count against the pre-update snapshot. If
     the live file now has **fewer** jobs than the snapshot, the snapshot copy

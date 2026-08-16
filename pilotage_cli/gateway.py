@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Ensure /bin and /usr/bin are on PATH so launchctl/systemctl are discoverable
-# when running under UV's bundled Python which ships a minimal PATH (#3849).
+# when running under UV's bundled Python which ships a minimal PATH.
 if os.name == "posix":
     _sys_dirs = {"/bin", "/usr/bin", "/usr/sbin", "/sbin"}
     _path_dirs = set(os.environ.get("PATH", "").split(os.pathsep))
@@ -270,7 +270,7 @@ def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float) -> bool:
             process PID).
         drain_timeout: Seconds to wait for the process to exit after sending
             SIGUSR1.  Must cover the after-turn wait plus the stop()/drain
-            phase (#77184); callers should pass
+            phase; callers should pass
             ``resolve_restart_exit_wait_budget(...)``.
 
     Returns:
@@ -324,14 +324,14 @@ def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
         _time.sleep(0.5)
 
 
-# --- Wedged-gateway detection + bounded escalation (#81642) -----------------
+# --- Wedged-gateway detection + bounded escalation -----------------
 #
 # A gateway whose asyncio loop is stalled (e.g. an in-loop compression pass,
-# #72707) cannot process SIGTERM/SIGUSR1 shutdown: the drain wait then burns
+#) cannot process SIGTERM/SIGUSR1 shutdown: the drain wait then burns
 # the full drain budget (180s by default), warns "still running after 180.0s
 # — restart may fail", and `pilotage update` can deadlock behind it.  The loop
 # publishes a liveness signal precisely for this case: an asyncio task
-# rewrites ``state/gateway.heartbeat`` every 30s (#66892), so a frozen loop
+# rewrites ``state/gateway.heartbeat`` every 30s, so a frozen loop
 # stops refreshing the file while a busy-but-alive loop keeps refreshing it.
 #
 # ``probe_gateway_loop_liveness`` reads that signal (a local stat + JSON read,
@@ -340,7 +340,7 @@ def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
 #
 # - ``alive``   — heartbeat is fresh: the loop is dispatching (possibly busy).
 #                 Callers must take the normal graceful-drain path, which
-#                 honours the in-flight cron drain floor (#86684).
+# honours the in-flight cron drain floor.
 # - ``wedged``  — heartbeat belongs to this PID but has gone stale well past
 #                 several missed beats: the loop is provably dead.  Draining
 #                 is pointless (nothing can run the drain), so callers may
@@ -404,7 +404,7 @@ def _escalate_wedged_gateway(
     term_grace: float = 5.0,
     kill_wait: float = 5.0,
 ) -> bool:
-    """Bounded stop for a gateway whose loop is provably dead (#81642).
+    """Bounded stop for a gateway whose loop is provably dead.
 
     SIGTERM first (the process may still have a live signal handler thread
     even with a dead loop), a short grace, then SIGKILL.  Total worst case is
@@ -413,7 +413,7 @@ def _escalate_wedged_gateway(
 
     Callers MUST have classified the gateway as ``GATEWAY_LOOP_WEDGED``
     before calling this: escalating a merely busy gateway would bypass the
-    in-flight cron drain floor (#86684) and SIGKILL live work.
+    in-flight cron drain floor and SIGKILL live work.
 
     Returns True once the PID has left the process table.
     """
@@ -437,7 +437,7 @@ def _get_ancestor_pids() -> set[int]:
     Walks from the current PID up to PID 1 (init) so that process-table scans
     never match the calling CLI process or any of its parents.  This prevents
     ``pilotage gateway status`` from falsely counting the ``pilotage`` CLI that
-    invoked it as a running gateway instance (see #13242).
+    invoked it as a running gateway instance.
     """
     ancestors: set[int] = set()
     pid = os.getpid()
@@ -474,7 +474,7 @@ def _scan_gateway_pids(
     """
     # Exclude the entire ancestor chain so the CLI process that invoked this
     # scan (e.g. ``pilotage gateway status``) is never mistaken for a running
-    # gateway.  See #13242.
+    # gateway. See.
     exclude_pids = exclude_pids | _get_ancestor_pids()
     pids: list[int] = []
     # Strict command-line matcher shared with gateway.status: requires the
@@ -897,7 +897,7 @@ def _spawn_gateway_restart_watcher(old_pid: int, run_argv: list[str]) -> bool:
     # ``python.exe`` (from ``get_python_path()``).  That's the interpreter we
     # want: the watcher respawns it under CREATE_NO_WINDOW detach flags, so
     # the gateway owns one hidden console that all descendants inherit —
-    # nothing flashes (#54220/#56747).  The spec helper normalizes the
+    # nothing flashes /). The spec helper normalizes the
     # interpreter and captures the stable cwd + env overlay (PILOTAGE_HOME,
     # VIRTUAL_ENV, PYTHONPATH) so the respawn doesn't depend on the watcher's
     # transient working directory.  No-op on POSIX.
@@ -1643,14 +1643,14 @@ def _reaper_candidate_is_supervisor_owned(pid: int) -> bool:
     whose ``gateway.pid`` record is missing or stale is invisible to both the
     service-PID and recorded-PID exclusions — yet it is alive and supervised.
     Scheduled Tasks run under the services tree, so a candidate whose parent
-    chain reaches ``services.exe`` is spared even with no pidfile (#83683,
-    #86098).
+    chain reaches ``services.exe`` is spared even with no pidfile,
+   ).
 
     This check is deliberately NOT applied on POSIX: there, every process has
     PID 1 (launchd / init / systemd) in its ancestry — and a genuine orphan is
     *reparented directly to PID 1* — so supervisor-name ancestry carries zero
-    signal and would spare every orphan the reaper exists to kill (#51325,
-    #75936). POSIX supervised gateways are already covered pidfile-
+    signal and would spare every orphan the reaper exists to kill,
+   ). POSIX supervised gateways are already covered pidfile-
     independently by the ``_get_service_pids()`` exclusion.
 
     Known limitation (fail-open): if the Task-launched bootstrap parent has
@@ -1688,7 +1688,7 @@ def _reap_unsupervised_gateway_orphans(extra_exclude: set | None = None) -> bool
     branch → ``run_gateway()``). If its pidfile or runtime record goes missing
     or stale, ``get_running_pid()`` returns ``None`` even though a live orphan
     still holds the webhook port, so a follow-up restart stacks a duplicate on
-    the same port (#51325). This is a no-op on hosts WITH a service supervisor,
+    the same port. This is a no-op on hosts WITH a service supervisor,
     where a ``gateway restart`` argv is a transient management command, not the
     running gateway — gating on ``supports_systemd_services()`` keeps the
     orphan-aware scan from killing live management processes there.
@@ -1715,7 +1715,7 @@ def _reap_unsupervised_gateway_orphans(extra_exclude: set | None = None) -> bool
     # without this the launchd gateway looks like an unsupervised orphan and
     # gets SIGTERM'd, causing launchd to restart it — or leaving it down
     # under KeepAlive.SuccessfulExit=false) and any systemd unit reachable
-    # from a host that got past the gate above (#83683, #85344).
+    # from a host that got past the gate above.
     try:
         own |= _get_service_pids()
     except Exception:
@@ -1723,9 +1723,9 @@ def _reap_unsupervised_gateway_orphans(extra_exclude: set | None = None) -> bool
     # On Windows there is no systemd/launchd service query at all
     # (_get_service_pids() returns an empty set), so a gateway supervised by
     # a Scheduled Task / Startup VBS looks like an unsupervised orphan to the
-    # process scan (#86098).  The same holds on every platform for a healthy
+    # process scan. The same holds on every platform for a healthy
     # gateway launched standalone (no service registration) whose PID the
-    # runtime record can see (#83683).  Exempt the recorded healthy gateway
+    # runtime record can see. Exempt the recorded healthy gateway
     # PID and its parent chain: a recorded, liveness-verified gateway is by
     # definition not an orphan "the pidfile/runtime record can't see", and
     # the Scheduled-Task bootstrap's argv (``gateway run``) matches the
@@ -1752,7 +1752,7 @@ def _reap_unsupervised_gateway_orphans(extra_exclude: set | None = None) -> bool
         # find_gateway_pids() includes no-supervisor `gateway restart` runtimes
         # for the current profile when no systemd supervisor is present.  On
         # Windows, additionally drop any candidate the Task Scheduler owns —
-        # the pidfile-less gap neither exclusion above can see (#83683, #86098).
+        # the pidfile-less gap neither exclusion above can see.
         orphans = [
             p
             for p in find_gateway_pids(exclude_pids=own)
@@ -1808,13 +1808,13 @@ def stop_profile_gateway() -> bool:
     restart`` argv), the pidfile/runtime record can be missing or stale while
     a live orphan still holds the webhook port. In that case fall back to the
     orphan-aware process scan so the replacement reaps the prior instance
-    instead of stacking a duplicate on the same port (#51325).
+    instead of stacking a duplicate on the same port.
 
     Even when the pid file is valid and points to the current gateway, older
     orphans may linger from prior restarts that overwrote the pid file before
     the old process exited. After killing the recorded PID, also sweep for
     any remaining orphans so each restart produces at most one live gateway
-    (#75936).
+.
     """
     try:
         from gateway.status import get_running_pid, remove_pid_file
@@ -1854,7 +1854,7 @@ def stop_profile_gateway() -> bool:
         remove_pid_file()
 
     # Also reap any orphans from prior restarts whose PIDs were overwritten
-    # in the pid file before they exited (#75936).  Exclude the PID we just
+    # in the pid file before they exited. Exclude the PID we just
     # killed so the sweep doesn't double-kill a process that's still tearing
     # down — _reap_unsupervised_gateway_orphans already excludes our own PID.
     try:
@@ -2340,7 +2340,7 @@ def _find_legacy_pilotage_units() -> list[tuple[str, Path, bool]]:
     different service name (e.g. ``pilotage.service`` before the rename to
     ``pilotage-gateway.service``). When both a legacy unit and the current
     ``pilotage-gateway.service`` are active, they fight over the same bot
-    token — the PR #5646 signal-recovery change turns this into a 30-second
+    token — the signal-recovery change turns this into a 30-second
     SIGTERM flap loop.
 
     Safety guards:
@@ -2836,7 +2836,7 @@ def _detect_venv_dir() -> Path | None:
 
     # uv and some other tools set VIRTUAL_ENV without changing sys.prefix.
     # This catches `uv run` where sys.prefix == sys.base_prefix but the
-    # environment IS a venv.  (#8620)
+    # environment IS a venv.
     _virtual_env = os.environ.get("VIRTUAL_ENV")
     if _virtual_env:
         venv = Path(_virtual_env)
@@ -3585,7 +3585,7 @@ def _get_restart_drain_timeout() -> float:
 
 
 def _get_restart_after_turn_timeout() -> float:
-    """Return the in-band restart wait-for-idle timeout in seconds (#77184)."""
+    """Return the in-band restart wait-for-idle timeout in seconds."""
     env_raw = os.getenv("PILOTAGE_RESTART_AFTER_TURN_TIMEOUT")
     if env_raw is not None and str(env_raw).strip() != "":
         return parse_restart_after_turn_timeout(env_raw)
@@ -3597,7 +3597,7 @@ def _get_restart_after_turn_timeout() -> float:
 
 
 def _get_restart_exit_wait_budget() -> float:
-    """CLI wait for gateway exit after SIGUSR1 / self-restart (#77184)."""
+    """CLI wait for gateway exit after SIGUSR1 / self-restart."""
     return resolve_restart_exit_wait_budget(
         _get_restart_drain_timeout(),
         _get_restart_after_turn_timeout(),
@@ -3782,12 +3782,12 @@ def systemd_restart(system: bool = False):
 
     pid = get_running_pid() or _systemd_main_pid(system=system)
     if pid is not None and probe_gateway_loop_liveness(pid) == GATEWAY_LOOP_WEDGED:
-        # Health probe says the event loop is provably dead (#81642): SIGUSR1
+        # Health probe says the event loop is provably dead: SIGUSR1
         # can never drain it, so the graceful wait below would burn the full
         # budget. Bounded escalation (SIGTERM grace → SIGKILL, ~10s) then let
         # systemd relaunch the unit. A busy-but-alive gateway (fresh
         # heartbeat) never takes this path — its in-flight work, including
-        # the #86684 cron drain floor, keeps the full graceful budget.
+        # the cron drain floor, keeps the full graceful budget.
         print(
             f"⚠ Gateway PID {pid} event loop is unresponsive — "
             "skipping graceful drain and forcing a bounded stop..."
@@ -4032,7 +4032,7 @@ def _launchd_domain() -> str:
     The result is cached for the lifetime of the process so that repeated
     calls (``start``, ``stop``, ``restart``) use a consistent domain.
 
-    See #40831, #23387.
+    See,.
     """
     global _resolved_launchd_domain
     if _resolved_launchd_domain is not None:
@@ -4099,11 +4099,11 @@ _LAUNCHD_JOB_UNLOADED_EXIT_CODES = frozenset({3, 113, 125})
 # different situations, so exit 5 is NOT on its own proof the domain is broken:
 #   1. The target label is still *registered* in the domain (a stale load from
 #      an interrupted restart / a bootout that didn't settle). This is
-#      recoverable — boot the stale label out and bootstrap again. See #42914.
+# recoverable — boot the stale label out and bootstrap again. See.
 #   2. The domain genuinely can't manage services (macOS 26+, neither
 #      `gui/<uid>` nor `user/<uid>` supports service management). Here launchd
 #      cannot supervise the gateway at all and we degrade to a detached
-#      background process (the `nohup pilotage gateway run` workaround). See #23387.
+# background process (the `nohup pilotage gateway run` workaround). See.
 # `_launchctl_bootstrap()` disambiguates by trying the bootout+retry (case 1)
 # first; only when that retry ALSO returns 5/125 do callers treat the domain as
 # unsupported (case 2) via `_launchctl_domain_unsupported`.
@@ -4343,7 +4343,7 @@ def _spawn_detached_gateway() -> bool:
     """Launch the gateway as a detached background process (launchd fallback).
 
     Used when launchctl can no longer bootstrap/kickstart the gateway on
-    macOS 26+ (issue #23387). Mirrors the `nohup pilotage gateway run --replace`
+    macOS 26+. Mirrors the `nohup pilotage gateway run --replace`
     workaround but keeps it CLI-managed: stdout goes to gateway.log, stderr is
     timestamped into gateway.error.log, and the PID is tracked via the
     gateway.pid file that `run_gateway` writes, so stop/status/restart keep
@@ -4553,7 +4553,7 @@ def refresh_launchd_plist_if_needed() -> bool:
     # (e.g. the agent triggered a self-update via its terminal tool), a direct
     # `launchctl bootout` tears down the service's process group — which
     # includes THIS CLI — before the follow-up `bootstrap` can run. The gateway
-    # then stays unloaded and KeepAlive can't revive it (#43842). The reload is
+    # then stays unloaded and KeepAlive can't revive it. The reload is
     # therefore always handed to a detached helper job (see NOTE below — POSIX
     # ancestry cannot reliably detect the dangerous case, so we no longer try).
     gateway_pid = None
@@ -4658,7 +4658,7 @@ def refresh_launchd_plist_if_needed() -> bool:
             # new POSIX session but does NOT move the child outside the
             # launchd job's process coalition.  When `launchctl bootout` fires
             # on the gateway label, launchd terminates ALL processes in that
-            # coalition — including a setsid-detached child (#69098).
+            # coalition — including a setsid-detached child.
             #
             # `launchctl submit` creates a wholly independent transient launchd
             # job that launchd manages separately from the gateway, so bootout
@@ -4846,7 +4846,7 @@ def launchd_start():
             )
         except subprocess.CalledProcessError as e2:
             # Even a fresh bootstrap can't manage the domain on this host —
-            # degrade to a detached background process (issue #23387).
+            # degrade to a detached background process.
             if not _launchctl_domain_unsupported(e2.returncode):
                 raise
             _launchd_fallback_to_detached(f"launchctl exit {e2.returncode}")
@@ -4874,7 +4874,7 @@ def launchd_stop():
         subprocess.run(["launchctl", "bootout", target], check=True, timeout=90)
     except subprocess.CalledProcessError as e:
         # Job already unloaded (3/113/125), or the domain can't be managed at
-        # all (5/125, macOS 26+ detached-fallback process, issue #23387) — in
+        # all (5/125, macOS 26+ detached-fallback process,) — in
         # both cases just fall through to the PID-based kill below.
         if _launchd_error_indicates_unloaded(e) or _launchctl_domain_unsupported(
             e.returncode
@@ -4951,13 +4951,13 @@ def launchd_restart():
             _clear_launchd_unsupported_marker()
             return
         if pid is not None and probe_gateway_loop_liveness(pid) == GATEWAY_LOOP_WEDGED:
-            # Health probe says the event loop is provably dead (#81642):
+            # Health probe says the event loop is provably dead:
             # the gateway cannot process a graceful shutdown, so waiting the
             # full drain budget only stalls the restart (and `pilotage update`
             # behind it) for 180s. Bounded escalation instead: SIGTERM grace
             # → SIGKILL → proceed, ~10s worst case. Never taken for a
             # busy-but-alive gateway — a fresh heartbeat keeps the drain path
-            # (and the #86684 cron drain floor) fully intact.
+            # (and the cron drain floor) fully intact.
             print(
                 f"⚠ Gateway PID {pid} event loop is unresponsive — "
                 "skipping drain and forcing a bounded stop..."
@@ -4969,7 +4969,7 @@ def launchd_restart():
             # the full drain budget (180s by default) while the old gateway
             # finishes in-flight agent runs, and it streams into surfaces with
             # no other feedback — the desktop updater's live output most of
-            # all, where a silent stop here reads as "update stuck" (#44515).
+            # all, where a silent stop here reads as "update stuck".
             # Mirrors the systemd branch's "draining (up to Ns)..." line.
             print(
                 f"→ Stopping gateway (PID {pid}) — draining in-flight runs "
@@ -5005,7 +5005,7 @@ def launchd_restart():
             # registered (we just drained it), so a plain bootstrap would hit
             # EIO on the common case. Boot the stale label out first — cheaper
             # and clearer here than routing through _launchctl_bootstrap's
-            # bootstrap-first/retry-on-EIO flow. See #23387, #42914.
+            # bootstrap-first/retry-on-EIO flow. See,.
             subprocess.run(
                 ["launchctl", "bootout", target],
                 check=False,
@@ -5265,7 +5265,7 @@ def _guard_supervised_gateway_conflict(force: bool = False) -> None:
     dispatcher that escapes the service cgroup, survives
     ``systemctl restart``, and becomes a silent concurrent writer on the shared
     kanban DB — the documented root cause of multi-writer SQLite WAL corruption
-    (issue #35240). Pass ``--force`` to start anyway.
+    . Pass ``--force`` to start anyway.
     """
     if force or _running_under_gateway_supervisor():
         return
@@ -5944,11 +5944,11 @@ def _setup_standard_platform(platform: dict):
 
 # _setup_whatsapp and _setup_dingtalk moved into their plugins:
 # plugins/platforms/{whatsapp,dingtalk}/adapter.py::interactive_setup
-# (registered via setup_fn, dispatched through the plugin path). #41112.
+# (registered via setup_fn, dispatched through the plugin path).
 
 
 # _setup_wecom moved to plugins/platforms/wecom/adapter.py::interactive_setup
-# (registered via setup_fn, dispatched through the plugin path). #41112.
+# (registered via setup_fn, dispatched through the plugin path).
 
 
 def _is_service_installed() -> bool:
@@ -6035,7 +6035,7 @@ def _builtin_setup_fn(key: str):
     return {
         # telegram and whatsapp live in plugins/platforms/*: their setup_fn is
         # registered by adapter.py::register() and dispatched through the
-        # plugin path in _configure_platform(). #41112.
+        # plugin path in _configure_platform.
         "webhooks": _s._setup_webhooks,
     }.get(key)
 
@@ -6544,7 +6544,7 @@ def _maybe_redirect_run_to_s6_supervision(args) -> bool:
     # `sleep` binary and historically crashed the whole container with
     # FileNotFoundError when PATH was empty/truncated/clobbered at this
     # point — e.g. after user customizations rewrote PATH, or on minimal
-    # images without `sleep` on PATH (issue #36208). Fall back to an
+    # images without `sleep` on PATH. Fall back to an
     # in-process block (no external binary, can't fail on PATH) so the
     # container keeps running instead of dying during boot.
     try:
@@ -6567,7 +6567,7 @@ def _block_until_terminated() -> None:
     """Keep the s6 CMD process alive until the container is stopped.
 
     Fallback heartbeat for when ``os.execvp("sleep", ...)`` can't run
-    (``sleep`` missing from PATH — issue #36208). Installs a SIGTERM
+    (``sleep`` missing from PATH). Installs a SIGTERM
     handler that exits with the conventional 128+signum code so
     ``docker stop`` produces a clean, expected exit, then blocks on
     ``signal.pause()``. Falls back to ``threading.Event().wait()`` on

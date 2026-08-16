@@ -360,7 +360,7 @@ class InProcessCronScheduler(CronScheduler):
         # ── Multiplex profiles ────────────────────────────────────────────
         # When profile_homes is set (multiplex_profiles on), tick EACH profile's
         # cron store on every tick cycle so secondary-profile jobs actually fire
-        # instead of languishing in a store no ticker owns (#69377). Without this,
+        # instead of languishing in a store no ticker owns. Without this,
         # only the process-global PILOTAGE_HOME (the default profile) is ticked.
         # Heartbeats and recovery are also scoped per profile so `pilotage cron
         # status` reflects liveness for every profile independently.
@@ -402,7 +402,7 @@ class InProcessCronScheduler(CronScheduler):
             except BaseException as e:
                 # Catch BaseException (not just Exception) so a SystemExit from
                 # a misbehaving provider SDK / agent retry path does not kill
-                # the ticker thread silently (#32612). KeyboardInterrupt is
+                # the ticker thread silently. KeyboardInterrupt is
                 # intentionally caught here too — gateway shutdown is driven by
                 # stop_event (set by the main thread's signal handler), not by
                 # an exception in this daemon thread, so swallowing it and
@@ -413,11 +413,11 @@ class InProcessCronScheduler(CronScheduler):
                 # WHY ticks fail, not just that the success marker is stale —
                 # e.g. a root-rewritten jobs.json locking out the ticker's
                 # uid went unnoticed for ~14h with the reason buried in the
-                # gateway log (#68483).
+                # gateway log.
                 record_ticker_error(f"{type(e).__name__}: {e}")
             # Record liveness every iteration; bump the success marker only on a
             # clean tick, so status can tell "alive but failing every tick" from
-            # "actually firing jobs" (#32612, #32895).
+            # "actually firing jobs".
             record_ticker_heartbeat(success=ok)
             if ok:
                 clear_ticker_error()
@@ -510,7 +510,7 @@ class InProcessCronScheduler(CronScheduler):
                         record_ticker_heartbeat(success=ok)
                         # Surface the failure reason (or clear it) per profile
                         # so `pilotage cron status` can show WHY ticks fail
-                        # (#68483).
+                        #.
                         if ok:
                             clear_ticker_error()
                         elif _tick_error:

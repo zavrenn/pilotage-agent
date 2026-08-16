@@ -50,7 +50,7 @@ TitleCallback = Callable[[str, str], None]
 # Validation callback: () -> bool. Called right before the LLM request in
 # generate_title(). Return False to skip — e.g. the user switched models
 # after this background thread captured its runtime snapshot, and sending
-# the request would reload a model the runtime already evicted (#19027).
+# the request would reload a model the runtime already evicted.
 RuntimeValidator = Callable[[], bool]
 
 # Cap on the text handed to the model. Claude Code and OpenClaw independently
@@ -135,7 +135,7 @@ _MACHINE_PREFIXES = (
     "[SYSTEM]",
     # Model-switch marker from tui_gateway.server._append_model_switch_marker.
     # It is persisted with role="user" (strict OpenAI-compatible providers
-    # reject a system message that is not first — #48338), so without this
+    # reject a system message that is not first), so without this
     # entry it looks like a real opening turn: switching models before the
     # first real message titled the session
     # "[System: The active model for this chat has…" instead of the user's
@@ -270,7 +270,7 @@ def derive_title(user_message: str) -> Optional[str]:
         space = cut.rfind(" ")
         if space > MAX_DERIVED_TITLE_CHARS // 2:
             cut = cut[:space]
-        line = cut.rstrip(" ,.;:—-") + "…"
+        line = cut.rstrip(",.;:—-") + "…"
     return line or None
 
 
@@ -357,7 +357,7 @@ def generate_title(
     returns False (e.g. the user's model was switched since the background
     thread captured its runtime snapshot), the call is skipped silently —
     no request is sent, so a stale title request can't reload a model the
-    runtime already unloaded (#19027).
+    runtime already unloaded.
     """
     if not _auto_title_enabled():
         logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
@@ -425,7 +425,7 @@ def _persist_session_title(session_db, session_id, title, *, source, dedupe=True
     transaction) so a manual ``/title`` set while generation was in flight is
     never overwritten. ``ValueError`` means the name is taken by an unrelated
     session (the unique-title index); rather than leave the session untitled
-    (#50537), append a ``#N`` suffix via ``get_next_title_in_lineage``.
+, append a ``#N`` suffix via ``get_next_title_in_lineage``.
 
     ``dedupe=False`` re-raises that collision instead. The derived title is the
     one write on the turn's critical path, and it is also the one that collides
@@ -598,7 +598,7 @@ def _auto_title_session(
         pass
     set_conversation_context(conversation_id)
     # Same for the accounting context, so the title call's token usage is
-    # recorded against this session (task='title_generation', #23270).
+    # recorded against this session (task='title_generation',).
     set_accounting_context(session_db, session_id)
 
     title = generate_title(

@@ -603,7 +603,7 @@ def is_official_openai_host(base_url: str) -> bool:
     (``api.openai.com.attacker.test``) and path-segment spoofs
     (``proxy.test/api.openai.com/v1``) are rejected. A genuine
     ``*.api.openai.com`` subdomain requires control of openai.com DNS, so
-    the dot-suffix match does not reopen the #32243 spoofing hole.
+    the dot-suffix match does not reopen the spoofing hole.
     Delegates to ``utils.base_url_host_matches``, which owns the
     exact-or-dot-suffix hostname contract (userinfo/port stripped,
     lowercased, trailing dot removed) — one implementation, not two.
@@ -633,7 +633,7 @@ def host_mandated_api_mode(base_url: str = "") -> Optional[str]:
     hostname = base_url_hostname(base_url)
     # Exact-hostname matching only — never bare substring — so lookalike hosts
     # (api.openai.com.attacker.test) and path-segment spoofs
-    # (proxy.test/api.openai.com/v1) are NOT treated as the real endpoint. (#32243)
+    # (proxy.test/api.openai.com/v1) are NOT treated as the real endpoint.
     if hostname == "api.kimi.com" and "/coding" in url_lower:
         return "anthropic_messages"
     if hostname == "api.anthropic.com" or url_lower.endswith("/anthropic"):
@@ -791,7 +791,7 @@ def resolve_custom_provider(
 
     # If the stored provider is the bare string "custom" (corrupt state
     # from a prior model-switch bug), fall back to the first custom
-    # provider entry so existing configs self-heal.  (GH #17478)
+    # provider entry so existing configs self-heal. (GH)
     bare_custom_fallback = requested == "custom"
     first_valid: Optional[Tuple[str, str, Tuple[str, ...], str]] = None
 

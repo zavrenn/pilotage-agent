@@ -513,7 +513,7 @@ class SessionResetPolicy:
     notify_exclude_platforms: tuple = ("api_server", "webhook")  # Platforms that don't get reset notifications
     # A background process this many hours old (or older) no longer blocks
     # session idle/daily reset. A forgotten preview server should not keep a
-    # session alive forever (#29177). The process is NOT killed — only ignored
+    # session alive forever. The process is NOT killed — only ignored
     # by the reset guard. Raise this if you run legitimate multi-day jobs whose
     # liveness should pin the conversation open.
     bg_process_max_age_hours: int = 24
@@ -585,7 +585,7 @@ class ChannelOverride:
 # Canonical map of platforms whose primary credential is ``PlatformConfig.token``
 # and the env var it loads from. Used for empty-token warnings at config
 # validation and by the multiplex primary-startup credential gate in
-# ``gateway.run`` (#64674). Platforms absent from this map authenticate some
+# ``gateway.run``. Platforms absent from this map authenticate some
 # other way (session files, port-bound webhooks, api_key-only) and must never
 # be skipped for a missing token.
 PLATFORM_TOKEN_ENV_NAMES: dict["Platform", str] = {
@@ -740,7 +740,7 @@ class StreamingConfig:
     edit_interval: float = DEFAULT_STREAMING_EDIT_INTERVAL
     buffer_threshold: int = DEFAULT_STREAMING_BUFFER_THRESHOLD
     cursor: str = DEFAULT_STREAMING_CURSOR
-    # Ported from openclaw/openclaw#72038.  When >0, the final edit for
+    # Ported from openclaw/. When >0, the final edit for
     # a long-running streamed response is delivered as a fresh message
     # if the original preview has been visible for at least this many
     # seconds, so the platform's visible timestamp reflects completion
@@ -871,7 +871,7 @@ class GatewayConfig:
 
     # Whether to keep writing the legacy sessions.json mirror of the gateway
     # routing index. The primary copy lives in state.db (gateway_routing
-    # table, #9006). Default True for backward compatibility with external
+    # table,). Default True for backward compatibility with external
     # tooling and downgrade safety; set gateway.write_sessions_json: false in
     # config.yaml to stop producing the file.
     write_sessions_json: bool = True
@@ -909,7 +909,7 @@ class GatewayConfig:
     # disables sd_notify at runtime.
     systemd_watchdog_seconds: int = 0
 
-    # In-process event-loop liveness watchdog (#69089). A daemon OS thread
+    # In-process event-loop liveness watchdog. A daemon OS thread
     # probes the gateway loop with call_soon_threadsafe; after consecutive
     # missed probes it dumps all-thread stacks and hard-exits with the
     # service-restart code so the supervisor can revive the process. On by
@@ -1471,7 +1471,7 @@ def load_gateway_config() -> GatewayConfig:
             if platforms_data:
                 gw_data["platforms"] = platforms_data
             # Iterate built-in platforms plus any registered plugin platforms
-            # so plugin authors get the same shared-key bridging (#24836).
+            # so plugin authors get the same shared-key bridging.
             try:
                 from pilotage_cli.plugins import discover_plugins
                 discover_plugins()  # idempotent
@@ -1619,11 +1619,11 @@ def load_gateway_config() -> GatewayConfig:
                     # plugin-enable pass in _apply_env_overrides honors an
                     # explicit ``enabled: false`` for migrated plugin platforms
                     # (telegram, whatsapp …)
-                    # instead of re-enabling them on token/SDK presence. #41112.
+                    # instead of re-enabling them on token/SDK presence.
                     extra["_enabled_explicit"] = True
                 extra.update(bridged)
 
-            # Plugin-owned YAML→env config bridges (#24836).  See
+            # Plugin-owned YAML→env config bridges. See
             # ``PlatformEntry.apply_yaml_config_fn`` for the hook contract.
             # Order: shared-key loop (above) → this dispatch → legacy hardcoded
             # blocks (below; no-op when a hook already set their env var) →
@@ -1663,7 +1663,7 @@ def load_gateway_config() -> GatewayConfig:
             # Bridge top-level require_mention to Telegram when the telegram: section
             # does not already provide one.  Users often write "require_mention: true"
             # at the top level alongside group_sessions_per_user, expecting it to work
-            # the same way (#3979).
+            # the same way.
             _tl_require_mention = yaml_cfg.get("require_mention")
             if _tl_require_mention is not None:
                 _tg_section = yaml_cfg.get("telegram") or {}
@@ -1676,17 +1676,17 @@ def load_gateway_config() -> GatewayConfig:
                     # block in core; it stays in core because it keys off the TOP-LEVEL
                     # require_mention (not a telegram: block), so the telegram plugin's
                     # apply_yaml_config_fn hook — which only runs when a telegram config
-                    # block exists — can't cover the no-telegram-block case (#3979).
+                    # block exists — can't cover the no-telegram-block case.
                     if not os.getenv("TELEGRAM_REQUIRE_MENTION"):
                         os.environ["TELEGRAM_REQUIRE_MENTION"] = str(_tl_require_mention).lower()
 
             # Telegram settings → env vars / extra: migrated to the telegram
             # plugin's apply_yaml_config_fn hook
-            # (plugins/platforms/telegram/adapter.py). #41112 / #3823.
+            # (plugins/platforms/telegram/adapter.py). /.
 
             # WhatsApp settings → env vars: migrated to the whatsapp plugin's
             # apply_yaml_config_fn hook (plugins/platforms/whatsapp/adapter.py).
-            # #41112 / #3823.
+            # /.
 
     except Exception as e:
         logger.warning(
@@ -1743,7 +1743,7 @@ def _validate_gateway_config(config: "GatewayConfig") -> None:
             )
 
     # Reject known-weak placeholder tokens.
-    # Ported from openclaw/openclaw#64586: users who copy .env.example
+    # Ported from openclaw/: users who copy.env.example
     # without changing placeholder values get a clear startup error instead
     # of a confusing "auth failed" from the platform API.
     try:
@@ -1783,7 +1783,7 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
         # Read (don't pop) the explicit-enable marker: the registry-driven
         # plugin-enable pass later in this function also needs it to avoid
         # re-enabling a platform the user explicitly disabled (migrated plugin
-        # platforms — telegram, whatsapp — flow through here too, #41112). The
+        # platforms — telegram, whatsapp — flow through here too,). The
         # flag is cleared once for all platforms in the final cleanup at the
         # end of _apply_env_overrides.
         enabled_was_explicit = bool(platform_config.extra.get("_enabled_explicit", False))
@@ -1981,7 +1981,7 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
     # project_id / subscription_name) can supply ``env_enablement_fn`` on
     # their PlatformEntry — called here BEFORE adapter construction.
     #
-    # Enablement gate (#31116): when a plugin registers ``is_connected``
+    # Enablement gate: when a plugin registers ``is_connected``
     # (the "has the user actually configured credentials for this?" check),
     # we MUST consult it before flipping ``enabled = True``.  Otherwise
     # ``check_fn`` alone — a passive "is the SDK importable?" probe —
@@ -2007,7 +2007,7 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
             # loop) when the user wrote ``enabled`` for this platform; if they
             # explicitly disabled it, never re-enable here just because
             # check_fn() / is_connected() pass (e.g. a token is present but the
-            # user set telegram.enabled: false). #41112.
+            # user set telegram.enabled: false).
             if (
                 existing_cfg is not None
                 and not existing_cfg.enabled
@@ -2094,7 +2094,7 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
             # ``load_gateway_config()`` call — including the desktop/dashboard
             # readiness probe (``GET /api/status``) — blocking startup until
             # every install finished and boot-looping the desktop app at 94%.
-            # The check_fn/ensure_deps_fn split (#79812) makes that
+            # The check_fn/ensure_deps_fn split makes that
             # impossible by construction.
             try:
                 deps_ok = bool(entry.check_fn())

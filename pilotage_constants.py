@@ -102,7 +102,7 @@ def _warn_profile_fallback_once() -> None:
             f"is the DEFAULT profile — not {active!r}. Any data this "
             f"process writes will land in the wrong profile. The "
             f"subprocess spawner should pass PILOTAGE_HOME explicitly "
-            f"(see issue #18594)."
+            f"(see)."
         )
         try:
             sys.stderr.write(msg + "\n")
@@ -127,7 +127,7 @@ def get_pilotage_home() -> Path:
     callers that import this at load time.  Subprocess spawners are
     expected to propagate ``PILOTAGE_HOME`` explicitly (see the systemd
     template in ``pilotage_cli/gateway.py`` and the kanban dispatcher in
-    ``pilotage_cli/kanban_db.py``).  See https://github.com/NousResearch/hermes-agent/issues/18594.
+    ``pilotage_cli/kanban_db.py``).
     """
     override = get_pilotage_home_override()
     if override:
@@ -289,7 +289,7 @@ def get_pilotage_dir(
     legacy install is in use" — install scaffolds, manual ``mkdir`` work,
     and cleared-then-abandoned locations all create empty stubs that
     would otherwise silently shadow real data populated at
-    ``<new_subpath>/``. See #27602 for the pairing-store regression where
+    ``<new_subpath>/``. See for the pairing-store regression where
     a dormant empty ``pairing/`` orphaned approved-user data in
     ``platforms/pairing/``.
 
@@ -427,7 +427,7 @@ def managed_node_tree_in_use(home: Path | None = None) -> bool:
     overwrite while a process runs them, so the updater must not rewrite
     ``%PILOTAGE_HOME%\\node`` while the desktop app's Node processes hold it —
     ``PermissionError: [WinError 5]`` on ``npm.cmd`` is the classic symptom
-    (#80926). Always ``False`` on POSIX, which has no equivalent lock
+. Always ``False`` on POSIX, which has no equivalent lock
     semantics.
 
     The scan is a fast pre-check that avoids pointless re-downloads in
@@ -504,7 +504,7 @@ def _heal_managed_node_windows(home: Path | None = None) -> bool | None:
     ``FILE_SHARE_DELETE`` — the same mechanism as the pilotage.exe quarantine);
     when the OS refuses the rename, that refusal *is* the in-use signal and
     the heal defers instead of forcing the write and crashing with
-    ``PermissionError: [WinError 5]`` on ``npm.cmd`` (#80926).
+    ``PermissionError: [WinError 5]`` on ``npm.cmd``.
     """
     import re
     import tempfile
@@ -719,7 +719,7 @@ def heal_pilotage_managed_node() -> bool:
     downloads the portable zip directly (same source as ``install.ps1``).
     A Windows deferral (the tree is in use by a running app) does NOT record
     the attempt, so a later call — or the next process — can heal once the
-    tree is free (#80926).
+    tree is free.
     """
     global _managed_node_heal_attempted
     if _managed_node_heal_attempted:
@@ -896,7 +896,7 @@ def agent_browser_runnable(path: str | None) -> bool:
     (e.g. ``/opt/homebrew/bin/agent-browser``) at our local
     ``node_modules/agent-browser/bin/...`` binary, which then disappears on the
     next ``pilotage update`` — leaving a **dangling symlink** that ``which`` still
-    reports but exec fails on with exit 127 (issue #48521). Callers that trust
+    reports but exec fails on with exit 127. Callers that trust
     such a path silently break every browser tool.
 
     This validates the candidate by resolving it to a real, executable file and
@@ -1013,7 +1013,7 @@ def secure_parent_dir(path: Path) -> None:
     prevent catastrophic host bricking when ``PILOTAGE_HOME`` or other path
     env vars resolve to an unexpected location.
 
-    See https://github.com/NousResearch/hermes-agent/issues/25821.
+
     """
     parent = path.parent.resolve()
     # Refuse root and its direct children (/usr, /home, /var, /tmp, …).
@@ -1457,7 +1457,7 @@ def is_container() -> bool:
 
     Result is cached for the process lifetime.  Import-safe — no heavy deps.
 
-    See: NousResearch/hermes-agent#47111
+    See:
     """
     global _container_detected
     if _container_detected is not None:
@@ -1586,7 +1586,7 @@ def venv_bin_dir(venv_dir, *, windows: bool | None = None) -> Path:
     Canonical helper for venv layout. This was open-coded in seven places
     across four ``pilotage_cli`` modules using three different Windows
     predicates (``platform.system()``, ``is_windows()``, ``_is_windows()``);
-    each new call site had to re-derive it, and #76091 shipped an eighth copy
+    each new call site had to re-derive it, and shipped an eighth copy
     because the correct behaviour lived 2400 lines away in another function.
     A few sites outside ``pilotage_cli`` (``tools/code_execution_tool.py``,
     ``agent/lsp/install.py``, ``agent/lsp/servers.py``) still hand-roll it —
@@ -1685,5 +1685,5 @@ def partial_update_hint(exc: BaseException) -> list[str]:
         "and a related one was not.",
         "Re-run the update to bring the whole tree to the same version:",
         "    pilotage update",
-        "If that also fails, reinstall: https://hermes-agent.nousresearch.com",
+        "If that also fails, reinstall: ",
     ]

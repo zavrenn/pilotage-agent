@@ -52,7 +52,7 @@ logger = logging.getLogger("gateway.run")
 # Upper bound on the off-loop agent-resource cleanup during a /new or /reset
 # (see _handle_reset_command). A stuck teardown must not block the event loop;
 # past this the reset proceeds and the cleanup is left to finish (or leak) in
-# its worker thread. (#35994)
+# its worker thread.
 _RESET_CLEANUP_TIMEOUT_S = 30.0
 
 
@@ -133,7 +133,7 @@ class GatewaySlashCommandsMixin:
         # Evict the running-agent slot now that the generation is bumped. The
         # in-flight run's own guarded release (run_generation=old) will return
         # False and leave its dead agent behind; clearing here keeps the slot
-        # from becoming a zombie that silently drops all later messages (#28686).
+        # from becoming a zombie that silently drops all later messages.
         # Idempotent, so the run's finally calling it again is harmless.
         self._release_running_agent_state(session_key)
 
@@ -150,7 +150,7 @@ class GatewaySlashCommandsMixin:
         # may do network IO). This handler runs ON the event loop when a
         # A confirm-button click resolves the slash-confirm
         # (see _request_slash_confirm), so an inline call wedges the whole loop
-        # and the bot goes silent until restart (#35994). Offload it to a worker
+        # and the bot goes silent until restart. Offload it to a worker
         # thread (via the contextvar-preserving executor helper) with a bounded
         # timeout so the loop is never blocked.
         _cache_lock = getattr(self, "_agent_cache_lock", None)
@@ -173,13 +173,13 @@ class GatewaySlashCommandsMixin:
                     logger.warning(
                         "Agent resource cleanup for session %s exceeded %ss during "
                         "/new reset; proceeding with reset (the worker thread is left "
-                        "to finish on its own). (#35994)",
+                        "to finish on its own).",
                         session_key, _RESET_CLEANUP_TIMEOUT_S,
                     )
                 except Exception as cleanup_exc:
                     logger.warning(
                         "Agent resource cleanup for session %s failed during /new "
-                        "reset: %s (#35994)",
+                        "reset: %s",
                         session_key, cleanup_exc,
                     )
         self._evict_cached_agent(session_key)
@@ -191,7 +191,7 @@ class GatewaySlashCommandsMixin:
         self._clear_conversation_scope(session_key, reason="session_reset")
 
         # The old conversation's in-flight async delegations end WITH it
-        # (#55578): after the reset rotates the session id, their completions
+        #: after the reset rotates the session id, their completions
         # would have no live owner — a dangling subagent can only burn tokens
         # and park an orphaned payload on the shared queue. Interrupt by the
         # expiring durable session id (delegations dispatched from gateway
@@ -257,7 +257,7 @@ class GatewaySlashCommandsMixin:
 
         # Resolve session config info to surface to the user, scoped to the
         # profile serving this source so a multiplexed /reset //new banner
-        # reports the profile's model, not the base config's (#59003).
+        # reports the profile's model, not the base config's.
         try:
             session_info = await asyncio.to_thread(
                 self._reset_notice_session_info, source
@@ -341,7 +341,7 @@ class GatewaySlashCommandsMixin:
         serves the room/channel (``source.profile`` — stamped by the
         ``/p/<profile>/`` URL prefix, a per-credential adapter, or a room→
         profile map). When ``multiplex_profiles`` is on, report the stamped
-        profile and, like the scoped /reset banner (#59003), resolve the
+        profile and, like the scoped /reset banner, resolve the
         displayed home under that profile's runtime scope. When multiplexing
         is off (the default) the stamp is ignored — mirroring the gating in
         ``_run_agent`` and ``_reset_notice_session_info`` — and the command
@@ -1245,7 +1245,7 @@ class GatewaySlashCommandsMixin:
 
         # Background (async) delegations — delegate_task(background=true).
         # Live per-child activity comes from the registry's progress sampler
-        # (#51690): api calls, current tool, seconds since last activity.
+        #: api calls, current tool, seconds since last activity.
         delegations: list[dict] = []
         try:
             from tools.async_delegation import list_async_delegations
@@ -1373,7 +1373,7 @@ class GatewaySlashCommandsMixin:
         # No running agent anywhere for this scope. A platform status
         # indicator can still be stuck — e.g. a persistent
         # assistant.threads.setStatus survives a gateway restart or a turn
-        # that died without a final send (#32295). Best-effort clear so
+        # that died without a final send. Best-effort clear so
         # /stop always dismisses a phantom "is thinking...".
         adapter = getattr(self, "adapters", {}).get(source.platform)
         if adapter and hasattr(adapter, "_stop_typing_with_metadata"):
@@ -1721,7 +1721,7 @@ class GatewaySlashCommandsMixin:
         # message turn does
         # (Telegram DM topic recovery) before deriving the override key, so
         # the override is stored under the key the next message turn reads
-        # (#30479).
+        #.
         source = await asyncio.to_thread(self._normalize_source_for_session_key, source)
         session_key = self._session_key_for_source(source)
         override = self._session_model_overrides.get(session_key, {})
@@ -1747,7 +1747,7 @@ class GatewaySlashCommandsMixin:
                 try:
                     # Offload blocking provider-listing (can fall through to a
                     # synchronous urllib HTTP fetch on a stale cache) off the
-                    # event loop so the gateway doesn't freeze. See #41289.
+                    # event loop so the gateway doesn't freeze. See.
                     providers = await asyncio.to_thread(
                         list_picker_providers,
                         current_provider=current_provider,
@@ -1783,7 +1783,7 @@ class GatewaySlashCommandsMixin:
                         # Offload the switch off the event loop — switch_model()
                         # can fall through to a synchronous models.dev HTTP fetch
                         # (requests.get, 15s timeout) on a cold/expired cache,
-                        # which freezes the gateway otherwise. See #20525, #41289.
+                        # which freezes the gateway otherwise. See,.
                         result = await asyncio.to_thread(
                             _switch_model,
                             raw_input=model_id,
@@ -1844,7 +1844,7 @@ class GatewaySlashCommandsMixin:
                                 # NOT evict the working cached agent.  Otherwise
                                 # the next message rebuilds a dead agent from the
                                 # broken override and the conversation is lost
-                                # (#50163).  A failed switch must be a no-op.
+                                # A failed switch must be a no-op.
                                 logger.warning(
                                     "Picker model switch failed for cached agent: %s", exc
                                 )
@@ -1857,7 +1857,7 @@ class GatewaySlashCommandsMixin:
                                 )
 
                         # Persist the new model to the session DB so the
-                        # dashboard shows the updated model (#34850).
+                        # dashboard shows the updated model.
                         _sess_db = getattr(_self, "_session_db", None)
                         if _sess_db is not None:
                             try:
@@ -1916,7 +1916,7 @@ class GatewaySlashCommandsMixin:
 
                         # Persist to config (default) unless --session opted out,
                         # mirroring the text /model command path above so a picked
-                        # model survives across sessions like a typed one (#49066).
+                        # model survives across sessions like a typed one.
                         if persist_global:
                             try:
                                 # Write-back round-trip: raw read is correct
@@ -1955,7 +1955,7 @@ class GatewaySlashCommandsMixin:
                                 # they need an explicit set-or-clear here — the previous
                                 # lone `if result.base_url:` left a stale base_url behind
                                 # when switching to a custom provider whose resolver
-                                # returned an empty base_url (#25107).
+                                # returned an empty base_url.
                                 _is_custom_target = str(result.target_provider or "").strip().lower() == "custom"
                                 if result.base_url:
                                     _persist_model_cfg["base_url"] = result.base_url
@@ -2056,7 +2056,7 @@ class GatewaySlashCommandsMixin:
 
             try:
                 # Offload blocking provider-listing off the event loop so the
-                # gateway doesn't freeze on a stale-cache HTTP fetch. See #41289.
+                # gateway doesn't freeze on a stale-cache HTTP fetch. See.
                 providers = await asyncio.to_thread(
                     list_authenticated_providers,
                     current_provider=current_provider,
@@ -2092,7 +2092,7 @@ class GatewaySlashCommandsMixin:
         # Offload the switch off the event loop — switch_model() can fall
         # through to a synchronous models.dev HTTP fetch (requests.get, 15s
         # timeout) on a cold/expired cache, which freezes the gateway
-        # otherwise. See #20525, #41289.
+        # otherwise. See,.
         result = await asyncio.to_thread(
             _switch_model,
             raw_input=model_input,
@@ -2153,7 +2153,7 @@ class GatewaySlashCommandsMixin:
                     # model/client and re-raised.  Abort the commit: skip DB
                     # persist, session override, cache eviction, and config
                     # write so a failed switch is a no-op rather than a dead
-                    # conversation (#50163).  Without this early return the
+                    # conversation. Without this early return the
                     # next message rebuilds a broken agent from the override.
                     logger.warning("In-place model switch failed for cached agent: %s", exc)
                     return t(
@@ -2165,14 +2165,14 @@ class GatewaySlashCommandsMixin:
                     )
 
             # Persist the new model to the session DB so the dashboard
-            # shows the updated model (#34850).
+            # shows the updated model.
             _sess_db = getattr(self, "_session_db", None)
             if _sess_db is not None:
                 try:
                     _sess_entry = await self.async_session_store.get_or_create_session(source)
                     # If this session was auto-reset, consume the flag so the
                     # next regular message's cleanup does not wipe the model
-                    # override just stored below (Closes #48031).
+                    # override just stored below (Closes).
                     if getattr(_sess_entry, "was_auto_reset", False):
                         _sess_entry.was_auto_reset = False
                     await _sess_db.update_session_model(
@@ -2224,7 +2224,7 @@ class GatewaySlashCommandsMixin:
             # a one-turn override must never survive a restart. The persisted
             # value stays at the pre-once state (the prior session override,
             # or nothing), which is exactly what the finally-restore reverts
-            # the in-memory dict to. (#29923 review defect: the original
+            # the in-memory dict to. review defect: the original
             # implementation wrote through, so a crash before the restore
             # rehydrated the once-model permanently.)
             if not one_turn:
@@ -2281,7 +2281,7 @@ class GatewaySlashCommandsMixin:
                     model_cfg["default"] = result.new_model
                     model_cfg["provider"] = result.target_provider
                     # See the picker handler above for why custom providers need an
-                    # explicit set-or-clear instead of the old lone truthy check (#25107).
+                    # explicit set-or-clear instead of the old lone truthy check.
                     _is_custom_target = str(result.target_provider or "").strip().lower() == "custom"
                     if result.base_url:
                         model_cfg["base_url"] = result.base_url
@@ -2532,7 +2532,7 @@ class GatewaySlashCommandsMixin:
         last_user_idx = None
         # is_user_originated_turn: excludes display_kind bookkeeping AND
         # compaction handoffs (durable role=user, sometimes without
-        # display_kind on legacy sessions; #80622) — /retry must never
+        # display_kind on legacy sessions;) — /retry must never
         # re-send a reference-only summary as if the user asked it.
         from agent.context_compressor import is_user_originated_turn
 
@@ -2550,7 +2550,7 @@ class GatewaySlashCommandsMixin:
         # live view. After in-place compaction the pre-compaction transcript
         # lives on as active=0/compacted=1 rows under this same session id, and
         # a bare rewrite (active_only=False) would DELETE them (same class as
-        # #61145). /retry never intends to purge archived history, so avoid a
+        #). /retry never intends to purge archived history, so avoid a
         # separate existence probe: it could fail open or race with the write.
         truncated = history[:last_user_idx]
         await self.async_session_store.rewrite_transcript(
@@ -3495,7 +3495,7 @@ class GatewaySlashCommandsMixin:
         args, persist_global = self._parse_reasoning_command_args(raw_args)
         # Normalize the source (Telegram DM topic recovery) before deriving
         # the override key so storage matches the key the next message turn
-        # reads — same fix as /model (#30479).
+        # reads — same fix as /model.
         _reasoning_source = await asyncio.to_thread(self._normalize_source_for_session_key, event.source)
         session_key = self._session_key_for_source(_reasoning_source)
         self._show_reasoning = self._load_show_reasoning()
@@ -4006,7 +4006,7 @@ class GatewaySlashCommandsMixin:
         if _aggressive:
             # LLM-free hard truncation is not supported on this surface —
             # it would need its own transcript-persistence branch outside
-            # the guarded _compress_context rotation machinery (#44794).
+            # the guarded _compress_context rotation machinery.
             _agg_note = t("gateway.compress.aggressive_unsupported")
             if not _preview:
                 return _agg_note
@@ -4038,7 +4038,7 @@ class GatewaySlashCommandsMixin:
             # normal gateway turn passes (gateway/run.py main turn), so external
             # context engines bind this temporary compression agent to the
             # original platform conversation instead of falling back to an
-            # unbound/default "cli" host source — see #50422. _platform_config_key
+            # unbound/default "cli" host source — see. _platform_config_key
             # maps LOCAL->"cli" exactly like the live turn, avoiding a new
             # "local" vs "cli" mismatch.
             from gateway.run import (
@@ -4058,7 +4058,7 @@ class GatewaySlashCommandsMixin:
 
             # Pass the FULL transcript (tool results included) — same
             # rationale as the session-hygiene auto-compress in
-            # gateway/run.py (#3854): filtering to user/assistant-only
+            # gateway/run.py: filtering to user/assistant-only
             # starves the compressor's tool-result pruning and can trip the
             # protect-first/last early-return on short filtered histories.
             msgs = [
@@ -4138,7 +4138,7 @@ class GatewaySlashCommandsMixin:
 
                 # Estimate with system prompt + tool schemas included so the
                 # figure reflects real request pressure, not a transcript-only
-                # underestimate (#6217). Must be computed after tmp_agent is
+                # underestimate. Must be computed after tmp_agent is
                 # built so _cached_system_prompt/tools are populated.
                 _sys_prompt = getattr(tmp_agent, "_cached_system_prompt", "") or ""
                 _tools = getattr(tmp_agent, "tools", None) or None
@@ -4188,7 +4188,7 @@ class GatewaySlashCommandsMixin:
                 # _compress_context either rotated (legacy: ended the old
                 # session, created a continuation id — write compressed messages
                 # into the NEW session so the original stays searchable) or
-                # compacted in place (compression.in_place / #38763: same id,
+                # compacted in place (compression.in_place /: same id,
                 # transcript replaced with the compacted set).
                 new_session_id = tmp_agent.session_id
                 rotated = new_session_id != session_entry.session_id
@@ -4214,14 +4214,14 @@ class GatewaySlashCommandsMixin:
                 # rewrite_transcript() after in-place compaction would invoke
                 # replace_messages(active_only=False) which DELETEs ALL rows —
                 # including the archived turns that archive_and_compact()
-                # deliberately preserved (silent data loss, #61145).
+                # deliberately preserved (silent data loss,).
                 #
                 # The third case: _compress_context could NOT rotate AND was
                 # not in-place (e.g. legacy mode but _session_db unavailable /
                 # the DB split raised) — there session_id is unchanged for a
                 # FAILURE reason, and rewrite_transcript() would DELETE the
                 # original messages and replace them with only the compressed
-                # summary (permanent data loss #44794, #39704).
+                # summary (permanent data loss,).
                 if rotated:
                     if not await self.async_session_store.rewrite_transcript(
                         new_session_id, compressed
@@ -4245,7 +4245,7 @@ class GatewaySlashCommandsMixin:
                         "Manual /compress: session rotation did not occur "
                         "(session_id unchanged) and in-place mode is off — "
                         "preserving original transcript instead of overwriting "
-                        "it (#44794)."
+                        "it."
                     )
                 # Reset stored token count — transcript changed, old value is stale
                 await self.async_session_store.update_session(
@@ -4295,8 +4295,8 @@ class GatewaySlashCommandsMixin:
                 # Off-loop + bounded: temporary-agent teardown can block on
                 # subprocess/network/SQLite work. Running it inline freezes the
                 # gateway loop and stalls platform polling / heartbeat, the same
-                # wedge class fixed for /new (#35994) and hygiene/shutdown
-                # (#53175).
+                # wedge class fixed for /new and hygiene/shutdown
+                #.
                 await self._cleanup_agent_resources_off_loop(
                     tmp_agent, context="manual compression"
                 )
@@ -4654,7 +4654,7 @@ class GatewaySlashCommandsMixin:
         if not target_id:
             return t("gateway.resume.not_found", name=name)
         # Compression creates child continuations that hold the live transcript.
-        # Follow that chain so gateway /resume matches CLI behavior (#15000).
+        # Follow that chain so gateway /resume matches CLI behavior.
         try:
             target_id = await self._session_db.resolve_resume_session_id(target_id)
         except Exception as e:
@@ -4683,8 +4683,8 @@ class GatewaySlashCommandsMixin:
             return t("gateway.resume.switch_failed")
 
         # Conversation boundary: clear ALL conversation-scoped per-session
-        # state (model/reasoning overrides #10702, one-turn restores, model
-        # notes, last-resolved cache #58403, /queue overflow) + security
+        # state (model/reasoning overrides, one-turn restores, model
+        # notes, last-resolved cache, /queue overflow) + security
         # state in one funnel call. See _CONVERSATION_SCOPED_STATE in
         # gateway/run.py.
         self._clear_conversation_scope(session_key, reason="resume")
@@ -4693,7 +4693,7 @@ class GatewaySlashCommandsMixin:
         # rebuilds with the correct session_id end-to-end — mirrors
         # /branch and /reset. Without this, the cached AIAgent (and its
         # memory provider, which cached `_session_id` during initialize())
-        # keeps writing into the wrong session's record. See #6672.
+        # keeps writing into the wrong session's record. See.
         self._evict_cached_agent(session_key)
 
         # Get the title for confirmation
@@ -4823,7 +4823,7 @@ class GatewaySlashCommandsMixin:
         parent_session_id = current_entry.session_id
 
         # Serialize the parent's full origin (same shape as the reset path's
-        # db_create_kwargs in gateway/session.py, #82633) so the branch row
+        # db_create_kwargs in gateway/session.py,) so the branch row
         # carries complete identity from birth. Prefer the live entry's origin
         # (it may hold richer metadata than the triggering event's source).
         _branch_origin = current_entry.origin or source
@@ -4862,7 +4862,7 @@ class GatewaySlashCommandsMixin:
                 # path (pilotage_state.py:1994-2009) that searches by the complete
                 # peer tuple when session_key doesn't match. origin_json and
                 # display_name complete the identity (same shape as the reset
-                # path's db_create_kwargs in gateway/session.py, #82633) so
+                # path's db_create_kwargs in gateway/session.py,) so
                 # consumers that read routing/presentation data from state.db
                 # (mcp_serve, mirror, channel directory) see the branch row
                 # fully formed with zero backfill gap.
@@ -4879,7 +4879,7 @@ class GatewaySlashCommandsMixin:
             return t("gateway.branch.create_failed", error=e)
 
         # Copy conversation history to the new session in bounded-chunk
-        # transactions (see #23254): one txn per row was the removed
+        # transactions: one txn per row was the removed
         # write-amplification pattern, and a history can be hundreds of rows.
         # Best-effort like the old loop — a failed copy still yields a
         # usable (partial) branch.
@@ -5168,7 +5168,7 @@ class GatewaySlashCommandsMixin:
                 lines.append(t("gateway.usage.label_compressions", count=ctx.compression_count))
 
             # Per-category context breakdown (estimated — chars/4 heuristic).
-            # Same engine the desktop popover uses (PR #54907). The system
+            # Same engine the desktop popover uses. The system
             # prompt / tools / skills / memory slices read off the live agent;
             # the conversation slice is estimated from the session transcript.
             breakdown_lines = await asyncio.to_thread(
@@ -5534,7 +5534,7 @@ class GatewaySlashCommandsMixin:
         ``/deny`` denies the oldest; ``/deny all`` denies everything.
         ``/deny <reason>`` (or ``/deny all <reason>``) attaches a one-line
         reason that is relayed back to the agent so it can adapt instead of
-        only hearing "denied". Ported from qwibitai/nanoclaw#2832.
+        only hearing "denied". Ported from qwibitai/nanoclaw.
         """
         source = event.source
         session_key = self._session_key_for_source(source)

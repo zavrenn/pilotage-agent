@@ -1,4 +1,4 @@
-"""Best-effort accessors for the single-writer stream fence (#65991).
+"""Best-effort accessors for the single-writer stream fence.
 
 The fence itself lives on ``AIAgent`` (``_claim_stream_writer`` /
 ``_stream_writer_is_current`` in ``run_agent.py``), but the streaming code paths

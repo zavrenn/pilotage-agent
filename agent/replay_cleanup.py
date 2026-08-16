@@ -6,7 +6,7 @@ the tool result is written — the persisted transcript can end with a dangling
 ``assistant(tool_calls)`` (no matching ``tool`` answer) or an interrupted
 ``assistant→tool`` block.  On resume the model sees that broken tail and
 re-issues the unanswered call, producing an endless "thinking"/reboot loop
-(#49201, #29086).
+.
 
 These pure helpers strip those tails before the history is replayed to the
 model.  They were originally local to ``gateway/run.py`` (which fixed the
@@ -132,7 +132,7 @@ def strip_dangling_tool_call_tail(
 
     On resume the model sees an unanswered tool call at the tail and naturally
     re-issues it — which restarts the gateway again, producing the infinite
-    reboot loop in #49201.  ``strip_interrupted_tool_tails`` does not catch
+    reboot loop in. ``strip_interrupted_tool_tails`` does not catch
     this because there is no tool result to inspect for an interrupt marker.
 
     This strips that dangling tail at the source so there is nothing for the
@@ -202,7 +202,7 @@ def sanitize_replay_history(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Stale dangerous-confirmation text expiry (#59607)
+# Stale dangerous-confirmation text expiry
 # ──────────────────────────────────────────────────────────────────────
 
 # How long a high-risk confirmation phrase remains valid.
@@ -258,7 +258,7 @@ def strip_stale_dangerous_confirmations(
     now: float,
     expiry_seconds: float = _DANGEROUS_CONFIRMATION_EXPIRY_SECONDS,
 ) -> List[Dict[str, Any]]:
-    """Expire stale dangerous-confirmation text in user messages (#59607).
+    """Expire stale dangerous-confirmation text in user messages.
 
     When a high-risk side effect (e.g. host restart via ``shutdown.exe``)
     runs, the user's plain-text confirmation phrase is persisted in the
@@ -270,7 +270,7 @@ def strip_stale_dangerous_confirmations(
     On the next inbound message — possibly a casual "are you there?" from
     the user minutes later — the LLM sees the stale confirmation and may
     interpret the new turn as a fresh re-confirmation, re-executing the
-    destructive action.  This is the failure mode reported in #59607.
+    destructive action. This is the failure mode reported in.
 
     Expired confirmations are REDACTED IN PLACE, not removed: deleting a
     user message from the incident tail (``user(confirm) →

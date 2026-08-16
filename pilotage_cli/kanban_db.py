@@ -214,7 +214,7 @@ def _kanban_observer_consumed(event: str) -> bool:
     """Return whether any first-party observer or plugin consumes *event*.
 
     Hot-path short-circuit for the worker-lifecycle / task-mutation /
-    dispatch-tick observers (RFC #58548): those fire on every dispatcher
+    dispatch-tick observers (RFC): those fire on every dispatcher
     tick and every task write, so call sites skip payload assembly entirely
     when nothing subscribes. Best-effort — if inspection fails the event is
     treated as unconsumed (the invoke path would fail the same way, and
@@ -239,7 +239,7 @@ def _fire_worker_spawned_hook(
     """Fire ``on_kanban_worker_spawned`` for one dispatched spawn.
 
     Called by the dispatch loop AFTER ``spawn_fn`` returned and the worker
-    PID (when one was reported) has been durably persisted — the RFC #58548
+    PID (when one was reported) has been durably persisted — the RFC
     timing contract. Fully best-effort: any failure is swallowed so a
     misbehaving observer can never break the dispatch loop.
     """
@@ -268,7 +268,7 @@ def notify_task_updated(
 ) -> None:
     """Fire ``on_kanban_task_updated`` for a committed task-row mutation.
 
-    Task-mutation boundary primitive from RFC #58548: a surface that mutates
+    Task-mutation boundary primitive from RFC: a surface that mutates
     a task row outside the claim/complete/block lifecycle calls this AFTER
     its write txn has committed — including surfaces that write with direct
     SQL and bypass every ``kanban_db`` mutator (the dashboard plugin API's
@@ -304,7 +304,7 @@ def _fire_dispatch_tick_hook(
 ) -> None:
     """Fire ``on_kanban_dispatch_tick`` after one dispatcher tick.
 
-    Re-port of PR #56066 per the #64231 batch disposition: renamed to the
+    Re-port of per the batch disposition: renamed to the
     taxonomy form and called by ``dispatch_once`` strictly AFTER
     ``_dispatch_tick_lock`` has been released — the original fired inside
     the lock, so a slow subscriber could extend the single-writer critical
@@ -368,10 +368,10 @@ DEFAULT_CLAIM_TTL_SECONDS = 15 * 60
 
 # If a worker's PID is still alive but its ``last_heartbeat_at`` is
 # older than this when ``release_stale_claims`` runs, treat the worker
-# as wedged and reclaim regardless of PID liveness (#29747 gap 3).
+# as wedged and reclaim regardless of PID liveness gap 3).
 # This catches the logic-loop case where the process is technically
 # running but not making observable progress.  ``_touch_activity``
-# bridges chunk-level liveness into ``last_heartbeat_at`` via #31752,
+# bridges chunk-level liveness into ``last_heartbeat_at`` via,
 # so any genuinely active worker keeps its heartbeat fresh as a side
 # effect of normal API traffic.
 DEFAULT_CLAIM_HEARTBEAT_MAX_STALE_SECONDS = 60 * 60
@@ -1178,7 +1178,7 @@ class Task:
                 row["consecutive_failures"] if "consecutive_failures" in keys
                 # Pre-migration fallback: ``_migrate_add_optional_columns`` always
                 # adds ``consecutive_failures`` now, so this branch is only reachable
-                # on a DB that was never opened since pre-#20410 code ran. Keep for
+                # on a DB that was never opened since pre- code ran. Keep for
                 # belt-and-suspenders safety; in practice it is dead code post-migration.
                 else (row["spawn_failures"] if "spawn_failures" in keys else 0)
             ),
@@ -1482,7 +1482,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
 -- this row carries metadata + the absolute ``stored_path`` so the
 -- dashboard can list/download and ``build_worker_context`` can surface
 -- the absolute path to the worker (which has full file-tool access). See
--- #35338.
+--.
 CREATE TABLE IF NOT EXISTS task_attachments (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id      TEXT NOT NULL,
@@ -1544,7 +1544,7 @@ DEFAULT_BUSY_TIMEOUT_MS = 120_000
 # right after each new backup is created.
 _CORRUPT_BACKUP_RETENTION = 10
 
-# Bounded acquire for the cross-process init lock (#36644). The original bare
+# Bounded acquire for the cross-process init lock. The original bare
 # blocking flock had no timeout, so a wedged holder blocked the dispatcher's
 # next-tick connect forever. We retry a non-blocking acquire up to this
 # deadline, polling at this interval, then proceed without the cross-process
@@ -1607,7 +1607,7 @@ def _cross_process_init_lock(path: Path):
     additive migrations single-file/single-writer across the whole host while
     leaving normal post-init DB usage concurrent under SQLite WAL.
 
-    The acquire is **bounded** (issue #36644): the original bare blocking
+    The acquire is **bounded** : the original bare blocking
     ``flock(LOCK_EX)`` had no timeout, so a single process stalled inside the
     critical section (or a stale lock held by a wedged worker) blocked every
     other ``connect()`` — including the long-lived gateway dispatcher's
@@ -1658,7 +1658,7 @@ def _cross_process_init_lock(path: Path):
                 "kanban init lock for %s not acquired within %.0fs — proceeding "
                 "without the cross-process lock (in-process lock + idempotent "
                 "init are the correctness backstop). A stuck holder is no longer "
-                "able to block this connect indefinitely (#36644).",
+                "able to block this connect indefinitely.",
                 lock_path, _INIT_LOCK_TIMEOUT_SECONDS,
             )
         yield
@@ -1688,7 +1688,7 @@ def _dispatch_tick_lock(db_path: Path):
     may proceed with the tick, or ``False`` when another process already
     holds it (the caller should skip the tick this round).
 
-    Motivation (issue #35240): a ``pilotage gateway run --replace`` /
+    Motivation : a ``pilotage gateway run --replace`` /
     ``gateway restart`` invoked from a shell on a systemd/launchd host can
     leave an orphan gateway whose dispatcher escapes the service cgroup,
     survives ``systemctl restart``, and becomes a *second* long-lived
@@ -1773,7 +1773,7 @@ def _dispatch_tick_lock(db_path: Path):
 # an explicit ``wal_checkpoint(PASSIVE)``.
 #
 # PASSIVE, not TRUNCATE (same class fix as the state.db checkpoints,
-# #45383/#80255/#44795): the dispatch flock only makes the dispatcher the
+#//): the dispatch flock only makes the dispatcher the
 # sole *dispatcher* — CLI kanban commands in other processes write to the
 # same board without taking that flock, so a TRUNCATE here races live
 # writers exactly like the state.db close() path did. PASSIVE never takes
@@ -2359,7 +2359,7 @@ def connect(
     # the cross-process init lock on every connect is what let a single stalled
     # holder (e.g. an external `pilotage kanban list` mid-integrity-probe) block
     # the long-lived gateway dispatcher's next-tick connect() forever — an
-    # unbounded flock with no timeout, no LOCK_NB, no recovery (#36644). On the
+    # unbounded flock with no timeout, no LOCK_NB, no recovery. On the
     # steady-state path there is nothing for the cross-process lock to protect
     # (no schema/migration writes run), so skip it entirely and just open the
     # connection with WAL/pragmas under the cheap in-process _INIT_LOCK.
@@ -2391,7 +2391,7 @@ def connect(
         # or replaced under a live process, and the open above silently
         # recreated an empty DB. Left alone, every query on this path fails
         # with "no such table: tasks" for the rest of the process's life and
-        # the board just renders empty (#83445). Drop the stale cache entry and
+        # the board just renders empty. Drop the stale cache entry and
         # fall through to the full init path, which re-runs the header and
         # integrity probes and the schema script under the cross-process lock.
         conn.close()
@@ -2404,13 +2404,13 @@ def connect(
         )
 
     with _cross_process_init_lock(path):
-        # Read-only file/sidecar preflight (port of kilocode#12508) —
+        # Read-only file/sidecar preflight (port of kilocode) —
         # repair-or-refuse before the header/integrity probes so a stray
         # read-only kanban.db fails with an actionable message instead of
         # "attempt to write a readonly database" mid-init.
         from pilotage_state import preflight_db_writability
         preflight_db_writability(path, db_label=f"kanban.db ({path.name})")
-        # Cheap byte-level check first — catches the #29507 TLS-overwrite shape
+        # Cheap byte-level check first — catches the TLS-overwrite shape
         # and other invalid-header cases without opening a sqlite connection.
         _validate_sqlite_header(path)
         # Full integrity probe — catches corruption past the header (malformed
@@ -2482,7 +2482,7 @@ def connect_closing(
     enough operations the process hits the kernel FD limit and dies
     with ``[Errno 24] Too many open files``.
 
-    See #33159 for the production incident.
+    See for the production incident.
 
     The ``connect()`` function itself remains unchanged so callers that
     intentionally manage the connection lifetime (tests, long-lived
@@ -2563,7 +2563,7 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
     # Avoid ``ALTER TABLE ... RENAME COLUMN`` for two reasons:
     #   1. Primary: very old DBs may never have had ``spawn_failures`` at
     #      all, so RENAME raises OperationalError: no such column (the crash
-    #      reported in issue #20842 after the #20410 update).
+    # reported in after the update).
     #   2. Secondary: SQLite reparses the whole schema on any RENAME, which
     #      fails if related objects (views, triggers) reference the old name.
     #
@@ -2843,7 +2843,7 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
 # DEFAULT 0``. ``CREATE TABLE IF NOT EXISTS`` skips existing tables
 # regardless of schema and ``_add_column_if_missing`` only adds columns, so
 # neither can fix a drifted column type — the table must be rebuilt. See
-# #35096.
+#
 #
 # Each entry pairs the canonical CREATE TABLE with the CREATE INDEX
 # statements that DROP TABLE would otherwise take down with it (including
@@ -2916,7 +2916,7 @@ def _rebuild_drifted_tables(conn: sqlite3.Connection) -> None:
 
     Old boards crash the gateway notifier (``int(None)`` on a NULL id in
     ``unseen_events_for_sub``) and never match the ``id > cursor`` filter, so
-    every kanban notification is silently lost (#35096). Each affected table is
+    every kanban notification is silently lost. Each affected table is
     rebuilt with the standard SQLite pattern — CREATE new → INSERT shared
     columns → DROP old → RENAME — recreating its indexes too (DROP TABLE takes
     them down). The legacy TEXT ids are dropped (they aren't valid integers);
@@ -3416,7 +3416,7 @@ def create_task(
     # inherit them. Scratch workspaces are auto-deleted on completion and
     # must stay under the per-board scratch root created by
     # ``resolve_workspace``; inheriting ``default_workdir`` for a scratch
-    # task would point cleanup at the user's source tree (#28818). The
+    # task would point cleanup at the user's source tree. The
     # containment guard in ``_cleanup_workspace`` is the safety rail, but
     # we also stop the bad state from being created in the first place.
     if (
@@ -3596,7 +3596,7 @@ def _inherit_notify_subs(
     owner of subscription inheritance for create_task, link_tasks, and triage
     decomposition. Omitting columns here silently degrades routing: a
     DM-originated child completion falls back to chat_type='group' and wakes
-    a fresh group-scoped session instead of the originating DM (issue #73030).
+    a fresh group-scoped session instead of the originating DM.
     """
     parent_ids = tuple(dict.fromkeys(p for p in parents if p))
     if not parent_ids:
@@ -3729,7 +3729,7 @@ def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) 
         else:
             conn.execute("UPDATE tasks SET assignee = ? WHERE id = ?", (profile, task_id))
         _append_event(conn, task_id, "assigned", {"assignee": profile})
-    # Task-mutation observer (RFC #58548), fired AFTER the assignment txn
+    # Task-mutation observer (RFC), fired AFTER the assignment txn
     # has committed so subscribers always observe durable board state.
     notify_task_updated(conn, task_id, ("assignee",))
     return True
@@ -3777,7 +3777,7 @@ def set_model_override(
             conn, task_id, "model_override_set",
             {"model": model, "provider": provider},
         )
-    # Task-mutation observer (RFC #58548), fired AFTER the txn commits.
+    # Task-mutation observer (RFC), fired AFTER the txn commits.
     notify_task_updated(conn, task_id, ("model_override", "provider_override"))
     return True
 
@@ -3817,7 +3817,7 @@ def set_reasoning_effort(
         _append_event(
             conn, task_id, "reasoning_effort_set", {"reasoning_effort": effort}
         )
-    # Task-mutation observer (RFC #58548), fired AFTER the txn commits.
+    # Task-mutation observer (RFC), fired AFTER the txn commits.
     notify_task_updated(conn, task_id, ("reasoning_effort",))
     return True
 
@@ -3896,7 +3896,7 @@ def unlink_tasks(conn: sqlite3.Connection, parent_id: str, child_id: str) -> boo
         # Dependency edge removed — re-evaluate promotion eligibility for the
         # child immediately.  Matches the contract of complete_task and
         # unblock_task; without this the child stays stuck in todo until the
-        # next dispatcher tick or a manual `pilotage kanban recompute` (issue #22459).
+        # next dispatcher tick or a manual `pilotage kanban recompute`.
         recompute_ready(conn)
     return removed
 
@@ -4442,7 +4442,7 @@ def _synthesize_ended_run(
 
 def _has_sticky_block(conn: sqlite3.Connection, task_id: str) -> bool:
     """Return True when ``task_id`` is sticky-blocked by an explicit
-    worker/operator ``kanban_block`` call (#28712).
+    worker/operator ``kanban_block`` call.
 
     A ``blocked`` status can come from two very different sources:
 
@@ -4466,7 +4466,7 @@ def _has_sticky_block(conn: sqlite3.Connection, task_id: str) -> bool:
 
     Returns ``False`` when there is no such event at all (e.g. the task
     was set to ``status='blocked'`` by the circuit breaker or by direct
-    DB manipulation) — preserves the pre-#28712 auto-recover semantics
+    DB manipulation) — preserves the pre- auto-recover semantics
     for that path.
     """
     row = conn.execute(
@@ -4522,13 +4522,13 @@ def recompute_ready(
 
     1. The most recent block event was a worker-initiated
        ``kanban_block`` — those stay blocked until an explicit
-       ``kanban_unblock`` (#28712).
+       ``kanban_unblock``.
 
     2. The task's ``consecutive_failures`` has reached the effective
        failure limit.  This prevents infinite retry loops when a task
        repeatedly exhausts its iteration budget: without this guard the
        counter would reset on every recovery cycle and the circuit
-       breaker could never trip (#35072).
+       breaker could never trip.
 
     The effective failure limit resolves in the same order as the
     circuit breaker in ``_record_task_failure`` so the two never
@@ -4956,17 +4956,17 @@ def release_stale_claims(
     reclaimed. Reclaiming a live worker mid-flight produces the spawn-
     then-immediately-reclaim loop seen on slow models that spend longer
     than ``DEFAULT_CLAIM_TTL_SECONDS`` inside a single tool-free LLM
-    call (#23025): no tool calls means no ``kanban_heartbeat``, even
+    call: no tool calls means no ``kanban_heartbeat``, even
     though the subprocess is healthy.
 
-    Backstop (#29747 gap 3): if the worker's PID is still alive but its
+    Backstop gap 3): if the worker's PID is still alive but its
     ``last_heartbeat_at`` is stale by more than
     ``DEFAULT_CLAIM_HEARTBEAT_MAX_STALE_SECONDS`` (1h), the worker has
     been making no observable progress and we reclaim anyway — even if
     ``_pid_alive`` is still true. This catches the wedged-in-a-logic-loop
     case where the process is technically running but accomplishing
     nothing. ``_touch_activity`` (run_agent.py) bridges chunk-level
-    liveness into ``last_heartbeat_at`` via #31752, so any genuinely
+    liveness into ``last_heartbeat_at`` via, so any genuinely
     active worker keeps its heartbeat fresh as a side effect of normal
     API traffic. ``enforce_max_runtime`` and ``detect_crashed_workers``
     remain the upper bounds for genuinely wedged or dead workers.
@@ -5090,7 +5090,7 @@ def release_stale_claims(
                 run_id=run_id,
             )
             reclaimed += 1
-        # Worker-lifecycle observer (RFC #58548): the reclaim txn above has
+        # Worker-lifecycle observer (RFC): the reclaim txn above has
         # committed. The ``continue`` branches (rowcount mismatch, claim
         # extension, deferred reclaim) never reach this point, so only a
         # genuinely reclaimed stale claim fires.
@@ -5869,7 +5869,7 @@ def _is_managed_scratch_path(p: Path) -> bool:
     Used by :func:`_cleanup_workspace` to refuse to ``shutil.rmtree`` paths
     outside Pilotage-managed storage. A board ``default_workdir`` pointing at a
     real source tree can otherwise pair with ``workspace_kind='scratch'`` and
-    cause task completion to delete user data (#28818).
+    cause task completion to delete user data.
     """
     is_managed, _board = _managed_scratch_path_info(p)
     return is_managed
@@ -5895,12 +5895,12 @@ def _cleanup_workspace(conn: sqlite3.Connection, task_id: str) -> None:
         if kind != "scratch" or not path:
             # This task's own workspace isn't a removable scratch dir, but its
             # completion may still unblock a deferred parent scratch cleanup
-            # (e.g. a 'dir' child whose scratch parent was waiting on it). #33774
+            # (e.g. a 'dir' child whose scratch parent was waiting on it).
             _try_cleanup_parent_workspaces(conn, task_id)
             return
         # Check if this task has children that still need the workspace.
         # If any child is not yet done/archived, defer cleanup so the
-        # child can read handoff artifacts from the scratch dir (#33774).
+        # child can read handoff artifacts from the scratch dir.
         _active_children = conn.execute(
             "SELECT 1 FROM task_links l "
             "JOIN tasks t ON t.id = l.child_id "
@@ -5918,7 +5918,7 @@ def _cleanup_workspace(conn: sqlite3.Connection, task_id: str) -> None:
         import shutil
         wp = Path(path)
         if wp.is_dir():
-            # Containment guard (#28818): a board's ``default_workdir`` can
+            # Containment guard: a board's ``default_workdir`` can
             # pair ``workspace_kind='scratch'`` with a user-supplied path
             # pointing at a real source tree. Without this check, task
             # completion would unconditionally ``shutil.rmtree`` that path
@@ -5938,7 +5938,7 @@ def _cleanup_workspace(conn: sqlite3.Connection, task_id: str) -> None:
         _cleanup_worker_tmux(conn, task_id)
         # After cleaning up this task's workspace, check if any parent
         # tasks now have all children done — their deferred cleanup can
-        # proceed (#33774).
+        # proceed.
         _try_cleanup_parent_workspaces(conn, task_id)
     except Exception:
         pass  # best-effort — never block completion
@@ -5950,7 +5950,7 @@ def _try_cleanup_parent_workspaces(conn: sqlite3.Connection, task_id: str) -> No
     When a parent task's cleanup was deferred because it had active children,
     this function is called after each child completes.  If all children of a
     parent are now done/archived/failed/cancelled, the parent's scratch
-    workspace is removed (#33774).
+    workspace is removed.
     """
     try:
         parents = conn.execute(
@@ -6650,7 +6650,7 @@ def request_changes(
         # NOTE: consecutive_failures is deliberately PRESERVED (neither
         # reset nor incremented). Review transitions are not evidence the
         # pathology cleared — only complete_task's success path resets the
-        # breaker counter (mirrors unblock_task, #35072).
+        # breaker counter (mirrors unblock_task,).
         cur = conn.execute(
             """
             UPDATE tasks
@@ -6916,7 +6916,7 @@ def reopen_review_task(conn: sqlite3.Connection, task_id: str) -> bool:
             "claim_lock = NULL, claim_expires = NULL, worker_pid = NULL "
             # consecutive_failures deliberately PRESERVED: review reopen is
             # not a success signal; only complete_task resets the breaker
-            # counter (mirrors unblock_task, #35072).
+            # counter (mirrors unblock_task,).
             + assignee_sql
             + " WHERE id = ? AND status = 'review'",
             params,
@@ -6987,7 +6987,7 @@ def invalidate_descendants_for_parent_reopen(
     fresh start with the breaker (a previously auto-blocked-then-completed
     descendant should not re-enter the queue one failure from the breaker).
     This is deliberately the OPPOSITE of the review-transition rule
-    (:func:`reopen_review_task` / #35072 preserves the counter) because the
+    (:func:`reopen_review_task` / preserves the counter) because the
     autonomous review loop must not be able to launder its own failure
     streak, while an operator invalidating a subtree is an explicit reset
     signal.
@@ -7946,7 +7946,7 @@ class DispatchResult:
     Operator-actionable — usually a misfiled task waiting for routing."""
     auto_assigned_default: list[str] = field(default_factory=list)
     """Task ids that were unassigned in the DB and had
-    ``kanban.default_assignee`` applied this tick before spawning (#27145).
+    ``kanban.default_assignee`` applied this tick before spawning.
     Surfaces the auto-assignment to telemetry / CLI / dashboard so the
     operator can see when the dispatcher is acting on the fallback rule
     rather than on explicit per-task assignments."""
@@ -7959,7 +7959,7 @@ class DispatchResult:
     available) from "correctly idle" (nothing spawnable in the queue)."""
     skipped_per_profile_capped: list[tuple[str, str, int]] = field(default_factory=list)
     """Tasks deferred this tick because their assignee is already at
-    ``kanban.max_in_progress_per_profile`` (#21582). Each entry is
+    ``kanban.max_in_progress_per_profile``. Each entry is
     ``(task_id, assignee, current_running_count)``. NOT an
     operator-actionable failure — the task will be picked up on a
     subsequent tick when the assignee has capacity. Separate bucket so
@@ -7987,7 +7987,7 @@ class DispatchResult:
     window just makes the task bounce cheaply until the window clears."""
     skipped_locked: bool = False
     """True when this tick was skipped because another process already held
-    the board's dispatch lock (issue #35240). A losing dispatcher does no
+    the board's dispatch lock. A losing dispatcher does no
     DB writes this tick — the lock holder is making progress on the same
     board. This is the steady-state signal that a single-writer guard is
     actively preventing two dispatchers from racing on ``kanban.db``."""
@@ -8796,7 +8796,7 @@ def detect_crashed_workers(conn: sqlite3.Connection) -> list[str]:
     # counter (see the post-txn loop below).
     crash_details: list[tuple[str, int, str, bool, str]] = []
     # (task_id, pid, claimer, protocol_violation, error_text)
-    # Worker-exit observer payloads (RFC #58548), collected inside the main
+    # Worker-exit observer payloads (RFC), collected inside the main
     # txn and fired only after every reclaim/accounting txn has committed.
     exited_hook_payloads: list[dict] = []
     with write_txn(conn):
@@ -8832,7 +8832,7 @@ def detect_crashed_workers(conn: sqlite3.Connection) -> list[str]:
                 # work itself succeeded and only the paperwork was skipped, so
                 # a retry usually completes; the corrective sentence below is
                 # surfaced to the retry worker via the prior-attempt error in
-                # ``build_worker_context`` (guidance approach from #61817).
+                # ``build_worker_context`` (guidance approach from).
                 protocol_violation = True
                 error_text = (
                     "worker exited cleanly (rc=0) without calling "
@@ -9041,7 +9041,7 @@ def detect_crashed_workers(conn: sqlite3.Connection) -> list[str]:
     # Same side-channel for rate-limited requeues — these did NOT count a
     # failure and are NOT crashes, so they stay out of the ``crashed`` return.
     detect_crashed_workers._last_rate_limited = rate_limited  # type: ignore[attr-defined]
-    # Worker-lifecycle observer (RFC #58548): exit events are tick-derived
+    # Worker-lifecycle observer (RFC): exit events are tick-derived
     # from this reclaim pass — fired only now, after the main reclaim txn
     # AND the breaker accounting above have committed, so subscribers always
     # observe fully durable board state.
@@ -9537,7 +9537,7 @@ def dispatch_once(
     """Run one dispatcher tick under the board's single-writer lock.
 
     Thin wrapper around :func:`_dispatch_once_locked`. It acquires a
-    non-blocking, board-scoped dispatch lock (issue #35240) so that two
+    non-blocking, board-scoped dispatch lock  so that two
     dispatchers pointed at the same ``kanban.db`` — e.g. the service-
     managed gateway and a shell-spawned orphan that escaped the service
     cgroup — can never run a reclaim/spawn/write tick concurrently and
@@ -9594,8 +9594,8 @@ def dispatch_once(
             # bounded by journal_size_limit on the writer's natural reset).
             _maybe_checkpoint_wal(conn, db_path)
     # The dispatch lock has been released here. Fire the tick observer
-    # strictly OUTSIDE the single-writer critical section (#56066 sweeper
-    # finding / #64231 disposition): a slow subscriber must never extend
+    # strictly OUTSIDE the single-writer critical section sweeper
+    # finding / disposition): a slow subscriber must never extend
     # the lock hold and stall a sibling dispatcher's tick.
     _fire_dispatch_tick_hook(result, board=board, dry_run=dry_run)
     return result
@@ -9707,7 +9707,7 @@ def _dispatch_once_locked(
         "ORDER BY priority DESC, created_at ASC"
     ).fetchall()
     spawned = 0
-    # Per-profile concurrency cap (#21582): when set, track how many
+    # Per-profile concurrency cap: when set, track how many
     # workers each assignee already has in flight, and refuse to spawn
     # when this would push that assignee past the cap. Prevents
     # fan-out workloads from melting a single profile's local model /
@@ -9753,7 +9753,7 @@ def _dispatch_once_locked(
             # exists, persist the assignment and proceed. This removes the
             # dashboard footgun where a task created without an assignee
             # parks in 'ready' forever even though the operator's intent
-            # ("default") was perfectly clear (#27145). Mutating the row
+            # ("default") was perfectly clear. Mutating the row
             # (not just the in-memory view) keeps diagnostics and the
             # board state consistent: the task is now legitimately owned
             # by ``kanban.default_assignee``, not "unassigned but secretly
@@ -9813,7 +9813,7 @@ def _dispatch_once_locked(
             # of human-pulled work.
             result.skipped_nonspawnable.append(row["id"])
             continue
-        # Per-profile concurrency cap (#21582): even if there's global
+        # Per-profile concurrency cap: even if there's global
         # headroom, refuse to spawn for an assignee that's already at
         # its in-flight cap. Prevents one profile's local model / API
         # quota / browser pool from being overwhelmed by a fan-out
@@ -9853,7 +9853,7 @@ def _dispatch_once_locked(
             # Increment per-profile counter even in dry_run so the cap
             # check sees the would-be spawn on subsequent iterations.
             # Without this, dry_run reports every task as spawnable and
-            # under-reports the capped subset (#21582).
+            # under-reports the capped subset.
             if _per_profile_cap is not None and row_assignee:
                 _per_profile_running[row_assignee] = (
                     _per_profile_running.get(row_assignee, 0) + 1
@@ -9897,7 +9897,7 @@ def _dispatch_once_locked(
                 pid = _spawn(claimed, str(workspace))
             if pid:
                 _set_worker_pid(conn, claimed.id, int(pid))
-            # Worker-lifecycle observer (RFC #58548): fires AFTER spawn_fn
+            # Worker-lifecycle observer (RFC): fires AFTER spawn_fn
             # returned and the PID (when reported) is durably persisted,
             # per the RFC timing contract. Best-effort — can never break
             # the dispatch loop.
@@ -9915,7 +9915,7 @@ def _dispatch_once_locked(
             spawned += 1
             # Track the new in-flight count for this profile so later
             # iterations in this same tick respect the per-profile cap
-            # (#21582). Subsequent ticks re-query from the DB.
+            # Subsequent ticks re-query from the DB.
             if _per_profile_cap is not None and claimed.assignee:
                 _per_profile_running[claimed.assignee] = (
                     _per_profile_running.get(claimed.assignee, 0) + 1
@@ -10029,7 +10029,7 @@ def _dispatch_once_locked(
                 pid = _spawn(claimed, str(workspace))
             if pid:
                 _set_worker_pid(conn, claimed.id, int(pid))
-            # Worker-lifecycle observer (RFC #58548): same contract as the
+            # Worker-lifecycle observer (RFC): same contract as the
             # ready-lane fire above — after spawn + PID persistence.
             _fire_worker_spawned_hook(
                 conn, claimed, str(workspace), pid, board=board,
@@ -10407,9 +10407,9 @@ def _default_spawn(
     # context-file loader anchor on the workspace, not whatever cwd the
     # dispatching gateway happened to export. The worker subprocess is already
     # launched with cwd=workspace, but TERMINAL_CWD takes precedence over the
-    # process cwd in both file_tools._resolve_base_dir (#41312 — relative
+    # process cwd in both file_tools._resolve_base_dir — relative
     # write_file paths were landing in the gateway user's home) and
-    # build_context_files_prompt (#34619 — workers loaded the dispatching
+    # build_context_files_prompt — workers loaded the dispatching
     # gateway's AGENTS.md instead of the task's). Setting it to the workspace
     # fixes both: the workspace is where the task's work actually happens.
     # Only pin a real, absolute directory — file_tools rejects relative /
@@ -10855,7 +10855,7 @@ def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
             # or "operator" can't be misread by the next worker as a system
             # directive above the (attacker-influenceable) comment body.
             # Defense-in-depth — the LLM-controlled author-forgery surface
-            # was already closed in #22435. See #22452.
+            # was already closed in. See.
             safe_author = (c.author or "").replace("`", "")
             lines.append(f"comment from worker `{safe_author}` at {ts_disp}:")
             lines.append(_cap(c.body, _CTX_MAX_COMMENT_BYTES))
@@ -11036,7 +11036,7 @@ def add_notify_sub(
     schema default 0. A cursor of 0 on an already-active task made the
     gateway notifier replay every historical terminal event on its next
     tick — and with many stale subs, a single boot-time burst of 100+
-    messages (issue #29905). Subscribers only want events that occur
+    messages. Subscribers only want events that occur
     AFTER they subscribe; the gateway/tool auto-subscribe paths run at
     task creation, where the snapshot is 0 anyway.
     """

@@ -160,7 +160,7 @@ def build_keepalive_http_client(
     (``keepalive_expiry=20.0`` reaps idle connections before reverse proxies'
     typical 30-60 s timeouts) instead of the former custom
     ``socket_options`` transport, which broke streaming behind reverse
-    proxies (#54049, #12952) and stalled TLS handshakes by stripping
+    proxies (,) and stalled TLS handshakes by stripping
     ``TCP_NODELAY``.
 
     ``verify`` is forwarded to httpx so auxiliary-client calls (compression,

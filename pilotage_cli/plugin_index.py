@@ -26,10 +26,10 @@ from pilotage_constants import get_pilotage_home
 
 logger = logging.getLogger(__name__)
 
-# Canonical index location. Override via config key ``plugins.index_url``.
-DEFAULT_INDEX_URL = (
-    "https://raw.githubusercontent.com/NousResearch/hermes-plugin-index/main/index.json"
-)
+# Remote plugin index disabled: Pilotage has no hosted index yet. Override
+# via config key ``plugins.index_url`` to point at a self-hosted index; with
+# no URL the loader serves the disk cache, then the bundled seed.
+DEFAULT_INDEX_URL = ""
 
 # Cache the fetched index for 24 hours; a stale cache is still preferred over
 # the bundled seed when the remote is unreachable.
@@ -187,6 +187,8 @@ def _write_cache(text: str) -> None:
 def _fetch_remote() -> Optional[List[PluginIndexEntry]]:
     """Fetch and parse the remote index; cache the raw payload on success."""
     url = get_index_url()
+    if not url:
+        return None
     try:
         import httpx
 

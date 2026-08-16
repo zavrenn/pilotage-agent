@@ -382,7 +382,7 @@ def _migrate_to_21(results: Dict[str, Any], quiet: bool) -> None:
 
 def _migrate_to_23(results: Dict[str, Any], quiet: bool) -> None:
     # ── Version 22 → 23: seed curator defaults + create logs/curator/ ──
-    # The curator (background skill maintenance) was added in PR #16049, but
+    # The curator (background skill maintenance) was added in, but
     # existing configs from before that PR (or before the April 2026
     # unification under `auxiliary.curator`) never wrote the curator section
     # to disk. The runtime deep-merge in `load_config()` fills defaults at
@@ -645,11 +645,11 @@ def _migrate_to_33(results: Dict[str, Any], quiet: bool) -> None:
 
 
 def _migrate_to_34(results: Dict[str, Any], quiet: bool) -> None:
-    # ── Version 33 → 34: one-time personality reset (post-#81946 unification) ──
+    # ── Version 33 → 34: one-time personality reset (post- unification) ──
     # Personality persistence used to be split per surface: the TUI/desktop
     # wrote the NAME to display.personality while the CLI/gateway wrote the
     # rendered TEXT into agent.system_prompt (and their "/personality none"
-    # only blanked the text, leaving the name behind). When #81946 made
+    # only blanked the text, leaving the name behind). When made
     # display.personality authoritative everywhere, stale names written years
     # ago resurrected personalities users had already turned off ("kawaii
     # defaults on after updating"). There is no way to know which of the two

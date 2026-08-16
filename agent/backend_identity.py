@@ -6,10 +6,10 @@ along the axis that failure invalidated?"**  Before this module, that
 question was re-implemented inline at six call sites across four subsystems,
 each comparing whatever string was locally convenient (provider label,
 provider+model, base_url+model, ...).  Each incident fixed one site while the
-others kept the bug: #22548 (same-shim aliases), #70893 (xai-oauth vs xai —
-same host, distinct credential), #59561 (aux chain skipped sibling models),
-#72468 (aux main-model safety net, same bug three weeks later), #62984 /
-#54250 / #57584 (dedup ignoring base_url strands multi-endpoint pools).
+others kept the bug: (same-shim aliases), (xai-oauth vs xai —
+same host, distinct credential), (aux chain skipped sibling models),
+ (aux main-model safety net, same bug three weeks later), /
+ / (dedup ignoring base_url strands multi-endpoint pools).
 
 The root insight: "provider" conflates three independent identity axes, and
 each failure class invalidates a different one:
@@ -116,8 +116,8 @@ def _both_first_class(a: BackendIdentity, b: BackendIdentity) -> bool:
 
     Two different registry providers have distinct credential surfaces even
     when they share an inference host (xai-oauth vs xai, openai-codex vs
-    openai-api) — #70893.  Custom/shim aliases are NOT in the registry, so
-    two aliases pointing at one URL still count as the same backend (#22548).
+    openai-api). Custom/shim aliases are NOT in the registry, so
+    two aliases pointing at one URL still count as the same backend.
     """
     if not a.provider or not b.provider or a.provider == b.provider:
         return False
@@ -142,7 +142,7 @@ def same_credential_surface(a: BackendIdentity, b: BackendIdentity) -> bool:
     if a.provider and b.provider:
         # Same label = same configured credential. Different labels =
         # different credential config (first-class registry providers
-        # explicitly so — #70893; custom entries can each carry their own
+        # explicitly so —; custom entries can each carry their own
         # api_key, so sameness is unprovable and we must not skip).
         return a.provider == b.provider
     # Provider unknown on a side: same explicit URL is the best signal left.
@@ -162,14 +162,14 @@ def same_deployment(a: BackendIdentity, b: BackendIdentity) -> bool:
     """Are these the exact same model deployment (the thing a timeout kills)?
 
     Provider+model must match; the base_url axis distinguishes only when BOTH
-    sides carry an explicit URL (#62984: same provider+model on two different
+    sides carry an explicit URL (: same provider+model on two different
     explicit URLs is two deployments — a pool).  A side with an unknown URL
     inherits the provider default and cannot prove difference.
     """
     if not (a.provider and b.provider and a.provider == b.provider):
         # Same-host different-label shims: same URL + same model IS the same
-        # deployment even when the alias labels differ (#22548) — unless both
-        # labels are first-class registry providers (#70893).
+        # deployment even when the alias labels differ — unless both
+        # labels are first-class registry providers.
         if (
             a.base_url
             and a.base_url == b.base_url

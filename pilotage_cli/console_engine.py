@@ -120,7 +120,7 @@ def _split_line(line: str) -> list[str]:
     try:
         # Windows-safe splitter: plain shlex posix=True eats backslashes, so
         # `sessions export C:\Users\me\out.jsonl` silently became a mangled
-        # relative filename in the cwd (#83934).
+        # relative filename in the cwd.
         from pilotage_cli._subprocess_compat import split_command_line
 
         return split_command_line(line)

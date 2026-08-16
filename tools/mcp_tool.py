@@ -123,11 +123,11 @@ logger = logging.getLogger(__name__)
 # Upper bound for the OSV malware preflight during stdio MCP startup. The
 # check makes a blocking urllib HTTPS call whose own timeout can fail to
 # interrupt a stalled SSL handshake, which froze the asyncio event loop and
-# blew past the gateway's 15s startup budget (#29184). We run it off the loop
+# blew past the gateway's 15s startup budget. We run it off the loop
 # AND bound it here; the check is fail-open, so a timeout lets startup proceed.
 # Set just ABOVE osv_check._TIMEOUT (10s) so the inner socket timeout fires
 # first in the normal case; this outer bound only bites when a stalled SSL
-# handshake defeats the inner timeout (the #29184 failure mode).
+# handshake defeats the inner timeout (the failure mode).
 _OSV_MALWARE_CHECK_TIMEOUT_S = 12.0
 
 
@@ -404,7 +404,7 @@ def _check_logging_callback_support() -> bool:
 
 
 # MCP logging levels (RFC 5424 syslog severities) -> Python logging levels.
-# Port of anomalyco/opencode#34529's serverLog mapping.
+# Port of's serverLog mapping.
 _MCP_LOG_LEVEL_MAP = {
     "debug": logging.DEBUG,
     "info": logging.INFO,
@@ -650,7 +650,7 @@ def _is_method_not_found_error(exc: BaseException) -> bool:
     without a structural ``-32601`` code (e.g. surfaced as a plain exception
     string). Besides the canonical "method not found", many JSON-RPC
     implementations phrase it as "Unknown method: <name>" — agentmemory's MCP
-    server is one such case (#50028). Without matching that phrasing the
+    server is one such case. Without matching that phrasing the
     ping→list_tools fallback never latches and the keepalive reconnect-loops.
     """
     # Structural: mcp.shared.exceptions.McpError carries ErrorData.code.
@@ -798,7 +798,7 @@ def _resolve_stdio_command(command: str, env: dict) -> tuple[str, dict]:
             # shutil.which(..., path=...) resolves extensions from the PARENT
             # process PATHEXT, not the MCP subprocess env — so a config that
             # supplies both PATH and PATHEXT can fail to resolve a command
-            # its own env can find (#56536). Retry with the config's PATHEXT
+            # its own env can find. Retry with the config's PATHEXT
             # (any key casing: PATHEXT / Pathext / pathext) applied.
             cfg_pathext = next(
                 (v for k, v in resolved_env.items()
@@ -829,7 +829,7 @@ def _resolve_stdio_command(command: str, env: dict) -> tuple[str, dict]:
                 # /usr/local/bin is the canonical install location for Node on
                 # Linux from-source builds, the upstream node:bookworm-slim
                 # image (which the Pilotage Docker image copies node + npm +
-                # corepack from since #4977), and macOS Homebrew on Intel.
+                # corepack from since), and macOS Homebrew on Intel.
                 # Without this candidate, any MCP server configured with an
                 # env.PATH that omits /usr/local/bin (a common pattern when
                 # users hand-author PATH for sandboxing) fails with ENOENT
@@ -1109,7 +1109,7 @@ class InvalidMcpUrlError(ValueError):
 
     Validated once at startup so we fail fast with a clear message instead of
     burning through the reconnect-backoff loop on every attempt.  (Ported from
-    anomalyco/opencode#25019.)
+)
     """
 
 
@@ -2120,7 +2120,7 @@ class MCPServerTask:
         self._elicitation: Optional[ElicitationHandler] = None
         self._registered_tool_names: list[str] = []
         self._reconnect_retries: int = 0
-        # Rapid-drop budget (#62212): a freshly (re)established session is
+        # Rapid-drop budget: a freshly (re)established session is
         # UNPROVEN until it demonstrates real health — it survived at least
         # one full keepalive interval (keepalive success path) or served at
         # least one successful tool call. Only a proven session clears the
@@ -2162,7 +2162,7 @@ class MCPServerTask:
         # ``await session.initialize()`` so downstream code can inspect the
         # server's real advertised capabilities (``.capabilities.resources``,
         # ``.capabilities.prompts``) instead of assuming every ``ClientSession``
-        # method attribute corresponds to a supported server method. See #18051.
+        # method attribute corresponds to a supported server method. See.
         self.initialize_result: Optional[Any] = None
         # Set True the first time a keepalive ``ping`` returns JSON-RPC
         # -32601 (method not found): the server is tool-capable but doesn't
@@ -2183,7 +2183,7 @@ class MCPServerTask:
         or resource-only servers omit it, and calling ``tools/list`` against
         them raises ``McpError(-32601 Method not found)`` — which previously
         killed the connection during discovery and made every keepalive fail.
-        (Ported from anomalyco/opencode#31271.)
+        (Ported)
 
         Returns True when no capability info was captured (legacy fallback:
         preserve the old always-call-list_tools behavior rather than regress
@@ -2267,7 +2267,7 @@ class MCPServerTask:
         server into Pilotage' logging (agent.log via pilotage_logging), tagged
         with the server name.  Without this, the SDK's default callback
         silently discards them, so server-side warnings/errors during a
-        tool call were invisible.  Port of anomalyco/opencode#34529.
+        tool call were invisible. Port of
         """
         async def _on_log(params):
             try:
@@ -2471,7 +2471,7 @@ class MCPServerTask:
         the reconnect budget cleared: a handshake that completes but drops
         moments later must keep consuming ``_reconnect_retries`` so a flapping
         transport still reaches the park instead of respawning forever
-        (#62212 — 6212 spawns in 63h).
+         — 6212 spawns in 63h).
         """
         if not self._session_proven:
             self._session_proven = True
@@ -2503,7 +2503,7 @@ class MCPServerTask:
         Periodically sends a lightweight keepalive (``ping``, with a
         ``list_tools`` fallback for servers that don't implement the optional
         ping utility — see :meth:`_keepalive_probe`) to prevent TCP/session
-        state from going stale during idle periods (#17003). If the keepalive
+        state from going stale during idle periods. If the keepalive
         fails, triggers a reconnect.
 
         The cadence is ``keepalive_interval`` from server config (default
@@ -2573,7 +2573,7 @@ class MCPServerTask:
                         break
                     # Keepalive succeeded — the session survived a full
                     # keepalive interval, which is real proof of health.
-                    # Clear the rapid-drop budget (#62212).
+                    # Clear the rapid-drop budget.
                     self._mark_session_proven()
         finally:
             for t in (shutdown_task, reconnect_task):
@@ -2663,7 +2663,7 @@ class MCPServerTask:
         # Check package against OSV malware database before spawning.
         # Run off the event loop (the urllib HTTPS call is blocking) and bound
         # it with a wall-clock timeout so a stalled SSL handshake can't freeze
-        # MCP discovery / gateway startup (#29184). The check is fail-open, so
+        # MCP discovery / gateway startup. The check is fail-open, so
         # on timeout we log and proceed rather than blocking indefinitely.
         # NOTE: must run against the REAL command/args — the watchdog wrap
         # below rewrites argv to `python -m tools.mcp_stdio_watchdog …`,
@@ -2721,7 +2721,7 @@ class MCPServerTask:
         # attempts before spawning a new one.  Without this, each retry in
         # the run() reconnect loop spawns a fresh process pair while the
         # previous failed pair lingers — leading to rapid zombie
-        # accumulation (see #57355, #57228).  The unscoped sweep also
+        # accumulation (see,). The unscoped sweep also
         # opportunistically reaps orphans left by *other* servers that
         # never reconnect; per-server filtering via ``server_name`` remains
         # available for scoped call sites.  Run in a worker thread: the
@@ -2783,7 +2783,7 @@ class MCPServerTask:
                     # stdio pipes/pidfd leak on every discovery retry — unbounded
                     # until the gateway hits EMFILE. Timing out here converts the
                     # hang into a normal failure, letting the ``finally`` reap the
-                    # child. See #59349.
+                    # child. See.
                     connect_timeout = float(
                         config.get("connect_timeout", _DEFAULT_CONNECT_TIMEOUT)
                     )
@@ -2796,11 +2796,11 @@ class MCPServerTask:
                     self._ready.set()
                     # Session is live again: clear any breaker state from a
                     # prior outage so the first call after recovery isn't
-                    # gated on a stale consecutive-failure count (#16788).
+                    # gated on a stale consecutive-failure count.
                     _reset_server_error(self.name)
                     # A completed handshake alone is NOT proof of health: a
                     # flapping transport can handshake fine and drop moments
-                    # later, forever (#62212). The session must prove itself
+                    # later, forever. The session must prove itself
                     # (keepalive success or a successful tool call) before the
                     # reconnect budget is cleared — see _mark_session_proven.
                     self._session_proven = False
@@ -2981,7 +2981,7 @@ class MCPServerTask:
         path, which applies exponential backoff and eventually *parks* the
         server for 300s and deregisters its tools — a multi-minute tool outage
         for what is usually a sub-second glitch while the POST path stays
-        healthy (issue #66092).
+        healthy.
 
         Returning ``"reconnect"`` instead lets ``run()`` rebuild the session
         immediately with no backoff, no park, and no tool deregistration.
@@ -2993,7 +2993,7 @@ class MCPServerTask:
           signals must propagate to the interpreter, never be converted into
           a reconnect;
         - the group carries a real ``CancelledError`` (task cancellation must
-          propagate to asyncio, mirroring the ``run()`` guard for #9930);
+          propagate to asyncio, mirroring the ``run`` guard for);
         - we never reached a live session this attempt (``_ready`` unset) — a
           connect/handshake failure SHOULD fall through to ``run()``'s backoff
           rather than hot-loop reconnects against a broken endpoint.
@@ -3096,7 +3096,7 @@ class MCPServerTask:
             # minutes between events, so a 60s read timeout drops the
             # connection after the first slow stretch. 300s matches the
             # Streamable HTTP code path's httpx read timeout below. Original
-            # observation from @amiller in PR #5981 (Router Teamwork,
+            # observation from @amiller in (Router Teamwork,
             # Supermemory on Cloudflare Workers idle-disconnect at ~60s).
             _sse_kwargs: dict = {
                 "url": url,
@@ -3146,7 +3146,7 @@ class MCPServerTask:
                         read_stream, write_stream, **sampling_kwargs
                     ) as session:
                         # Bound the handshake — same orphaned-task hang as the
-                        # stdio path (#59349): an endpoint that accepts the
+                        # stdio path: an endpoint that accepts the
                         # connection but never answers ``initialize`` parks this
                         # coroutine forever on the background loop.
                         self.initialize_result = await asyncio.wait_for(
@@ -3157,9 +3157,9 @@ class MCPServerTask:
                         self._ready.set()
                         # Session is live again: clear any breaker state from a
                         # prior outage so the first call after recovery isn't
-                        # gated on a stale consecutive-failure count (#16788).
+                        # gated on a stale consecutive-failure count.
                         _reset_server_error(self.name)
-                        # Unproven until keepalive/tool-call success (#62212).
+                        # Unproven until keepalive/tool-call success.
                         self._session_proven = False
                         reason = await self._wait_for_lifecycle_event()
                         if reason == "reconnect":
@@ -3169,7 +3169,7 @@ class MCPServerTask:
                             )
             except BaseExceptionGroup as _eg:
                 # SSE transport TaskGroup dropped (idle timeout / stream blip):
-                # reconnect immediately instead of backoff/park (#66092).
+                # reconnect immediately instead of backoff/park.
                 reason = self._reconnect_or_reraise_group(_eg)
             return reason
 
@@ -3207,7 +3207,7 @@ class MCPServerTask:
                         read_stream, write_stream, _get_session_id,
                     ):
                         async with ClientSession(read_stream, write_stream, **sampling_kwargs) as session:
-                            # Bound the handshake (#59349) — see stdio path.
+                            # Bound the handshake — see stdio path.
                             self.initialize_result = await asyncio.wait_for(
                                 session.initialize(), timeout=float(connect_timeout)
                             )
@@ -3216,9 +3216,9 @@ class MCPServerTask:
                             self._ready.set()
                             # Session is live again: clear any breaker state from
                             # a prior outage so the first call after recovery
-                            # isn't gated on a stale failure count (#16788).
+                            # isn't gated on a stale failure count.
                             _reset_server_error(self.name)
-                            # Unproven until keepalive/tool-call success (#62212).
+                            # Unproven until keepalive/tool-call success.
                             self._session_proven = False
                             reason = await self._wait_for_lifecycle_event()
                             if reason == "reconnect":
@@ -3228,7 +3228,7 @@ class MCPServerTask:
                                 )
             except BaseExceptionGroup as _eg:
                 # Streamable-HTTP transport TaskGroup dropped: reconnect
-                # immediately instead of backoff/park (#66092).
+                # immediately instead of backoff/park.
                 reason = self._reconnect_or_reraise_group(_eg)
             return reason
         else:
@@ -3254,7 +3254,7 @@ class MCPServerTask:
                     read_stream, write_stream, _get_session_id,
                 ):
                     async with ClientSession(read_stream, write_stream, **sampling_kwargs) as session:
-                        # Bound the handshake (#59349) — see stdio path.
+                        # Bound the handshake — see stdio path.
                         self.initialize_result = await asyncio.wait_for(
                             session.initialize(), timeout=float(connect_timeout)
                         )
@@ -3263,9 +3263,9 @@ class MCPServerTask:
                         self._ready.set()
                         # Session is live again: clear any breaker state from a
                         # prior outage so the first call after recovery isn't
-                        # gated on a stale consecutive-failure count (#16788).
+                        # gated on a stale consecutive-failure count.
                         _reset_server_error(self.name)
-                        # Unproven until keepalive/tool-call success (#62212).
+                        # Unproven until keepalive/tool-call success.
                         self._session_proven = False
                         reason = await self._wait_for_lifecycle_event()
                         if reason == "reconnect":
@@ -3275,7 +3275,7 @@ class MCPServerTask:
                             )
             except BaseExceptionGroup as _eg:
                 # Legacy Streamable-HTTP transport TaskGroup dropped: reconnect
-                # immediately instead of backoff/park (#66092).
+                # immediately instead of backoff/park.
                 reason = self._reconnect_or_reraise_group(_eg)
             return reason
 
@@ -3287,7 +3287,7 @@ class MCPServerTask:
         which previously aborted the connection — those servers could never
         stay connected for their prompts/resources. Skip the call when the
         server doesn't advertise the ``tools`` capability.
-        (Ported from anomalyco/opencode#31271.)
+        (Ported)
         """
         # Fresh transport connection → re-probe with the cheap ``ping`` path.
         # Clears any latch from a prior connection in case the server gained
@@ -3386,7 +3386,7 @@ class MCPServerTask:
         # letting it blow up inside the SDK's httpx layer on every retry)
         # means a typo in config.yaml fails fast with a clear error — and
         # critically, no reconnect-backoff burn.  (Ported from
-        # anomalyco/opencode#25019.)
+        #)
         if self._is_http():
             try:
                 _validate_remote_mcp_url(self.name, config.get("url"))
@@ -3465,7 +3465,7 @@ class MCPServerTask:
                 # keepalive failure / transport TaskGroup drop). That alone is
                 # NOT proof of health: a flapping transport handshakes fine and
                 # drops moments later, and resetting the budget here let such
-                # servers respawn forever (#62212 — 6212 spawns in 63h).
+                # servers respawn forever — 6212 spawns in 63h).
                 # Only clear the consecutive-failure budget once the session
                 # PROVED healthy — survived >=1 full keepalive interval or
                 # served >=1 successful tool call (_mark_session_proven).
@@ -3519,7 +3519,7 @@ class MCPServerTask:
                 # and the MCP server would stay dead until Pilotage is fully
                 # restarted. Re-raise so the task's cancellation propagates
                 # correctly to asyncio's task machinery and ``shutdown()``'s
-                # ``await self._task`` completes. See #9930.
+                # ``await self._task`` completes. See.
                 self.session = None
                 raise
             except Exception as exc:
@@ -3549,7 +3549,7 @@ class MCPServerTask:
                         # Deterministic failure (bad command, non-MCP URL,
                         # 401/403): every retry hits the same wall. Park
                         # immediately instead of burning the retry ladder
-                        # and spamming N identical warnings (#65673).
+                        # and spamming N identical warnings.
                         #
                         # Auth failures park here too rather than returning.
                         # Returning ends the run task, and with it the only
@@ -3698,12 +3698,12 @@ class MCPServerTask:
                     # Do NOT return — exiting the task orphans the server:
                     # nothing would ever listen for _reconnect_event again
                     # and the server would be permanently wedged for the
-                    # life of the process (#16788). Instead, drop the phantom
+                    # life of the process. Instead, drop the phantom
                     # tools from the registry and park. Because parking
                     # deregisters the tools, no tool call can reach the
                     # circuit-breaker half-open probe or _signal_reconnect —
                     # so the park is a TIMED wait: every _PARKED_RETRY_INTERVAL
-                    # we wake and attempt one reconnect ourselves (#57129).
+                    # we wake and attempt one reconnect ourselves.
                     # An explicit _reconnect_event.set() (OAuth recovery,
                     # manual /mcp refresh) still wakes us immediately.
                     self._was_parked = True
@@ -3755,7 +3755,7 @@ class MCPServerTask:
             # in asyncio.wait_for) cancels *this* coroutine, but the
             # ensure_future'd run() task is independent and would otherwise
             # keep running detached — parked on a hung transport with no
-            # owner to reap it (#59349). Propagate the cancellation so the
+            # owner to reap it. Propagate the cancellation so the
             # transport context managers unwind and their finally blocks
             # release the child process / FDs.
             if self._task and not self._task.done():
@@ -3836,7 +3836,7 @@ class MCPServerTask:
 _servers: Dict[str, MCPServerTask] = {}
 _server_connecting: set[str] = set()
 _server_connect_errors: Dict[str, str] = {}
-# Lazy MCP startup (#56832): servers whose tools were registered from the
+# Lazy MCP startup: servers whose tools were registered from the
 # on-disk schema cache without spawning/connecting. Keyed by server name;
 # entries are popped once a real connection is established on first use.
 _lazy_server_configs: Dict[str, dict] = {}
@@ -3857,7 +3857,7 @@ _connect_server_claim: contextvars.ContextVar[
 # ``_servers[name] = server`` line. Without a cooldown, EVERY subsequent
 # ``discover_mcp_tools()`` (one per agent worker session, i.e. every few
 # seconds) sees the server as "not connected" and re-spawns it from
-# scratch. That is the restart storm in #50394: the failing server is
+# scratch. That is the restart storm in: the failing server is
 # re-attempted on the shared MCP event loop on every worker session, the
 # subprocesses pile up unreaped, and the churn destabilises the healthy
 # co-located servers (their tools intermittently surface as
@@ -3907,7 +3907,7 @@ def _connect_cooldown_active(server_name: str) -> bool:
 # Circuit breaker: consecutive error counts per server.  After
 # _CIRCUIT_BREAKER_THRESHOLD consecutive failures, the handler returns
 # a "server unreachable" message that tells the model to stop retrying,
-# preventing the 90-iteration burn loop described in #10447.
+# preventing the 90-iteration burn loop described in.
 #
 # State machine:
 #   closed    — error count below threshold; all calls go through.
@@ -4391,7 +4391,7 @@ def _handle_auth_error_and_retry(
 # Substrings (lower-cased match) that indicate the MCP server rejected
 # the request because its server-side transport session expired /
 # was garbage-collected.  The caller's OAuth token is still valid —
-# only the transport-layer session state needs rebuilding.  See #13383.
+# only the transport-layer session state needs rebuilding. See.
 _SESSION_EXPIRED_MARKERS: tuple = (
     "invalid or expired session",
     "expired session",
@@ -4504,7 +4504,7 @@ def _handle_session_expired_and_retry(
     ``_reconnect_event`` causes the server task's lifecycle loop to
     tear down the current ``streamablehttp_client`` + ``ClientSession``
     and rebuild them, reusing the existing OAuth provider instance.
-    See #13383.
+    See.
 
     Args:
         server_name: Name of the MCP server that raised.
@@ -4594,7 +4594,7 @@ _lock = threading.Lock()
 # ---------------------------------------------------------------------------
 # Advisory file lock that prevents N concurrent Pilotage processes (e.g.
 # gateway + CLI + TUI) from all running MCP discovery simultaneously.
-# See issue #62771.
+# See.
 _LOCK_UNAVAILABLE: Any = object()  # sentinel: locking broken/unavailable
 _MCP_DISCOVERY_LOCK_PATH: Optional[str] = None  # resolved lazily
 
@@ -5239,7 +5239,7 @@ def _resolve_server_lazy(name: str, config: dict) -> bool:
 
     Gated per-server by ``mcp_servers.<name>.lazy`` in config (default OFF),
     following the same per-server key pattern as ``idle_timeout_seconds``.
-    Design from #56832 (Vansh5632).
+    Design from (Vansh5632).
     """
     return _parse_boolish(config.get("lazy", False), default=False)
 
@@ -5248,7 +5248,7 @@ def _ensure_lazy_server_connected(server_name: str) -> bool:
     """Connect a lazily-registered MCP server on demand (sync, blocks caller).
 
     Composes with the existing connect machinery: respects the per-server
-    connect cooldown (#50394), the ``_server_connecting`` dedup set, and
+    connect cooldown, the ``_server_connecting`` dedup set, and
     routes through ``_discover_and_register_server`` so parked/recycle/
     cooldown bookkeeping stays in one place. Returns True when a live
     session is available afterwards.
@@ -5321,7 +5321,7 @@ def _get_connected_server_for_call(server_name: str) -> Optional[MCPServerTask]:
 
     Also the single first-use connect point for lazy (schema-cache
     registered) servers, so raw tool calls AND the resource/prompt utility
-    handlers all trigger the deferred spawn (#56832).
+    handlers all trigger the deferred spawn.
     """
     with _lock:
         server = _servers.get(server_name)
@@ -5363,7 +5363,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
 
         # Circuit breaker: if this server has failed too many times
         # consecutively, short-circuit with a clear message so the model
-        # stops retrying and uses alternative approaches (#10447).
+        # stops retrying and uses alternative approaches.
         #
         # Once the cooldown elapses, the breaker transitions to
         # half-open: we let the *next* call through as a probe. On
@@ -5395,7 +5395,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             # transport swaps in a fresh session object asynchronously) —
             # wait briefly before treating this as a failure, so a
             # transient reconnect window doesn't burn a circuit-breaker
-            # strike (#26892).
+            # strike.
             if _wait_for_server_session_ready(
                 server, timeout=min(5.0, float(tool_timeout or 5.0)),
             ):
@@ -5404,7 +5404,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                 # Still down — the server task is reconnecting, or it has
                 # exhausted its retry budget and parked (e.g. a dead stdio
                 # subprocess). Probing here would write into a dead/absent
-                # transport and re-arm the breaker forever (#16788). Instead,
+                # transport and re-arm the breaker forever. Instead,
                 # ask the (always-present) server task to rebuild the
                 # transport — which respawns a dead stdio subprocess — and
                 # return a clean "reconnecting" error so the model backs off
@@ -5434,7 +5434,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                     server._pending_call_context = None
             # The RPC round-trip completed — the session is demonstrably
             # healthy at the transport level (even if the tool itself
-            # returned isError). Clear the rapid-drop budget (#62212).
+            # returned isError). Clear the rapid-drop budget.
             _mark_proven = getattr(server, "_mark_session_proven", None)
             if _mark_proven is not None:
                 _mark_proven()
@@ -5462,8 +5462,8 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             # adapters that render images natively. Without this, image blocks
             # were silently dropped and the agent got an empty response.
             #
-            # Distilled from #17915 (c3115644151) and #10848 (gnanirahulnutakki),
-            # both too stale to cherry-pick. #10848's approach (integrate with
+            # Distilled from (c3115644151) and (gnanirahulnutakki),
+            # both too stale to cherry-pick.'s approach (integrate with
             # Pilotage' MEDIA tag + cache_image_from_bytes) was the cleaner of
             # the two — plugs into existing infrastructure.
             parts: List[str] = []
@@ -5546,7 +5546,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             if recovered is not None:
                 return recovered
 
-            # Transport session expiry (#13383): same reconnect flow
+            # Transport session expiry: same reconnect flow
             # but skips OAuth recovery because the access token is
             # still valid — only the server-side session is stale.
             recovered = _handle_session_expired_and_retry(
@@ -5822,7 +5822,7 @@ def _make_check_fn(server_name: str):
             ):
                 return True
             # Lazy (schema-cache registered) servers are available: the
-            # first real call spawns/connects them (#56832).
+            # first real call spawns/connects them.
             return server_name in _lazy_server_configs
 
     return _check
@@ -5844,12 +5844,12 @@ def _normalize_mcp_input_schema(schema: dict | None) -> dict:
     Additional MCP-server robustness repairs applied recursively:
 
     * Missing or ``null`` ``type`` on an object-shaped node is coerced to
-      ``"object"`` (some servers omit it).  See PR #4897.
+      ``"object"`` (some servers omit it). See.
     * When an ``object`` node lacks ``properties``, an empty ``properties``
       dict is added so ``required`` entries don't dangle.
     * ``required`` arrays are pruned to only names that exist in
       ``properties``; otherwise Google AI Studio / Gemini 400s with
-      ``property is not defined``.  See PR #4651.
+      ``property is not defined``. See.
     * MCP/Pydantic optional fields commonly arrive as
       ``anyOf: [{...}, {"type": "null"}], default: null``.  Anthropic rejects
       nullable branches in tool input schemas, so nullable unions are collapsed
@@ -5999,7 +5999,7 @@ def sanitize_mcp_name_component(value: str) -> str:
 
 # Native MCP tool-name prefix. Pilotage uses the ``mcp__<server>__<tool>``
 # convention shared by Claude Code, Codex, and OpenCode (anomalyco/opencode
-# #33533). The double-underscore delimiter disambiguates the server/tool
+#). The double-underscore delimiter disambiguates the server/tool
 # boundary even when either component contains underscores, and matches the
 # naming models are trained on. It also aligns native registration with the
 # Anthropic-OAuth wire form (``_MCP_TOOL_PREFIX`` in anthropic_adapter.py),
@@ -6198,7 +6198,7 @@ _UTILITY_CAPABILITY_METHODS = {
 # all four utility stubs registered and every model call to them came
 # back with JSON-RPC ``-32601 Method not found``, which made the model
 # conclude the server was broken even when the real tools worked. See
-# #18051.
+#
 _UTILITY_CAPABILITY_ATTRS = {
     "list_resources": "resources",
     "read_resource": "resources",
@@ -6287,7 +6287,7 @@ def _existing_tool_names() -> List[str]:
             schema = _convert_mcp_schema(server.name, mcp_tool)
             names.append(schema["name"])
     # Lazy servers registered from the schema cache have no MCPServerTask
-    # yet — their tools live in the registry only (#56832).
+    # yet — their tools live in the registry only.
     with _lock:
         lazy_names = [
             n
@@ -6322,7 +6322,7 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
     toolset_name = f"mcp-{name}"
 
     # Selective tool loading: honour include/exclude lists from config.
-    # Rules (matching issue #690 spec, extended with glob support):
+    # Rules (matching spec, extended with glob support):
     #   tools.include — whitelist: only matching tool names are registered
     #   tools.exclude — blacklist: all tools EXCEPT matching ones are registered
     #   entries may be exact names or fnmatch globs (e.g. "*_radar_*")
@@ -6489,7 +6489,7 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
 
     if registered_names:
         registry.register_toolset_alias(name, toolset_name)
-        # Write-through (#56832): refresh the on-disk schema cache after a
+        # Write-through: refresh the on-disk schema cache after a
         # live connect so the next startup can lazily register this server
         # without spawning it. Cache failures never break registration.
         try:
@@ -6541,7 +6541,7 @@ class _CachedMCPTool:
 def _register_from_cache_sync(name: str, config: dict, entry: dict) -> List[str]:
     """Register a server's tools from a cached manifest, no child process.
 
-    Lazy startup (#56832, design by Vansh5632): tools appear in the registry
+    Lazy startup (, design by Vansh5632): tools appear in the registry
     immediately; the first real call routes through
     ``_get_connected_server_for_call`` → ``_ensure_lazy_server_connected``.
     """
@@ -6762,7 +6762,7 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
     # Only attempt servers that aren't already connected (or currently
     # connecting) and are enabled.  Checking ``_server_connecting`` prevents
     # duplicate subprocess spawns when ``discover_mcp_tools()`` is called
-    # from multiple entry-points before the first batch finishes (#58862).
+    # from multiple entry-points before the first batch finishes.
     with _lock:
         connecting = set(_server_connecting)
         new_servers = {
@@ -6771,13 +6771,13 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
             if k not in _servers
             and k not in connecting
             # Servers already lazily registered from the schema cache are
-            # not re-registered; they connect on first tool use (#56832).
+            # not re-registered; they connect on first tool use.
             and k not in _lazy_server_configs
             and _parse_boolish(v.get("enabled", True), default=True)
             # Skip a server still serving its post-failure backoff. Without
             # this, a server that fails to connect (and is therefore never
             # recorded in ``_servers``) would be re-spawned on every worker
-            # session's discovery pass -- the #50394 restart storm. The
+            # session's discovery pass -- the restart storm. The
             # cooldown is cleared automatically on the next successful
             # connect or by a manual /mcp refresh.
             and not _connect_cooldown_active(k)
@@ -6786,7 +6786,7 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
         # Their tools are deregistered, so nothing else can reach
         # _signal_reconnect — without this nudge a new session silently
         # waits up to _PARKED_RETRY_INTERVAL for the next self-probe
-        # (#50170). Wake them now so their tools come back promptly.
+        # Wake them now so their tools come back promptly.
         stale_cached = [
             _servers[k]
             for k in servers
@@ -6808,7 +6808,7 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
     if not new_servers:
         return _existing_tool_names()
 
-    # Lazy startup (#56832): servers gated with ``lazy: true`` whose config
+    # Lazy startup: servers gated with ``lazy: true`` whose config
     # fingerprint matches a valid on-disk schema-cache entry register their
     # tools from cache WITHOUT spawning/connecting. A missing or stale cache
     # entry falls back to the normal eager connect below (which write-through
@@ -6876,7 +6876,7 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
                     _server_connect_errors[name] = message
                     # Arm the per-server backoff so the next discovery pass
                     # doesn't immediately re-spawn this failing server
-                    # (#50394). Isolated to this server -- healthy servers
+                    # Isolated to this server -- healthy servers
                     # in the same batch are unaffected.
                     _record_connect_failure(name)
                 logger.warning(
@@ -6907,7 +6907,7 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
         # When the outer timeout fires or the user interrupts,
         # _discover_all's gather may not have finished, leaving
         # entries stranded in _server_connecting.  Those stale
-        # entries would block future reconnection attempts (#58862).
+        # entries would block future reconnection attempts.
         with _lock:
             stale = [n for n in new_servers if n in _server_connecting]
             if stale:
@@ -6975,7 +6975,7 @@ def discover_mcp_tools() -> List[str]:
         logger.debug("MCP SDK not available -- skipping MCP tool discovery")
         return []
 
-    # Cross-process discovery guard (#62771). A lock loser waits for
+    # Cross-process discovery guard. A lock loser waits for
     # the holder, then performs its own process-local discovery. If locking is
     # unavailable or the bounded wait expires, preserve the previous
     # fail-soft behavior by running discovery unguarded.
@@ -7404,7 +7404,7 @@ def _reinject_post_build_tools(agent, tools_list: list, name_set: set) -> set:
 
     # Context-engine tools (lcm_grep/lcm_describe/…) — the `context_engine`
     # toolset is intentionally empty, so these only exist via this append.
-    # Honor the same enabled_toolsets gate agent_init uses (#5544): without it a
+    # Honor the same enabled_toolsets gate agent_init uses: without it a
     # restricted-toolset platform (e.g. platform_toolsets: telegram: []) would
     # re-leak lcm_* tools the build deliberately excluded, and pay the local-
     # model latency penalty.
@@ -7442,7 +7442,7 @@ def shutdown_mcp_servers():
 
     # Fast path: nothing to shut down. The connect-cooldown maps can still
     # be populated here — a server that failed to connect is never recorded
-    # in ``_servers`` (that is the very premise of the #50394 cooldown), so
+    # in ``_servers`` (that is the very premise of the cooldown), so
     # "no live servers" is the MOST likely state in which stale backoff
     # entries exist. Clear them so a post-shutdown restart re-attempts every
     # configured server immediately.
@@ -7467,7 +7467,7 @@ def shutdown_mcp_servers():
             _servers.clear()
             # Drop connect-retry cooldowns too: a full shutdown/restart
             # should re-attempt every server immediately, not honour a
-            # stale per-server backoff from before the restart (#50394).
+            # stale per-server backoff from before the restart.
             _server_connect_retry_after.clear()
             _server_connect_failures.clear()
 
@@ -7489,7 +7489,7 @@ def shutdown_mcp_servers():
     # Unconditional final sweep: whether the async ``_shutdown`` ran,
     # timed out, or was never scheduled (loop already stopped), a full
     # shutdown must leave no stale connect-cooldown state behind — the
-    # next start should re-attempt every server immediately (#50394).
+    # next start should re-attempt every server immediately.
     with _lock:
         _server_connect_retry_after.clear()
         _server_connect_failures.clear()
@@ -7575,7 +7575,7 @@ def _kill_orphaned_mcp_children(
             if _my_pgid is not None and pgid == _my_pgid:
                 # The MCP child shares the gateway's own process group.
                 # Using killpg would deliver the signal to the gateway as
-                # well, crashing it (see #47134).  Fall through to the
+                # well, crashing it. Fall through to the
                 # per-pid kill() path instead. Warn because per-pid kill
                 # cannot reach grandchildren in this shared group — if the
                 # direct child has already exited, they may leak (inherent:
@@ -7704,7 +7704,7 @@ def _stop_mcp_loop(*, only_if_idle: bool = False) -> bool:
         # Drain before stopping: closing the loop with tasks still suspended
         # leaves their coroutines for the GC, whose finalizer then resumes them
         # to run cleanup against a loop that is already closed -> "Event loop
-        # is closed" (#60197). ``shutdown_mcp_servers`` only reaps servers held
+        # is closed". ``shutdown_mcp_servers`` only reaps servers held
         # in ``_servers``, so anything else left on this loop ends up here.
         stop_owned_by_loop = False
         if loop.is_running():

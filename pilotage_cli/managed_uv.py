@@ -458,7 +458,7 @@ def _list_available_patches(
     """Return known patch versions for ``minor`` (e.g. "3.11"), newest first.
 
     Queries ``uv python list --all-versions`` rather than trusting the bare
-    minor-line request to resolve to the newest patch (issue #71250: on some
+    minor-line request to resolve to the newest patch (: on some
     hosts/uv versions, the resolved candidate for a bare "3.11" request can
     be an older cached/indexed patch that still links a vulnerable SQLite,
     even when a newer non-vulnerable patch is available). Returns [] on any
@@ -663,7 +663,7 @@ def _install_safe_python_generation(
     # retry with explicit newer versions, newest-first -- this handles the
     # case where the default resolution for a bare request picks an older
     # cached/indexed patch even though a newer, non-vulnerable one is
-    # available (issue #71250).
+    # available.
     env_for_list = managed_python_env(project_root, install_dir=python_root)
     patches = _list_available_patches(
         uv_bin, request, cwd=project_root, env=env_for_list
@@ -680,7 +680,7 @@ def _install_safe_python_generation(
         # guard in _attempt_install_generation rejects it anyway -- so trying
         # it spends a full download+install+probe+delete cycle to reach a
         # certain rejection. This matters on a uv whose download catalog is
-        # stale: in #71250 the newest indexed 3.11 was 3.11.14, exactly the
+        # stale: in the newest indexed 3.11 was 3.11.14, exactly the
         # installed version, so without this skip the loop burned all five
         # retries walking backwards (3.11.13 -> 3.11.9) before failing.
         if version_tuple <= current.python_version[:3]:
@@ -699,7 +699,7 @@ def _install_safe_python_generation(
     # All patches on the current minor line are vulnerable or rejected.
     # Fall forward to the next supported minor (e.g. 3.11 → 3.12) so the
     # user isn't stuck on every `pilotage update` with no path to a fixed
-    # runtime (issue #76106).  The requires-python constraint
+    # runtime. The requires-python constraint
     # (>=3.11,<3.14) and the downstream import smoke-test gate
     # compatibility; we only need to stay inside that window.
     cur_major, cur_minor = current.python_version[:2]
@@ -1056,7 +1056,7 @@ def _refresh_managed_uv_catalog(uv_bin: str) -> bool:
     re-releases existing CPython patch versions with newer SQLite (e.g. the
     3.11.15 build was re-cut with SQLite 3.53.x), so a stale catalog can make
     every provisioning attempt resolve to a vulnerable build even though a
-    fixed build of the SAME patch version exists (issue #72093).  The
+    fixed build of the SAME patch version exists. The
     patch-retry loop cannot recover from that: the fixed build carries no
     newer version number to retry with.
 
@@ -1123,7 +1123,7 @@ def _sweep_stale_runtime_backups(
     A successful runtime repair parks the previous venv as
     ``<live>.stale.runtime-<token>``; historically nothing ever reclaimed
     those, so each repair leaked a full venv (~1 GB) at the project root
-    forever (issue #73109).  On POSIX, deleting the tree is safe even while
+    forever. On POSIX, deleting the tree is safe even while
     an older process still maps files from it — open FDs and mmaps keep
     their inodes alive; the directory entry is what goes away.
 
@@ -1178,7 +1178,7 @@ def repair_vulnerable_runtime(
         # next to the live venv are leftovers from a past repair (or from
         # a build predating the post-repair cleanup) and will never be
         # rolled back to. Sweep them so they don't leak ~1 GB each
-        # forever (issue #73109). Age-gated to avoid racing an in-flight
+        # forever. Age-gated to avoid racing an in-flight
         # repair in a sibling process.
         _sweep_stale_runtime_backups(live, root=root)
         return RuntimeRepairResult(
@@ -1235,7 +1235,7 @@ def repair_vulnerable_runtime(
             # Likely a stale managed-uv catalog: python-build-standalone
             # re-releases the same patch versions with fixed SQLite, but a
             # frozen catalog keeps resolving the old vulnerable build and the
-            # patch-retry loop has no newer number to try (issue #72093).
+            # patch-retry loop has no newer number to try.
             # Refresh the managed binary and retry once.
             if _refresh_managed_uv_catalog(uv_bin):
                 print("  → Managed uv refreshed; retrying provisioning...")

@@ -220,7 +220,7 @@ def list_plugin_sources() -> List[SecretSource]:
     Includes both legacy global plugin registrations (``_SOURCE_ORIGINS ==
     "plugin"``) and the current scope's profile-keyed registrations — every
     scoped entry is plugin-registered by definition, since bundled sources
-    register with ``scope=None`` (#64229 profile isolation).
+    register with ``scope=None`` profile isolation).
     """
     _ensure_builtin_sources()
     with _REGISTRY_LOCK:
@@ -432,7 +432,7 @@ def apply_all(secrets_cfg: dict, home_path: Path,
 
     1. ``secrets.preserve_existing`` names — a pre-existing env value always
        wins for these, even against a source with ``override_existing: true``
-       (escape hatch for profile-local platform secrets, #58073).
+       (escape hatch for profile-local platform secrets,).
     2. Pre-existing env (.env / shell) — unless the winning source has
        ``override_existing: true``.
     3. Mapped sources, in configured order.
@@ -442,7 +442,7 @@ def apply_all(secrets_cfg: dict, home_path: Path,
     ``skipped_claimed`` entry and a conflict warning — never a silent
     clobber, and ``override_existing`` never applies across sources.
 
-    Profile aliasing (#51447): when running under a named profile, an applied
+    Profile aliasing: when running under a named profile, an applied
     var ``FOO_<PROFILE>`` (credential-shaped suffixes only) also hydrates the
     canonical ``FOO`` so platform adapters and plugins that read fixed env
     names see the profile's value.  The alias obeys the same protected /

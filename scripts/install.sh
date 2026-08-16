@@ -6,7 +6,7 @@
 # Uses uv for desktop/server installs and Python's stdlib venv + pip on Termux.
 #
 # Usage:
-#   curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+#   curl -fsSL https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent/raw/main/scripts/install.sh | bash
 #
 # Or with options:
 #   curl -fsSL ... | bash -s -- --no-venv --skip-setup
@@ -29,7 +29,7 @@ if [ -n "${PYTHONHOME:-}" ]; then
 fi
 
 # Prevent uv from discovering config files (uv.toml, pyproject.toml) from the
-# wrong user's home directory when running under sudo -u <user>.  See #21269.
+# wrong user's home directory when running under sudo -u <user>. See.
 export UV_NO_CONFIG=1
 
 # Colors
@@ -43,8 +43,8 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:NousResearch/hermes-agent.git"
-REPO_URL_HTTPS="https://github.com/NousResearch/hermes-agent.git"
+REPO_URL_SSH="git@github.com:REPLACE-WITH-PILOTAGE-REPO/pilotage-agent.git"
+REPO_URL_HTTPS="https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent.git"
 PILOTAGE_HOME="${PILOTAGE_HOME:-$HOME/.pilotage}"
 # INSTALL_DIR is resolved AFTER arg parsing and OS detection so we can pick an
 # FHS-style layout for root installs.  Track whether the user gave us an
@@ -417,7 +417,7 @@ resolve_install_layout() {
         # is world-readable.  Default uv paths land in /root/.local/share/uv,
         # which non-root users can't traverse — leaving the shared
         # /usr/local/bin/pilotage wrapper unable to exec the bad-interpreter venv
-        # python.  See #21457.
+        # python. See.
         export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-/usr/local/share/uv/python}"
         export UV_PYTHON_BIN_DIR="${UV_PYTHON_BIN_DIR:-/usr/local/share/uv/bin}"
         log_info "Root install on Linux — using FHS layout"
@@ -498,7 +498,7 @@ detect_os() {
                     DISTRO="$ID"
                     # VERSION_ID (e.g. "26.04", "14") lets us tell whether the
                     # apt release is newer than the newest one Playwright's
-                    # platform resolver recognizes — the #35166 hang condition.
+                    # platform resolver recognizes — the hang condition.
                     DISTRO_VERSION="${VERSION_ID:-}"
                 else
                     DISTRO="unknown"
@@ -514,7 +514,7 @@ detect_os() {
             OS="windows"
             DISTRO="windows"
             log_error "Windows detected. Please use the PowerShell installer:"
-            log_info "  iex (irm https://hermes-agent.nousresearch.com/install.ps1)"
+            log_info "  iex (irm https://github.com/REPLACE-WITH-PILOTAGE-REPO/pilotage-agent/raw/main/scripts/install.ps1)"
             exit 1
             ;;
         *)
@@ -819,7 +819,7 @@ check_node() {
     # without a sibling npm (leftover from a node version manager) makes
     # `command -v node` succeed while every later `npm install` silently
     # fails and the desktop build dies with an opaque "Node.js / npm
-    # unavailable" (#77003). Node only counts as found when npm resolves on
+    # unavailable". Node only counts as found when npm resolves on
     # the same PATH.
     if command -v node &> /dev/null && command -v npm &> /dev/null \
         && node_satisfies_build "$(node --version)"; then
@@ -1158,7 +1158,7 @@ install_system_packages() {
                 # Read the prompt from /dev/tty (same approach the setup wizard uses).
                 # Probe by actually opening /dev/tty: a bare existence test passes
                 # in Docker builds where the device node is in the mount namespace
-                # but opening fails with ENXIO. See #16746.
+                # but opening fails with ENXIO. See.
                 echo ""
                 log_info "sudo is needed ONLY to install optional system packages (${pkgs[*]}) via your package manager."
                 log_info "Pilotage Agent itself does not require or retain root access."
@@ -1226,7 +1226,7 @@ clone_repo() {
 
     # An interrupted previous clone leaves a .git with no initial commit, where
     # the update path's `git stash` / `git checkout` abort with "You do not
-    # have the initial commit yet" and fail the install (#40998). Move such a
+    # have the initial commit yet" and fail the install. Move such a
     # partial checkout aside -- never delete it, in case it holds something the
     # user wants -- so the fresh-clone path below can proceed.
     if [ -d "$INSTALL_DIR/.git" ] && ! git -C "$INSTALL_DIR" rev-parse --verify HEAD >/dev/null 2>&1; then
@@ -1252,7 +1252,7 @@ clone_repo() {
                 # markers with `git reset` first -- this keeps working-tree
                 # changes (they're still stashed just below) and only drops the
                 # index-level conflict state. Mirrors the `pilotage update` path
-                # (#4735).
+                #.
                 if [ -n "$(git ls-files --unmerged)" ]; then
                     log_info "Clearing unmerged index entries from a previous conflict..."
                     git reset -q
@@ -1438,7 +1438,7 @@ setup_venv() {
 
 run_locked_uv_sync() {
     # Bootstrap uv calls stay isolated from ambient config via UV_NO_CONFIG
-    # (#21269). A locked project sync is different: uv.lock records resolver
+    # A locked project sync is different: uv.lock records resolver
     # settings from this checkout's [tool.uv], so hiding pyproject.toml makes
     # uv 0.12+ reject the valid lock. Re-enable project discovery only for
     # this subprocess while redirecting user/system config lookups to an empty
@@ -1496,7 +1496,7 @@ install_deps() {
         # it ever invokes the C build, so the next pip install would fail at
         # "platform android is not supported".  Prebuild psutil from the official
         # sdist with a one-line marker patch (Linux source path is fine on
-        # Android).  Stopgap until psutil#2762 ships upstream.
+        # Android). Stopgap until psutil ships upstream.
         if "$PIP_PYTHON" -c 'import sys; raise SystemExit(0 if sys.platform == "android" else 1)' 2>/dev/null; then
             log_info "Android Python detected: prebuilding psutil compatibility shim..."
             if ! "$PIP_PYTHON" "$INSTALL_DIR/scripts/install_psutil_android.py" --pip "$PIP_PYTHON -m pip"; then
@@ -1751,7 +1751,7 @@ setup_path() {
     mkdir -p "$command_link_dir"
     # Older installs created this path as a symlink to $PILOTAGE_BIN. Without
     # the rm, `cat >` follows the symlink and overwrites the venv pip entry
-    # point with this shim — making `exec "$PILOTAGE_BIN"` self-recurse. (#21454)
+    # point with this shim — making `exec "$PILOTAGE_BIN"` self-recurse.
     rm -f "$command_link_dir/pilotage"
     if [ "$USE_VENV" = true ]; then
         # uv-generated console scripts resolve themselves through `realpath`,
@@ -1778,7 +1778,7 @@ EOF
     # Also expose `pilotage-agent`. The `pilotage-agent` console script declared in
     # pyproject.toml's [project.scripts] lives inside the venv, which is not on
     # the login-shell PATH. Without this launcher users can't invoke the agent
-    # entrypoint directly from outside the venv. (#74819)
+    # entrypoint directly from outside the venv.
     rm -f "$command_link_dir/pilotage-agent"
     if [ "$USE_VENV" = true ]; then
         cat > "$command_link_dir/pilotage-agent" <<EOF
@@ -2056,7 +2056,7 @@ run_browser_install_with_timeout() {
 # function target, which the `timeout` binary cannot exec) it uses a pure-shell
 # watchdog: launch the command in its own process group, poll until it finishes,
 # and SIGTERM (then SIGKILL) the whole group on timeout. The pure-shell path is
-# what protects the bug-#39219 case — a stalled Electron download on macOS,
+# what protects the bug- case — a stalled Electron download on macOS,
 # where `timeout` is usually absent — turning an indefinite hang into a non-zero
 # exit so callers (install_desktop) can self-heal via the mirror fallback.
 #
@@ -2088,7 +2088,7 @@ run_with_timeout() {
         if [ -n "$timeout_bin" ]; then
             # GNU `timeout` runs the command in its own process group, so a
             # terminal Ctrl+C is delivered to `timeout` but never reaches the
-            # child — the download looks frozen and ignores Ctrl+C (#35166).
+            # child — the download looks frozen and ignores Ctrl+C.
             # `--foreground` keeps the command in the shell's foreground group
             # so Ctrl+C reaches it; `-k 10` sends SIGKILL 10s after the deadline
             # so a wedged download can't outlive the timeout. Both flags are
@@ -2143,7 +2143,7 @@ run_with_timeout() {
 
 # Return success only when the host is an apt release NEWER than the newest one
 # Playwright's platform resolver recognizes — the exact condition that makes
-# `playwright install` hang uninterruptibly (#35166). We scope the override
+# `playwright install` hang uninterruptibly. We scope the override
 # retry to this case rather than retrying on *any* failure, so a genuine
 # network/disk/permission failure doesn't get a mismatched-glibc build forced
 # onto it. Newest Playwright-known apt releases as of this writing: Ubuntu
@@ -2158,7 +2158,7 @@ playwright_host_unrecognized() {
     case "$DISTRO" in
         ubuntu) _ver_gt "${DISTRO_VERSION:-0}" "24.04" ;;
         debian) _ver_gt "${DISTRO_VERSION:-0}" "13" ;;
-        *) return 1 ;;  # Non-apt or unknown — not the #35166 hang condition.
+        *) return 1 , # Non-apt or unknown — not the hang condition.
     esac
 }
 
@@ -2180,7 +2180,7 @@ playwright_fallback_platform() {
 # Run a `playwright install ...` command, and if it fails or hangs (the
 # uninterruptible "Installing Playwright Chromium with system dependencies"
 # stall on apt releases Playwright doesn't recognize yet — Ubuntu 26.04,
-# Debian 14, future distros — see #35166), retry it ONCE with
+# Debian 14, future distros — see), retry it ONCE with
 # PLAYWRIGHT_HOST_PLATFORM_OVERRIDE pinned to the newest known build.
 #
 # The override retry is scoped to the actual hang condition: it fires only when
@@ -2188,13 +2188,13 @@ playwright_fallback_platform() {
 # (playwright_host_unrecognized). On every release Playwright already supports
 # (Ubuntu <=24.04, Debian <=13) and every non-apt distro, the first attempt is
 # authoritative and a failure is reported as-is — we never force a
-# mismatched-glibc build (microsoft/playwright#35114) onto a host Playwright
+# mismatched-glibc build (microsoft/playwright) onto a host Playwright
 # handles correctly. This is deliberately narrower than a retry-on-any-failure:
 # a network/disk/permission error on a supported host should surface, not get
 # papered over with a platform override. Playwright's maintainers bless this
 # env var as the supported escape hatch for unrecognized platforms
-# (microsoft/playwright#33434); a hardcoded full distro/version table was
-# rejected upstream (microsoft/playwright#33432), so we only need the
+# (microsoft/playwright); a hardcoded full distro/version table was
+# rejected upstream (microsoft/playwright), so we only need the
 # newest-known floor here.
 #
 # An operator-provided PLAYWRIGHT_HOST_PLATFORM_OVERRIDE is always respected:
@@ -2217,7 +2217,7 @@ run_playwright_install() {
     fi
 
     # Only retry with an override on the apt releases too new for Playwright to
-    # recognize (the #35166 hang). Any other failure is a real failure and is
+    # recognize (the hang). Any other failure is a real failure and is
     # surfaced unchanged.
     if ! playwright_host_unrecognized; then
         return 1
@@ -2230,7 +2230,7 @@ run_playwright_install() {
     fi
 
     log_warn "Playwright doesn't recognize ${DISTRO} ${DISTRO_VERSION} yet — retrying with PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=$fallback"
-    log_info "(apt releases newer than Playwright knows hang at this step; see #35166)"
+    log_info "(apt releases newer than Playwright knows hang at this step; see)"
     PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$fallback" \
         run_browser_install_with_timeout "$timeout_seconds" "$@"
 }
@@ -2282,10 +2282,10 @@ install_node_deps() {
         log_info "Installing Node.js dependencies (browser tools)..."
         cd "$INSTALL_DIR"
         # Time-boxed: a stalled registry fetch would otherwise hang here with no
-        # progress (same #39219 stall class as the desktop build below).
+        # progress (same stall class as the desktop build below).
         # A failed npm install used to still print "✓ Node.js dependencies
-        # installed", hiding the degradation from the user (#77003). Now it
-        # fails the install outright instead of burying the warning (#85297).
+        # installed", hiding the degradation from the user. Now it
+        # fails the install outright instead of burying the warning.
         if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm install --silent; then
             log_error "npm install failed or timed out; Node.js dependencies were not installed"
             restore_dirty_lockfiles "$INSTALL_DIR"
@@ -2389,9 +2389,9 @@ install_node_deps() {
     if [ -f "$INSTALL_DIR/ui-tui/package.json" ]; then
         log_info "Installing TUI dependencies..."
         cd "$INSTALL_DIR/ui-tui"
-        # Time-boxed: a stalled registry fetch would otherwise hang here (#39219).
+        # Time-boxed: a stalled registry fetch would otherwise hang here.
         # Report success only on actual success, same as node-deps above
-        # (#77003) — and fail the install outright (#85297).
+        # — and fail the install outright.
         if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm install --silent; then
             log_error "TUI npm install failed or timed out; TUI dependencies were not installed"
             restore_dirty_lockfiles "$INSTALL_DIR"
@@ -2519,7 +2519,7 @@ maybe_start_gateway() {
 
     # Probe by actually opening /dev/tty: a bare existence test passes
     # in Docker builds where the device node is in the mount namespace
-    # but opening fails with ENXIO. See #16746.
+    # but opening fails with ENXIO. See.
     if ! (: </dev/tty) 2>/dev/null; then
         log_info "Gateway setup skipped (no terminal available). Run 'pilotage gateway install' later."
         return 0
@@ -2671,8 +2671,8 @@ ensure_browser() {
         return 1
     fi
 
-    # agent-browser itself is intentionally NOT installed here (#43564 /
-    # PR #44772 review): it resolves lazily via `npx agent-browser` instead,
+    # agent-browser itself is intentionally NOT installed here /
+    # review): it resolves lazily via `npx agent-browser` instead,
     # which every consumer (tools/browser_tool.py, `pilotage update`'s npx
     # cache warm) already goes through. Eagerly npm-installing a second,
     # separately version-pinned copy here -- only reachable via this
@@ -2682,7 +2682,7 @@ ensure_browser() {
     log_info "Installing camofox browser server..."
     local log_file
     log_file="$(mktemp)"
-    # Time-boxed (#39219): a stalled npm registry fetch here would otherwise
+    # Time-boxed: a stalled npm registry fetch here would otherwise
     # hang the installer with no progress, same class as the desktop build.
     if ! run_with_timeout "$NODE_DEPS_TIMEOUT" "$npm_bin" install -g --prefix "$PILOTAGE_HOME/node" --silent --ignore-scripts \
         "@askjo/camofox-browser@^1.5.2" \

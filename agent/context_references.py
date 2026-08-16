@@ -18,7 +18,7 @@ from pilotage_cli.sizefmt import format_bytes
 from abc import ABC, abstractmethod
 
 # ---------------------------------------------------------------------------
-# Plugin context-reference provider API (Issue #26193)
+# Plugin context-reference provider API 
 # ---------------------------------------------------------------------------
 
 BUILTIN_PREFIXES = frozenset({"diff", "staged", "file", "folder", "git", "url"})
@@ -661,7 +661,7 @@ def _agent_visible_path(path: Path) -> str:
     sandbox — the container has its own filesystem and the host path is not
     mounted. Files staged into an auto-mounted cache dir (``images/``,
     ``attachments/``, ...) are translated to their in-container path via the
-    existing ``tools.credential_files`` machinery (#76577). Falls back to the
+    existing ``tools.credential_files`` machinery. Falls back to the
     host path when the backend is local or translation is unavailable.
     """
     try:

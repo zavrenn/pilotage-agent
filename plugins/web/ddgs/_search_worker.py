@@ -1,4 +1,4 @@
-"""DDGS search child-process entrypoint (#68096).
+"""DDGS search child-process entrypoint.
 
 Invoked as ``python plugins/web/ddgs/_search_worker.py`` (script path from the
 parent provider). Reads one JSON request from stdin, writes one JSON envelope

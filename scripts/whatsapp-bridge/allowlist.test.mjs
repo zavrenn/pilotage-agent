@@ -58,7 +58,7 @@ test('matchesAllowedUser treats * as allow-all wildcard', () => {
   }
 });
 
-test('matchesAllowedUser rejects everyone when allowlist is empty (#8389)', () => {
+test('matchesAllowedUser rejects everyone when allowlist is empty',  => {
   // Regression guard: empty allowlist used to return true (allow-everyone),
   // which let any stranger DM the bridge and trigger a Python-side
   // pairing-code reply. Secure default is now "reject unless explicitly

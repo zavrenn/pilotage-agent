@@ -20,7 +20,7 @@ This module provides three hooks:
    when ``_flush_messages_to_session_db`` raises.  Dumps the live
    ``agent._session_messages`` to the same atomic JSON recovery directory.
 
-See issue #72680 for the full incident report.
+See for the full incident report.
 """
 
 from __future__ import annotations
@@ -143,7 +143,7 @@ def flush_pending_to_file(
 
 
 # Reason tag for transcript messages dropped by the in-memory pending cap
-# during live operation (#78182). These payloads carry the full transcript
+# during live operation. These payloads carry the full transcript
 # message dict so they can be replayed verbatim once the DB recovers.
 TRANSCRIPT_CAP_DROP_REASON = "transcript_cap_drop"
 
@@ -158,7 +158,7 @@ def spool_dropped_transcript_message(
     (one atomic JSON payload per message under
     ``<pilotage_home>/pending_messages/``), so a runtime cap rotation no
     longer silently discards user data while the process stays up
-    (#78182).
+.
 
     Returns the written spool path, or ``None`` when spooling failed —
     callers must degrade to the previous drop-and-log behaviour.
@@ -334,7 +334,7 @@ def recover_pending_to_db(
             if payload.get("reason") == "shutdown-with-unpersisted-agent-history":
                 continue
             # Cap-dropped transcript payloads carry the full message dict
-            # keyed by session_id — replay directly (#78182). This handles
+            # keyed by session_id — replay directly. This handles
             # spool files that were never drained before a restart.
             if payload.get("reason") == TRANSCRIPT_CAP_DROP_REASON:
                 data = payload.get("data", {}) or {}
@@ -424,7 +424,7 @@ def flush_agent_history_to_file(
     """Best-effort dump of an agent's in-memory transcript before teardown.
 
     Used when ``_flush_messages_to_session_db`` raises (e.g. FTS/SQLite
-    index corruption, #72680): the live ``agent._session_messages`` could
+    index corruption,): the live ``agent._session_messages`` could
     not be written to disk, and a plain debug log would lose it permanently
     when the process exits. Serialize to an atomic JSON file outside the
     broken DB so an operator can salvage the conversation after repairing

@@ -647,7 +647,7 @@ def check_certificates(should_fix: bool = False, issues: "list | None" = None) -
     a wall of tracebacks on the first outbound HTTPS call.
 
     With ``--fix``, a broken bundle (missing/corrupt ``cacert.pem`` — e.g.
-    after a brew Python upgrade rebuilt the venv, #29866) is repaired by
+    after a brew Python upgrade rebuilt the venv,) is repaired by
     force-reinstalling certifi into THIS interpreter's environment and
     re-verifying.
     """
@@ -1027,7 +1027,7 @@ def run_doctor(args):
             issues,
         )
 
-    # Linked SQLite library (issue #69784): version + source id matter independently
+    # Linked SQLite library : version + source id matter independently
     # of the Python minor — uv's python-build-standalone can keep a vulnerable
     # SQLite across Python upgrades.
     try:
@@ -1385,7 +1385,7 @@ def run_doctor(args):
         except Exception:
             pass
 
-        # Detect stale root-level model keys (known bug source — PR #4329)
+        # Detect stale root-level model keys (known bug source)
         try:
             # Raw-file diagnostic: stale-key detection must see the raw file.
             from pilotage_cli.config import read_user_config_raw
@@ -1424,7 +1424,7 @@ def run_doctor(args):
             pass
 
         # Detect stale PILOTAGE_MAX_ITERATIONS ghost in .env shadowing
-        # agent.max_turns in config.yaml (issue #17534). The setup wizard
+        # agent.max_turns in config.yaml. The setup wizard
         # used to dual-write the iteration budget to both stores; users who
         # later edit only config.yaml are left with a .env ghost. The gateway
         # bridge normally derives PILOTAGE_MAX_ITERATIONS from agent.max_turns
@@ -1581,7 +1581,7 @@ def run_doctor(args):
             # Native OAuth uses Pilotage' own device-code flow — the Codex CLI is
             # only needed to import existing tokens from ~/.codex/auth.json.
             # Attach the hint to the Codex auth row so it doesn't read as
-            # remediation for whichever provider happens to print next (#27975).
+            # remediation for whichever provider happens to print next.
             if not _safe_which("codex"):
                 check_info(
                     "codex CLI not installed "
@@ -1693,7 +1693,7 @@ def run_doctor(args):
             conn.close()
             check_ok(f"{_DHH}/state.db exists ({count} sessions)")
 
-            # FTS write-health probe (#50502): `SELECT COUNT(*)` above succeeds
+            # FTS write-health probe: `SELECT COUNT(*)` above succeeds
             # even when the FTS index is corrupt and every message write fails
             # through the triggers. `_db_opens_cleanly` now drives a rolled-back
             # write so this otherwise-silent corruption class is surfaced (and
@@ -2103,7 +2103,7 @@ def run_doctor(args):
     # Node.js + agent-browser (for browser automation tools)
     if _safe_which("node"):
         check_ok("Node.js")
-        # agent-browser is no longer a root package.json dependency (#43564)
+        # agent-browser is no longer a root package.json dependency
         # — it resolves lazily via npx (or a global/Pilotage-managed install)
         # at first use. Mirror tools.browser_tool._find_agent_browser's own
         # resolution cascade here so doctor can't diverge from what browser
@@ -2135,7 +2135,7 @@ def run_doctor(args):
         elif _resolved_ab:
             # Found on PATH but won't run — almost always a dangling global
             # symlink left behind by agent-browser's npm postinstall after a
-            # `pilotage update` wiped node_modules (issue #48521).
+            # `pilotage update` wiped node_modules.
             check_warn(
                 "agent-browser found but not runnable",
                 f"(broken symlink at {_resolved_ab}? run: npx agent-browser --version)",
@@ -2214,11 +2214,11 @@ def run_doctor(args):
         # PROJECT_ROOT is audited with --workspaces=false so that the apps/*
         # glob (which pulls in Electron, node-pty, etc.) is never resolved
         # for a routine security check. The web and ui-tui workspaces are
-        # audited separately via --workspace flags. See #38772.
+        # audited separately via --workspace flags. See.
         # The WhatsApp bridge may live under a writable PILOTAGE_HOME mirror
         # instead of the (possibly read-only) install tree in Docker — resolve
         # it through the shared helper so we audit the dir that actually holds
-        # node_modules. See #49561.
+        # node_modules. See.
         try:
             from gateway.platforms.whatsapp_common import resolve_whatsapp_bridge_dir
             _whatsapp_bridge_dir = resolve_whatsapp_bridge_dir()

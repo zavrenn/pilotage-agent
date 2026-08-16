@@ -333,7 +333,7 @@ def _record_codex_app_server_compaction(
 
 
 # ---------------------------------------------------------------------------
-# Codex app-server → Pilotage UI bridge (#33200)
+# Codex app-server → Pilotage UI bridge
 #
 # The codex_app_server runtime hands the entire turn to a subprocess and
 # bypasses the normal Pilotage tool loop. Without this bridge gateway
@@ -737,8 +737,8 @@ def run_codex_app_server_turn(
         # (tool_progress_callback, _fire_stream_delta,
         # _emit_interim_assistant_message). Without this, Discord/Telegram
         # users see no live tool-progress or interim commentary while
-        # codex_app_server is running — only the final answer (#33200).
-        # Supersedes the narrower item/started-only bridge from #38835.
+        # codex_app_server is running — only the final answer.
+        # Supersedes the narrower item/started-only bridge from.
         agent._codex_session = CodexAppServerSession(
             cwd=cwd,
             approval_callback=approval_callback,
@@ -838,7 +838,7 @@ def run_codex_app_server_turn(
         # ONLY the new codex projected rows and does NOT re-write the user turn.
         # Keeping the agent as the sole persister lets us return
         # agent_persisted=True below, so the gateway skips its own DB write and
-        # we avoid the #860/#42039 duplicate user-message write (append_message
+        # we avoid the/ duplicate user-message write (append_message
         # is a raw INSERT with no dedup, so a gateway re-write would duplicate
         # the already-flushed user turn). See gateway/run.py agent_persisted.
         if getattr(agent, "_session_db", None) is not None:
@@ -856,7 +856,7 @@ def run_codex_app_server_turn(
                 # codex output has already streamed to the user by the time this
                 # flush runs, so there is nothing left to withhold. We cannot
                 # flip agent_persisted=False either: the gateway fallback write
-                # would re-INSERT the already-flushed user turn (#860/#42039).
+                # would re-INSERT the already-flushed user turn /).
                 # Surface the durability gap loudly instead of a silent debug.
                 logger.warning(
                     "codex app-server turn was delivered but could NOT be "
@@ -944,7 +944,7 @@ def run_codex_app_server_turn(
         # gateway conversation. Report agent_persisted=True so the gateway
         # skips its own append_to_transcript DB write — writing again there
         # would re-INSERT the already-flushed user turn (append_message has no
-        # dedup), reintroducing the #860 / #42039 duplicate-write bug.
+        # dedup), reintroducing the / duplicate-write bug.
         "agent_persisted": True,
         "codex_thread_id": turn.thread_id,
         "codex_turn_id": turn.turn_id,
@@ -1009,7 +1009,7 @@ def _raise_stream_error(event: Any) -> None:
     Read the top-level fields first, then fall back to the nested envelope so
     the error classifier sees the provider's real code/message (rate-limit vs
     context-overflow vs entitlement) rather than the generic placeholder.
-    Port of anomalyco/opencode#36130.
+    Port of
 
     Imported lazily so this module stays importable from places that don't
     pull in ``run_agent`` (e.g. plugin code, doc tools).

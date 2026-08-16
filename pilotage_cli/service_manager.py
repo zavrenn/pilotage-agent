@@ -137,7 +137,7 @@ def _s6_running() -> bool:
     detection always fails. Since every Pilotage runtime call inside the
     container drops to pilotage via ``s6-setuidgid``, that silent failure
     made the entire service-manager runtime-registration path inert in
-    production (PR #30136 review).
+    production ( review).
 
     Probe instead via:
       * ``/proc/1/comm`` — world-readable, contains the process comm
@@ -428,7 +428,7 @@ def _seed_supervise_skeleton(svc_dir: Path) -> None:
     operation via ``s6-setuidgid``) gets ``EACCES`` on any ``s6-svc``,
     ``s6-svstat``, or ``s6-svwait`` invocation against the slot.
 
-    The PR #30136 review surfaced this as a real product gap: the
+    The review surfaced this as a real product gap: the
     entire S6ServiceManager lifecycle (``register/start/stop/unregister
     _profile_gateway``) was inert in production because every operation
     is dispatched as the pilotage user.
@@ -476,7 +476,7 @@ def _seed_supervise_skeleton(svc_dir: Path) -> None:
     ---------
     Discussed at length on the skarnet `skaware` mailing list in 2020
     (`<http://skarnet.org/lists/skaware/1424.html>`_); see also
-    just-containers/s6-overlay#130. The pre-creation pattern was
+    just-containers/s6-overlay. The pre-creation pattern was
     historically called out as forward-compatibility-fragile, but the
     EEXIST handling in s6-supervise has been stable since 2015 — it's
     the same pattern ``s6-svperms`` and ``fix-attrs.d`` rely on.
@@ -662,7 +662,7 @@ class S6ServiceManager:
         that was passed in but never substituted into the rendered
         script (carried for "API parity" with a deterministic SHA-256
         allocator in ``pilotage_cli.profiles._allocate_gateway_port``).
-        PR #30136 review item I5 retired both the allocator and the
+ review item I5 retired both the allocator and the
         parameter because they were dead code through the entire stack.
         """
         import shlex
@@ -718,10 +718,10 @@ class S6ServiceManager:
         platforms — we tell s6-supervise to stop restarting by exiting
         125 (permanent failure).  A clean exit 0 is an intentional stop,
         not a crash: restarting after it turns any normal gateway exit
-        into a reconnect loop (the ashriel-discord storm in #76435 —
+        into a reconnect loop (the ashriel-discord storm in —
         1,000+ connections and a provider token reset).  Only non-zero,
         non-78 exits (genuine crashes) let s6 restart normally.
-        See #51228, #76435.
+        See,.
         """
         from gateway.restart import GATEWAY_FATAL_CONFIG_EXIT_CODE
 
@@ -797,7 +797,7 @@ class S6ServiceManager:
             # log/supervise/control is pilotage-owned, so an unprivileged user
             # can race a pathname op through a symlink swap (CWE-59 /
             # CWE-367). Parent logs/gateways is seeded pilotage-owned at stage2
-            # boot (#45258; tests/docker/test_log_dir_seed.py).
+            # boot (; tests/docker/test_log_dir_seed.py).
             f'if [ "$(id -u)" = 0 ]; then\n'
             f'  s6-setuidgid pilotage mkdir -p "$log_dir"\n'
             f'  s6-setuidgid pilotage rm -f "$log_dir/lock"\n'
@@ -875,7 +875,7 @@ class S6ServiceManager:
         Parses ``s6-svstat`` output (``up (pid NNNN) ...``). Used to
         mark an operator-initiated stop with the planned-stop marker so
         the gateway's shutdown handler classifies the incoming SIGTERM
-        as intentional rather than an unexpected kill (issue #42675).
+        as intentional rather than an unexpected kill.
         Best-effort: any parse/exec failure returns None.
         """
         import subprocess
@@ -902,7 +902,7 @@ class S6ServiceManager:
         intent). Without the marker, an intentional ``pilotage gateway
         stop`` is indistinguishable from the container/s6 SIGTERM sent on
         ``docker restart``; the latter must NOT persist ``stopped`` or
-        container_boot refuses to auto-start on the next boot (#42675).
+        container_boot refuses to auto-start on the next boot.
         The marker write is best-effort — a failure only means the stop
         is treated as signal-initiated, which is the safe fallback.
 

@@ -74,12 +74,12 @@ def _warn_memory_provider_unavailable(name: str, reason: str = "") -> None:
     log for itself. Without this warning a provider whose credentials/config are
     missing is silently dropped — the user has ``memory.provider`` set but gets
     no memory and no diagnostic. A common trigger is systemd/gateway services
-    not inheriting ``~/.pilotage/.env``. See NousResearch/hermes-agent#2765.
+    not inheriting ``~/.pilotage/.env``.
 
     ``reason`` is the provider's ``unavailable_reason()`` — a provider-specific,
     actionable hint (e.g. which package to install). Because an unavailable
     provider is never initialized, this is the only place such a hint can reach
-    the user, so it is appended to the warning when present (#7718).
+    the user, so it is appended to the warning when present.
     """
     if name in _warned_unavailable_providers:
         return
@@ -708,8 +708,8 @@ def init_agent(
     # Credential-pool validation runs AFTER provider auto-detection so
     # a pool scoped to e.g. "anthropic" is not rejected when the agent
     # was constructed with provider=None and an anthropic.com URL.
-    # Regression from #63048 which placed this check before the
-    # URL-based auto-detection block above (fixed #63425).
+    # Regression from which placed this check before the
+    # URL-based auto-detection block above (fixed).
     if credential_pool is not None:
         try:
             from agent.credential_pool import credential_pool_matches_provider
@@ -749,7 +749,7 @@ def init_agent(
     # handles its own routing and does not implement the Responses API
     # surface.
     # When api_mode was explicitly provided, respect it — the user
-    # knows what their endpoint supports (#10473).
+    # knows what their endpoint supports.
     # Exception: Azure OpenAI serves gpt-5.x on /chat/completions and
     # does NOT support the Responses API — skip the upgrade for Azure
     # (openai.azure.com), even though it looks OpenAI-compatible.
@@ -903,15 +903,15 @@ def init_agent(
     # Anthropic supports "5m" (default) and "1h" cache TTL tiers. Read from
     # config.yaml under prompt_caching.cache_ttl; unknown values keep "5m".
     # 1h tier costs 2x on write vs 1.25x for 5m, but amortizes across long
-    # sessions with >5-minute pauses between turns (#14971).
+    # sessions with >5-minute pauses between turns.
     #
     # Setting cache_ttl to a falsy value (false / null / "off" / "disabled" /
     # "no" / "none") disables prompt caching entirely. This is useful for
     # OAuth subscription users where cache writes bill against "extra usage"
     # or for third-party proxies that inject their own cache_control markers
-    # (#13477). The disable propagates through anthropic_prompt_cache_policy()
+    # The disable propagates through anthropic_prompt_cache_policy
     # and restore_primary_runtime() so it survives /model switches and
-    # fallback re-derivation (#33555).
+    # fallback re-derivation.
     agent._cache_ttl = "5m"
     try:
         from pilotage_cli.config import load_config_readonly as _load_pc_cfg
@@ -935,7 +935,7 @@ def init_agent(
     # point we inject ONE message, allow one final API call, and if the
     # model doesn't produce a text response, force a user-message asking
     # it to summarise.  No intermediate pressure warnings — they caused
-    # models to "give up" prematurely on complex tasks (#7915).
+    # models to "give up" prematurely on complex tasks.
     agent._budget_exhausted_injected = False
     agent._budget_grace_call = False
 
@@ -948,7 +948,7 @@ def init_agent(
     # Default / unmigrated paths and _touch_activity stamp unknown; named
     # provenances are stamped by compression writers (heartbeat / timeout / cooldown).
     agent._last_activity_provenance = ActivityProvenance.UNKNOWN
-    # Rate-limit durable SessionDB activity stamps from _touch_activity (#72016).
+    # Rate-limit durable SessionDB activity stamps from _touch_activity.
     agent._session_activity_last_persist_mono: float = 0.0
     agent._current_tool: str | None = None
     agent._api_call_count: int = 0
@@ -1008,11 +1008,11 @@ def init_agent(
     # single "\n\n" is prepended to the next real text delta.
     agent._stream_needs_break = False
     # Stateful scrubber for <memory-context> spans split across stream
-    # deltas (#5719).  sanitize_context() alone can't survive chunk
+    # deltas. sanitize_context alone can't survive chunk
     # boundaries because the block regex needs both tags in one string.
     agent._stream_context_scrubber = StreamingContextScrubber()
     # Stateful scrubber for reasoning/thinking tags in streamed deltas
-    # (#17924).  Replaces the per-delta _strip_think_blocks regex that
+    # Replaces the per-delta _strip_think_blocks regex that
     # destroyed downstream state (e.g. MiniMax-M2.7 streaming
     # '<think>' as delta1 and 'Let me check' as delta2 — the regex
     # erased delta1, so downstream state machines never learned a
@@ -1028,7 +1028,7 @@ def init_agent(
     # repeated commentary is not re-sent before normalization can deduplicate it.
     agent._delivered_interim_texts: set[str] = set()
 
-    # Single-writer guard for the streaming delta sink (#65991). A stale/
+    # Single-writer guard for the streaming delta sink. A stale/
     # superseded stream (e.g. one the stale-stream detector reconnected past,
     # whose socket abort raced and never actually stopped the old worker) must
     # NOT keep writing tokens into the turn alongside the retry's stream —
@@ -1091,7 +1091,7 @@ def init_agent(
         else:
             # Only fall back to ANTHROPIC_TOKEN when the provider is actually Anthropic.
             # Other anthropic_messages providers (MiniMax, Alibaba, etc.) must use their own API key.
-            # Falling back would send Anthropic credentials to third-party endpoints (Fixes #1739, #minimax-401).
+            # Falling back would send Anthropic credentials to third-party endpoints (Fixes, #minimax-401).
             _is_native_anthropic = agent.provider == "anthropic"
             effective_key = (api_key or resolve_anthropic_token() or "") if _is_native_anthropic else (api_key or "")
 
@@ -1127,7 +1127,7 @@ def init_agent(
             # (MiniMax, Kimi, GLM, LiteLLM proxies) that accept the
             # Anthropic protocol must never trip OAuth code paths — doing
             # so injects Claude-Code identity headers and system prompts
-            # that cause 401/403 on their endpoints.  Guards #1739 and
+            # that cause 401/403 on their endpoints. Guards and
             # the third-party identity-injection bug.
             from agent.anthropic_adapter import _is_oauth_token as _is_oat
             agent._is_anthropic_oauth = _is_oat(effective_key) if (_is_native_anthropic and isinstance(effective_key, str)) else False
@@ -1161,7 +1161,7 @@ def init_agent(
         # through the same callback the tool lifecycle uses. Best-effort and
         # cache-safe — display-only events, they never touch the message
         # history. The factory is shared with the fallback-restore/recovery
-        # paths so a restored facade keeps emitting these events (#53802).
+        # paths so a restored facade keeps emitting these events.
         agent.client = build_moa_facade(agent, agent.model)
         agent._client_kwargs = {}
         agent.api_key = api_key or "moa-virtual-provider"
@@ -1296,7 +1296,7 @@ def init_agent(
                             _env_hint = _pcfg.api_key_env_vars[0]
                     except Exception:
                         pass
-                    # --- Init-time fallback (#17929) ---
+                    # --- Init-time fallback ---
                     _fb_entries = []
                     if isinstance(fallback_model, list):
                         _fb_entries = [
@@ -1377,7 +1377,7 @@ def init_agent(
         # User-configured request headers (model.default_headers in
         # config.yaml) override provider/SDK defaults. Lets custom
         # OpenAI-compatible endpoints behind a gateway/WAF that rejects the
-        # OpenAI SDK's identifying headers swap in a plain User-Agent. (#40033)
+        # OpenAI SDK's identifying headers swap in a plain User-Agent.
         # client_kwargs is the same dict object as agent._client_kwargs, so
         # this mutation is reflected in the client built just below.
         agent._apply_user_default_headers()
@@ -1739,7 +1739,7 @@ def init_agent(
     # A flush/background agent may pass skip_memory=True to avoid spinning up an
     # external memory *provider*, but if the caller also explicitly enables the
     # "memory" toolset it still needs the built-in file-backed store — otherwise
-    # the memory tool dispatches with store=None and every call fails (#65429).
+    # the memory tool dispatches with store=None and every call fails.
     # So the built-in store is created unless memory is globally disabled, while
     # the external-provider block below stays gated on skip_memory.
     _memory_toolset_requested = "memory" in (agent.enabled_toolsets or [])
@@ -1916,7 +1916,7 @@ def init_agent(
     agent._platform_hint_overrides = _platform_hints_cfg
 
     # App-level API retry count (wraps each model API call).  Default 3,
-    # overridable via agent.api_max_retries in config.yaml.  See #11616.
+    # overridable via agent.api_max_retries in config.yaml. See.
     try:
         _raw_api_retries = _agent_section.get("api_max_retries", 3)
         _api_retries = int(_raw_api_retries)
@@ -2006,7 +2006,7 @@ def init_agent(
     # strands sessions that legitimately need more rounds — e.g. a restart
     # history reload whose incompressible tool schemas keep the request
     # estimate above the threshold even though the messages compress fine
-    # (the #62605 failure class).  Default 3 preserves current behavior, so
+    # (the failure class). Default 3 preserves current behavior, so
     # an unset key is behavior-neutral; validated >= 1, hard-capped at 10,
     # and any non-int-like value falls back to 3.  Booleans are rejected
     # (bool subclasses int, so int(True) would silently become 1) and
@@ -2099,11 +2099,11 @@ def init_agent(
             compression_threshold_tokens = None
     # In-place compaction: when True, compress_context() rewrites the message
     # list + rebuilds the system prompt WITHOUT rotating the session id (no
-    # parent_session_id chain, no `name #N` renumber). See #38763 and
+    # parent_session_id chain, no `name #N` renumber). See and
     # agent/conversation_compression.py. Consumed by compress_context(), not the
     # compressor, so it rides on the agent.
     # Default True must match DEFAULT_CONFIG["compression"]["in_place"]
-    # (#38763). default=False here previously flipped agents into rotation
+    # default=False here previously flipped agents into rotation
     # mode whenever the merged config omitted the key (partial configs,
     # load_config failure → {}), re-arming the pre-lease drift abort.
     compression_in_place = is_truthy_value(
@@ -2148,7 +2148,7 @@ def init_agent(
     # engages for gpt-5.6-family models on api.openai.com or the ChatGPT
     # Codex backend — the per-request gate lives in agent/native_compaction.py.
     # Shared truthy coercion: "false"/"off"/"no" strings stay disabled
-    # (bool("false") is True — #82777).
+    # (bool("false") is True).
     from utils import is_truthy_value as _is_truthy
 
     codex_responses_native_compaction = _is_truthy(
@@ -2522,7 +2522,7 @@ def init_agent(
                 _candidate = None
             if _candidate is not None and _candidate.name == _engine_name:
                 # Deep-copy the shared plugin singleton so a child agent's
-                # update_model() can't mutate the parent's compressor (#42449).
+                # update_model can't mutate the parent's compressor.
                 # Copy can fail for engines holding uncopyable state (locks, DB
                 # connections, clients); in that case fall back to the built-in
                 # compressor with an ACCURATE message rather than silently
@@ -2555,7 +2555,7 @@ def init_agent(
         # threshold (including the Codex gpt-5.5 autoraise above) only
         # configures the built-in ContextCompressor and never reaches the
         # plugin, so the autoraise notice would announce a change that does
-        # not apply. Drop it. (#44439)
+        # not apply. Drop it.
         agent._compression_threshold_autoraised = None
         # Resolve context_length for plugin engines — mirrors switch_model() path
         from agent.model_metadata import get_model_context_length
@@ -2658,14 +2658,14 @@ def init_agent(
 
     # Inject context engine tool schemas (e.g. lcm_grep, lcm_describe, lcm_expand).
     # Skip names that are already present — the _ra().get_tool_definitions()
-    # quiet_mode cache returned a shared list pre-#17335, so a stray
+    # quiet_mode cache returned a shared list pre-, so a stray
     # mutation here would poison subsequent agent inits in the same
     # Gateway process and trip provider-side 'duplicate tool name'
     # errors. Even with the cache fix, dedup is the right defense
     # against plugin paths that may register the same schemas via
     # ctx.register_tool(). Mirrors the memory tools dedup above.
     #
-    # Respect the platform's enabled_toolsets configuration (#5544):
+    # Respect the platform's enabled_toolsets configuration:
     # context engine tools follow the same gating pattern as memory
     # provider tools — without the gate, `platform_toolsets: telegram: []`
     # would still leak lcm_* tools into the tool surface and incur the
@@ -2691,7 +2691,7 @@ def init_agent(
             if _schema is None:
                 # A schema with no resolvable name (e.g. an already-wrapped
                 # entry) would append a nameless tool that strict providers
-                # 400 on, disabling the whole toolset (#47707). Skip it.
+                # 400 on, disabling the whole toolset. Skip it.
                 _ra().logger.warning(
                     "Context engine returned a tool schema with no resolvable "
                     "name; skipping to avoid poisoning the request (%r)",
@@ -2725,7 +2725,7 @@ def init_agent(
         working_dir=os.getenv("TERMINAL_CWD") or None,
     )
     agent._user_turn_count = 0
-    # Copilot x-initiator flag: first API call of a user turn sends "user" (#3040).
+    # Copilot x-initiator flag: first API call of a user turn sends "user".
     agent._is_user_initiated_turn = False
 
     # Cumulative token usage for the session
@@ -2794,7 +2794,7 @@ def init_agent(
     # Codex gpt-5.x autoraise notice: show at most once per profile/config
     # state. Without the persisted marker the notice re-fires on every agent
     # init — and the gateway rebuilds the agent per inbound message, so Discord
-    # etc. saw it repeatedly (#54432). A change in the raised threshold (or the
+    # etc. saw it repeatedly. A change in the raised threshold (or the
     # autoraised model) updates the marker state and re-notifies once. The
     # config display gate (compression.codex_gpt55_autoraise_notice) still
     # suppresses the banner entirely without disabling the threshold autoraise.
@@ -2810,7 +2810,7 @@ def init_agent(
         if compression_enabled:
             # Report the active engine's own threshold — for a plugin engine
             # the host compression_threshold is not in effect, and mixing the
-            # two printed a percent that contradicted the token count. (#44439)
+            # two printed a percent that contradicted the token count.
             _active_threshold_pct = getattr(
                 agent.context_compressor, "threshold_percent", compression_threshold
             )

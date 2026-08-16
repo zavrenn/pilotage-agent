@@ -136,7 +136,7 @@ EXHAUSTED_TTL_SOLE_CREDENTIAL_SECONDS = 60   # 1 minute
 # the classifier), so the value is duplicated here rather than referenced.
 FAILURE_REASON_BILLING = "billing"
 
-# Billing verdict that rests on an ambiguous body (#82154): Anthropic's
+# Billing verdict that rests on an ambiguous body: Anthropic's
 # "out of extra usage" 400 is returned both for genuine overage depletion and
 # for a server-side content-filter rejection of the request. The latter leaves
 # the credential perfectly healthy, so an unverified billing exhaustion gets
@@ -155,7 +155,7 @@ FAILURE_REASON_BILLING_UNVERIFIED = "billing_unverified"
 # readiness handshake ("Timed out connecting to Pilotage backend after
 # 15000ms"). Logging the condition at most once per window preserves the
 # signal while removing the storm — same class of fix as the warn-once
-# dedup in #58265.
+# dedup in.
 NO_AVAILABLE_ENTRIES_LOG_THROTTLE_SECONDS = 60.0
 
 # Pool key prefix for custom OpenAI-compatible endpoints.
@@ -340,7 +340,7 @@ def _exhausted_ttl(
     if error_code == 401:
         return EXHAUSTED_TTL_401_SECONDS
     base = EXHAUSTED_TTL_429_SECONDS if error_code == 429 else EXHAUSTED_TTL_DEFAULT_SECONDS
-    # Unverified billing (#82154): the same 400 body can be a content-filter
+    # Unverified billing: the same 400 body can be a content-filter
     # rejection of the request itself, in which case the credential is healthy
     # and an hour-long bench just blocks it (and, for a sole credential,
     # replays the stored error for the full hour — making a real fix look like
@@ -598,7 +598,7 @@ def _write_through_provider_state_to_global_root(
     """Persist a rotated OAuth ``state`` into the global-root auth.json.
 
     Best-effort write-through for the multi-profile rotation hazard
-    (#48415 / #43589): nous, openai-codex, and xai-oauth rotate the
+     / ): nous, openai-codex, and xai-oauth rotate the
     refresh_token on refresh, so when a profile pool refresh rotates a grant
     it resolved from the root fallback, the rotated chain must land back in
     root. Otherwise root keeps a now-revoked refresh token and every other
@@ -667,7 +667,7 @@ class CredentialPool:
         # Re-armed to None on every successful selection so a recover→re-exhaust
         # transition logs promptly instead of being swallowed by a stale window.
         self._last_no_entries_log_at: Optional[float] = None
-        # #70401: consecutive mark_exhausted_and_rotate() calls whose supplied
+        #: consecutive mark_exhausted_and_rotate calls whose supplied
         # credential identity matched no pool entry (OAuth wrappers whose
         # runtime key rotates, entries pruned by another process, ...).  These
         # rotations mark nothing exhausted, so without a cap the pool can
@@ -821,7 +821,7 @@ class CredentialPool:
         # transition to STATUS_DEAD instead of STATUS_EXHAUSTED.  Without this,
         # a revoked credential gets a 1-hour TTL cooldown and then re-enters
         # rotation, failing immediately every hour until the user manually
-        # removes it (issue #32849).  DEAD entries are excluded from rotation
+        # removes it. DEAD entries are excluded from rotation
         # unconditionally and only clear via an explicit re-auth write-side
         # sync (``_save_codex_tokens`` after a fresh device-code login).
         if self._is_terminal_auth_failure(status_code, normalized_error):
@@ -1200,7 +1200,7 @@ class CredentialPool:
                 # Resolve state and track which store it came from — the
                 # source path tells us whether this profile genuinely owns
                 # its provider block or is reading from the global root.
-                # #74339: the old key-presence check decided write-through
+                #: the old key-presence check decided write-through
                 # on whether the profile had ``providers.<id>`` BEFORE the
                 # save — correct for the first refresh but self-sealing
                 # because ``_store_provider_state`` unconditionally creates
@@ -1287,7 +1287,7 @@ class CredentialPool:
                     # only.  Do NOT call _store_provider_state on the
                     # profile auth_store (it would create a shadowing
                     # providers.<id> key that disables write-through on
-                    # the next refresh — #74339).
+                    # the next refresh).
                     # _load_provider_state has root fallback, so the
                     # profile can always read fresh tokens from root
                     # without needing its own providers block.
@@ -1731,7 +1731,7 @@ class CredentialPool:
         Codex CLI / ChatGPT UI, upgrades their plan, or OpenAI resets the
         window.  Without this check the pool keeps the credential frozen
         until the stale timestamp elapses even though the account is
-        usable (issue #43747).
+        usable.
 
         Only fires for openai-codex entries frozen by a 429/quota-shaped
         error.  The underlying probe is throttled per token (5 min) so this
@@ -1936,7 +1936,7 @@ class CredentialPool:
                     # ``last_error_reset_at`` can then be days in the future
                     # while the account is already usable again — a throttled
                     # live probe of the Codex usage endpoint detects that and
-                    # lifts the stale cooldown (issue #43747).
+                    # lifts the stale cooldown.
                     if not (
                         clear_expired
                         and self._codex_quota_restored_upstream(entry)
@@ -2062,7 +2062,7 @@ class CredentialPool:
                     (e for e in self._entries if e.id == credential_id),
                     None,
                 )
-                # #79156: when both identities are supplied and they disagree,
+                #: when both identities are supplied and they disagree,
                 # trust the key that actually made the request. A stale
                 # ``_credential_pool_entry_id`` (e.g. after per-turn env
                 # refresh rewrote ``api_key`` without rebinding the id) would
@@ -2084,7 +2084,7 @@ class CredentialPool:
                         logger.info(
                             "credential pool: credential_id %s runtime key "
                             "does not match api_key_hint; attributing failure "
-                            "to key-matched entry %s instead (#79156)",
+                            "to key-matched entry %s instead",
                             (entry.label or entry.id[:8]),
                             (hint_entry.label or hint_entry.id[:8]),
                         )
@@ -2108,7 +2108,7 @@ class CredentialPool:
                 # Falling through to current()/_select_unlocked() would mark an
                 # innocent healthy key exhausted for the full cooldown TTL.
                 #
-                # #70401: this branch must still be BOUNDED. With OAuth-token
+                #: this branch must still be BOUNDED. With OAuth-token
                 # auth the upstream 401's key hint never matches any entry's
                 # ``runtime_api_key``, so every retry lands here, nothing is
                 # ever marked exhausted, and the pool can never reach the
@@ -2515,7 +2515,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
         # Only auto-discover external credentials (Claude Code, Pilotage PKCE)
         # when the user has explicitly configured anthropic as their provider.
         # Without this gate, auxiliary client fallback chains silently read
-        # ~/.claude/.credentials.json without user consent.  See PR #4210.
+        # ~/.claude/.credentials.json without user consent. See.
         try:
             from pilotage_cli.auth import is_provider_explicitly_configured
             if not is_provider_explicitly_configured("anthropic"):
@@ -2638,7 +2638,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
                     # pruning by age) can distinguish just-refreshed credentials
                     # from stale ones.  Without these, fresh device_code
                     # entries get obtained_at=None and look older than they
-                    # are (#15099).
+                    # are.
                     "obtained_at": state.get("obtained_at"),
                     "expires_in": state.get("expires_in"),
                     "agent_key_id": state.get("agent_key_id"),
@@ -3031,7 +3031,7 @@ def _prune_stale_seeded_entries(
         # ``env:*`` entries are persisted references that get re-hydrated from
         # the environment on every load. A process that merely lacks the env
         # var this call must NOT delete the on-disk entry for every other
-        # process — that destructive read is the bug behind #9331. Only prune
+        # process — that destructive read is the bug behind. Only prune
         # an env source when ``prune_env_sources`` is explicitly requested
         # (e.g. an `pilotage auth` command that confirmed the source is gone).
         if entry.source.startswith("env:"):
@@ -3176,7 +3176,7 @@ def load_pool(provider: str) -> CredentialPool:
         )
         # ``load_pool()`` is a non-destructive read for env-seeded entries: a
         # process missing a provider env var must not delete the persisted
-        # pool entry for every other process (#9331). File-backed singletons
+        # pool entry for every other process. File-backed singletons
         # still prune when their backing file is gone.
         changed |= _prune_stale_seeded_entries(
             entries,

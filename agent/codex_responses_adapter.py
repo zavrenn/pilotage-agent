@@ -267,7 +267,7 @@ def _deterministic_call_id(fn_name: str, arguments: str, index: int = 0) -> str:
 
 
 def _clamp_responses_call_id(call_id: str) -> str:
-    """Keep a ``call_id`` within the Responses API's 64-char limit (#73492).
+    """Keep a ``call_id`` within the Responses API's 64-char limit.
 
     The codex app-server namespaces MCP tool call ids as
     ``codex_mcp__<server>__<tool>_<codex_call_id>``; with an ``exec-<uuid>``
@@ -275,7 +275,7 @@ def _clamp_responses_call_id(call_id: str) -> str:
     and the Responses API rejects the whole payload with a non-retryable HTTP
     400 that then replays every turn — permanently bricking the session.
 
-    Sibling defect to #10788 (which clamped ``input[*].id``), applied here to
+    Sibling defect to (which clamped ``input[*].id``), applied here to
     ``call_id``. The surrogate is a pure, deterministic function of the
     original, so the ``function_call`` and its matching ``function_call_output``
     — which carry the same original id — map to the same surrogate and stay
@@ -419,7 +419,7 @@ def _chat_messages_to_responses_input(
     """Convert internal chat-style messages to Responses input items.
 
     ``is_xai_responses`` is kept for transport signature compatibility but
-    no longer suppresses encrypted reasoning replay.  Earlier (PR #26644,
+    no longer suppresses encrypted reasoning replay. Earlier (,
     May 2026) we believed xAI's OAuth/SuperGrok ``/v1/responses`` surface
     rejected replayed ``encrypted_content`` reasoning items minted by
     prior turns, and we stripped them.  That decision was wrong — xAI
@@ -443,7 +443,7 @@ def _chat_messages_to_responses_input(
     backend "connection" — credential-pool rotation, a gateway restart,
     or routine load-balancer churn between turns all invalidate it — and
     rejects a stale id with HTTP 401 "input item ID does not belong to
-    this connection" even for short ids (see #32716). ``phase``/
+    this connection" even for short ids. ``phase``/
     ``status``/``content`` are still replayed; only ``id`` is unsafe to
     reuse across a Copilot connection.
 
@@ -471,7 +471,7 @@ def _chat_messages_to_responses_input(
     a ``compression.enabled: false`` flip, the rejection kill switch and a
     resumed session; without this flag a single captured checkpoint would
     keep deleting every pre-checkpoint item from every later request, on a
-    model that cannot decrypt the blob (#85914). Default False = pre-feature
+    model that cannot decrypt the blob. Default False = pre-feature
     wire, which is also correct for every caller that never sends
     ``context_management`` (auxiliary/compression client, ad-hoc
     ``convert_messages``). Dropping the checkpoint costs nothing: Pilotage'
@@ -1183,7 +1183,7 @@ def _preflight_codex_api_kwargs(
     elif "stream" in api_kwargs:
         raise ValueError("Codex Responses stream flag is only allowed in fallback streaming requests.")
 
-    # Safety-net sanitization for xAI Responses (#28490): defense-in-depth
+    # Safety-net sanitization for xAI Responses: defense-in-depth
     # for the same slash-enum strip that ``chat_completion_helpers`` and
     # ``auxiliary_client`` apply at request-build time.  If a future code
     # path forgets to sanitize before calling us, this catches the bypass
@@ -1264,7 +1264,7 @@ def _format_responses_error(error_obj: Any, response_status: str) -> str:
 
     Falls back to ``code`` alone when ``message`` is empty, and to a stable
     default referencing the response status when no error payload is
-    available at all. Adapted from anomalyco/opencode#28757.
+    available at all. Adapted
     """
     # Pull code and message from either dict or attribute-style payloads.
     code: Any = None
@@ -1426,7 +1426,7 @@ def _normalize_codex_response(
                 # Responses ``commentary``/``analysis`` phase text is mid-turn
                 # preamble/progress narration, never the turn's final answer
                 # (Codex CLI excludes it from last-message extraction; issues
-                # #24933 / #41293).  Keep it out of assistant content so it
+                # / ). Keep it out of assistant content so it
                 # can't be concatenated into — or leak as — the final response,
                 # but surface it through the reasoning channel so the CLI/
                 # gateway display it like thinking text.  The exact message
@@ -1660,7 +1660,7 @@ def _normalize_codex_response(
         # are queued/in_progress/incomplete, reasoning alone is a valid final
         # state — forcing "incomplete" causes multi-minute stalls as the
         # continuation path re-issues calls (3 retries × up to 240s each).
-        # See https://github.com/NousResearch/hermes-agent/issues/64434
+        #
         if response_status == "completed" and issuer_kind not in (
             "codex_backend",
             "xai_responses",

@@ -15,7 +15,7 @@ Providers live in ``<repo>/plugins/web/<name>/`` (built-in, auto-loaded as
 This ABC is the SINGLE plugin-facing surface for web providers — every
 provider in the tree (brave-free, ddgs, searxng, exa, parallel, tavily,
 firecrawl) implements it. The legacy in-tree ``tools.web_providers.base``
-ABCs were deleted in PR #25182 along with the per-vendor inline helpers
+ABCs were deleted in along with the per-vendor inline helpers
 in ``tools/web_tools.py``; the response-shape contract documented below
 is preserved bit-for-bit so the tool wrapper does not have to translate.
 
@@ -63,7 +63,7 @@ def get_provider_env(name: str) -> str:
     ``os.environ`` first, then ``~/.pilotage/.env``) so credentials set
     through Pilotage' config layer are visible even when they were never
     exported into the process environment — gateway sessions, delegate
-    children, and subprocess agent runs (issue #40190). Falls back to a
+    children, and subprocess agent runs. Falls back to a
     bare ``os.getenv`` when the config module is unavailable (stripped
     installs, early import contexts).
 

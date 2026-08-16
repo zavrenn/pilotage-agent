@@ -34,7 +34,7 @@ def _probe_fail_json(diagnostic: str = "probe failed") -> str:
     ``ok: false`` plus ``probe_failed: true`` means the detector itself could
     not run — this is *not* a clear scan. Callers must treat
     ``ok is not True`` / non-zero exit as probe failure, never as
-    ``blocked: false`` "clear" (#83149).
+    ``blocked: false`` "clear".
     """
     return json.dumps(
         {

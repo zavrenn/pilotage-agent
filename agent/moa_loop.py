@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # phone numbers, credentials pasted by the user — into surfaces the user may
 # not expect: the labelled reference blocks rendered in the UI, saved MoA
 # trace files, and (in `full` mode) the guidance block injected into the
-# aggregator prompt (issue #59959). Secret/credential shapes (API-key
+# aggregator prompt. Secret/credential shapes (API-key
 # prefixes, JWTs, private keys, DB connection strings, E.164 phone numbers)
 # are handled by the repo's central redactor, ``agent.redact
 # .redact_sensitive_text`` — the MoA filter never re-implements those. The
@@ -156,7 +156,7 @@ def _redact_trace_accounting(acct: Any) -> Any:
 # config + preset + every slot's provider runtime on EACH create() call
 # (once per tool-loop iteration), serially before the parallel fan-out could
 # start — adding 5-30s of "frozen" latency on complex presets
-# (#66793). The preset structure is immutable for the life of a turn, so
+# The preset structure is immutable for the life of a turn, so
 # cache both the resolved preset and each (provider, model) runtime.
 _preset_cache_lock = threading.Lock()
 _preset_cache: dict[tuple, Any] = {}
@@ -309,7 +309,7 @@ def _aggregator_reasoning_config(aggregator: dict[str, Any]) -> dict[str, Any] |
     applies ``agent.reasoning_overrides`` for the slot's model first, then
     the global ``agent.reasoning_effort``. Without this the main loop's
     reasoning gates (keyed to the virtual ``moa://local`` identity) never
-    fire, so the aggregator silently ran at the backend default (#64187).
+    fire, so the aggregator silently ran at the backend default.
 
     Reference advisors intentionally do NOT get this fallback: they are side
     calls (like auxiliary tasks), and inheriting a global ``xhigh`` into every
@@ -350,7 +350,7 @@ def _slot_runtime(slot: dict[str, Any]) -> dict[str, Any]:
     (``_RUNTIME_CACHE_TTL_SECONDS``): the resolution does real I/O (catalog
     query + config read) that used to run serially per create() call before
     the parallel fan-out could start — the dominant source of MoA cold-start
-    latency (#66793). The TTL bounds credential staleness (key rotation,
+    latency. The TTL bounds credential staleness (key rotation,
     base_url edits) instead of caching for the process lifetime.
     """
     provider = str(slot.get("provider") or "").strip()
@@ -427,11 +427,11 @@ def _maybe_apply_moa_cache_control(
 
     ``cache_disabled`` (or the live config when omitted) is stamped onto the
     policy stub so ``prompt_caching.cache_ttl: off`` is not bypassed by the
-    blank-agent pattern (#76085).
+    blank-agent pattern.
 
     ``cache_ttl`` threads the agent's configured tier (default ``5m``) so
     advisor/synthesis requests stop regressing 1h → 5m; it is clamped
-    per-destination by :func:`effective_cache_ttl` (Qwen → 5m, #84733).
+    per-destination by :func:`effective_cache_ttl` (Qwen → 5m,).
     """
     try:
         from agent.agent_runtime_helpers import (
@@ -450,7 +450,7 @@ def _maybe_apply_moa_cache_control(
 
         # The policy function reads agent.* only as fallbacks for kwargs we
         # don't pass; blank_cache_policy_stub is the only sanctioned stub
-        # so _cache_disabled cannot be left off again (#76085).
+        # so _cache_disabled cannot be left off again.
         stub = blank_cache_policy_stub(cache_disabled)
         should_cache, native_layout = anthropic_prompt_cache_policy(
             stub,
@@ -526,7 +526,7 @@ def _run_reference(
         # may have a smaller window than the aggregator (e.g. kimi-k2.7-code
         # @ 262K advising a glm-5.2 @ 1M conversation); without this trim the
         # provider returns a hard HTTP 400 which the except below silently
-        # converts to a [failed: …] note (issue #60345). Estimated AFTER the
+        # converts to a [failed: …] note. Estimated AFTER the
         # advisory system prompt is prepended so its tokens count against the
         # budget too.
         messages = _trim_messages_for_reference(
@@ -549,7 +549,7 @@ def _run_reference(
         # (their caching is automatic; markers are ignored harmlessly, but we
         # only decorate when the policy says the route honors them).
         # Pin the live agent disable onto the runtime so advisor decoration
-        # tracks conversation state, not a fresh config re-read (#76085).
+        # tracks conversation state, not a fresh config re-read.
         cache_runtime = runtime
         if cache_disabled is not None:
             cache_runtime = {**runtime, "_cache_disabled": cache_disabled}
@@ -672,7 +672,7 @@ def _trim_messages_for_reference(
     the main conversation. Without this trim, a reference whose window is
     exceeded gets a hard HTTP 400 from the provider, which ``_run_reference``'s
     try/except silently converts to a ``[failed: …]`` note — the MoA turn
-    silently degrades to fewer references (issue #60345).
+    silently degrades to fewer references.
 
     ``messages`` is the FULL request as it will be sent — the advisory system
     prompt already prepended — so the estimate covers everything the provider
@@ -863,7 +863,7 @@ def _run_references_parallel(
         getattr(agent, "_cache_disabled", None) if agent is not None else None
     )
     # Thread the agent's configured cache TTL into every advisor request so
-    # the fan-out stops regressing 1h → 5m (#84733); the destination-aware
+    # the fan-out stops regressing 1h → 5m; the destination-aware
     # clamp (Qwen → 5m) runs inside _maybe_apply_moa_cache_control.
     cache_ttl = getattr(agent, "_cache_ttl", None) if agent is not None else None
     try:
@@ -1253,7 +1253,7 @@ def aggregate_moa_context(
     model's own maximum. ``call_llm`` omits the parameter entirely when it
     is ``None`` (see its docstring), which also sidesteps providers that
     reject ``max_tokens`` outright. A hardcoded cap on the aggregator call
-    previously truncated long aggregator syntheses (#53580) — passing
+    previously truncated long aggregator syntheses — passing
     ``reference_max_tokens`` to both calls here would silently reintroduce
     that regression.
 
@@ -1334,7 +1334,7 @@ def aggregate_moa_context(
     agg_label = _slot_label(aggregator)
     agg_runtime = _slot_runtime(aggregator)
     # Pin the live agent disable onto synthesis decoration so mid-session
-    # config flips cannot re-enable markers on this path alone (#76085).
+    # config flips cannot re-enable markers on this path alone.
     # Same not-None guard as _run_reference: stamping None would be a no-op
     # (present-None falls through to the config fallback anyway).
     agg_cache_runtime = agg_runtime
@@ -1347,7 +1347,7 @@ def aggregate_moa_context(
             "_cache_disabled": _agg_cache_disabled,
         }
     # Thread the agent's configured cache TTL into the synthesis decoration
-    # so the one-shot /moa path stops regressing 1h → 5m (#84733).
+    # so the one-shot /moa path stops regressing 1h → 5m.
     _agg_cache_ttl = getattr(agent, "_cache_ttl", None) if agent is not None else None
     try:
         # Same cache_control decoration as _run_reference's advisor calls
@@ -1484,7 +1484,7 @@ def peel_reference_guidance(
     text part, appended user message) — kept adjacent so the two evolve
     together; a drifting separator or shape would make the peel silently
     no-op and let a cache breakpoint land on the turn-varying guidance
-    block (the bug class #72626 fixes).
+    block (the bug class fixes).
 
     Used by the failover redecoration chokepoint: redecoration must run on
     the base transcript so the last cache breakpoint does not land on the
@@ -1778,7 +1778,7 @@ class MoAChatCompletions:
             # Tri-state: only pass a bool when a live agent snapshot exists.
             # Prepared-aggregator facades built via __new__ have no _agent;
             # getattr(self._agent, ...) raises and bool(None-agent) would
-            # force False and suppress the planner's config fallback (#76085).
+            # force False and suppress the planner's config fallback.
             _agent = getattr(self, "_agent", None)
             _cache_disabled = (
                 getattr(_agent, "_cache_disabled", None)
@@ -1795,7 +1795,7 @@ class MoAChatCompletions:
                 cache_disabled=_cache_disabled,
                 # Thread the agent's configured TTL and stable system prefix
                 # into the aggregator plan so MoA stops regressing 1h → 5m and
-                # marking the whole system prompt as one breakpoint (#84733).
+                # marking the whole system prompt as one breakpoint.
                 cache_ttl=getattr(_agent, "_cache_ttl", None),
                 static_system_prefix=getattr(
                     _agent, "_cached_system_prompt_static", None
@@ -1867,7 +1867,7 @@ class MoAChatCompletions:
             tools=tools,
             extra_body=agg_extra_body,
             # Prepared requests must retain the acting aggregator's reasoning
-            # policy exactly as the direct create() path does (#64187).
+            # policy exactly as the direct create path does.
             reasoning_config=_aggregator_reasoning_config(aggregator),
             **stream_kwargs,
             **agg_runtime,
@@ -1893,7 +1893,7 @@ class MoAChatCompletions:
             # object even when the acting consumer requested token streaming.
             # The outer chat-completions streaming loop expects delta chunks;
             # hand it a one-chunk iterator instead of letting it iterate the
-            # SimpleNamespace response itself (#55933).
+            # SimpleNamespace response itself.
             return iter((_completed_response_as_stream_chunk(_agg_response),))
         return _agg_response
 
@@ -1911,7 +1911,7 @@ class MoAChatCompletions:
         # resolve_moa_preset re-normalizes + re-validates the whole moa
         # config block on every call, and create() runs once per tool-loop
         # iteration — a serial cold-start cost before the parallel fan-out
-        # can begin (#66793). Keyed on the config FILE's mtime_ns (not a
+        # can begin. Keyed on the config FILE's mtime_ns (not a
         # config-object attribute, which load_config()'s dicts don't carry),
         # so a config edit invalidates on the next call.
         try:
@@ -1995,7 +1995,7 @@ class MoAChatCompletions:
         reference_outputs: list[tuple[str, str, Any]] = []
         ref_messages = _reference_messages(messages)
 
-        # Fan-out cadence. "user_turn" (default — cheapest cadence, #67199):
+        # Fan-out cadence. "user_turn" (default — cheapest cadence,):
         # advisors run ONCE per user turn; subsequent tool iterations reuse
         # that turn's advice and the aggregator acts alone (the original MoA
         # shape: synthesize at the start, then let the acting model work).
@@ -2005,7 +2005,7 @@ class MoAChatCompletions:
         # advisory view changes — i.e. every tool iteration, since the view
         # grows with each tool result; advice tracks live task state at the
         # cost of multiplying advisor latency/spend by tool-loop depth.
-        # "every_n:<N>" (N >= 2): the middle ground (issue #63393 — advisor
+        # "every_n:<N>" (N >= 2): the middle ground ( — advisor
         # fan-out multiplies latency/cost by the tool-iteration count).
         # Advisors run on iteration 1 of a user turn and then every Nth tool
         # iteration; the iterations in between REUSE the cached guidance from
@@ -2247,7 +2247,7 @@ class MoAChatCompletions:
         _agg_refs: list = []
         if successful_outputs:
             # 'full' privacy mode: redact the advisor text that reaches the
-            # AGGREGATOR too (issue #59959's literal ask). 'display' leaves
+            # AGGREGATOR too ('s literal ask). 'display' leaves
             # the aggregator input raw so synthesis quality is unaffected.
             # The redaction is applied to a per-call copy — the cache always
             # holds raw advisor text (see the emit comment above). Failed
@@ -2369,7 +2369,7 @@ def build_moa_facade(agent, preset_name: Any = None) -> MoAClient:
     ``agent.tool_progress_callback`` — after a fallback+restore cycle the
     facade would still work, but every frontend (CLI spinner, TUI, desktop,
     gateway) would stop receiving ``moa.reference`` / ``moa.aggregating``
-    display events for the rest of the session (#53802).
+    display events for the rest of the session.
 
     The relay reads ``agent.tool_progress_callback`` at *emit* time, so a
     callback attached after client construction is picked up automatically.

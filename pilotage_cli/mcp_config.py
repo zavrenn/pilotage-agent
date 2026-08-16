@@ -2,7 +2,7 @@
 MCP Server Management CLI — ``pilotage mcp`` subcommand.
 
 Implements ``pilotage mcp add/remove/list/test/configure`` for interactive
-MCP server lifecycle management (issue #690 Phase 2).
+MCP server lifecycle management ( Phase 2).
 
 Relies on tools/mcp_tool.py for connection/discovery and keeps
 configuration in ~/.pilotage/config.yaml under the ``mcp_servers`` key.
@@ -161,7 +161,7 @@ def _strip_bearer_prefix(token: str) -> str:
 
     The header template stores ``Authorization: Bearer ${MCP_X_API_KEY}``, so
     if a user pastes a token that already includes the ``Bearer `` prefix the
-    server receives ``Bearer Bearer <jwt>`` → 401. Normalize on save. (#37792)
+    server receives ``Bearer Bearer <jwt>`` → 401. Normalize on save.
     """
     if not isinstance(token, str):
         return token
@@ -260,7 +260,7 @@ def _resolve_mcp_server_config(config: dict) -> dict:
     ``Authorization: Bearer ${MCP_X_API_KEY}`` but the probe path never
     resolved them, so the discovery probe sent the literal placeholder and
     auth-requiring servers (e.g. n8n) returned 401 — while runtime tool
-    loading worked because it interpolates. (#37792)
+    loading worked because it interpolates.
     """
     from tools.mcp_tool import _interpolate_env_vars
 
@@ -919,7 +919,7 @@ def cmd_mcp_reauth(args):
     Serial-by-design: a human can only complete one browser OAuth flow at a
     time, so re-authing all servers concurrently would open N tabs at once
     and N-1 would time out. This is the self-service fix for the recurring
-    stale-client ritual in GH#36767 (and avoids the startup popup storm when
+    stale-client ritual in GH (and avoids the startup popup storm when
     several servers go stale at once).
     """
     servers = _get_mcp_servers()

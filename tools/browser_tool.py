@@ -111,7 +111,7 @@ def _lazy_call_llm(*args, **kwargs):
 
 # Browser-specific tool keys passed through to the agent-browser subprocess
 # AFTER credential stripping.  agent-browser is a Node process loading npm
-# deps; handing it the full operator keyring (#29157 / GHSA-m4m8-xjp4-5rmm)
+# deps; handing it the full operator keyring / GHSA-m4m8-xjp4-5rmm)
 # means a compromised transitive dependency could read every Pilotage secret
 # straight out of process.env.  Strip by default, then re-add only the
 # browser-backend keys the worker legitimately needs.
@@ -324,7 +324,7 @@ def _get_command_timeout() -> int:
         logger.debug("Could not read command_timeout from config: %s", e)
     # Assign the cached value BEFORE flipping the resolved flag so a
     # concurrent reader cannot observe ``resolved=True`` while the cache
-    # is still ``None`` (see issue #14331).
+    # is still ``None`` (see).
     _cached_command_timeout = result
     _command_timeout_resolved = True
     return result
@@ -1080,7 +1080,7 @@ def _lightpanda_fallback_reason(engine: str, command: str, result: Dict[str, Any
 
     if command == "screenshot":
         # Lightpanda returns a placeholder PNG with its panda logo.
-        # Since LP PR #1766 resized it to 1920x1080, the placeholder is
+        # Since LP resized it to 1920x1080, the placeholder is
         # ~17 KB.  Real Chromium screenshots are typically 100 KB+.
         path = data.get("path", "")
         if path:
@@ -2008,7 +2008,7 @@ def _reap_orphaned_browser_sessions():
         # *this* session's agent-browser daemon before tree-killing it; refuse
         # otherwise (don't touch the process, leave the socket dir for a later
         # sweep once the imposter PID is gone).  Fixes the arbitrary same-user
-        # process DoS in issue #14073.
+        # process DoS in.
         if not _verify_reapable_browser_daemon(
                 daemon_pid, socket_dir, session_name):
             continue
@@ -2474,7 +2474,7 @@ def _find_agent_browser(*, validate: bool = True) -> str:
     # npm postinstall re-points a global install symlink at our local
     # node_modules binary, which disappears on the next ``pilotage update`` and
     # leaves a dangling link that ``which`` still reports but exec fails on with
-    # exit 127 (issue #48521). Validating lets a dead candidate fall through to
+    # exit 127. Validating lets a dead candidate fall through to
     # the next working resolution (extended PATH → local .bin → npx) instead of
     # caching the broken one and silently killing every browser tool.
 
@@ -2573,7 +2573,7 @@ def _kill_process_tree(proc: "subprocess.Popen") -> None:
     pipe open, hanging the caller's ``communicate()`` past the nominal
     timeout — the same orphaned-pipe hazard already hit in production on
     POSIX (see ``tools/process_registry.py``'s ``_reader_loop``, issue
-    #68915: a backgrounded grandchild inheriting a pipe's write end kept it
+: a backgrounded grandchild inheriting a pipe's write end kept it
     from ever reaching EOF). That hazard is cross-platform, not
     Windows-specific; what *is* Windows-specific is the lack of a remedy
     other than killing the tree — anonymous pipes there don't support
@@ -2628,7 +2628,7 @@ def _kill_process_tree(proc: "subprocess.Popen") -> None:
 def warm_agent_browser_npx_cache(timeout: float = 60.0) -> bool:
     """Best-effort pre-fetch of the agent-browser npm package via npx.
 
-    agent-browser is no longer a root package.json dependency (#43564) —
+    agent-browser is no longer a root package.json dependency —
     it resolves lazily via ``npx agent-browser`` instead, which keeps it
     out of the npm workspace install graph entirely (nothing to prune it
     anymore) but means the first real invocation in a session would
@@ -2871,7 +2871,7 @@ def _run_browser_command(
             idle_ms = str(BROWSER_SESSION_INACTIVITY_TIMEOUT * 1000)
             browser_env["AGENT_BROWSER_IDLE_TIMEOUT_MS"] = idle_ms
 
-        # Inject --no-sandbox when needed (issue #15765):
+        # Inject --no-sandbox when needed :
         # - Running as root: Chromium always refuses to start without it
         # - Ubuntu 23.10+ / AppArmor systems: unprivileged user namespaces
         #   are restricted, causing Chromium to exit with "No usable sandbox"
@@ -3327,7 +3327,7 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     # There's no legitimate agent use case for navigating to
     # 169.254.169.254 / metadata.google.internal / ECS task metadata
     # via a browser, and routing those to a local Chromium sidecar
-    # on an EC2/GCP/Azure host exfiltrates IAM credentials (#16234).
+    # on an EC2/GCP/Azure host exfiltrates IAM credentials.
     # The floor is UNCONDITIONAL — it must fire for every backend,
     # including the pure-local headless Chromium and off-host CDP cases
     # (a local Chromium on a cloud VM still reaches the host IMDS).
@@ -3401,7 +3401,7 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
         # hitting a private URL by design).
         # Always-blocked floor (cloud metadata / IMDS) is enforced for every
         # backend and even when auto_local_this_nav is true — see pre-nav
-        # check for rationale (#16234).
+        # check for rationale.
         if (
             final_url
             and final_url != url
@@ -5001,7 +5001,7 @@ def cleanup_all_browsers() -> None:
     _agent_browser_resolved = False
     _discover_homebrew_node_dirs.cache_clear()
     # Flip the resolved flag BEFORE nulling the cache so a concurrent
-    # reader never sees ``resolved=True`` with ``cache=None`` (#14331).
+    # reader never sees ``resolved=True`` with ``cache=None``.
     _command_timeout_resolved = False
     _cached_command_timeout = None
     _cached_chromium_installed = None
@@ -5270,7 +5270,7 @@ def check_browser_vision_requirements() -> bool:
     resolvable vision backend. Without the vision check, the tool stays in
     the model's tool list even when no vision provider is configured, then
     fails at call time with a cryptic provider-side error like
-    ``unknown variant `image_url`, expected `text``` (issue #31179).
+    ``unknown variant `image_url`, expected `text```.
     """
     if not check_browser_requirements():
         return False
