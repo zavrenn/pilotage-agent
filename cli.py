@@ -13475,10 +13475,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if not reqs.get("stt_available", reqs.get("stt_key_set")):
             raise RuntimeError(
                 "Voice mode requires an STT provider for transcription.\n"
-                "Option 1: uv pip install faster-whisper  "
-                "(free, local; `pip install faster-whisper` also works if pip is on PATH)\n"
-                "Option 2: Set GROQ_API_KEY (free tier)\n"
-                "Option 3: Set VOICE_TOOLS_OPENAI_KEY (paid)"
+                "Set VOICE_TOOLS_OPENAI_KEY (or OPENAI_API_KEY), or configure a "
+                "plugin-registered STT provider."
             )
 
         # Prevent double-start from concurrent threads (atomic check-and-set)

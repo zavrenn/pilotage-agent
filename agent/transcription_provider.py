@@ -7,18 +7,13 @@ register instances via
 :meth:`PluginContext.register_transcription_provider`; the active one
 (selected via ``stt.provider`` in ``config.yaml``) services every
 :func:`tools.transcription_tools.transcribe_audio` call **when the
-configured name is neither a built-in (``local``, ``local_command``,
-``groq``, ``openai``, ``mistral``, ``xai``) nor disabled**.
+configured name is neither a built-in (``openai``) nor disabled**.
 
 Two coexisting STT extension surfaces — in resolution order:
 
 1. **Built-in providers** (``BUILTIN_STT_PROVIDERS`` in
-   :mod:`tools.transcription_tools`) — native Python implementations
-   for the 6 backends shipped today (faster-whisper, local_command,
-   Groq, OpenAI, Mistral, xAI). **Always win** — plugins cannot
-   shadow them. The single-env-var shell escape hatch
-   ``HERMES_LOCAL_STT_COMMAND`` is preserved via the built-in
-   ``local_command`` path.
+   :mod:`tools.transcription_tools`) — the native OpenAI Whisper
+   implementation. **Always wins** — plugins cannot shadow it.
 2. **Plugin-registered providers** (this ABC). For new STT backends —
    OpenRouter, SenseAudio, Gemini-STT, custom proprietary engines —
    that need a Python implementation without modifying

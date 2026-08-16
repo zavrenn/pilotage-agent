@@ -223,18 +223,14 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     "tool.doc_extract": ("firecrawl-anydoc==0.1.6",),
     # HF Agent Trace Viewer upload (hermes trace upload / /upload-trace).
     #
-    # huggingface-hub is a SHARED dependency: transformers (pulled by
-    # sentence-transformers for local Hindsight embeddings) requires
-    # >=1.5.0,<2, and faster-whisper/tokenizers depend on it transitively.
-    # Because active_features() marks a feature active from mere package
-    # presence, the `hermes update` lazy-refresh pass re-asserts THIS pin on
-    # every install where hub is present — so an exact pin below 1.5.0
-    # force-downgrades the shared package and breaks Hindsight startup
-    # (#60783). Policy: keep the exact pin (no ranges — security posture),
-    # but it MUST stay inside transformers' accepted window and MUST match
-    # uv.lock so the whole tree converges on ONE hub version
-    # (tests/test_project_metadata.py enforces both). When bumping: update
-    # here AND `uv lock --upgrade-package huggingface-hub` in lockstep.
+    # huggingface-hub can also arrive transitively via tokenizers-based
+    # tooling. Because active_features() marks a feature active from mere
+    # package presence, the `hermes update` lazy-refresh pass re-asserts
+    # THIS pin on every install where hub is present. Policy: keep the
+    # exact pin (no ranges — security posture) and keep it matching
+    # uv.lock so the whole tree converges on ONE hub version. When
+    # bumping: update here AND `uv lock --upgrade-package huggingface-hub`
+    # in lockstep.
     "tool.trace_upload": ("huggingface-hub==1.24.0",),
 }
 

@@ -1417,8 +1417,8 @@ def transcribe_recording(wav_path: str, model: Optional[str] = None) -> Dict[str
     result = transcribe_audio(wav_path, model=model, source="voice_mode")
 
     # Only chunk when the provider itself reports "File too large" —
-    # local providers (faster-whisper, whisper.cpp, etc.) have no upload
-    # cap so ``transcribe_audio`` will never return this error for them.
+    # local/plugin providers have no upload cap so ``transcribe_audio``
+    # will never return this error for them.
     if not result.get("success") and "File too large" in result.get("error", ""):
         result = _transcribe_wav_in_chunks(wav_path, model=model, max_file_size=MAX_FILE_SIZE)
 

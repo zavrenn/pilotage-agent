@@ -184,7 +184,6 @@ TIPS = [
     "Cron jobs run in completely fresh agent sessions — prompts must be self-contained.",
 
     # --- Voice ---
-    "Voice mode works with zero API keys if faster-whisper is installed (free local speech-to-text).",
     "Five TTS providers available: Edge TTS (free), ElevenLabs, OpenAI, NeuTTS (free local), MiniMax.",
     "/voice on enables voice mode in the CLI. Ctrl+B toggles push-to-talk recording.",
     "Streaming TTS plays sentences as they generate — you don't wait for the full response.",

@@ -715,54 +715,6 @@ def _prepare_audio_for_transcription(
         }
 
 # ---------------------------------------------------------------------------
-# Provider: local (faster-whisper)
-# ---------------------------------------------------------------------------
-
-
-# Substrings that identify a missing/unloadable CUDA runtime library.  When
-# ctranslate2 (the backend for faster-whisper) cannot dlopen one of these, the
-# "auto" device picker has already committed to CUDA and the model can no
-# longer be used — we fall back to CPU and reload.
-#
-# Deliberately narrow: we match on library-name tokens and dlopen phrasing so
-# we DO NOT accidentally catch legitimate runtime failures like "CUDA out of
-# memory" — those should surface to the user, not silently fall back to CPU
-# (a 32GB audio clip on CPU at int8 isn't useful either).
-_CUDA_LIB_ERROR_MARKERS = (
-    "libcublas",
-    "libcudnn",
-    "libcudart",
-    "cannot be loaded",
-    "cannot open shared object",
-    "no kernel image is available",
-    "CUBLAS_STATUS_NOT_SUPPORTED",
-    "no CUDA-capable device",
-    "CUDA driver version is insufficient",
-)
-
-
-# Silence-hallucination hardening defaults for local faster-whisper.
-# Whisper decodes SOMETHING even from pure silence/noise — often short junk
-# tokens ("You", "Thank you.", other-language phrases). Three layers kill the
-# class at the source (all tunable under ``stt.local``):
-#   1. vad_filter (Silero VAD, bundled with faster-whisper): silence never
-#      reaches the model. ``stt.local.vad: false`` restores raw behavior
-#      (e.g. transcribing music/ambient audio).
-#   2. condition_on_previous_text=False: one hallucinated token can't seed a
-#      run of them; negligible quality cost for voice-note-length audio.
-#   3. Segment confidence gate (see _is_hallucinated_segment): drops segments
-#      the model itself flags as probably-not-speech AND low-confidence.
-_VAD_MIN_SILENCE_MS_DEFAULT = 500
-_NO_SPEECH_PROB_THRESHOLD_DEFAULT = 0.6
-_LOGPROB_THRESHOLD_DEFAULT = -1.0
-
-
-# ---------------------------------------------------------------------------
-# Provider: groq (Whisper API — free tier)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Provider: openai (Whisper API)
 # ---------------------------------------------------------------------------
 
@@ -877,35 +829,13 @@ def _transcribe_openai(
         return {"success": False, "transcript": "", "error": f"Transcription failed: {e}"}
 
 # ---------------------------------------------------------------------------
-# Provider: mistral (Voxtral Transcribe API)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Provider: xAI (Grok STT API)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Provider: ElevenLabs (Scribe STT API)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Provider: DeepInfra (OpenAI-compatible /v1/audio/transcriptions)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Cloud pre-upload silence trim
 # ---------------------------------------------------------------------------
 #
-# Local faster-whisper gets Silero VAD (build_local_transcribe_kwargs) so
-# silence never reaches the model. Cloud providers get no such protection:
-# the raw file is uploaded, so every second of silence is paid for twice —
-# once in upload time and once in per-audio-minute billing — and cloud
-# Whisper hallucinates junk tokens on silent stretches exactly like local
-# Whisper did before the VAD hardening.
+# Cloud endpoints transcribe the raw upload, so every second of silence is
+# paid for twice — once in upload time and once in per-audio-minute
+# billing — and cloud Whisper hallucinates junk tokens on silent
+# stretches.
 #
 # Before uploading to a built-in cloud provider we collapse long pauses with
 # ffmpeg's silenceremove filter, keeping ``stt.cloud_trim_keep_ms`` of every

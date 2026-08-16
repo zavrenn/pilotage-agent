@@ -262,20 +262,15 @@ def _tts_label(current_provider: str) -> str:
 def _stt_label(current_provider: str) -> str:
     mapping = {
         "openai": "OpenAI Whisper",
-        "groq": "Groq Whisper",
-        "mistral": "Mistral Voxtral Transcribe",
-        "local": "Local faster-whisper",
     }
-    return mapping.get(current_provider or "local", current_provider or "Local faster-whisper")
+    return mapping.get(current_provider or "openai", current_provider or "OpenAI Whisper")
 
 
 def _local_stt_backend_available() -> bool:
-    """Whether a local STT backend could serve transcription right now.
+    """Local STT backends were removed (OpenAI-only STT); always False.
 
-    True when faster-whisper is importable or a custom local STT command
-    is configured. Used both for feature detection and to stop
-    ``apply_nous_managed_defaults`` from flipping a working local setup
-    to the managed gateway.
+    Kept for the ``apply_nous_managed_defaults`` gate so a plugin-registered
+    local provider can re-earn this hook later.
     """
     return False
 
@@ -406,11 +401,7 @@ def get_nous_subscription_features(
     # search/extract independently of web.backend.
     web_search_backend = str(web_cfg.get("search_backend") or "").strip().lower()
     tts_provider = str(tts_cfg.get("provider") or "edge").strip().lower()
-    # STT default is "local" (faster-whisper) per DEFAULT_CONFIG, which
-    # requires `pip install faster-whisper`. For Nous subscribers we'd
-    # rather route through the managed OpenAI audio gateway — see
-    # apply_nous_managed_defaults below.
-    stt_provider = str(stt_cfg.get("provider") or "local").strip().lower()
+    stt_provider = str(stt_cfg.get("provider") or "openai").strip().lower()
     browser_provider_explicit = "cloud_provider" in browser_cfg
     browser_provider = normalize_browser_cloud_provider(
         browser_cfg.get("cloud_provider") if browser_provider_explicit else None
@@ -447,13 +438,8 @@ def get_nous_subscription_features(
 
     # STT direct providers. OpenAI Whisper reuses the same audio key as
     # OpenAI TTS — resolve_openai_audio_api_key() reads VOICE_TOOLS_OPENAI_KEY
-    # and falls back to OPENAI_API_KEY. The local provider's "direct"
-    # signal is whether faster-whisper is importable; we lazy-import so
-    # this module stays cheap on the happy path.
+    # and falls back to OPENAI_API_KEY.
     direct_openai_stt = bool(resolve_openai_audio_api_key())
-    direct_groq_stt = bool(get_env_value("GROQ_API_KEY"))
-    direct_mistral_stt = bool(get_env_value("MISTRAL_API_KEY"))
-    local_stt_available = False
 
     # When use_gateway is set, suppress direct credentials for managed detection
     if web_use_gateway:
@@ -468,9 +454,6 @@ def get_nous_subscription_features(
         direct_elevenlabs = False
     if stt_use_gateway:
         direct_openai_stt = False
-        direct_groq_stt = False
-        direct_mistral_stt = False
-        local_stt_available = False
     if browser_use_gateway:
         direct_browser_use = False
         direct_browserbase = False
@@ -562,17 +545,14 @@ def get_nous_subscription_features(
     # tool — the gateway voice middleware calls it on every inbound voice
     # message — so toolset_enabled is N/A and we treat stt as always
     # "enabled" if a usable provider is configured.
-    stt_current_provider = stt_provider or "local"
+    stt_current_provider = stt_provider or "openai"
     stt_managed = (
         stt_current_provider == "openai"
         and managed_stt_available
         and not direct_openai_stt
     )
     stt_available = bool(
-        (stt_current_provider == "local" and local_stt_available)
-        or (stt_current_provider == "openai" and (managed_stt_available or direct_openai_stt))
-        or (stt_current_provider == "groq" and direct_groq_stt)
-        or (stt_current_provider == "mistral" and direct_mistral_stt)
+        (stt_current_provider == "openai" and (managed_stt_available or direct_openai_stt))
     )
     stt_active = stt_available
 
@@ -784,24 +764,16 @@ def apply_nous_managed_defaults(
         tts_cfg["provider"] = "openai"
         changed.add("tts")
 
-    # STT: same pattern as TTS. The DEFAULT_CONFIG seed is "local"
-    # (requires `pip install faster-whisper`); for Nous subscribers we
-    # flip it to "openai" so the managed audio gateway handles transcription
-    # via the same auth as TTS. Skipped when the user has explicitly
-    # configured STT, has direct credentials for a non-managed provider,
-    # has a working local backend (faster-whisper installed or a custom
-    # local command — strong intent signal that "local" was a choice, not
-    # just the DEFAULT_CONFIG seed), or isn't entitled to the managed
-    # "openai-audio" category (flipping would point at a gateway that
-    # refuses them, silently breaking voice transcription).
+    # STT: same pattern as TTS. When no explicit provider is configured and
+    # no direct OpenAI audio key exists, flip to "openai" so the managed
+    # audio gateway handles transcription via the same auth as TTS — but
+    # only for accounts entitled to the "openai-audio" category (flipping
+    # would point at a gateway that refuses them, silently breaking voice
+    # transcription).
     if (
         not features.stt.explicit_configured
         and not _local_stt_backend_available()
-        and not (
-            resolve_openai_audio_api_key()
-            or get_env_value("GROQ_API_KEY")
-            or get_env_value("MISTRAL_API_KEY")
-        )
+        and not resolve_openai_audio_api_key()
         and features.account_info is not None
         and features.account_info.tool_gateway_entitled_for("openai-audio")
     ):
@@ -859,11 +831,7 @@ def _get_gateway_direct_credentials() -> Dict[str, bool]:
         # with TTS via resolve_openai_audio_api_key() — counting it here
         # too is intentional: if the user has an OpenAI audio key they
         # don't need the gateway for either.
-        "stt": bool(
-            resolve_openai_audio_api_key()
-            or get_env_value("GROQ_API_KEY")
-            or get_env_value("MISTRAL_API_KEY")
-        ),
+        "stt": bool(resolve_openai_audio_api_key()),
         "browser": bool(
             get_env_value("BROWSER_USE_API_KEY")
             or (get_env_value("BROWSERBASE_API_KEY") and get_env_value("BROWSERBASE_PROJECT_ID"))

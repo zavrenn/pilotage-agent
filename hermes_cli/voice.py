@@ -4,7 +4,7 @@ Wraps ``tools.voice_mode`` (recording/transcription) and ``tools.tts_tool``
 (text-to-speech) behind idempotent, stateful entry points that the gateway's
 ``voice.record``, ``voice.toggle``, and ``voice.tts`` JSON-RPC handlers can
 call from a dedicated thread. The gateway imports this module lazily so that
-missing optional audio deps (sounddevice, faster-whisper, numpy) surface as
+missing optional audio deps (sounddevice, numpy) surface as
 an ``ImportError`` at call time, not at startup.
 
 Two usage modes are exposed:

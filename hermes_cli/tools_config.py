@@ -405,14 +405,6 @@ TOOL_CATEGORIES = {
         "icon": "🎙️",
         "providers": [
             {
-                "name": "Local Whisper",
-                "badge": "★ recommended · free",
-                "tag": "faster-whisper on-device, no API key",
-                "env_vars": [],
-                "stt_provider": "local",
-                "post_setup": "faster_whisper",
-            },
-            {
                 "name": "Nous Subscription",
                 "badge": "subscription",
                 "tag": "Managed OpenAI transcription billed to your subscription",
@@ -424,49 +416,12 @@ TOOL_CATEGORIES = {
             },
             {
                 "name": "OpenAI",
-                "badge": "paid",
+                "badge": "★ recommended",
                 "tag": "whisper-1, gpt-4o-transcribe, gpt-transcribe",
                 "env_vars": [
                     {"key": "VOICE_TOOLS_OPENAI_KEY", "prompt": "OpenAI API key", "url": "https://platform.openai.com/api-keys"},
                 ],
                 "stt_provider": "openai",
-            },
-            {
-                "name": "Groq",
-                "badge": "free tier",
-                "tag": "Whisper large-v3 family — very fast",
-                "env_vars": [
-                    {"key": "GROQ_API_KEY", "prompt": "Groq API key", "url": "https://console.groq.com/keys"},
-                ],
-                "stt_provider": "groq",
-            },
-            {
-                "name": "xAI",
-                "tag": "grok-stt — uses xAI Grok OAuth or XAI_API_KEY",
-                "env_vars": [],
-                "stt_provider": "xai",
-                "post_setup": "xai_grok",
-            },
-            {
-                "name": "ElevenLabs Scribe",
-                "badge": "paid",
-                "tag": "scribe_v2 — diarization + audio-event tagging",
-                "env_vars": [
-                    {"key": "ELEVENLABS_API_KEY", "prompt": "ElevenLabs API key", "url": "https://elevenlabs.io/app/settings/api-keys"},
-                ],
-                "stt_provider": "elevenlabs",
-            },
-            # Mistral Voxtral STT intentionally omitted — mistralai PyPI
-            # package quarantined (malicious 2.4.6 release, 2026-05-12).
-            # Restore alongside the dashboard stt.provider option.
-            {
-                "name": "DeepInfra",
-                "badge": "paid",
-                "tag": "Live STT catalog from api.deepinfra.com",
-                "env_vars": [
-                    {"key": "DEEPINFRA_API_KEY", "prompt": "DeepInfra API key", "url": "https://deepinfra.com/dash/api_keys"},
-                ],
-                "stt_provider": "deepinfra",
             },
         ],
     },
@@ -888,29 +843,6 @@ def _run_post_setup(post_setup_key: str):
         elif not _npm_bin:
             _print_warning("    Node.js not found. Install Camofox via Docker:")
             _print_info("      docker run -p 9377:9377 -e CAMOFOX_PORT=9377 jo-inc/camofox-browser")
-
-    elif post_setup_key == "faster_whisper":
-        import subprocess
-        try:
-            __import__("faster_whisper")
-            _print_success("    faster-whisper is already installed")
-            return
-        except ImportError:
-            pass
-        _print_info("    Installing faster-whisper (model ~150MB downloads on first use)...")
-        try:
-            result = _pip_install(["-U", "faster-whisper", "--quiet"], timeout=300)
-            if result.returncode == 0:
-                _print_success("    faster-whisper installed")
-                _print_info("    Model sizes: tiny, base (default), small, medium, large-v3")
-                _print_info("    Change via stt.local.model in ~/.hermes/config.yaml")
-            else:
-                _print_warning("    faster-whisper install failed:")
-                _print_info(f"      {(result.stderr or '').strip()[:300]}")
-                _print_info("    Run manually: uv pip install -U faster-whisper")
-        except subprocess.TimeoutExpired:
-            _print_warning("    faster-whisper install timed out (>5min)")
-            _print_info("    Run manually: uv pip install -U faster-whisper")
 
     elif post_setup_key == "kittentts":
         try:
@@ -2236,7 +2168,6 @@ def _module_installed(module_name: str) -> bool:
 # old site-packages disappears and restored afterward. Keep these install
 # arguments in sync with the corresponding ``_run_post_setup`` branches.
 _RESTORABLE_PYTHON_TOOL_DEPENDENCIES: dict[str, tuple[str, tuple[str, ...]]] = {
-    "faster_whisper": ("faster_whisper", ("-U", "faster-whisper")),
     "kittentts": (
         "kittentts",
         (
