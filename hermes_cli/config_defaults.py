@@ -2758,11 +2758,6 @@ DEFAULT_CONFIG = {
         #               ignored paths — node_modules, venv, build outputs —
         #               are never touched.
         "non_interactive_local_changes": "stash",
-        # Refresh an already-installed cua-driver during `hermes update`.
-        # The refresh is best-effort and macOS-only. Turn this off if the
-        # upstream installer is not appropriate for the machine, for example
-        # on non-admin accounts where `/Applications` is not writable.
-        "refresh_cua_driver": True,
     },
 
     # Language Server Protocol — semantic diagnostics from real
@@ -2947,32 +2942,6 @@ DEFAULT_CONFIG = {
     "paste_collapse_threshold": 5,
     "paste_collapse_threshold_fallback": 5,
     "paste_collapse_char_threshold": 2000,
-
-    # Computer Use (cua-driver) toolset settings.
-    "computer_use": {
-        # cua-driver ships with anonymous usage telemetry (PostHog) ENABLED
-        # by default upstream. Hermes disables it for our users unless they
-        # explicitly opt in here. When false (default), Hermes sets
-        # CUA_DRIVER_RS_TELEMETRY_ENABLED=0 in the cua-driver child env for
-        # every invocation (MCP backend, status, doctor, install). Set true
-        # to let cua-driver use its own default (telemetry on).
-        "cua_telemetry": False,
-        # Cap driver screenshot longest edge (pixels) via set_config on
-        # session start. Shrinks SOM multimodal payloads; 0 disables.
-        "max_image_dimension": 1456,
-        # Mode for capture_after follow-ups: som (screenshot + overlays —
-        # default), ax (elements only, no PNG — faster), vision (pixels only).
-        "capture_after_mode": "som",
-        # Disable the cursor overlay rendered by cua-driver. The overlay
-        # shows where agent actions land but can peg a core when idle
-        # (macOS vImage redraw loop #47032; Linux/WSL2 idle spin #28152).
-        # cua-driver ≥ 0.6.x supports --no-overlay; Hermes also calls
-        # set_agent_cursor_enabled(false) after start_session when this is on.
-        #   None  = auto-detect (off on macOS + headless/WSL2 Linux; on elsewhere)
-        #   True  = always disable the overlay
-        #   False = always enable the overlay
-        "no_overlay": None,
-    },
 
     # =========================================================================
     # Egress credential-injection proxy (iron-proxy)

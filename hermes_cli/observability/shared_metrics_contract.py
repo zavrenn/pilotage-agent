@@ -110,7 +110,6 @@ TOOL_CATEGORIES: frozenset[str] = frozenset({
     "browser",
     "code_execution",
     "communication",
-    "computer_use",
     "delegation",
     "file",
     "home_automation",

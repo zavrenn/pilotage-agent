@@ -223,15 +223,6 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # package clears the uv exclude-newer 14-day quarantine (first release
     # 2026-08-04); add the mirrored extra then.
     "tool.doc_extract": ("firecrawl-anydoc==0.1.6",),
-    # Computer Use (cua-driver) — the MCP client SDK used to spawn and talk
-    # to the cua-driver process over stdio. Matches the `mcp` / `computer-use`
-    # extras in pyproject.toml. The one-liner installer pulls this in via
-    # `[all]`; lazy-installing here covers lean / partial / broken-extra
-    # installs so computer_use never dead-ends on `No module named 'mcp'`.
-    "tool.computer_use": (
-        "mcp==1.28.1",
-        "starlette==1.3.1",  # CVE-2026-48710 — keep in sync with pyproject [computer-use]
-    ),
     # HF Agent Trace Viewer upload (hermes trace upload / /upload-trace).
     #
     # huggingface-hub is a SHARED dependency: transformers (pulled by

@@ -76,8 +76,6 @@ _HERMES_CORE_TOOLS = [
     "kanban_comment", "kanban_create", "kanban_link",
     "kanban_unblock",
     "kanban_attach", "kanban_attach_url", "kanban_attachments",
-    # Computer use (macOS, gated on cua-driver being installed via check_fn)
-    "computer_use",
 ]
 
 # Webhook events may originate from untrusted third-party content (for example,
@@ -135,16 +133,6 @@ TOOLSETS = {
     "image_gen": {
         "description": "Creative generation tools (images)",
         "tools": ["image_generate"],
-        "includes": []
-    },
-
-    "computer_use": {
-        "description": (
-            "Background desktop control via cua-driver (macOS/Windows/Linux) — "
-            "screenshots, mouse, keyboard, scroll, drag. Does NOT steal the "
-            "user's cursor or keyboard focus. Works with any tool-capable model."
-        ),
-        "tools": ["computer_use"],
         "includes": []
     },
 
