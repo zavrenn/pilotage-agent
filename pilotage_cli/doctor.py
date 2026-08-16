@@ -806,7 +806,7 @@ def _build_apikey_providers_list() -> list:
     # API-key loop (with custom headers/auth). Skip their pluggable profiles
     # here so the generic Bearer-auth loop doesn't run a duplicate, broken
     # check (e.g. Anthropic native API requires x-api-key, not Bearer).
-    _dedicated_canonical = {"anthropic", "openrouter", "bedrock"}
+    _dedicated_canonical = {"anthropic", "openrouter"}
     _known_canonical.update(_dedicated_canonical)
     try:
         from providers import list_providers
@@ -2224,10 +2224,9 @@ def run_doctor(args):
     _section("API Connectivity")
     # Refactor: every connectivity probe below is HTTP-bound and fully
     # independent. Running them in series spent ~5s wall on a typical
-    # workstation (2s of that was boto3's IMDS lookup for AWS credentials,
-    # which times out unless you're actually on EC2). Threading them with
-    # a small executor pool collapses the section to roughly the slowest
-    # single probe — about 2s — without changing the output format.
+    # workstation. Threading them with a small executor pool collapses the
+    # section to roughly the slowest single probe — about 2s — without
+    # changing the output format.
     #
     # Each ``_probe_*`` helper is a pure function: takes its inputs,
     # makes one HTTP/SDK call, returns a ``_ConnectivityResult`` carrying
@@ -2408,30 +2407,13 @@ def run_doctor(args):
     print(f"  {color(f'Running {len(_probes)} connectivity checks in parallel…', Colors.DIM)}",
           end="", flush=True)
 
-    # Disable boto3's EC2 instance-metadata-service probe for the duration
-    # of the parallel block. boto's default credential chain tries
-    # 169.254.169.254 with a multi-second timeout when we're not on EC2,
-    # which dominated the section's wall time before this fix
-    # (~2s on a developer laptop, even with the rest parallelized).
-    # Set on the parent thread before submitting work so the env-var
-    # mutation never races with another worker. has_aws_credentials() in
-    # the bedrock probe already gates on real env-var creds, so IMDS is
-    # never the legitimate source for `pilotage doctor`.
-    _imds_prev = os.environ.get("AWS_EC2_METADATA_DISABLED")
-    os.environ["AWS_EC2_METADATA_DISABLED"] = "true"
-    try:
-        # 8 workers is plenty — each probe is a single HTTP call plus a TLS
-        # handshake. More than that wastes thread-startup cost and risks
-        # noisy output if anything ever printed from inside a worker.
-        with _futures.ThreadPoolExecutor(max_workers=8,
-                                         thread_name_prefix="doctor-probe") as _ex:
-            _futures_in_order = [_ex.submit(_fn) for _, _fn in _probes]
-            _results = [_f.result() for _f in _futures_in_order]
-    finally:
-        if _imds_prev is None:
-            os.environ.pop("AWS_EC2_METADATA_DISABLED", None)
-        else:
-            os.environ["AWS_EC2_METADATA_DISABLED"] = _imds_prev
+    # 8 workers is plenty — each probe is a single HTTP call plus a TLS
+    # handshake. More than that wastes thread-startup cost and risks
+    # noisy output if anything ever printed from inside a worker.
+    with _futures.ThreadPoolExecutor(max_workers=8,
+                                     thread_name_prefix="doctor-probe") as _ex:
+        _futures_in_order = [_ex.submit(_fn) for _, _fn in _probes]
+        _results = [_f.result() for _f in _futures_in_order]
 
     # Clear the "Running …" line and print all results in submission order.
     print("\r" + " " * 70 + "\r", end="")

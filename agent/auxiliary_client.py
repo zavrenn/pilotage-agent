@@ -1564,7 +1564,6 @@ class _CodexCompletionsAdapter:
             from agent.transports.codex import (
                 _cache_scope_from_session_id,
                 _content_cache_key,
-                _default_prompt_cache_retention_for_request,
             )
             from utils import base_url_host_matches
 
@@ -1589,13 +1588,6 @@ class _CodexCompletionsAdapter:
                 _cache_key = _content_cache_key(instructions, resp_kwargs.get("tools"), _scope)
                 if _cache_key:
                     resp_kwargs["prompt_cache_key"] = _cache_key
-            if "prompt_cache_retention" not in resp_kwargs:
-                _cache_retention = _default_prompt_cache_retention_for_request(
-                    model,
-                    _host_src,
-                )
-                if _cache_retention:
-                    resp_kwargs["prompt_cache_retention"] = _cache_retention
         except Exception:
             logger.debug(
                 "Codex auxiliary: prompt_cache_key derivation skipped", exc_info=True

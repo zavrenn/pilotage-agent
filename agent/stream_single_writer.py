@@ -3,7 +3,7 @@
 The fence itself lives on ``AIAgent`` (``_claim_stream_writer`` /
 ``_stream_writer_is_current`` in ``run_agent.py``), but the streaming code paths
 that use it live in *other* modules — ``chat_completion_helpers`` (chat /
-anthropic / bedrock) and ``codex_runtime`` (codex responses). Calling the fence
+anthropic) and ``codex_runtime`` (codex responses). Calling the fence
 directly as ``agent._claim_stream_writer()`` from those modules makes them
 hard-depend on the method being present on whatever object is passed in as
 ``agent``.

@@ -1,7 +1,7 @@
 """
 Lazy dependency installer for opt-in Pilotage Agent backends.
 
-Many Pilotage features (Mistral TTS, ElevenLabs TTS, Honcho memory, Bedrock,
+Many Pilotage features (Mistral TTS, ElevenLabs TTS, Honcho memory,
 WhatsApp, etc.) require Python packages that not every user needs. The
 historical approach was to bundle them all under ``pyproject.toml`` extras
 (``pilotage-agent[all]``) and install them eagerly at setup time. That has
@@ -99,8 +99,6 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # Native Anthropic SDK — needed when provider=anthropic (not via
     # OpenRouter / aggregators which use the openai SDK).
     "provider.anthropic": ("anthropic==0.87.0",),  # CVE-2026-34450, CVE-2026-34452
-    # AWS Bedrock provider
-    "provider.bedrock": ("boto3==1.42.89",),
     # Google Vertex AI provider — OAuth2 token minting for the Gemini
     # OpenAI-compatible endpoint. Only loaded when provider=vertex is selected;
     # google-auth is NOT in [all] so plain installs don't carry it.

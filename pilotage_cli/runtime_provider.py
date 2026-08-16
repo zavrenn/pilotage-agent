@@ -357,7 +357,6 @@ _VALID_API_MODES = {
     "chat_completions",
     "codex_responses",
     "anthropic_messages",
-    "bedrock_converse",
     # Optional opt-in: hand the entire turn to a `codex app-server` subprocess
     # so terminal/file-ops/patching/sandboxing run inside Codex's own runtime
     # instead of Pilotage' tool dispatch. Gated behind config key

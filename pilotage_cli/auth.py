@@ -412,14 +412,6 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         api_key_env_vars=("OLLAMA_API_KEY",),
         base_url_env_var="OLLAMA_BASE_URL",
     ),
-    "bedrock": ProviderConfig(
-        id="bedrock",
-        name="AWS Bedrock",
-        auth_type="aws_sdk",
-        inference_base_url="https://bedrock-runtime.us-east-1.amazonaws.com",
-        api_key_env_vars=(),
-        base_url_env_var="BEDROCK_BASE_URL",
-    ),
     "vertex": ProviderConfig(
         id="vertex",
         name="Google Vertex AI",
@@ -1889,8 +1881,7 @@ def resolve_provider(
     4. OpenRouter credential pool
     5. Provider-specific API keys (GLM, Kimi, MiniMax, ...) -> that provider
     6. auth.json `active_provider` (logged-in OAuth) — last-resort fallback
-    7. AWS Bedrock credential chain
-    8. Error (no provider configured)
+    7. Error (no provider configured)
     """
     normalized = (requested or "auto").strip().lower()
 
@@ -1914,7 +1905,6 @@ def resolve_provider(
         "mimo": "xiaomi", "xiaomi-mimo": "xiaomi",
         "tencent": "tencent-tokenhub", "tokenhub": "tencent-tokenhub",
         "tencent-cloud": "tencent-tokenhub", "tencentmaas": "tencent-tokenhub",
-        "aws": "bedrock", "aws-bedrock": "bedrock", "amazon-bedrock": "bedrock", "amazon": "bedrock",
         "go": "opencode-go", "opencode-go-sub": "opencode-go",
         "kilo": "kilocode", "kilo-code": "kilocode", "kilo-gateway": "kilocode",
         "lmstudio": "lmstudio", "lm-studio": "lmstudio", "lm_studio": "lmstudio",
@@ -1960,7 +1950,7 @@ def resolve_provider(
     # win over a stale logged-in OAuth `active_provider`. Order matches the
     # docstring: 1. explicit CLI creds  2. config.yaml `model.provider`
     # 3. OPENAI/OPENROUTER env keys  4. OpenRouter pool  5. provider-specific
-    # env keys  6. auth.json `active_provider` (OAuth)  7. Bedrock  8. error.
+    # env keys  6. auth.json `active_provider` (OAuth)  7. error.
     # The normal chat/gateway path resolves config.provider upstream in
     # resolve_requested_provider() before ever reaching "auto"; this duplicate
     # check is the safety net for the lone direct caller (main.py resolve_provider

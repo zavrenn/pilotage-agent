@@ -766,122 +766,18 @@ def _check_stale_giveup(agent) -> None:
         )
 
 
-def _derive_stream_stale_timeout(agent, api_kwargs: dict) -> float:
-    """Stale-stream patience for a provider that is never a local endpoint.
-
-    Mirrors the main streaming path's derivation — provider config → env base
-    → context-size scaling → reasoning-model floor — minus the local-endpoint
-    ``float('inf')``/900s disable branch, which cannot apply to Bedrock (its
-    endpoint is always the AWS cloud). Factored so the Bedrock streaming
-    watchdog shares the exact same patience budget as the OpenAI/Anthropic
-    stale-stream detector below.
-    """
-    _cfg_stale = get_provider_stale_timeout(agent.provider, agent.model)
-    if _cfg_stale is not None:
-        _base = _cfg_stale
-    else:
-        _base = env_float("PILOTAGE_STREAM_STALE_TIMEOUT", 180.0)
-    _est_tokens = estimate_request_context_tokens(api_kwargs)
-    if _est_tokens > 100_000:
-        _timeout = max(_base, 300.0)
-    elif _est_tokens > 50_000:
-        _timeout = max(_base, 240.0)
-    else:
-        _timeout = _base
-    from agent.reasoning_timeouts import get_reasoning_stale_timeout_floor
-    # Resolve the model id from BOTH the OpenAI/Anthropic key (``model``) and
-    # the Bedrock key (``modelId``). OpenAI/Anthropic wins first via the ``or``
-    # chain, so those paths are unchanged. Bedrock carries the model as a
-    # dotted, region-prefixed inference-profile id (e.g.
-    # ``us.anthropic.claude-opus-4-6-v1:0``) that the floor's start-of-slug
-    # regex cannot match directly — normalize it to a canonical slug first.
-    _model_id = api_kwargs.get("model") or api_kwargs.get("modelId") or ""
-    _reasoning_floor = get_reasoning_stale_timeout_floor(_model_id)
-    if _reasoning_floor is None and api_kwargs.get("modelId"):
-        _reasoning_floor = _bedrock_reasoning_stale_floor(api_kwargs["modelId"])
-    if _reasoning_floor is not None:
-        _timeout = max(_timeout, _reasoning_floor)
-    return _timeout
-
-
-def _bedrock_reasoning_stale_floor(model_id: object) -> "float | None":
-    """Map a Bedrock inference-profile id to its reasoning stale-timeout floor.
-
-    Bedrock carries the model as a dotted, region-prefixed id such as
-    ``us.anthropic.claude-opus-4-6-v1:0``, whereas
-    :func:`get_reasoning_stale_timeout_floor` anchors its slug patterns at the
-    start of a bare slug (``claude-opus-4``). Strip the region prefix
-    (``us.``/``eu.``/``apac.``/...) and try two candidate slugs against the
-    floor:
-
-    * the segment after the provider namespace (``claude-opus-4-6-v1:0``) —
-      matches Anthropic-style slugs whose floor key excludes the provider
-      (``claude-opus-4``); and
-    * the region-stripped id with the provider dot rewritten to a dash
-      (``deepseek-r1-v1:0``) — matches provider-qualified floor keys
-      (``deepseek-r1``).
-
-    The floor's right-anchor (``$`` or ``-``/``.``/``_``) tolerates the
-    trailing date-stamp / ``-v1:0`` version suffix, so no suffix stripping is
-    needed. First non-None wins; returns None for unknown models.
-
-    The floor table mixes version-separator conventions: some keys are
-    keyed with a dashed version (``claude-opus-4``) while others embed a
-    dotted version (``claude-sonnet-4.5``, ``claude-sonnet-4.6``). Bedrock
-    always dashes the version (``claude-sonnet-4-5-v1:0``), so for every
-    candidate slug we also try the alternate version-separator form —
-    digit-dash-digit rewritten to digit-dot-digit and vice-versa — so a
-    dashed Bedrock id matches a dotted floor key (and the reverse). The
-    rewrite only touches version-number separators (a dash/dot flanked by
-    digits), never other dashes in the slug, so ``claude-sonnet`` is left
-    intact while ``4-5`` becomes ``4.5``.
-    """
-    from agent.reasoning_timeouts import get_reasoning_stale_timeout_floor
-
-    if not model_id or not isinstance(model_id, str):
-        return None
-    name = model_id.strip().lower()
-    for prefix in (
-        "global.", "us.", "eu.", "apac.", "ap.", "au.", "jp.",
-        "ca.", "sa.", "me.", "af.",
-    ):
-        if name.startswith(prefix):
-            name = name[len(prefix):]
-            break
-    base_candidates = [name]
-    if "." in name:
-        base_candidates.append(name.rsplit(".", 1)[1])   # claude-opus-4-6-v1:0
-        base_candidates.append(name.replace(".", "-", 1))  # deepseek-r1-v1:0
-    candidates: list[str] = []
-    for cand in base_candidates:
-        # Try the slug as-is plus both alternate version-separator forms.
-        # ``4-5`` <-> ``4.5`` only; a dash/dot not flanked by digits is
-        # left alone (e.g. ``claude-sonnet`` stays dashed).
-        dashed_to_dotted = re.sub(r"(?<=\d)-(?=\d)", ".", cand)
-        dotted_to_dashed = re.sub(r"(?<=\d)\.(?=\d)", "-", cand)
-        for form in (cand, dashed_to_dotted, dotted_to_dashed):
-            if form not in candidates:
-                candidates.append(form)
-    for cand in candidates:
-        floor = get_reasoning_stale_timeout_floor(cand)
-        if floor is not None:
-            return floor
-    return None
-
-
 def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
     """Run one non-streaming LLM request for the active api_mode and return it.
 
     Shared by the interrupt-worker path (``interruptible_api_call``) and the
     inline path (``direct_api_call``) so the per-api_mode dispatch — codex /
-    anthropic / bedrock / MoA / OpenAI-compatible — lives in exactly one place.
+    anthropic / OpenAI-compatible — lives in exactly one place.
 
     ``make_client(reason, kind=...)`` builds the per-request client for the
     codex / OpenAI-compatible (``kind="openai"``) and anthropic
     (``kind="anthropic_messages"``) branches; the worker path uses it to
     register the client with its stranger-thread abort machinery, the inline
-    path uses it to capture the client for its own ``finally`` close. The
-    bedrock / MoA branches manage their own clients and never call it. All
+    path uses it to capture the client for its own ``finally`` close. All
     interrupt, abort, cancellation, and close semantics stay in the callers —
     this helper only issues the request.
     """
@@ -918,7 +814,7 @@ def should_use_direct_api_call(agent) -> bool:
     invokes cross-thread to shut the active sockets — the same mechanism the
     async-delegation stall monitor relies on.
 
-    Keep native/Codex/Bedrock transports on their established workers:
+    Keep native/Codex transports on their established workers:
     their cancellation and client ownership differ.
     """
     if getattr(agent, "api_mode", None) != "chat_completions":
@@ -1727,25 +1623,10 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         )
         return anthropic_kwargs
 
-    # AWS Bedrock native Converse API — bypasses the OpenAI client entirely.
-    # The adapter handles message/tool conversion and boto3 calls directly.
-    if agent.api_mode == "bedrock_converse":
-        _bt = agent._get_transport()
-        region = getattr(agent, "_bedrock_region", None) or "us-east-1"
-        guardrail = getattr(agent, "_bedrock_guardrail_config", None)
-        return _bt.build_kwargs(
-            model=agent.model,
-            messages=api_messages,
-            tools=tools_for_api,
-            max_tokens=agent.max_tokens or 4096,
-            region=region,
-            guardrail_config=guardrail,
-        )
-
     # Rotation-stable logical cache scope, shared by every OpenAI-wire branch
     # below (codex + both chat_completions paths). Memoized on the agent —
-    # cheap after the first call. Resolved after the anthropic/bedrock early
-    # returns above, which don't use prompt_cache_key.
+    # cheap after the first call. Resolved after the anthropic early
+    # return above, which doesn't use prompt_cache_key.
     _cache_scope_id = _prompt_cache_scope_for_agent(agent)
 
     if agent.api_mode == "codex_responses":
@@ -1832,7 +1713,7 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
     # an explicit value).  Model-gated, not URL-gated: any chat-completions
     # proxy serving a Claude/MiniMax/Qwen3 model needs max_tokens, because the
     # Anthropic Messages API treats it as mandatory and proxies that omit it
-    # (AWS Bedrock, NVIDIA, LiteLLM, vLLM, corporate gateways) default as low
+    # (NVIDIA, LiteLLM, vLLM, corporate gateways) default as low
     # as 4096 output tokens — easily exhausted by thinking + large tool calls
     # like write_file/patch.  OpenRouter/Nous were the only routes covered
     # before; gating on _ANTHROPIC_OUTPUT_LIMITS membership covers them all.
@@ -2419,11 +2300,6 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
                 # provider-specific exceptions like Copilot gpt-5-mini on
                 # chat completions.
                 fb_api_mode = "codex_responses"
-            elif fb_provider == "bedrock" or (
-                base_url_hostname(fb_base_url).startswith("bedrock-runtime.")
-                and base_url_host_matches(fb_base_url, "amazonaws.com")
-            ):
-                fb_api_mode = "bedrock_converse"
 
         old_model = agent.model
         old_provider = agent.provider

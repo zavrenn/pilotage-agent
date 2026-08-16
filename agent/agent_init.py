@@ -628,7 +628,7 @@ def init_agent(
     agent._credential_pool = credential_pool
     agent.acp_command = acp_command or command
     agent.acp_args = list(acp_args or args or [])
-    if api_mode in {"chat_completions", "codex_responses", "anthropic_messages", "bedrock_converse", "codex_app_server"}:
+    if api_mode in {"chat_completions", "codex_responses", "anthropic_messages", "codex_app_server"}:
         agent.api_mode = api_mode
     elif agent.provider == "openai-codex":
         agent.api_mode = "codex_responses"
@@ -646,13 +646,6 @@ def init_agent(
         # use a URL convention ending in /anthropic. Auto-detect these so the
         # Anthropic Messages API adapter is used instead of chat completions.
         agent.api_mode = "anthropic_messages"
-    elif agent.provider == "bedrock" or (
-        agent._base_url_hostname.startswith("bedrock-runtime.")
-        and base_url_host_matches(agent._base_url_lower, "amazonaws.com")
-    ):
-        # AWS Bedrock — auto-detect from provider name or base URL
-        # (bedrock-runtime.<region>.amazonaws.com).
-        agent.api_mode = "bedrock_converse"
     else:
         agent.api_mode = "chat_completions"
 
@@ -1005,8 +998,7 @@ def init_agent(
 
     # Resolve per-provider / per-model request timeout once up front so
     # every client construction path below (Anthropic native, OpenAI-wire,
-    # router-based implicit auth) can apply it consistently.  Bedrock
-    # Claude uses its own timeout path and is not covered here.
+    # router-based implicit auth) can apply it consistently.
     _provider_timeout = get_provider_request_timeout(agent.provider, agent.model)
 
     if api_key and base_url:

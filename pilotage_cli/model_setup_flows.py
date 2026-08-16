@@ -29,54 +29,6 @@ from pilotage_cli.config import clear_model_endpoint_credentials
 from pilotage_cli.providers import custom_provider_slug
 
 
-# AWS cross-region inference profile prefixes. Any geo-prefixed profile only
-# routes from endpoints in its own geography, so the Bedrock picker must not
-# offer (e.g.) us.* profiles to an eu-central-2 endpoint — selecting one
-# produces a config AWS rejects regardless of credentials.
-# global.* routes from everywhere. Full set per the AWS cross-region
-# inference docs.
-BEDROCK_GEO_PREFIXES = (
-    "us.", "eu.", "ap.", "apac.", "jp.", "ca.", "sa.", "me.", "af.",
-)
-
-
-def bedrock_region_geo_prefix(region_name: str) -> str:
-    """Map an AWS region name to its inference-profile geo prefix ('' = unknown)."""
-    r = (region_name or "").lower()
-    for geo, region_prefixes in (
-        ("us.", ("us-", "us_gov")),
-        ("eu.", ("eu-",)),
-        ("ap.", ("ap-",)),
-        ("ca.", ("ca-",)),
-        ("sa.", ("sa-",)),
-        ("me.", ("me-",)),
-        ("af.", ("af-",)),
-    ):
-        if r.startswith(region_prefixes):
-            return geo
-    return ""
-
-
-def bedrock_model_routable_from_region(model_id: str, region_name: str) -> bool:
-    """True when *model_id* can be invoked from *region_name*'s endpoint.
-
-    Bare foundation-model ids and ``global.*`` profiles route from anywhere.
-    Geo-prefixed inference profiles (``us.*``, ``eu.*``, ...) only route from
-    endpoints in their own geography. Unknown region shapes hide nothing.
-    """
-    mid = (model_id or "").lower()
-    matched_geo = next((p for p in BEDROCK_GEO_PREFIXES if mid.startswith(p)), None)
-    if matched_geo is None or mid.startswith("global."):
-        return True
-    geo = bedrock_region_geo_prefix(region_name)
-    if not geo:
-        return True
-    if geo == "ap.":
-        # Asia-Pacific regions can carry ap./apac./jp. profile spellings.
-        return matched_geo in ("ap.", "apac.", "jp.")
-    return matched_geo == geo
-
-
 def _existing_api_key_for_model_flow(provider_id: str, pconfig) -> tuple[str, str]:
     """Resolve an existing wizard credential without changing its storage."""
     from pilotage_cli.auth import _resolve_api_key_provider_secret

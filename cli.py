@@ -14807,7 +14807,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
 
         # Route image attachments based on the active model's vision capability.
         # "native" → pass pixels as OpenAI-style content parts (adapters
-        #            translate for Anthropic/Gemini/Bedrock).
+        #            translate for Anthropic/Gemini).
         # "text"   → pre-analyze each image with vision_analyze and prepend the
         #            description as text — works with non-vision models.
         # See agent/image_routing.py for the decision table.

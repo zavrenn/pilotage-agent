@@ -4876,7 +4876,7 @@ class AIAgent:
         # see. Leaving SDK retries on (default 2) compounds with our outer
         # retries and lets a single hung provider request stretch to ~3x
         # the per-call timeout before our stale detector reports it.
-        # Shared/primary clients and Anthropic / Bedrock paths are
+        # Shared/primary clients and the Anthropic path are
         # unaffected (they don't go through here).
         request_kwargs["max_retries"] = 0
         # Reuse the cached wire client while the effective kwargs are
@@ -5348,7 +5348,7 @@ class AIAgent:
         # custom_providers[].extra_headers) — applied last so the most
         # specific config level survives credential swaps and rebuilds too.
         # SECURITY: values may carry credentials — never log them.
-        if self.api_mode not in ("anthropic_messages", "bedrock_converse"):
+        if self.api_mode != "anthropic_messages":
             try:
                 from pilotage_cli.config import (
                     apply_custom_provider_extra_headers_to_client_kwargs,
@@ -5378,10 +5378,10 @@ class AIAgent:
         ``agent.auxiliary_client._apply_user_default_headers`` so the main and
         auxiliary clients can never drift on precedence or value handling.
 
-        No-op for Anthropic/Bedrock modes, which don't use the OpenAI client,
+        No-op for the Anthropic mode, which doesn't use the OpenAI client,
         and when no overrides are configured.
         """
-        if self.api_mode in ("anthropic_messages", "bedrock_converse"):
+        if self.api_mode == "anthropic_messages":
             return
         from agent.auxiliary_client import (
             _apply_user_default_headers as _merge_user_headers,
@@ -6410,17 +6410,12 @@ class AIAgent:
         Xiaomi MiMo keeps dots (e.g. mimo-v2.5, mimo-v2.5-pro).
         OpenCode Go/Zen keeps dots for non-Claude models (e.g. minimax-m2.5-free).
         ZAI/Zhipu keeps dots (e.g. glm-4.7, glm-5.1).
-        AWS Bedrock uses dotted inference-profile IDs
-        (e.g. ``global.anthropic.claude-opus-4-7``,
-        ``us.anthropic.claude-sonnet-4-5-20250929-v1:0``) and rejects
-        the hyphenated form with
-        ``HTTP 400 The provided model identifier is invalid``.
         Regression for; mirrors the opencode-go fix for
         (commit f77be22c), which extended this same allowlist."""
         if (getattr(self, "provider", "") or "").lower() in {
             "alibaba", "minimax", "minimax-cn",
             "opencode-go", "opencode-zen",
-            "zai", "bedrock",
+            "zai",
             "xiaomi", "vertex",
         }:
             return True
@@ -6436,9 +6431,6 @@ class AIAgent:
             # Vertex AI OpenAI-compat endpoint — Gemini model ids keep dots
             # (e.g. google/gemini-3.5-flash); the hyphenated form is wrong.
             or base_url_host_matches(base, "aiplatform.googleapis.com")
-            # AWS Bedrock runtime endpoints — defense-in-depth when
-            # ``provider`` is unset but ``base_url`` still names Bedrock.
-            or host.startswith("bedrock-runtime.")
         )
 
     def _is_qwen_portal(self) -> bool:

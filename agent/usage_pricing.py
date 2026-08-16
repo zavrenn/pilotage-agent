@@ -663,130 +663,6 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
         source_url="https://ai.google.dev/pricing",
         pricing_version="google-pricing-2026-07-07",
     ),
-    # AWS Bedrock — pricing per the Bedrock pricing page.
-    # Bedrock charges the same per-token rates as the model provider but
-    # through AWS billing.  These are the on-demand prices (no commitment).
-    # Source: https://aws.amazon.com/bedrock/pricing/
-    # Current-gen Claude Opus on Bedrock. Commercial Bedrock on-demand
-    # mirrors Anthropic's published list price for the Claude line
-    # ($5/$25 for Opus 4.6/4.7/4.8; cache write = 1.25x input at the
-    # 5-minute TTL, cache read = 0.1x input). NOTE: the AWS Price List API
-    # had not published these SKUs machine-readably as of 2026-07 — these
-    # are commercial-list snapshots pending an authoritative machine source.
-    (
-        "bedrock",
-        "anthropic.claude-opus-4-8",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("5.00"),
-        output_cost_per_million=Decimal("25.00"),
-        cache_read_cost_per_million=Decimal("0.50"),
-        cache_write_cost_per_million=Decimal("6.25"),
-        source="official_docs_snapshot",
-        source_url="https://aws.amazon.com/bedrock/pricing/",
-        pricing_version="anthropic-list-2026-07",
-    ),
-    (
-        "bedrock",
-        "anthropic.claude-opus-4-7",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("5.00"),
-        output_cost_per_million=Decimal("25.00"),
-        cache_read_cost_per_million=Decimal("0.50"),
-        cache_write_cost_per_million=Decimal("6.25"),
-        source="official_docs_snapshot",
-        source_url="https://aws.amazon.com/bedrock/pricing/",
-        pricing_version="anthropic-list-2026-07",
-    ),
-    (
-        "bedrock",
-        "anthropic.claude-opus-4-6",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("5.00"),
-        output_cost_per_million=Decimal("25.00"),
-        cache_read_cost_per_million=Decimal("0.50"),
-        cache_write_cost_per_million=Decimal("6.25"),
-        source="official_docs_snapshot",
-        source_url="https://aws.amazon.com/bedrock/pricing/",
-        pricing_version="anthropic-list-2026-07",
-    ),
-    (
-        "bedrock",
-        "anthropic.claude-sonnet-5",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("3.00"),
-        output_cost_per_million=Decimal("15.00"),
-        cache_read_cost_per_million=Decimal("0.30"),
-        cache_write_cost_per_million=Decimal("3.75"),
-        source="official_docs_snapshot",
-        source_url="https://aws.amazon.com/bedrock/pricing/",
-        pricing_version="bedrock-pricing-2026-06",
-    ),
-    (
-        "bedrock",
-        "anthropic.claude-sonnet-4-6",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("3.00"),
-        output_cost_per_million=Decimal("15.00"),
-        cache_read_cost_per_million=Decimal("0.30"),
-        cache_write_cost_per_million=Decimal("3.75"),
-        source="official_docs_snapshot",
-        source_url="https://aws.amazon.com/bedrock/pricing/",
-        pricing_version="bedrock-pricing-2026-04",
-    ),
-    (
-        "bedrock",
-        "anthropic.claude-sonnet-4-5",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("3.00"),
-        output_cost_per_million=Decimal("15.00"),
-        cache_read_cost_per_million=Decimal("0.30"),
-        cache_write_cost_per_million=Decimal("3.75"),
-        source="official_docs_snapshot",
-        source_url="https://aws.amazon.com/bedrock/pricing/",
-        pricing_version="bedrock-pricing-2026-04",
-    ),
-    (
-        "bedrock",
-        "anthropic.claude-haiku-4-5",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("0.80"),
-        output_cost_per_million=Decimal("4.00"),
-        cache_read_cost_per_million=Decimal("0.08"),
-        cache_write_cost_per_million=Decimal("1.00"),
-        source="official_docs_snapshot",
-        source_url="https://aws.amazon.com/bedrock/pricing/",
-        pricing_version="bedrock-pricing-2026-04",
-    ),
-    (
-        "bedrock",
-        "amazon.nova-pro",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("0.80"),
-        output_cost_per_million=Decimal("3.20"),
-        source="official_docs_snapshot",
-        source_url="https://aws.amazon.com/bedrock/pricing/",
-        pricing_version="bedrock-pricing-2026-04",
-    ),
-    (
-        "bedrock",
-        "amazon.nova-lite",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("0.06"),
-        output_cost_per_million=Decimal("0.24"),
-        source="official_docs_snapshot",
-        source_url="https://aws.amazon.com/bedrock/pricing/",
-        pricing_version="bedrock-pricing-2026-04",
-    ),
-    (
-        "bedrock",
-        "amazon.nova-micro",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("0.035"),
-        output_cost_per_million=Decimal("0.14"),
-        source="official_docs_snapshot",
-        source_url="https://aws.amazon.com/bedrock/pricing/",
-        pricing_version="bedrock-pricing-2026-04",
-    ),
     # MiniMax
     (
         "minimax",
@@ -1100,47 +976,6 @@ def resolve_billing_route(
     return BillingRoute(provider=provider_name or "unknown", model=model.split("/")[-1] if model else "", base_url=base_url or "", billing_mode="unknown")
 
 
-def _normalize_bedrock_model_name(model: str) -> str:
-    """Normalize a Bedrock model id to its bare foundation-model form.
-
-    Bedrock cross-region inference profiles prefix the foundation model id
-    with a region scope (``us.`` / ``global.`` / ``eu.`` / ``apac.`` / ``au.``
-    / ...), e.g. ``us.anthropic.claude-opus-4-7`` or
-    ``au.anthropic.claude-sonnet-4-5-20250929-v1:0``.  The pricing table is
-    keyed on the bare ``anthropic.claude-*`` id, so the prefix must be
-    stripped before the lookup or every cross-region session prices as
-    unknown.  Note Asia-Pacific uses ``apac.`` (a bare ``ap.`` never matches
-    an ``apac.*`` id) and Australia/New Zealand use ``au.``.  Also normalizes
-    dot-notation version numbers (``4.7`` → ``4-7``) and the documented
-    trailing date, revision, and profile components (``-20250514-v1:0``).
-    """
-    name = model.lower().strip()
-    for prefix in (
-        "global.",
-        "us.",
-        "eu.",
-        "apac.",
-        "ap.",
-        "au.",
-        "jp.",
-        "ca.",
-        "sa.",
-        "me.",
-        "af.",
-    ):
-        if name.startswith(prefix):
-            name = name[len(prefix):]
-            break
-    name = re.sub(r"(\d+)\.(\d+)", r"\1-\2", name)
-    # Bedrock inference profile IDs append these documented components to the
-    # foundation model ID. Strip only the trailing forms, not arbitrary model
-    # name continuations that could be a distinct SKU.
-    name = re.sub(r":\d+$", "", name)
-    name = re.sub(r"-v\d+$", "", name)
-    name = re.sub(r"-\d{8}$", "", name)
-    return name
-
-
 def _normalize_anthropic_model_name(model: str) -> str:
     """Normalize Anthropic model name variants to canonical form.
 
@@ -1167,14 +1002,6 @@ def _lookup_official_docs_pricing(route: BillingRoute) -> Optional[PricingEntry]
     # Try normalized name for Anthropic (handles dot-notation like opus-4.7)
     if route.provider == "anthropic":
         normalized = _normalize_anthropic_model_name(model)
-        if normalized != model:
-            entry = _OFFICIAL_DOCS_PRICING.get((route.provider, normalized))
-            if entry:
-                return entry
-    # Bedrock cross-region inference profiles carry a region prefix
-    # (us./global./eu./...) that the bare pricing keys don't have.
-    if route.provider == "bedrock":
-        normalized = _normalize_bedrock_model_name(model)
         if normalized != model:
             entry = _OFFICIAL_DOCS_PRICING.get((route.provider, normalized))
             if entry:

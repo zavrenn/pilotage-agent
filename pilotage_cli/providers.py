@@ -99,7 +99,6 @@ TRANSPORT_TO_API_MODE: Dict[str, str] = {
     "openai_chat": "chat_completions",
     "anthropic_messages": "anthropic_messages",
     "codex_responses": "codex_responses",
-    "bedrock_converse": "bedrock_converse",
 }
 
 
@@ -282,7 +281,6 @@ def host_mandated_api_mode(base_url: str = "") -> Optional[str]:
         models when tools + reasoning are in play (chat/completions 400s).
       - api.anthropic.com / ``…/anthropic`` suffixes speak native Messages.
       - Kimi's ``/coding`` endpoint speaks native Messages.
-      - AWS Bedrock runtime hosts speak Converse.
 
     These are *mandatory* — a session carrying a stale api_mode (e.g. a
     /model switch that kept the previous provider's ``chat_completions``)
@@ -307,8 +305,6 @@ def host_mandated_api_mode(base_url: str = "") -> Optional[str]:
     # catalog filtering and listing authority.
     if is_official_openai_host(base_url):
         return "codex_responses"
-    if hostname.startswith("bedrock-runtime.") and base_url_host_matches(base_url, "amazonaws.com"):
-        return "bedrock_converse"
     return None
 
 
@@ -318,8 +314,7 @@ def determine_api_mode(provider: str, base_url: str = "", model: str = "") -> st
     Resolution order:
       1. Host-mandated mode (special endpoints that only accept one protocol).
       2. Known provider → transport → TRANSPORT_TO_API_MODE.
-      3. Direct provider checks (bedrock).
-      4. Default: 'chat_completions'.
+      3. Default: 'chat_completions'.
     """
     mandated = host_mandated_api_mode(base_url)
     if mandated is not None:
@@ -328,10 +323,6 @@ def determine_api_mode(provider: str, base_url: str = "", model: str = "") -> st
     pdef = get_provider(provider)
     if pdef is not None:
         return TRANSPORT_TO_API_MODE.get(pdef.transport, "chat_completions")
-
-    # Direct provider checks for providers not in PILOTAGE_OVERLAYS
-    if provider == "bedrock":
-        return "bedrock_converse"
 
     return "chat_completions"
 

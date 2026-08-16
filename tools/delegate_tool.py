@@ -4253,13 +4253,12 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
     configured_api_key = str(cfg.get("api_key") or "").strip() or None
     configured_api_mode = str(cfg.get("api_mode") or "").strip().lower() or None
 
-    # Native-SDK providers (Bedrock, Vertex, Google GenAI) speak their own
+    # Native-SDK providers (Vertex, Google GenAI) speak their own
     # wire protocol — they cannot be reached via OpenAI chat_completions against
     # a base_url. For these, always fall through to resolve_runtime_provider()
     # so the proper SDK path is taken. The configured base_url is still
-    # forwarded through runtime-provider resolution when applicable (e.g. a
-    # custom Bedrock regional endpoint).
-    _NATIVE_SDK_PROVIDERS = {"bedrock", "vertex", "google", "google-genai"}
+    # forwarded through runtime-provider resolution when applicable.
+    _NATIVE_SDK_PROVIDERS = {"vertex", "google", "google-genai"}
     _provider_lower = (configured_provider or "").strip().lower()
     _is_native_sdk_provider = _provider_lower in _NATIVE_SDK_PROVIDERS
 
