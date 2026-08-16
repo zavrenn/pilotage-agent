@@ -10152,12 +10152,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 _cprint(f"    Max output: {mi.max_output:,} tokens")
             _cprint(f"    Capabilities: {mi.format_capabilities()}")
 
-        cache_enabled = (
-            (base_url_host_matches(result.base_url or "", "openrouter.ai") and "claude" in result.new_model.lower())
-            or result.api_mode == "anthropic_messages"
-        )
-        if cache_enabled:
-            _cprint("    Prompt caching: enabled")
         if result.warning_message:
             _cprint(f"    ⚠ {result.warning_message}")
         if persist_global:
@@ -10533,14 +10527,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
             if mi.max_output:
                 _cprint(f"    Max output: {mi.max_output:,} tokens")
             _cprint(f"    Capabilities: {mi.format_capabilities()}")
-
-        # Cache notice
-        cache_enabled = (
-            (base_url_host_matches(result.base_url or "", "openrouter.ai") and "claude" in result.new_model.lower())
-            or result.api_mode == "anthropic_messages"
-        )
-        if cache_enabled:
-            _cprint("    Prompt caching: enabled")
 
         # Warning from validation
         if result.warning_message:

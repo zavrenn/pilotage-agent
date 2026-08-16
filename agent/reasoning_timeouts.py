@@ -60,34 +60,6 @@ from typing import Optional
 # word-boundary component via the wrapper regex in ``_match_any``
 # below.  Order is irrelevant — the first regex match wins.
 _REASONING_STALE_TIMEOUT_FLOORS: tuple[tuple[str, int], ...] = (
-    # NVIDIA Nemotron — reasoning models behind hosted NIM with
-    # documented 60-180s upstream idle kill (NVIDIA/NemoClaw:
-    # 120s measured).
-    ("nemotron-3-ultra", 600),
-    ("nemotron-3-super", 600),
-    ("nemotron-3-nano",  300),
-    ("nemotron-3.5-lightning", 300),
-    # DeepSeek — R1 and V4 reasoning models on hosted NIM / DeepSeek direct.
-    # V4 series emits reasoning_content in a separate delta field before
-    # final content, requiring the same extended stale timeout floor.
-    ("deepseek-r1", 600),
-    ("deepseek-reasoner", 600),
-    ("deepseek-v4-flash", 600),
-    ("deepseek-v4-pro", 600),
-    # Qwen — QwQ reasoning + Qwen3 thinking variants.  QwQ-32B
-    # preview is the stable slug; ``qwen3`` covers the family of
-    # thinking-mode Qwen3 models (qwen3-235b-a22b, qwen3-32b, etc.)
-    # without over-matching every Qwen3 instruct variant — the
-    # right-anchor requires the slug to be at the start of the
-    # remaining model name, so ``qwen3-235b-instruct`` (instruct is
-    # NOT a thinking variant) would still match.  Acceptable
-    # trade-off: instruct variants of qwen3 get the 180s floor
-    # even though they don't reason.  The cost is a slightly longer
-    # wait on a hung provider; the alternative (matching only
-    # ``qwen3-.*-thinking``) breaks the moment NVIDIA or Alibaba
-    # ships a slightly different naming shape.
-    ("qwq-32b", 300),
-    ("qwen3", 180),
     # OpenAI o-series — known multi-minute TTFB.  Each variant
     # enumerated explicitly so bare ``o1`` doesn't over-match
     # ``olmo-1`` or hypothetical future community derivatives.
@@ -99,22 +71,6 @@ _REASONING_STALE_TIMEOUT_FLOORS: tuple[tuple[str, int], ...] = (
     ("o3-pro", 600),
     ("o3-mini", 300),
     ("o4-mini", 300),
-    # Anthropic Claude 4.x thinking variants.  Anchored at
-    # ``claude-opus-4`` so non-thinking Claude 3.x or future
-    # non-reasoning Claude variants don't match.
-    ("claude-opus-4", 240),
-    ("claude-opus-5", 240),
-    ("claude-sonnet-5", 180),
-    ("claude-sonnet-4.5", 180),
-    ("claude-sonnet-4.6", 180),
-    # Anthropic Mythos-class named reasoning models (claude-fable-5, …).
-    # 1M context + 128K output — heavier thinking phase than the
-    # numbered Claude line, so the floor is in the deep-reasoning tier
-    # alongside o1 / deepseek-r1 / nemotron-3-ultra.  Without this
-    # entry the stale-stream detector kills fable-5's thinking phase
-    # at the default 180s (300s with context scaling), tripping the
-    # cross-turn circuit breaker after 5 consecutive stale kills.
-    ("claude-fable", 600),
 )
 
 

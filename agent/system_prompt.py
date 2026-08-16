@@ -767,7 +767,6 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     """
     parts = build_system_prompt_parts(agent, system_message=system_message)
     joined = "\n\n".join(p for p in (parts["stable"], parts["context"], parts["volatile"]) if p)
-    agent._cached_system_prompt_static = parts["stable"]
 
     # Surface context-file truncation warnings through the normal agent status
     # channel so gateway/CLI users see them in chat instead of only in logs.
@@ -784,63 +783,8 @@ def invalidate_system_prompt(agent: Any) -> None:
     so the rebuilt prompt captures any writes from this session.
     """
     agent._cached_system_prompt = None
-    agent._cached_system_prompt_static = None
     if agent._memory_store:
         agent._memory_store.load_from_disk()
-
-
-def reconstruct_static_prefix(
-    agent: Any,
-    system_message: Optional[str] = None,
-    *,
-    log_label: str = "restore",
-) -> None:
-    """Reconstruct ``_cached_system_prompt_static`` for a stored prompt.
-
-    The static prefix is not persisted (only the full prompt is), so any
-    path that adopts a stored/kept ``_cached_system_prompt`` — session
-    restore, the compression keep-prompt path, or a failover to a cache-on
-    provider mid-turn — must rebuild the stable tier to regain the
-    two-block ``[static, volatile]`` system layout.
-
-    Safety: the rebuilt stable tier is used ONLY when the stored prompt
-    literally starts with it (checked here AND re-checked by
-    ``_apply_system_cache_markers``'s ``startswith`` gate). If any
-    stable-tier input changed since the prompt was persisted (identity
-    changed, SOUL.md edited), the prefix mismatches, the static stays
-    None, and requests fall back to the legacy layout with the stored
-    prompt bytes untouched — never a rewritten prompt.
-
-    A failed reconstruction is memoized per stored prompt
-    (``_static_rebuild_failed_for``): ``build_system_prompt_parts`` does
-    real file I/O (SOUL.md, context files, memory), and callers on the
-    retry-loop hot path must not re-run it every attempt when the inputs
-    haven't changed. A legitimately changed stored prompt retries once.
-    """
-    if not getattr(agent, "_use_prompt_caching", False):
-        return
-    stored = getattr(agent, "_cached_system_prompt", None)
-    if not isinstance(stored, str) or not stored:
-        return
-    existing = getattr(agent, "_cached_system_prompt_static", None)
-    if isinstance(existing, str) and existing and stored.startswith(existing):
-        return
-    if getattr(agent, "_static_rebuild_failed_for", None) == stored:
-        return
-    try:
-        static = build_system_prompt_parts(agent, system_message=system_message)["stable"]
-        if static and stored.startswith(static):
-            agent._cached_system_prompt_static = static
-            agent._static_rebuild_failed_for = None
-            return
-    except Exception:
-        logger.debug(
-            "static system-prefix reconstruction failed on %s",
-            log_label,
-            exc_info=True,
-        )
-    agent._cached_system_prompt_static = None
-    agent._static_rebuild_failed_for = stored
 
 
 def format_tools_for_system_message(agent: Any) -> str:

@@ -595,26 +595,6 @@ def _normalize_aux_provider(provider: Optional[str]) -> str:
     return _PROVIDER_ALIASES.get(normalized, normalized)
 
 
-# Sentinel: when returned by _fixed_temperature_for_model(), callers must
-# strip the ``temperature`` key from API kwargs entirely so the provider's
-# server-side default applies.  Kimi/Moonshot models manage temperature
-# internally — sending *any* value (even the "correct" one) can conflict
-# with gateway-side mode selection (thinking → 1.0, non-thinking → 0.6).
-OMIT_TEMPERATURE: object = object()
-
-
-def _is_kimi_model(model: Optional[str]) -> bool:
-    """True for any Kimi / Moonshot model that manages temperature server-side."""
-    bare = (model or "").strip().lower().rsplit("/", 1)[-1]
-    return bare.startswith("kimi-") or bare == "kimi"
-
-
-def _is_arcee_trinity_thinking(model: Optional[str]) -> bool:
-    """True for Arcee Trinity Large Thinking (direct or via OpenRouter)."""
-    bare = (model or "").strip().lower().rsplit("/", 1)[-1]
-    return bare == "trinity-large-thinking"
-
-
 # Context window enforced by ChatGPT's Codex OAuth backend for the
 # gpt-5.4 / gpt-5.5 / gpt-5.6 families. The raw OpenAI API and OpenRouter
 # expose 1.05M for the same slugs, but the Codex backend hard-caps at 272K
@@ -683,28 +663,6 @@ def _is_codex_spark(model: Optional[str], provider: Optional[str] = None) -> boo
     return bare == "gpt-5.3-codex-spark"
 
 
-def _fixed_temperature_for_model(
-    model: Optional[str],
-    base_url: Optional[str] = None,
-) -> "Optional[float] | object":
-    """Return a temperature directive for models with strict contracts.
-
-    Returns:
-        ``OMIT_TEMPERATURE`` — caller must remove the ``temperature`` key so the
-            provider chooses its own default.  Used for all Kimi / Moonshot
-            models whose gateway selects temperature server-side.
-        ``float`` — a specific value the caller must use (reserved for future
-            models with fixed-temperature contracts).
-        ``None`` — no override; caller should use its own default.
-    """
-    if _is_kimi_model(model):
-        logger.debug("Omitting temperature for Kimi model %r (server-managed)", model)
-        return OMIT_TEMPERATURE
-    if _is_arcee_trinity_thinking(model):
-        return 0.5
-    return None
-
-
 def _compression_threshold_for_model(
     model: Optional[str],
     provider: Optional[str] = None,
@@ -718,7 +676,6 @@ def _compression_threshold_for_model(
     compression and preserve more raw context.
 
     Per-model/route overrides:
-      - Arcee Trinity Large Thinking → 0.75 (preserve reasoning context).
       - gpt-5.4 / gpt-5.5 / gpt-5.6 on the Codex OAuth route → 0.85, because
         Codex caps all three families at 272K and the default 50% trigger
         would compact at ~136K. Gated by ``allow_codex_gpt55_autoraise``
@@ -734,8 +691,6 @@ def _compression_threshold_for_model(
     Returns a float in (0, 1] to override the global ``compression.threshold``
     config value, or ``None`` to leave the user's config value unchanged.
     """
-    if _is_arcee_trinity_thinking(model):
-        return 0.75
     if allow_codex_gpt55_autoraise and _is_codex_gpt54_or_gpt55(model, provider):
         return _CODEX_GPT54_GPT55_COMPACTION_THRESHOLD
     if _is_codex_spark(model, provider):
@@ -3620,34 +3575,6 @@ def _fallback_destination(
     return _complete_fallback_destination(provider, base_url, api_mode, model)
 
 
-def _replan_synchronous_cache_sections(
-    messages: list,
-    tools: Optional[list],
-    *,
-    destination: _FallbackDestination,
-) -> tuple[list, list]:
-    """Strip source decoration and plan one synchronous destination locally."""
-    from agent.agent_runtime_helpers import (
-        configured_cache_ttl,
-        plan_cache_sections_for_destination,
-    )
-
-    return plan_cache_sections_for_destination(
-        messages,
-        tools,
-        provider=destination.provider,
-        base_url=destination.base_url,
-        api_mode=destination.api_mode or "",
-        model=destination.model or "",
-        # Thread the operator's configured tier so auxiliary fallback
-        # requests stop regressing a configured 1h to the 5m default
-        #; the planner clamps per-destination (Qwen → 5m). There
-        # is no live agent here, so read the same config key agent_init
-        # snapshots into agent._cache_ttl.
-        cache_ttl=configured_cache_ttl(),
-    )
-
-
 def _call_fallback_candidate_sync(
     fb_client: Any,
     fb_model: Optional[str],
@@ -3691,11 +3618,7 @@ def _call_fallback_candidate_sync(
         )
         effective_timeout = fb_timeout
     destination = _fallback_destination(task, fb_client, fb_model, fb_label)
-    fallback_messages, fallback_tools = _replan_synchronous_cache_sections(
-        messages,
-        tools,
-        destination=destination,
-    )
+    fallback_messages, fallback_tools = messages, tools
     fb_kwargs = _build_call_kwargs(
         destination.provider, destination.model, fallback_messages,
         temperature=temperature, max_tokens=max_tokens,
@@ -3733,11 +3656,7 @@ def _call_fallback_candidate_sync(
                     destination.api_mode,
                     retry_model or destination.model,
                 )
-                retry_messages, retry_tools = _replan_synchronous_cache_sections(
-                    messages,
-                    tools,
-                    destination=retry_destination,
-                )
+                retry_messages, retry_tools = messages, tools
                 retry_kwargs = _build_call_kwargs(
                     retry_destination.provider,
                     retry_destination.model,
@@ -3797,11 +3716,7 @@ async def _call_fallback_candidate_async(
         )
         effective_timeout = fb_timeout
     destination = _fallback_destination(task, fb_client, fb_model, fb_label)
-    fallback_messages, fallback_tools = _replan_synchronous_cache_sections(
-        messages,
-        tools,
-        destination=destination,
-    )
+    fallback_messages, fallback_tools = messages, tools
     fb_kwargs = _build_call_kwargs(
         destination.provider, destination.model, fallback_messages,
         temperature=temperature, max_tokens=max_tokens,
@@ -3840,11 +3755,7 @@ async def _call_fallback_candidate_async(
                     destination.api_mode,
                     retry_model or destination.model,
                 )
-                retry_messages, retry_tools = _replan_synchronous_cache_sections(
-                    messages,
-                    tools,
-                    destination=retry_destination,
-                )
+                retry_messages, retry_tools = messages, tools
                 retry_kwargs = _build_call_kwargs(
                     retry_destination.provider,
                     retry_destination.model,
@@ -4857,8 +4768,6 @@ def resolve_provider_client(
         wrap_base = ""
         if explicit_base_url:
             custom_base = _to_openai_base_url(explicit_base_url).strip()
-            if api_mode == "anthropic_messages":
-                wrap_base = (explicit_base_url or "").strip().rstrip("/")
             custom_key = (
                 (explicit_api_key or "").strip()
                 or _scoped_key_env("OPENAI_API_KEY")
@@ -4892,9 +4801,7 @@ def resolve_provider_client(
             _clean_base, _dq = _extract_url_query_params(custom_base)
             if _dq:
                 extra["default_query"] = _dq
-            if base_url_host_matches(custom_base, "api.kimi.com"):
-                extra["default_headers"] = {"User-Agent": "claude-code/0.1.0"}
-            elif base_url_host_matches(custom_base, "integrate.api.nvidia.com"):
+            if base_url_host_matches(custom_base, "integrate.api.nvidia.com"):
                 extra["default_headers"] = build_nvidia_nim_headers(custom_base)
             else:
                 # Fall back to profile.default_headers for providers that
@@ -4973,16 +4880,8 @@ def resolve_provider_client(
                     or "gpt-4o-mini",
                     provider,
                 )
-                # anthropic_messages talks to the /anthropic surface directly;
-                # OpenAI-wire paths (chat_completions / codex_responses) need the
-                # /v1 equivalent.  Rewrite only on the OpenAI-wire path so the
-                # Anthropic fallback SDK still sees the original URL.
-                if entry_api_mode == "anthropic_messages":
-                    openai_base = custom_base
-                    raw_base_for_wrap = custom_base
-                else:
-                    openai_base = _to_openai_base_url(custom_base)
-                    raw_base_for_wrap = custom_base
+                openai_base = _to_openai_base_url(custom_base)
+                raw_base_for_wrap = custom_base
                 _clean_base2, _dq2 = _extract_url_query_params(openai_base)
                 _extra2 = {"default_query": _dq2} if _dq2 else {}
                 _headers2 = _apply_user_default_headers(_extra2.get("default_headers"))
@@ -5094,9 +4993,7 @@ def resolve_provider_client(
 
         # Provider-specific headers
         headers = {}
-        if base_url_host_matches(base_url, "api.kimi.com"):
-            headers["User-Agent"] = "claude-code/0.1.0"
-        elif base_url_host_matches(base_url, "integrate.api.nvidia.com"):
+        if base_url_host_matches(base_url, "integrate.api.nvidia.com"):
             headers.update(build_nvidia_nim_headers(base_url))
         else:
             # Fall back to profile.default_headers for providers that declare
@@ -6480,12 +6377,6 @@ def _build_call_kwargs(
         "messages": messages,
         "timeout": timeout,
     }
-
-    fixed_temperature = _fixed_temperature_for_model(model, base_url)
-    if fixed_temperature is OMIT_TEMPERATURE:
-        temperature = None  # strip — let server choose
-    elif fixed_temperature is not None:
-        temperature = fixed_temperature
 
     # Opus 4.7+ rejects any non-default temperature/top_p/top_k — silently
     # drop here so auxiliary callers that hardcode temperature (e.g. 0 on

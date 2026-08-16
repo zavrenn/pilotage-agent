@@ -586,16 +586,15 @@ def build_turn_context(
     agent._vision_supported = True
 
     # Pre-turn connection health check: clean up dead TCP connections.
-    if agent.api_mode != "anthropic_messages":
-        try:
-            if agent._cleanup_dead_connections():
-                agent._emit_status(
-                    "🔌 Detected stale connections from a previous provider "
-                    "issue — cleaned up automatically. Proceeding with fresh "
-                    "connection."
-                )
-        except Exception:
-            pass
+    try:
+        if agent._cleanup_dead_connections():
+            agent._emit_status(
+                "🔌 Detected stale connections from a previous provider "
+                "issue — cleaned up automatically. Proceeding with fresh "
+                "connection."
+            )
+    except Exception:
+        pass
     # Replay compression warning through status_callback for gateway platforms.
     if agent._compression_warning:
         agent._replay_compression_warning()

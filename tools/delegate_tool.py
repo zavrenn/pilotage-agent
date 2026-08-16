@@ -4288,13 +4288,10 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
         ):
             provider = "openai-codex"
             api_mode = "codex_responses"
-        elif base_url_hostname(configured_base_url) == "api.anthropic.com":
-            provider = "anthropic"
-            api_mode = "anthropic_messages"
 
         # Explicit delegation.api_mode in config always wins. Lets users force
         # a transport for non-standard endpoints the URL heuristic can't detect.
-        if configured_api_mode in {"chat_completions", "codex_responses", "anthropic_messages"}:
+        if configured_api_mode in {"chat_completions", "codex_responses"}:
             api_mode = configured_api_mode
 
         return {

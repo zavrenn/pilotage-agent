@@ -75,12 +75,6 @@ from agent.model_metadata import (
     save_context_length,
 )
 from agent.process_bootstrap import _install_safe_stdio
-from agent.prompt_caching import (
-    build_prompt_cache_plan,
-    effective_cache_ttl,
-    strip_anthropic_cache_control,
-    strip_anthropic_tool_cache_control,
-)
 from agent.retry_utils import (
     adaptive_rate_limit_backoff,
     is_zai_coding_overload_error,
@@ -307,54 +301,6 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
     agent._stream_needs_break = True
 
 
-def _is_copilot_provider(agent: Any) -> bool:
-    """Delegate to ``AIAgent._is_copilot_provider`` (single owner of the check).
-
-    ``agent.provider`` is not always the normalized ``copilot`` slug —
-    ``/model`` and profile configs can leave the alias ``github-copilot`` (or
-    ``github``) in place, and a bare ``provider == "copilot"`` gate silently
-    skips credential recovery for those spellings.
-    """
-    try:
-        return bool(agent._is_copilot_provider())
-    except Exception:
-        return (getattr(agent, "provider", "") or "").strip().lower() in {
-            "copilot",
-            "github-copilot",
-            "github",
-        }
-
-
-def _is_stale_copilot_credential_error(status_code: Optional[int], error_message: str) -> bool:
-    """Detect a Copilot 400 that is really a STALE / DEGRADED credential.
-
-    Copilot surfaces a stale or degraded credential as an HTTP 400 rather than a
-    clean 401. Two body markers indicate this class:
-
-    - ``model_not_available_for_integrator`` — the request reached the
-      restricted ``copilot-language-server`` integrator (the server's fallback
-      when it receives a raw OAuth token instead of an exchanged API token),
-      whose model allowlist omits enterprise-only models.
-    - ``model_not_supported`` / "the requested model is not supported" — the
-      cached bearer's Copilot entitlement rotated out from under a long-lived
-      process.
-
-    Matched narrowly (status 400 AND a specific marker) so a genuinely wrong
-    model name — a real 400 — never triggers the single-shot re-exchange. The
-    caller enforces copilot-provider scoping and the single-shot guard.
-    """
-    lowered = (error_message or "").lower()
-    is_400 = status_code == 400 or "error code: 400" in lowered
-    if not is_400:
-        return False
-    return (
-        "model_not_available_for_integrator" in lowered
-        or "not available for integrator" in lowered
-        or "model_not_supported" in lowered
-        or "the requested model is not supported" in lowered
-    )
-
-
 def _image_error_max_dimension(error: Exception) -> Optional[int]:
     """Extract a provider-reported image dimension ceiling, if present."""
     parts = []
@@ -382,50 +328,6 @@ def _image_error_max_dimension(error: Exception) -> Optional[int]:
     if 512 <= max_dimension <= 8000:
         return max_dimension
     return None
-
-
-def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str]:
-    """Return a user-facing error when Ollama is loaded with too little context."""
-    if not getattr(agent, "tools", None):
-        return None
-
-    runtime_ctx = getattr(agent, "_ollama_num_ctx", None)
-    if not isinstance(runtime_ctx, int) or runtime_ctx <= 0:
-        return None
-    if runtime_ctx >= MINIMUM_CONTEXT_LENGTH:
-        return None
-
-    model = getattr(agent, "model", "") or "the selected model"
-    base_url = getattr(agent, "base_url", "") or "unknown base URL"
-    provider = getattr(agent, "provider", "") or "unknown"
-    tool_count = len(getattr(agent, "tools", None) or [])
-
-    logger.warning(
-        "Ollama runtime context too small for Pilotage tool use: "
-        "model=%s provider=%s base_url=%s runtime_context=%d "
-        "minimum_context=%d estimated_request_tokens=%d tool_count=%d "
-        "session=%s",
-        model,
-        provider,
-        base_url,
-        runtime_ctx,
-        MINIMUM_CONTEXT_LENGTH,
-        request_tokens,
-        tool_count,
-        getattr(agent, "session_id", None) or "none",
-    )
-
-    return (
-        f"Ollama loaded `{model}` with only {runtime_ctx:,} tokens of runtime "
-        f"context, but Pilotage needs at least {MINIMUM_CONTEXT_LENGTH:,} tokens "
-        "for reliable tool use.\n\n"
-        "Increase the Ollama context for this model and restart/reload the "
-        "model before trying again. A known-good starting point is 65,536 "
-        "tokens. In Pilotage config, set `model.ollama_num_ctx: 65536` "
-        "(and `model.context_length: 65536` if you also override the displayed "
-        "model context). If you manage the model through an Ollama Modelfile, "
-        "set `PARAMETER num_ctx 65536` there instead."
-    )
 
 
 def _ra():
@@ -665,20 +567,6 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
         from agent.system_prompt import restore_plugin_prompt_sections
 
         restore_plugin_prompt_sections(agent, stored_prompt)
-        # Reconstruct the cross-session-stable prefix for the early cache
-        # breakpoint. The static prefix is not persisted (only the full
-        # prompt is), so gateway surfaces that build a fresh AIAgent per
-        # turn would otherwise lose the two-block system layout after the
-        # first turn — flip-flopping the wire shape mid-conversation and
-        # silently degrading to the legacy single-breakpoint layout.
-        #
-        # ``reconstruct_static_prefix`` gates on ``_use_prompt_caching`` (so
-        # non-Anthropic routes skip the rebuild), applies the startswith
-        # safety gate (stored prompt bytes are never rewritten), and
-        # fails open to the legacy cache layout.
-        from agent.system_prompt import reconstruct_static_prefix
-
-        reconstruct_static_prefix(agent, system_message=system_message)
         return
     if stored_prompt:
         stored_state = "stale_runtime"
@@ -1221,86 +1109,6 @@ def _sync_failover_system_message(agent, api_messages, active_system_prompt):
         if not _rewrite_system_content_blocks(api_messages[0], effective):
             api_messages[0]["content"] = effective
     return sp
-
-
-def _ensure_cached_system_prompt_static(agent, system_message=None) -> None:
-    """Rebuild ``_cached_system_prompt_static`` when caching becomes active.
-
-    Sessions restored under a cache-off primary skip the static-prefix rebuild
-    (gated on ``_use_prompt_caching`` at restore time). A later failover to a
-    cache-on provider would otherwise redecorate with ``static_system_prefix=
-    None`` and silently fall back to the legacy system-plus-3 layout.
-
-    Thin wrapper over :func:`agent.system_prompt.reconstruct_static_prefix`,
-    which memoizes failed rebuilds so this stays cheap on the retry-loop hot
-    path (it runs at the top of every attempt).
-    """
-    from agent.system_prompt import reconstruct_static_prefix
-
-    reconstruct_static_prefix(
-        agent, system_message=system_message, log_label="failover redecoration"
-    )
-
-
-def _redecorate_prompt_cache_for_provider(
-    agent,
-    api_messages: List[Dict[str, Any]],
-    *,
-    system_message=None,
-    tools_for_api: Optional[List[Dict[str, Any]]] = None,
-) -> tuple[List[Dict[str, Any]]] | tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Strip and re-apply cache_control for the *current* provider policy.
-
-    Decoration runs once per call block before the retry loop for the primary
-    provider. ``try_activate_fallback`` refreshes ``_use_prompt_caching`` /
-    ``_use_native_cache_layout`` but the nine failover ``continue`` paths reused
-    the old ``api_messages``. Mirror ``_reapply_reasoning_echo_for_provider``
-    by reshaping at the top of each retry attempt.
-
-    The source list is the mutated in-flight request (image shrink / ASCII /
-    reasoning_details recoveries already applied), never a pristine
-    pre-decoration snapshot.
-    """
-    messages: List[Dict[str, Any]] = [
-        dict(m) if isinstance(m, dict) else m for m in (api_messages or [])
-    ]
-
-    strip_anthropic_cache_control(messages)
-    planned_tools = strip_anthropic_tool_cache_control(
-        tools_for_api if tools_for_api is not None else getattr(agent, "tools", [])
-    )
-
-    # Direct attribute access matches the call-block decoration site — the
-    # flags are unconditionally initialized on AIAgent, and a getattr
-    # default here would mask a real init bug as silent cache-off.
-    if agent._use_prompt_caching:
-        _ensure_cached_system_prompt_static(agent, system_message=system_message)
-        static = getattr(agent, "_cached_system_prompt_static", None)
-        direct_tool_cache = getattr(
-            agent,
-            "_direct_native_anthropic_tool_cache_capability",
-            lambda: False,
-        )()
-        plan = build_prompt_cache_plan(
-            messages,
-            planned_tools,
-            # Clamp per-destination: a configured 1h regresses to 5m on
-            # Qwen/Alibaba routes, whose context cache is 5m-only.
-            cache_ttl=effective_cache_ttl(
-                agent._cache_ttl,
-                provider=agent.provider,
-                model=agent.model,
-            ),
-            native_anthropic=agent._use_native_cache_layout,
-            static_system_prefix=static if isinstance(static, str) else None,
-            direct_native_tool_cache=direct_tool_cache,
-        )
-        messages = plan.messages
-        planned_tools = plan.tools
-
-    if tools_for_api is None:
-        return messages
-    return messages, planned_tools
 
 
 def _apply_context_engine_selection(
@@ -2040,28 +1848,6 @@ def run_conversation(
         # last also keeps breakpoints off messages that the orphan sweep or
         # the thinking-only drop is about to remove or merge away.
         tools_for_api = agent.tools
-        if agent._use_prompt_caching:
-            _static_system_prefix = getattr(agent, "_cached_system_prompt_static", None)
-            _initial_cache_plan = build_prompt_cache_plan(
-                api_messages,
-                tools_for_api,
-                # Clamp per-destination: a configured 1h regresses to 5m on
-                # Qwen/Alibaba routes, whose context cache is 5m-only.
-                cache_ttl=effective_cache_ttl(
-                    agent._cache_ttl,
-                    provider=agent.provider,
-                    model=agent.model,
-                ),
-                native_anthropic=agent._use_native_cache_layout,
-                static_system_prefix=(
-                    _static_system_prefix
-                    if isinstance(_static_system_prefix, str)
-                    else None
-                ),
-                direct_native_tool_cache=agent._direct_native_anthropic_tool_cache_capability(),
-            )
-            api_messages = _initial_cache_plan.messages
-            tools_for_api = _initial_cache_plan.tools
 
         # One image-stripped message estimate feeds both figures. Was: a
         # str(msg) char walk (re-serialized base64 every call) + a second
@@ -2346,18 +2132,6 @@ def run_conversation(
                 # unless the active provider needs it) so the fallback request
                 # isn't sent with stale, primary-shaped reasoning fields.
                 agent._reapply_reasoning_echo_for_provider(api_messages)
-                # Same story for prompt-cache decoration: try_activate_
-                # fallback refreshes the policy flags, but the decorated list
-                # still carries the primary's breakpoints (or none). Strip and
-                # re-render for the current provider before building kwargs.
-                api_messages, tools_for_api = (
-                    _redecorate_prompt_cache_for_provider(
-                        agent,
-                        api_messages,
-                        system_message=system_message,
-                        tools_for_api=tools_for_api,
-                    )
-                )
                 if tools_for_api == agent.tools:
                     api_kwargs = agent._build_api_kwargs(api_messages)
                 else:
@@ -2381,17 +2155,8 @@ def run_conversation(
                     api_kwargs = agent._get_transport().preflight_kwargs(
                         api_kwargs,
                         allow_stream=False,
-                        is_github_responses=agent._is_copilot_url(),
                         sanitize_harmony_tokens=agent._is_codex_backend(),
                     )
-                # Copilot x-initiator: the first API call of a user turn is
-                # marked "user" so Copilot bills a premium request; tool-loop
-                # follow-ups keep the default "agent" header.
-                if getattr(agent, "_is_user_initiated_turn", False) and agent._is_copilot_url():
-                    _xh = dict(api_kwargs.get("extra_headers") or {})
-                    _xh["x-initiator"] = "user"
-                    api_kwargs["extra_headers"] = _xh
-                    agent._is_user_initiated_turn = False
                 try:
                     from pilotage_cli.middleware import apply_llm_request_middleware
 
@@ -2508,15 +2273,11 @@ def run_conversation(
                 # session instead of re-failing every retry.
                 if getattr(agent, "_disable_streaming", False):
                     _use_streaming = False
-                # CopilotACPClient communicates via subprocess stdio and
+                # An ACP subprocess client communicates via stdio / TCP and
                 # returns a plain SimpleNamespace — not an iterable
                 # stream.  Mirror the ACP exclusion used for Responses
                 # API upgrade (lines ~1083-1085).
-                elif (
-                    agent.provider in {"copilot-acp"}
-                    or str(agent.base_url or "").lower().startswith("acp://copilot")
-                    or str(agent.base_url or "").lower().startswith("acp+tcp://")
-                ):
+                elif str(agent.base_url or "").lower().startswith("acp+tcp://"):
                     _use_streaming = False
                 elif not agent._has_stream_consumers():
                     # No display/TTS consumer. Still prefer streaming for
@@ -2531,7 +2292,6 @@ def run_conversation(
                         next_api_kwargs = agent._get_transport().preflight_kwargs(
                             next_api_kwargs,
                             allow_stream=False,
-                            is_github_responses=agent._is_copilot_url(),
                             sanitize_harmony_tokens=agent._is_codex_backend(),
                         )
                     if _use_streaming:
@@ -2686,14 +2446,6 @@ def run_conversation(
                                     )
                                     response_invalid = True
                                     error_details.append("response.output is empty")
-                elif agent.api_mode == "anthropic_messages":
-                    _tv = agent._get_transport()
-                    if not _tv.validate_response(response):
-                        response_invalid = True
-                        if response is None:
-                            error_details.append("response is None")
-                        else:
-                            error_details.append("response.content invalid (not a non-empty list)")
                 else:
                     _ctv = agent._get_transport()
                     if not _ctv.validate_response(response):
@@ -2911,9 +2663,6 @@ def run_conversation(
                         finish_reason = "content_filter"
                     else:
                         finish_reason = "stop"
-                elif agent.api_mode == "anthropic_messages":
-                    _tfr = agent._get_transport()
-                    finish_reason = _tfr.map_finish_reason(response.stop_reason)
                 else:
                     _cc_fr = agent._get_transport()
                     _finish_result = _cc_fr.normalize_response(response)
@@ -2946,12 +2695,7 @@ def run_conversation(
                 # configured fallback once, otherwise return the refusal.
                 if finish_reason == "content_filter":
                     _refusal_transport = agent._get_transport()
-                    if agent.api_mode == "anthropic_messages":
-                        _refusal_result = _refusal_transport.normalize_response(
-                            response, strip_tool_prefix=agent._is_anthropic_oauth
-                        )
-                    else:
-                        _refusal_result = _refusal_transport.normalize_response(response)
+                    _refusal_result = _refusal_transport.normalize_response(response)
                     _refusal_text = (getattr(_refusal_result, "content", None) or "").strip()
                     # Some refusals carry the explanation only in the reasoning
                     # channel; fall back to it so the user sees *something*.
@@ -3056,12 +2800,7 @@ def run_conversation(
                     # would have been appended in the non-truncated path.
                     _trunc_msg = None
                     _trunc_transport = agent._get_transport()
-                    if agent.api_mode == "anthropic_messages":
-                        _trunc_result = _trunc_transport.normalize_response(
-                            response, strip_tool_prefix=agent._is_anthropic_oauth
-                        )
-                    else:
-                        _trunc_result = _trunc_transport.normalize_response(response)
+                    _trunc_result = _trunc_transport.normalize_response(response)
                     _trunc_msg = _trunc_result
 
                     _trunc_content = getattr(_trunc_msg, "content", None) if _trunc_msg else None
@@ -3128,7 +2867,7 @@ def run_conversation(
                             "error": _exhaust_error,
                         }
 
-                    if agent.api_mode in {"chat_completions", "anthropic_messages"}:
+                    if agent.api_mode == "chat_completions":
                         assistant_message = _trunc_msg
                         # ── Content-filter stream stall → fallback ──
                         # When the provider's output-layer safety filter (e.g.
@@ -3295,7 +3034,7 @@ def run_conversation(
                                 "error": "Response remained truncated after 4 continuation attempts",
                             }
 
-                    if agent.api_mode in {"chat_completions", "anthropic_messages"}:
+                    if agent.api_mode == "chat_completions":
                         assistant_message = _trunc_msg
                         if assistant_message is not None and _trunc_has_tool_calls:
                             _is_stub_stall = (
@@ -5042,17 +4781,6 @@ def run_conversation(
                 ) and not is_context_length_error
 
                 if is_client_error:
-                    # Copilot self-heal BEFORE fallback: a stale/degraded
-                    # credential surfaces as a 400
-                    # ``model_not_available_for_integrator`` /
-                    # ``model_not_supported`` (not a clean 401), so the 401
-                    # refresh path above never fired. Force a fresh token
-                    # exchange + client rebuild and retry once on the SAME
-                    # provider — a fresh 437-char API token routes to the
-                    # correct integrator and the model becomes available again.
-                    # Single-shot guard prevents looping on a genuinely
-                    # unavailable model. Copilot-scoped so other providers'
-                    # real 400s are untouched.
                     # Try fallback before aborting — a different provider may
                     # not have the same issue (rate limit, auth, etc.). Only
                     # announce the attempt when a fallback chain actually
@@ -5637,8 +5365,6 @@ def run_conversation(
         try:
             _transport = agent._get_transport()
             _normalize_kwargs = {}
-            if agent.api_mode == "anthropic_messages":
-                _normalize_kwargs["strip_tool_prefix"] = agent._is_anthropic_oauth
             normalized = _transport.normalize_response(response, **_normalize_kwargs)
             assistant_message = normalized
             finish_reason = normalized.finish_reason

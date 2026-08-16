@@ -23,7 +23,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from utils import base_url_host_matches, base_url_hostname
+from utils import base_url_host_matches
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 class PilotageOverlay:
     """Pilotage-specific provider metadata layered on top of models.dev."""
 
-    transport: str = "openai_chat"        # openai_chat | anthropic_messages | codex_responses
+    transport: str = "openai_chat"        # openai_chat | codex_responses
     is_aggregator: bool = False
     auth_type: str = "api_key"            # api_key | oauth_device_code | oauth_external | external_process
     extra_env_vars: Tuple[str, ...] = ()  # env vars models.dev doesn't list
@@ -66,7 +66,7 @@ class ProviderDef:
 
     id: str
     name: str
-    transport: str                        # openai_chat | anthropic_messages | codex_responses
+    transport: str                        # openai_chat | codex_responses
     api_key_env_vars: Tuple[str, ...]     # all env vars to check for API key
     base_url: str = ""
     base_url_env_var: str = ""
@@ -97,7 +97,6 @@ _LABEL_OVERRIDES: Dict[str, str] = {
 
 TRANSPORT_TO_API_MODE: Dict[str, str] = {
     "openai_chat": "chat_completions",
-    "anthropic_messages": "anthropic_messages",
     "codex_responses": "codex_responses",
 }
 
@@ -118,7 +117,7 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
     """Look up a built-in provider by id or alias.
 
     Resolution order:
-      1. Pilotage overlays (for providers not in models.dev: nous, openai-codex, etc.)
+      1. Pilotage overlays (for providers not in models.dev: openai-codex, etc.)
       2. models.dev catalog + Pilotage overlay
 
     User-defined providers from config.yaml (``providers:`` / ``custom_providers:``)
@@ -217,34 +216,26 @@ def is_aggregator(provider: str) -> bool:
     return pdef.is_aggregator if pdef else False
 
 
-# Flat-namespace resellers (e.g. opencode-go, opencode-zen) are flagged
-# ``is_aggregator=True`` because their live ``/v1/models`` returns bare model
-# IDs ("deepseek-v4-flash") rather than ``vendor/model`` routing slugs — the
-# model-switch resolver relies on that flag to search their flat catalog
-# (see model_switch.py step d). But they are NOT routing aggregators: every
-# model they list is a first-party model served under their own subscription,
-# not a passthrough route to another provider's endpoint. The picker dedup
-# (build_models_payload) must treat them differently from true routers like
-# OpenRouter — a reseller's first-party "minimax-m3" must never be stripped
-# just because a user's custom proxy also happens to serve a same-named model.
-_FLAT_NAMESPACE_RESELLERS: frozenset[str] = frozenset({
-    # Use normalized provider IDs: normalize_provider("opencode-zen") -> "opencode".
-    "opencode-go",
-    "opencode",
-})
+# Flat-namespace resellers would be flagged ``is_aggregator=True`` because
+# their live ``/v1/models`` returns bare model IDs rather than
+# ``vendor/model`` routing slugs, while NOT being routing aggregators (every
+# model they list is first-party). None are defined in the OpenAI-only
+# registry; the mechanism below stays so a plugin reseller can be exempted
+# from routing-aggregator treatment with a one-line addition.
+_FLAT_NAMESPACE_RESELLERS: frozenset[str] = frozenset()
 
 
 def is_routing_aggregator(provider: str) -> bool:
-    """Return True only for TRUE routing aggregators (e.g. OpenRouter, named
-    ``custom:*`` proxies) — those that route bare/vendor-slugged model names
-    to *other* providers' endpoints.
+    """Return True only for TRUE routing aggregators (named ``custom:*``
+    proxies) — those that route bare/vendor-slugged model names to *other*
+    providers' endpoints.
 
     Distinct from :func:`is_aggregator`, which also reports True for
-    flat-namespace resellers (opencode-go/zen) whose catalog is entirely
-    first-party. Use this gate when the question is "would selecting this
-    model silently re-route the call away from the user's intended provider?"
-    — i.e. the picker dedup. Resellers answer no: their listed models are
-    their own, so their rows must not be deduped against user proxies.
+    flat-namespace resellers whose catalog is entirely first-party. Use this
+    gate when the question is "would selecting this model silently re-route
+    the call away from the user's intended provider?" — i.e. the picker
+    dedup. Resellers answer no: their listed models are their own, so their
+    rows must not be deduped against user proxies.
     """
     provider_norm = normalize_provider(provider or "")
     if provider_norm in _FLAT_NAMESPACE_RESELLERS:
@@ -279,7 +270,6 @@ def host_mandated_api_mode(base_url: str = "") -> Optional[str]:
     Some hosts only accept one API mode and reject the others outright:
       - api.openai.com only accepts the Responses API for its (reasoning)
         models when tools + reasoning are in play (chat/completions 400s).
-      - api.anthropic.com / ``…/anthropic`` suffixes speak native Messages.
 
     These are *mandatory* — a session carrying a stale api_mode (e.g. a
     /model switch that kept the previous provider's ``chat_completions``)
@@ -289,17 +279,12 @@ def host_mandated_api_mode(base_url: str = "") -> Optional[str]:
     """
     if not base_url:
         return None
-    url_lower = base_url.rstrip("/").lower()
-    hostname = base_url_hostname(base_url)
-    # Exact-hostname matching only — never bare substring — so lookalike hosts
-    # (api.openai.com.attacker.test) and path-segment spoofs
-    # (proxy.test/api.openai.com/v1) are NOT treated as the real endpoint.
-    if hostname == "api.anthropic.com" or url_lower.endswith("/anthropic"):
-        return "anthropic_messages"
     # Official OpenAI host family: canonical + data-residency regional hosts
     # (us./eu.api.openai.com) all mandate the Responses API for reasoning
     # models with tools. Shared predicate keeps this lane in lockstep with
-    # catalog filtering and listing authority.
+    # catalog filtering and listing authority. Hostname-parsed matching only
+    # — never substring — so lookalike hosts (api.openai.com.attacker.test)
+    # and path-segment spoofs (proxy.test/api.openai.com/v1) are rejected.
     if is_official_openai_host(base_url):
         return "codex_responses"
     return None
@@ -499,10 +484,9 @@ def resolve_provider_full(
     # 0. User-defined config providers win over the built-in alias table.
     #    A user who declares ``providers.<name>`` in config.yaml has stated
     #    explicit intent for that name — it must not be hijacked by a legacy
-    #    vendor alias (e.g. bare "openai" → "openrouter"). Resolve the raw
-    #    name against user config FIRST so a configured ``providers.openai``
-    #    (pointing at api.openai.com) beats the alias that would otherwise
-    #    silently route to OpenRouter. Only the raw (pre-alias) name is tried
+    #    vendor alias. Resolve the raw name against user config FIRST so a
+    #    configured ``providers.<name>`` beats any alias that would otherwise
+    #    silently route it elsewhere. Only the raw (pre-alias) name is tried
     #    here; canonical/alias resolution still happens below.
     if user_providers:
         user_pdef = resolve_user_provider(raw, user_providers)
@@ -512,9 +496,9 @@ def resolve_provider_full(
     # 0.5 Exact Pilotage provider IDs must win over LOSSY alias collapsing.
     # A collapse is lossy only when MULTIPLE distinct registry providers
     # normalize to the same canonical name — resolving through the alias
-    # would then lose which one the caller meant. Single-entry rewrites
-    # (e.g. "copilot" → "github-copilot") are correct routing and must keep
-    # resolving through the built-in chain below so overlay transports apply.
+    # would then lose which one the caller meant. Single-entry rewrites are
+    # correct routing and must keep resolving through the built-in chain
+    # below so overlay transports apply.
     if canonical != raw:
         try:
             from pilotage_cli.auth import PROVIDER_REGISTRY as _AUTH_PROVIDER_REGISTRY

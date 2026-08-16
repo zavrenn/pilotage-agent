@@ -18,7 +18,6 @@ from pilotage_cli.colors import Colors, color
 from pilotage_cli.config import get_env_path, get_env_value, get_pilotage_home, load_config
 from pilotage_cli.models import provider_label
 from pilotage_cli.runtime_provider import resolve_requested_provider
-from pilotage_constants import OPENROUTER_MODELS_URL
 
 def check_mark(ok: bool) -> str:
     if ok:
@@ -82,22 +81,6 @@ def _effective_provider_label() -> str:
         effective = resolve_provider(requested)
     except AuthError:
         effective = requested or "auto"
-
-    if effective == "openrouter":
-        # A custom endpoint may be configured either in config.yaml
-        # (model.base_url — the canonical location; the runtime treats
-        # config.yaml as the single source of truth) or via the legacy
-        # OPENAI_BASE_URL env var. Either way, labeling it "OpenRouter"
-        # is misleading.
-        config_base_url = ""
-        try:
-            model_cfg = load_config().get("model")
-            if isinstance(model_cfg, dict):
-                config_base_url = (model_cfg.get("base_url") or "").strip()
-        except Exception:
-            pass
-        if config_base_url or get_env_value("OPENAI_BASE_URL"):
-            effective = "custom"
 
     return provider_label(effective)
 
@@ -163,16 +146,7 @@ def show_status(args):
 
     # Values may be a single env var name (str) or a tuple of alternates (first found wins).
     keys: dict[str, str | tuple[str, ...]] = {
-        "OpenRouter": "OPENROUTER_API_KEY",
         "OpenAI": "OPENAI_API_KEY",
-        "Anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"),
-        "Google / Gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
-        "DeepSeek": "DEEPSEEK_API_KEY",
-        "NVIDIA NIM": "NVIDIA_API_KEY",
-        "Z.AI / GLM": "GLM_API_KEY",
-        "MiniMax": "MINIMAX_API_KEY",
-        "MiniMax-CN": "MINIMAX_CN_API_KEY",
-        "DeepInfra": "DEEPINFRA_API_KEY",
         "Firecrawl": "FIRECRAWL_API_KEY",
         "Tavily": "TAVILY_API_KEY",
         "Browser Use": "BROWSER_USE_API_KEY",  # Optional — local browser works without this
@@ -193,20 +167,10 @@ def show_status(args):
         return get_env_value(env_ref) or ""
 
     for name, env_ref in keys.items():
-        # Anthropic already has a dedicated lookup below; keep that as the
-        # single source of truth (it also resolves OAuth tokens), skip here
-        # so we don't print two "Anthropic" rows.
-        if name == "Anthropic":
-            continue
         value = _resolve_env(env_ref)
         has_key = bool(value)
         display = redact_key(value)
         print(f"  {name:<12}  {check_mark(has_key)} {display}")
-
-    from pilotage_cli.auth import get_anthropic_key
-    anthropic_value = get_anthropic_key()
-    anthropic_display = redact_key(anthropic_value)
-    print(f"  {'Anthropic':<12}  {check_mark(bool(anthropic_value))} {anthropic_display}")
 
     # =========================================================================
     # Auth Providers (OAuth)
@@ -474,21 +438,6 @@ def show_status(args):
     if deep:
         print()
         print(color("◆ Deep Checks", Colors.CYAN, Colors.BOLD))
-        
-        # Check OpenRouter connectivity
-        openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
-        if openrouter_key:
-            try:
-                import httpx
-                response = httpx.get(
-                    OPENROUTER_MODELS_URL,
-                    headers={"Authorization": f"Bearer {openrouter_key}"},
-                    timeout=10
-                )
-                ok = response.status_code == 200
-                print(f"  OpenRouter:   {check_mark(ok)} {'reachable' if ok else f'error ({response.status_code})'}")
-            except Exception as e:
-                print(f"  OpenRouter:   {check_mark(False)} error: {e}")
         
         # Check gateway port
         try:

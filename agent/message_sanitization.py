@@ -81,7 +81,7 @@ def _sanitize_messages_surrogates(messages: list) -> bool:
     metadata/arguments, AND any additional string or nested structured fields
     (``reasoning``, ``reasoning_content``, ``reasoning_details``, etc.) so
     retries don't fail on a non-content field.  Byte-level reasoning models
-    (xiaomi/mimo, kimi, glm) can emit lone surrogates in reasoning output
+    can emit lone surrogates in reasoning output
     that flow through to ``api_messages["reasoning_content"]`` on the next
     turn and crash json.dumps inside the OpenAI SDK.
     """
@@ -125,7 +125,7 @@ def _sanitize_messages_surrogates(messages: list) -> bool:
                         found = True
         # Walk any additional string / nested fields (reasoning,
         # reasoning_content, reasoning_details, etc.) — surrogates from
-        # byte-level reasoning models (xiaomi/mimo, kimi, glm) can lurk
+        # byte-level reasoning models can lurk
         # in these fields and aren't covered by the per-field checks above.
         # Matches _sanitize_messages_non_ascii's coverage.
         for key, value in msg.items():
@@ -494,12 +494,6 @@ __all__ = [
     "deterministic_call_id",
     "coalesce_tool_call_id",
     "uniquify_tool_call_ids",
-    # reasoning_content policy owners (F4 consolidation)
-    "reasoning_echo_family",
-    "matches_reasoning_echo_family",
-    "needs_reasoning_echo",
-    "apply_reasoning_content_policy",
-    "reapply_reasoning_echo",
 ]
 
 
@@ -552,13 +546,11 @@ def uniquify_tool_call_ids(tool_calls: list) -> list:
     """Ensure every tool call in a single assistant turn has a distinct id.
 
     Some models/providers reuse one call id across different calls in a
-    single batch (observed with native Kimi Responses replays, Ollama-
-    compatible endpoints, and degraded models at long context; same bug
-    class as openclaw/ /). Duplicate ids are lossy
-    downstream: the pre-API sanitizer keeps only the first call/result
-    pair per id, so the later call's result silently vanishes
-    from every replayed payload, and strict providers (Anthropic
-    tool_use, DeepSeek) reject duplicate ids outright.
+    single batch (observed with OpenAI-compatible endpoints and degraded models
+    at long context). Duplicate ids are lossy downstream: the pre-API
+    sanitizer keeps only the first call/result pair per id, so the later
+    call's result silently vanishes from every replayed payload, and
+    strict providers reject duplicate ids outright.
 
     The first occurrence keeps its id; later collisions get a
     deterministic ``<id>_d<n>`` suffix — never a random UUID, which would
@@ -627,237 +619,10 @@ def uniquify_tool_call_ids(tool_calls: list) -> list:
     return tool_calls
 
 
-# ---------------------------------------------------------------------------
-# reasoning_content policy — single owner (audit F4)
-# ---------------------------------------------------------------------------
-#
-# The strip-vs-repad decision was previously forked across the wire files in
-# separate incident commits (2b3a4f0af8 strip for strict providers,
-# b5495db701 re-pad for require-side, 94b3131be7/9a9f8a6d99 kimi pad).  The
-# POLICY — which provider direction gets which treatment — lives here as one
-# rule table + apply functions; adapters keep only SYNTAX mapping (e.g.
-# anthropic_adapter turning reasoning_content into a thinking block).
-#
-# Direction table:
-#   require-side (echo-back enforced; replays 400 without the field):
-#     kimi     — host api.kimi.com / moonshot.ai / moonshot.cn.
-#                Host-driven on purpose: aggregators re-exporting kimi
-#                models reject the echo.
-#     deepseek — provider "deepseek", model contains "deepseek", or host
-# api.deepseek.com (; V4 rejects empty-string pads,
-# hence the " " single-space pad,).
-#     mimo     — provider "xiaomi", model contains "mimo", or host
-#                *.xiaomimimo.com.
-#   strict side (field rejected with 400/422 "Extra inputs are not
-#     permitted"): everyone else — Mistral, Cerebras, Groq, SambaNova, …
-# Strip the key entirely, even a single-space pad.
-
-_REASONING_ECHO_RULES: tuple = (
-    # (family, exact providers (raw), exact providers (lowered),
-    #  model substrings (lowered), base_url hosts)
-    ("kimi", frozenset(), frozenset(), (),
-     ("api.kimi.com", "moonshot.ai", "moonshot.cn")),
-    ("deepseek", frozenset(), frozenset({"deepseek"}), ("deepseek",),
-     ("api.deepseek.com",)),
-    ("mimo", frozenset(), frozenset({"xiaomi"}), ("mimo",),
-     ("api.xiaomimimo.com", "xiaomimimo.com")),
-)
-
-
-def _family_rule(family: str) -> tuple:
-    for rule in _REASONING_ECHO_RULES:
-        if rule[0] == family:
-            return rule
-    raise KeyError(family)
-
-
-def matches_reasoning_echo_family(
-    family: str, provider: Any, model: Any, base_url: Any
-) -> bool:
-    """True when (provider, model, base_url) matches one echo-back family.
-
-    Families can overlap (e.g. a deepseek-named model pointed at a kimi
-    host); this membership test is independent per family so per-family
-    predicates keep their original semantics.
-    """
-    from utils import base_url_host_matches
-
-    _, raw_providers, lowered_providers, model_subs, hosts = _family_rule(family)
-    provider_lower = (provider or "").lower()
-    model_lower = (model or "").lower()
-    if provider in raw_providers or provider_lower in lowered_providers:
-        return True
-    if any(sub in model_lower for sub in model_subs):
-        return True
-    return any(base_url_host_matches(base_url, host) for host in hosts)
-
-
-def reasoning_echo_family(provider: Any, model: Any, base_url: Any) -> "str | None":
-    """Classify the provider direction for the reasoning_content echo policy.
-
-    Returns ``"kimi"``, ``"deepseek"``, or ``"mimo"`` (first match in table
-    order) when the target endpoint enforces reasoning_content echo-back on
-    assistant turns, else ``None`` (strict/indifferent side — the field must
-    be stripped).
-    """
-    for rule in _REASONING_ECHO_RULES:
-        if matches_reasoning_echo_family(rule[0], provider, model, base_url):
-            return rule[0]
-    return None
-
-
-def needs_reasoning_echo(provider: Any, model: Any, base_url: Any) -> bool:
-    """True when the endpoint requires reasoning_content echo-back."""
-    return reasoning_echo_family(provider, model, base_url) is not None
-
-
-def apply_reasoning_content_policy(
-    source_msg: dict, api_msg: dict, needs_thinking_pad: bool
-) -> None:
-    """Copy provider-facing reasoning fields onto an API replay message.
-
-    ``needs_thinking_pad`` is the require-side flag (see
-    ``needs_reasoning_echo`` / the agent's cached
-    ``_needs_thinking_reasoning_pad``). Mutates ``api_msg`` in place.
-    """
-    if source_msg.get("role") != "assistant":
-        return
-
-    # 1. Explicit reasoning_content already set.
-    #
-    # When the active provider enforces the thinking-mode echo-back
-    # (DeepSeek / Kimi / MiMo), preserve it verbatim — that includes their
-    # own space-placeholder written at creation time and any valid reasoning
-    # from the same provider. Sessions persisted BEFORE have
-    # empty-string placeholders pinned at creation time; DeepSeek V4 Pro
-    # rejects those with HTTP 400, so upgrade "" → " " on replay.
-    #
-    # When the active provider does NOT enforce echo-back, strip the field
-    # entirely. Strict OpenAI-compatible providers (Mistral, Cerebras, Groq,
-    # SambaNova, …) reject ANY reasoning_content key in input messages with
-    # HTTP 400/422 ("Extra inputs are not permitted"), even an empty string
-    # or a single-space pad. This is the cross-provider fallback case: a
-    # reasoning primary (DeepSeek/Kimi/MiMo) pads history with " ", then a
-    # fallback to a strict provider replays that pad and 422s. Stripping
-    # here covers the rebuild path; ``reapply_reasoning_echo`` covers the
-    # already-built api_messages path. Refs.
-    existing = source_msg.get("reasoning_content")
-    if isinstance(existing, str):
-        if not needs_thinking_pad:
-            api_msg.pop("reasoning_content", None)
-        elif existing == "":
-            api_msg["reasoning_content"] = " "
-        else:
-            api_msg["reasoning_content"] = existing
-        return
-
-    # 2. Cross-provider poisoned history: on DeepSeek/Kimi,
-    # if the source turn has tool_calls AND a 'reasoning' field but no
-    # 'reasoning_content' key, the 'reasoning' text was written by a
-    # prior provider (e.g. MiniMax) — DeepSeek's own _build_assistant_message
-    # pins reasoning_content at creation time for tool-call turns, so the
-    # shape (reasoning set, reasoning_content absent, tool_calls present)
-    # is unreachable from same-provider DeepSeek history after this fix.
-    # Inject a single space to satisfy the API without leaking another
-    # provider's chain of thought to DeepSeek/Kimi. Space (not "")
-    # because DeepSeek V4 Pro rejects empty-string reasoning_content
-    # in thinking mode (refs).
-    normalized_reasoning = source_msg.get("reasoning")
-    if (
-        needs_thinking_pad
-        and source_msg.get("tool_calls")
-        and isinstance(normalized_reasoning, str)
-        and normalized_reasoning
-    ):
-        api_msg["reasoning_content"] = " "
-        return
-
-    # 3. Healthy session: promote 'reasoning' field to 'reasoning_content'
-    # for providers that use the internal 'reasoning' key.
-    # This must happen before the unconditional empty-string fallback so
-    # genuine reasoning content is not overwritten regression in
-    #). Only promote for providers that enforce echo-back —
-    # strict providers reject the field (refs).
-    if isinstance(normalized_reasoning, str) and normalized_reasoning:
-        if needs_thinking_pad:
-            api_msg["reasoning_content"] = normalized_reasoning
-        else:
-            api_msg.pop("reasoning_content", None)
-        return
-
-    # 4. DeepSeek / Kimi thinking mode: all assistant messages need
-    # reasoning_content. Inject a single space to satisfy the provider's
-    # requirement when no explicit reasoning content is present. Covers
-    # both tool-call turns (already-poisoned history with no reasoning
-    # at all) and plain text turns. Space (not "") because DeepSeek V4
-    # Pro tightened validation and rejects empty string with HTTP 400
-    # ("The reasoning content in the thinking mode must be passed back
-    # to the API"). Refs.
-    if needs_thinking_pad:
-        api_msg["reasoning_content"] = " "
-        return
-
-    # 5. reasoning_content was present but not a string (e.g. None after
-    # context compaction).  Don't pass null to the API.
-    api_msg.pop("reasoning_content", None)
-
-
-def reapply_reasoning_echo(api_messages: list, needs_thinking_pad: bool) -> int:
-    """Re-pad (or strip) assistant turns' reasoning_content for the active provider.
-
-    ``api_messages`` is built once, before the retry loop, while the *primary*
-    provider is active.  A mid-conversation fallback can then switch providers,
-    so the reasoning fields baked into ``api_messages`` are shaped for the
-    *prior* provider and must be reconciled against the *current* one:
-
-    * Switching TO a require-side provider (DeepSeek / Kimi / MiMo thinking
-      mode): assistant turns built when the prior provider did NOT need the
-      echo-back go out without ``reasoning_content`` and the new provider
-      rejects them with HTTP 400 ("The reasoning_content in the thinking mode
-      must be passed back").  Re-apply the pad.
-
-    * Switching TO a strict provider that rejects the field (Mistral,
-      Cerebras, Groq, SambaNova, …): assistant turns built under a reasoning
-      primary carry a ``reasoning_content`` pad (often a single space ``" "``),
-      and the strict provider rejects it with HTTP 400/422 ("Extra inputs are
-      not permitted").  Strip the field.  This is the exact cross-provider
-      fallback bug from — a DeepSeek primary pads history with ``" "``,
-      the request falls back to Mistral, and Mistral 422s on the stale pad.
-
-    Calling this immediately before building the request kwargs reconciles the
-    fields against the *current* provider.  It is idempotent and safe to call
-    every iteration; it covers every fallback path.
-
-    Returns the number of assistant turns whose reasoning_content was added or
-    removed.
-    """
-    changed = 0
-    for api_msg in api_messages:
-        if api_msg.get("role") != "assistant":
-            continue
-        if needs_thinking_pad:
-            if api_msg.get("reasoning_content"):
-                continue
-            apply_reasoning_content_policy(api_msg, api_msg, needs_thinking_pad)
-            if api_msg.get("reasoning_content"):
-                changed += 1
-        else:
-            # Strict provider — strip any stale reasoning_content pad left
-            # over from a reasoning primary so the fallback request doesn't
-            # 400/422 on it.
-            if "reasoning_content" in api_msg:
-                api_msg.pop("reasoning_content", None)
-                changed += 1
-    return changed
-
-
-# ---------------------------------------------------------------------------
 # Image / multimodal parts — evaluated, NOT consolidated (verdict: syntax)
 # ---------------------------------------------------------------------------
 #
 # The per-adapter image handling is format-specific SYNTAX, not shared policy:
-#   * anthropic_adapter (~1817): data-URL → Anthropic `source: {type: base64}`
-#     block mapping — Anthropic wire shape only.
 #   * codex_responses_adapter (~113/165/812): chat `image_url` parts →
 #     Responses `input_image` items and image counting for log summaries —
 #     Responses wire shape only.

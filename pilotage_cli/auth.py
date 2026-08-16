@@ -112,7 +112,6 @@ AUTH_LOCK_TIMEOUT_SECONDS = 15.0
 ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120       # refresh 2 min before expiry
 DEVICE_AUTH_POLL_INTERVAL_CAP_SECONDS = 1     # poll at most every 1s
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
-DEFAULT_OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1"
 DEFAULT_ACTUAL_BASE_URL = "https://api.actual.inc/v1"
 DEFAULT_ACTUAL_LOCAL_BASE_URL = "http://127.0.0.1:8080/v1"
 CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -126,11 +125,6 @@ CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
 OAUTH_OVER_SSH_DOCS_URL = ""
 SERVICE_PROVIDER_NAMES: Dict[str, str] = {}
 
-# LM Studio's default no-auth mode still requires *some* non-empty bearer for
-# the API-key code paths (auxiliary_client, runtime resolver) to treat the
-# provider as configured. This sentinel is sent only to LM Studio, never to
-# any remote service.
-LMSTUDIO_NOAUTH_PLACEHOLDER = "dummy-lm-api-key"
 ACTUAL_LOCAL_NOAUTH_PLACEHOLDER = "dummy-actual-local-api-key"
 
 
@@ -202,207 +196,6 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         api_key_env_vars=("OPENAI_API_KEY",),
         base_url_env_var="OPENAI_BASE_URL",
     ),
-    "lmstudio": ProviderConfig(
-        id="lmstudio",
-        name="LM Studio",
-        auth_type="api_key",
-        inference_base_url="http://127.0.0.1:1234/v1",
-        api_key_env_vars=("LM_API_KEY",),
-        base_url_env_var="LM_BASE_URL",
-    ),
-    "gemini": ProviderConfig(
-        id="gemini",
-        name="Google AI Studio",
-        auth_type="api_key",
-        inference_base_url="https://generativelanguage.googleapis.com/v1beta",
-        api_key_env_vars=("GOOGLE_API_KEY", "GEMINI_API_KEY"),
-        base_url_env_var="GEMINI_BASE_URL",
-    ),
-    "zai": ProviderConfig(
-        id="zai",
-        name="Z.AI / GLM",
-        auth_type="api_key",
-        inference_base_url="https://api.z.ai/api/paas/v4",
-        api_key_env_vars=("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"),
-        base_url_env_var="GLM_BASE_URL",
-    ),
-    "arcee": ProviderConfig(
-        id="arcee",
-        name="Arcee AI",
-        auth_type="api_key",
-        inference_base_url="https://api.arcee.ai/api/v1",
-        api_key_env_vars=("ARCEEAI_API_KEY",),
-        base_url_env_var="ARCEE_BASE_URL",
-    ),
-    "gmi": ProviderConfig(
-        id="gmi",
-        name="GMI Cloud",
-        auth_type="api_key",
-        inference_base_url="https://api.gmi-serving.com/v1",
-        api_key_env_vars=("GMI_API_KEY",),
-        base_url_env_var="GMI_BASE_URL",
-    ),
-    "actual": ProviderConfig(
-        id="actual",
-        name="Actual Computer",
-        auth_type="api_key",
-        inference_base_url=DEFAULT_ACTUAL_BASE_URL,
-        api_key_env_vars=("ACTUAL_API_KEY",),
-        base_url_env_var="ACTUAL_BASE_URL",
-    ),
-    "minimax": ProviderConfig(
-        id="minimax",
-        name="MiniMax",
-        auth_type="api_key",
-        inference_base_url="https://api.minimax.io/anthropic",
-        api_key_env_vars=("MINIMAX_API_KEY",),
-        base_url_env_var="MINIMAX_BASE_URL",
-    ),
-    "anthropic": ProviderConfig(
-        id="anthropic",
-        name="Anthropic",
-        auth_type="api_key",
-        inference_base_url="https://api.anthropic.com",
-        # CLAUDE_CODE_OAUTH_TOKEN is NOT an API key, despite auth_type="api_key"
-        # and its place in this tuple. `claude setup-token` yields an
-        # `sk-ant-oat01…` OAuth token: sent as `x-api-key` it 401s, and sent as a
-        # bare Bearer it 429s. It is listed here because this tuple doubles as the
-        # credential-DISCOVERY list (agent/credential_pool.py builds its env scan
-        # from it), so removing it would stop Pilotage finding a setup-token
-        # credential at all. The adapter routes such a value down the OAuth path
-        # on the strength of its prefix, not on this entry. Only ANTHROPIC_API_KEY
-        # and ANTHROPIC_TOKEN are usable as literal API keys.
-        api_key_env_vars=("ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
-        base_url_env_var="ANTHROPIC_BASE_URL",
-    ),
-    "alibaba": ProviderConfig(
-        id="alibaba",
-        name="Qwen Cloud",
-        auth_type="api_key",
-        inference_base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        api_key_env_vars=("DASHSCOPE_API_KEY",),
-        base_url_env_var="DASHSCOPE_BASE_URL",
-    ),
-    "alibaba-coding-plan": ProviderConfig(
-        id="alibaba-coding-plan",
-        name="Alibaba Cloud (Coding Plan)",
-        auth_type="api_key",
-        inference_base_url="https://coding-intl.dashscope.aliyuncs.com/v1",
-        api_key_env_vars=("ALIBABA_CODING_PLAN_API_KEY", "DASHSCOPE_API_KEY"),
-        base_url_env_var="ALIBABA_CODING_PLAN_BASE_URL",
-    ),
-    "minimax-cn": ProviderConfig(
-        id="minimax-cn",
-        name="MiniMax (China)",
-        auth_type="api_key",
-        inference_base_url="https://api.minimaxi.com/anthropic",
-        api_key_env_vars=("MINIMAX_CN_API_KEY",),
-        base_url_env_var="MINIMAX_CN_BASE_URL",
-    ),
-    "deepseek": ProviderConfig(
-        id="deepseek",
-        name="DeepSeek",
-        auth_type="api_key",
-        inference_base_url="https://api.deepseek.com/v1",
-        api_key_env_vars=("DEEPSEEK_API_KEY",),
-        base_url_env_var="DEEPSEEK_BASE_URL",
-    ),
-    "nvidia": ProviderConfig(
-        id="nvidia",
-        name="NVIDIA NIM",
-        auth_type="api_key",
-        inference_base_url="https://integrate.api.nvidia.com/v1",
-        api_key_env_vars=("NVIDIA_API_KEY",),
-        base_url_env_var="NVIDIA_BASE_URL",
-    ),
-    "ai-gateway": ProviderConfig(
-        id="ai-gateway",
-        name="Vercel AI Gateway",
-        auth_type="api_key",
-        inference_base_url="https://ai-gateway.vercel.sh/v1",
-        api_key_env_vars=("AI_GATEWAY_API_KEY",),
-        base_url_env_var="AI_GATEWAY_BASE_URL",
-    ),
-    "opencode-zen": ProviderConfig(
-        id="opencode-zen",
-        name="OpenCode Zen",
-        auth_type="api_key",
-        inference_base_url="https://opencode.ai/zen/v1",
-        api_key_env_vars=("OPENCODE_ZEN_API_KEY",),
-        base_url_env_var="OPENCODE_ZEN_BASE_URL",
-    ),
-    "opencode-go": ProviderConfig(
-        id="opencode-go",
-        name="OpenCode Go",
-        auth_type="api_key",
-        # OpenCode Go mixes API surfaces by model:
-        # - GLM uses OpenAI-compatible chat completions under /v1
-        # - MiniMax models use Anthropic Messages under /v1/messages
-        # - Qwen 3.7 uses Anthropic Messages under /v1/messages
-        # Keep the provider base at /v1 and select api_mode per-model.
-        inference_base_url="https://opencode.ai/zen/go/v1",
-        api_key_env_vars=("OPENCODE_GO_API_KEY",),
-        base_url_env_var="OPENCODE_GO_BASE_URL",
-    ),
-    "kilocode": ProviderConfig(
-        id="kilocode",
-        name="Kilo Code",
-        auth_type="api_key",
-        inference_base_url="https://api.kilo.ai/api/gateway",
-        api_key_env_vars=("KILOCODE_API_KEY",),
-        base_url_env_var="KILOCODE_BASE_URL",
-    ),
-    "huggingface": ProviderConfig(
-        id="huggingface",
-        name="Hugging Face",
-        auth_type="api_key",
-        inference_base_url="https://router.huggingface.co/v1",
-        api_key_env_vars=("HF_TOKEN",),
-        base_url_env_var="HF_BASE_URL",
-    ),
-    "xiaomi": ProviderConfig(
-        id="xiaomi",
-        name="Xiaomi MiMo",
-        auth_type="api_key",
-        inference_base_url="https://api.xiaomimimo.com/v1",
-        api_key_env_vars=("XIAOMI_API_KEY",),
-        base_url_env_var="XIAOMI_BASE_URL",
-    ),
-    "tencent-tokenhub": ProviderConfig(
-        id="tencent-tokenhub",
-        name="Tencent TokenHub",
-        auth_type="api_key",
-        inference_base_url="https://tokenhub.tencentmaas.com/v1",
-        api_key_env_vars=("TOKENHUB_API_KEY",),
-        base_url_env_var="TOKENHUB_BASE_URL",
-    ),
-    "ollama-cloud": ProviderConfig(
-        id="ollama-cloud",
-        name="Ollama Cloud",
-        auth_type="api_key",
-        inference_base_url=DEFAULT_OLLAMA_CLOUD_BASE_URL,
-        api_key_env_vars=("OLLAMA_API_KEY",),
-        base_url_env_var="OLLAMA_BASE_URL",
-    ),
-    "vertex": ProviderConfig(
-        id="vertex",
-        name="Google Vertex AI",
-        auth_type="vertex",
-        # No static inference_base_url: Vertex's endpoint is computed per
-        # request from project_id + region (agent/vertex_adapter.py's
-        # build_vertex_base_url), not a fixed host like the other entries.
-        inference_base_url="",
-        api_key_env_vars=(),  # OAuth2 (service-account JSON / ADC), not a key
-        base_url_env_var="",
-    ),
-    "azure-foundry": ProviderConfig(
-        id="azure-foundry",
-        name="Azure Foundry",
-        auth_type="api_key",
-        inference_base_url="",  # User-provided endpoint
-        api_key_env_vars=("AZURE_FOUNDRY_API_KEY",),
-        base_url_env_var="AZURE_FOUNDRY_BASE_URL",
-    ),
 }
 
 # Auto-extend PROVIDER_REGISTRY with any api-key provider registered in
@@ -416,10 +209,8 @@ try:
         if _pp.auth_type != "api_key" or not _pp.env_vars:
             continue
         # Skip providers that need custom token resolution or are special-cased
-        # in resolve_provider() (copilot/zai have bespoke token refresh;
-        # openrouter/custom are aggregator/user-supplied and handled outside
-        # the registry — adding them here breaks runtime_provider resolution
-        # that relies on `openrouter not in PROVIDER_REGISTRY`).
+        # elsewhere (copilot/zai have bespoke token refresh; custom is
+        # user-supplied and resolved outside the registry).
         if _pp.name in {"copilot", "zai", "openrouter", "custom"}:
             continue
         _api_key_vars = tuple(v for v in _pp.env_vars if not v.endswith("_BASE_URL") and not v.endswith("_URL"))
@@ -438,31 +229,6 @@ try:
                 PROVIDER_REGISTRY[_alias] = PROVIDER_REGISTRY[_pp.name]
 except Exception:
     pass
-
-
-# =============================================================================
-# Anthropic Key Helper
-# =============================================================================
-
-def get_anthropic_key() -> str:
-    """Return the first usable Anthropic credential, or ``""``.
-
-    Checks both the ``.env`` file and the process environment, preferring
-    ``~/.pilotage/.env`` so a deliberate key rotation isn't shadowed by a stale
-    shell export (matches the api-key resolution path — see). The
-    order mirrors the ``PROVIDER_REGISTRY["anthropic"].api_key_env_vars``
-    tuple:
-
-        ANTHROPIC_API_KEY -> ANTHROPIC_TOKEN -> CLAUDE_CODE_OAUTH_TOKEN
-    """
-    from pilotage_cli.config import get_env_value_prefer_dotenv
-
-    for var in PROVIDER_REGISTRY["anthropic"].api_key_env_vars:
-        value = get_env_value_prefer_dotenv(var) or ""
-        if value:
-            return value
-    return ""
-
 
 
 _PLACEHOLDER_SECRET_VALUES = {
@@ -697,22 +463,6 @@ def _resolve_zai_base_url(api_key: str, default_url: str, env_override: str) -> 
     return default_url
 
 
-def _normalize_lmstudio_runtime_base_url(base_url: str) -> str:
-    """Return the OpenAI-compatible LM Studio runtime base URL.
-
-    LM Studio's native management API lives under ``/api/v1`` while its
-    OpenAI-compatible chat endpoint lives under ``/v1``. Users often paste
-    either form into ``LM_BASE_URL`` or ``model.base_url``; normalize before
-    the OpenAI SDK appends ``/chat/completions``.
-    """
-    root = str(base_url or "").strip().rstrip("/")
-    for suffix in ("/api/v1", "/api", "/v1"):
-        if root.endswith(suffix):
-            root = root[: -len(suffix)].rstrip("/")
-            break
-    return (root or "http://127.0.0.1:1234") + "/v1"
-
-
 # =============================================================================
 # Error Types
 # =============================================================================
@@ -881,8 +631,7 @@ def _load_global_auth_store() -> Dict[str, Any]:
     Returns an empty dict when no global fallback exists (classic mode,
     or the global auth.json is absent). Never raises on missing file.
 
-    Memoised keyed on the global auth file's path + mtime (same pattern as
-    ``_nous_auth_status_cache``): read_credential_pool() -> load_pool() runs
+    Memoised keyed on the global auth file's path + mtime: read_credential_pool() -> load_pool() runs
     this once per provider row in the /model picker, and the path resolution
     (``_global_auth_file_path()`` -> ``get_default_pilotage_root()``) + JSON
     parse cost ~105us+ per call even when nothing changed. The global
@@ -1039,8 +788,8 @@ def _auth_store_lock(
     uses its own reentrancy tracker and kernel lock.
 
     Lock ordering invariant: when this lock is held together with
-    ``_nous_shared_store_lock``, acquire ``_auth_store_lock`` FIRST
-    (outer) and the shared Nous lock SECOND (inner). All runtime
+    another store's lock, acquire ``_auth_store_lock`` FIRST
+    (outer) and the other lock SECOND (inner). All runtime
     refresh paths follow this order; violating it risks deadlock
     against a concurrent import on the shared store.
     """
@@ -1354,7 +1103,7 @@ def is_runtime_provider_routable(provider_id: str) -> bool:
     normalized = (provider_id or "").strip().lower()
     if not normalized:
         return False
-    if normalized in {"auto", "openrouter", "custom"}:
+    if normalized in {"auto", "custom"}:
         return True
     if normalized.startswith("custom:"):
         return True
@@ -1674,12 +1423,12 @@ def is_provider_explicitly_configured(provider_id: str) -> bool:
         pass
 
     # 3. Check provider-specific env vars
-    # Exclude CLAUDE_CODE_OAUTH_TOKEN — it's set by Claude Code itself,
-    # not by the user explicitly configuring anthropic in Pilotage.
+    # Exclude CLAUDE_CODE_OAUTH_TOKEN — it's set by external tools, not by
+    # the user explicitly configuring inference in Pilotage.
     _IMPLICIT_ENV_VARS = {"CLAUDE_CODE_OAUTH_TOKEN"}
     pconfig = PROVIDER_REGISTRY.get(normalized)
     # Fallback to ProviderDef from models.dev catalog when the provider
-    # isn't in the manually-maintained PROVIDER_REGISTRY (e.g. openrouter).
+    # isn't in the manually-maintained PROVIDER_REGISTRY.
     # Both expose .auth_type and .api_key_env_vars with the same shape.
     if pconfig is None:
         from pilotage_cli.providers import get_provider
@@ -1814,41 +1563,18 @@ def resolve_provider(
 
     Priority (when requested="auto" or None) — explicit user intent wins over a
     stale logged-in OAuth provider:
-    1. Explicit CLI api_key/base_url -> "openrouter"
+    1. Explicit CLI api_key/base_url -> "custom"
     2. config.yaml `model.provider`
-    3. OPENAI_API_KEY / OPENROUTER_API_KEY env vars -> "openrouter"
-    4. OpenRouter credential pool
-    5. Provider-specific API keys (GLM, MiniMax, ...) -> that provider
-    6. auth.json `active_provider` (logged-in OAuth) — last-resort fallback
-    7. Error (no provider configured)
+    3. OPENAI_API_KEY env var -> "openai-api"
+    4. Provider-specific API keys -> that provider
+    5. auth.json `active_provider` (logged-in OAuth) — last-resort fallback
+    6. Error (no provider configured)
     """
     normalized = (requested or "auto").strip().lower()
 
-    # Normalize provider aliases
-    _PROVIDER_ALIASES = {
-        "glm": "zai", "z-ai": "zai", "z.ai": "zai", "zhipu": "zai",
-        "google": "gemini", "google-gemini": "gemini", "google-ai-studio": "gemini",
-        "arcee-ai": "arcee", "arceeai": "arcee",
-        "gmi-cloud": "gmi", "gmicloud": "gmi",
-        "actual-computer": "actual", "actualcomputer": "actual", "aci": "actual",
-        "minimax-china": "minimax-cn", "minimax_cn": "minimax-cn",
-        "alibaba_coding": "alibaba-coding-plan", "alibaba-coding": "alibaba-coding-plan",
-        "alibaba_coding_plan": "alibaba-coding-plan",
-        "claude": "anthropic", "claude-code": "anthropic",
-        "aigateway": "ai-gateway", "vercel": "ai-gateway", "vercel-ai-gateway": "ai-gateway",
-        "opencode": "opencode-zen", "zen": "opencode-zen",
-        "hf": "huggingface", "hugging-face": "huggingface", "huggingface-hub": "huggingface",
-        "mimo": "xiaomi", "xiaomi-mimo": "xiaomi",
-        "tencent": "tencent-tokenhub", "tokenhub": "tencent-tokenhub",
-        "tencent-cloud": "tencent-tokenhub", "tencentmaas": "tencent-tokenhub",
-        "go": "opencode-go", "opencode-go-sub": "opencode-go",
-        "kilo": "kilocode", "kilo-code": "kilocode", "kilo-gateway": "kilocode",
-        "lmstudio": "lmstudio", "lm-studio": "lmstudio", "lm_studio": "lmstudio",
-        # Local server aliases — route through the generic custom provider
-        "ollama": "custom", "ollama_cloud": "ollama-cloud",
-        "vllm": "custom", "llamacpp": "custom",
-        "llama.cpp": "custom", "llama-cpp": "custom",
-    }
+    # Normalize provider aliases. Built-in slugs need none; plugin-declared
+    # aliases are merged in below.
+    _PROVIDER_ALIASES = {}
     # Extend with aliases declared in plugins/model-providers/<name>/ that aren't already mapped.
     # This keeps providers/ as the single source for new aliases while the
     # hardcoded dict above remains authoritative for existing ones.
@@ -1862,8 +1588,6 @@ def resolve_provider(
         pass
     normalized = _PROVIDER_ALIASES.get(normalized, normalized)
 
-    if normalized == "openrouter":
-        return "openrouter"
     if normalized == "custom":
         return "custom"
     if normalized in PROVIDER_REGISTRY:
@@ -1878,15 +1602,15 @@ def resolve_provider(
             msg += " Check 'pilotage model' for available providers, or run 'pilotage doctor' to diagnose config issues."
         raise AuthError(msg, code="invalid_provider")
 
-    # Explicit one-off CLI creds always mean openrouter/custom
+    # Explicit one-off CLI creds always mean a custom endpoint
     if explicit_api_key or explicit_base_url:
-        return "openrouter"
+        return "custom"
 
     # Provider precedence for the auto-path: explicit user intent must
     # win over a stale logged-in OAuth `active_provider`. Order matches the
     # docstring: 1. explicit CLI creds  2. config.yaml `model.provider`
-    # 3. OPENAI/OPENROUTER env keys  4. OpenRouter pool  5. provider-specific
-    # env keys  6. auth.json `active_provider` (OAuth)  7. error.
+    # 3. OPENAI env keys  4. provider-specific env keys
+    # 5. auth.json `active_provider` (OAuth)  6. error.
     # The normal chat/gateway path resolves config.provider upstream in
     # resolve_requested_provider() before ever reaching "auto"; this duplicate
     # check is the safety net for the lone direct caller (main.py resolve_provider
@@ -1903,27 +1627,12 @@ def resolve_provider(
     except Exception as e:
         logger.debug("Could not read config.yaml model.provider for auto-resolution: %s", e)
 
-    if has_usable_secret(os.getenv("OPENAI_API_KEY")) or has_usable_secret(os.getenv("OPENROUTER_API_KEY")):
-        return "openrouter"
-
-    # Auto-detect an OpenRouter credential added via `pilotage auth add openrouter`
-    # (manual pool entry, no env var). Without this, a key that only lives in
-    # the credential pool is invisible to auto-detection — the user sees
-    # `pilotage auth list` showing the credential while requests go out with no
-    # Authorization header ("HTTP 401: Missing Authentication header"). The
-    # env-var check above only covers keys exported as OPENROUTER_API_KEY /
-    # OPENAI_API_KEY. See.
-    try:
-        from agent.credential_pool import load_pool as _load_pool
-
-        if _load_pool("openrouter").has_credentials():
-            return "openrouter"
-    except Exception as e:
-        logger.debug("Could not check OpenRouter credential pool: %s", e)
+    if has_usable_secret(os.getenv("OPENAI_API_KEY")):
+        return "openai-api"
 
     # Determine the logged-in OAuth provider up front so the env-key loop below
-    # can WARN when an exported API key preempts it transparency). The
-    # actual OAuth fallback (tier 6) still happens later if nothing else matches.
+    # can WARN when an exported API key preempts it. The
+    # actual OAuth fallback (tier 5) still happens later if nothing else matches.
     _oauth_active: Optional[str] = None
     try:
         _store = _load_auth_store()
@@ -1936,14 +1645,6 @@ def resolve_provider(
     # Auto-detect API-key providers by checking their env vars
     for pid, pconfig in PROVIDER_REGISTRY.items():
         if pconfig.auth_type != "api_key":
-            continue
-        # GitHub tokens are commonly present for repo/tool access but should not
-        # hijack inference auto-selection unless the user explicitly chooses
-        # Copilot/GitHub Models as the provider. LM Studio is a local server
-        # whose availability isn't implied by LM_API_KEY presence (it may be
-        # offline, and the no-auth setup uses a placeholder value), so it
-        # also requires explicit selection.
-        if pid == "lmstudio":
             continue
         for env_var in pconfig.api_key_env_vars:
             if has_usable_secret(os.getenv(env_var, "")):
@@ -1980,7 +1681,7 @@ def resolve_provider(
 
     raise AuthError(
         "No inference provider configured. Run 'pilotage model' to choose a "
-        "provider and model, or set an API key (OPENROUTER_API_KEY, "
+        "provider and model, or set an API key (OPENAI_API_KEY, "
         "OPENAI_API_KEY, etc.) in ~/.pilotage/.env.",
         code="no_provider_configured",
     )
@@ -3239,7 +2940,7 @@ def get_codex_auth_status() -> Dict[str, Any]:
 
 
 def get_api_key_provider_status(provider_id: str) -> Dict[str, Any]:
-    """Status snapshot for API-key providers (z.ai, MiniMax)."""
+    """Status snapshot for API-key providers."""
     pconfig = PROVIDER_REGISTRY.get(provider_id)
     if not pconfig or pconfig.auth_type != "api_key":
         return {"configured": False}
@@ -3257,22 +2958,13 @@ def get_api_key_provider_status(provider_id: str) -> Dict[str, Any]:
     else:
         base_url = pconfig.inference_base_url
 
-    if provider_id == "actual":
-        base_url = normalize_actual_base_url(base_url)
-
-    actual_local_noauth = (
-        provider_id == "actual"
-        and not api_key
-        and is_actual_local_base_url(base_url)
-    )
-
     return {
-        "configured": bool(api_key) or actual_local_noauth,
+        "configured": bool(api_key),
         "provider": provider_id,
         "name": pconfig.name,
-        "key_source": key_source or ("local-offline" if actual_local_noauth else ""),
+        "key_source": key_source,
         "base_url": base_url,
-        "logged_in": bool(api_key) or actual_local_noauth,  # compat with OAuth status shape
+        "logged_in": bool(api_key),  # compat with OAuth status shape
     }
 
 
@@ -3308,39 +3000,20 @@ def resolve_api_key_provider_credentials(provider_id: str) -> Dict[str, Any]:
     key_source = ""
     api_key, key_source = _resolve_api_key_provider_secret(provider_id, pconfig)
 
-    # No-auth LM Studio: substitute a placeholder so runtime / auxiliary_client
-    # see the local server as configured. doctor still reports unconfigured
-    # because get_api_key_provider_status uses the raw secret resolver.
-    if not api_key and provider_id == "lmstudio":
-        api_key = LMSTUDIO_NOAUTH_PLACEHOLDER
-        key_source = key_source or "default"
-
     env_url = ""
     if pconfig.base_url_env_var:
         env_url = os.getenv(pconfig.base_url_env_var, "").strip()
 
-    if provider_id == "zai":
-        base_url = _resolve_zai_base_url(api_key, pconfig.inference_base_url, env_url)
-    elif env_url:
+    if env_url:
         base_url = env_url.rstrip("/")
     else:
         base_url = pconfig.inference_base_url
 
-    if provider_id == "lmstudio":
-        base_url = _normalize_lmstudio_runtime_base_url(base_url)
-
-    if provider_id == "actual":
-        base_url = normalize_actual_base_url(base_url)
-
     # Last-resort guard: an API-key provider must never hand back an empty
-    # base URL (a set-but-empty COPILOT_API_BASE_URL or similar env override
-    # otherwise wedges chat inference).
+    # base URL (a set-but-empty base-URL env override otherwise wedges chat
+    # inference).
     if not (isinstance(base_url, str) and base_url.strip()):
         base_url = pconfig.inference_base_url
-
-    if not api_key and provider_id == "actual" and is_actual_local_base_url(base_url):
-        api_key = ACTUAL_LOCAL_NOAUTH_PLACEHOLDER
-        key_source = key_source or "local-offline"
 
     return {
         "provider": provider_id,
@@ -3365,8 +3038,8 @@ def _update_config_for_provider(
     ``model.default`` value.  This prevents a race condition where the
     gateway (which re-reads config per-message) picks up the new provider
     before the caller has finished model selection, resulting in a
-    mismatched model/provider (e.g. ``anthropic/claude-opus-4.6`` sent to
-    MiniMax's API).
+    mismatched model/provider (e.g. a vendor-prefixed slug sent to a
+    direct-API provider).
     """
     # Set active_provider in auth.json so auto-resolution picks this provider
     with _auth_store_lock():
@@ -3403,9 +3076,9 @@ def _update_config_for_provider(
 
     clear_model_endpoint_credentials(model_cfg)
 
-    # When switching to a non-OpenRouter provider, ensure model.default is
-    # valid for the new provider.  An OpenRouter-formatted name like
-    # "anthropic/claude-opus-4.6" will fail on direct-API providers.
+    # When switching providers, ensure model.default is
+    # valid for the new provider.  A vendor-prefixed name like
+    # "vendor/model" will fail on direct-API providers.
     if default_model:
         cur_default = model_cfg.get("default", "")
         if not cur_default or "/" in cur_default:

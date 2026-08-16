@@ -289,7 +289,6 @@ _LEGACY_MODEL_FAMILIES = frozenset({
     "gemma",
     "glm",
     "gpt",
-    "kimi",
     "llama",
     "minimax",
     "mimo",
@@ -301,7 +300,6 @@ _LEGACY_MODEL_FAMILIES = frozenset({
     "o4",
     "qwen",
     "step",
-    "trinity",
     "unknown",
 })
 

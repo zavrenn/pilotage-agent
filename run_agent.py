@@ -278,32 +278,9 @@ _MAX_TOOL_WORKERS = 8
 _DB_PERSISTED_MARKER = "_db_persisted"
 
 
-# Guard so the OpenRouter metadata pre-warm thread is only spawned once per
-# process, not once per AIAgent instantiation.  Without this, long-running
-# gateway processes leak one OS thread per incoming message and eventually
-# exhaust the system thread limit (RuntimeError: can't start new thread).
-_openrouter_prewarm_done = threading.Event()
-
 # =========================================================================
 # Large tool result handler — save oversized output to temp file
 # =========================================================================
-
-
-# =========================================================================
-# Qwen Portal headers — mimics QwenCode CLI for portal.qwen.ai compatibility.
-# Extracted as a module-level helper so both __init__ and
-# _apply_client_headers_for_base_url can share it.
-# =========================================================================
-_QWEN_CODE_VERSION = "0.14.1"
-
-
-def _routermint_headers() -> dict:
-    """Return the User-Agent RouterMint needs to avoid Cloudflare 1010 blocks."""
-    from pilotage_cli import __version__ as _PILOTAGE_VERSION
-
-    return {
-        "User-Agent": f"PilotageAgent/{_PILOTAGE_VERSION}",
-    }
 
 
 def _pool_may_recover_from_rate_limit(pool) -> bool:
@@ -329,19 +306,6 @@ def _pool_may_recover_from_rate_limit(pool) -> bool:
     if not pool.has_available():
         return False
     return len(pool.entries()) > 1
-
-
-def _qwen_portal_headers() -> dict:
-    """Return default HTTP headers required by Qwen Portal API."""
-    import platform as _plat
-
-    _ua = f"QwenCode/{_QWEN_CODE_VERSION} ({_plat.system().lower()}; {_plat.machine()})"
-    return {
-        "User-Agent": _ua,
-        "X-DashScope-CacheControl": "enable",
-        "X-DashScope-UserAgent": _ua,
-        "X-DashScope-AuthType": "qwen-oauth",
-    }
 
 
 def _safe_session_filename_component(session_id: str) -> str:
@@ -459,7 +423,6 @@ class AIAgent:
         provider_sort: str = None,
         provider_require_parameters: bool = False,
         provider_data_collection: str = None,
-        openrouter_min_coding_score: Optional[float] = None,
         session_id: str = None,
         tool_progress_callback: callable = None,
         tool_start_callback: callable = None,
@@ -543,7 +506,6 @@ class AIAgent:
             provider_sort=provider_sort,
             provider_require_parameters=provider_require_parameters,
             provider_data_collection=provider_data_collection,
-            openrouter_min_coding_score=openrouter_min_coding_score,
             session_id=session_id,
             tool_progress_callback=tool_progress_callback,
             tool_start_callback=tool_start_callback,
@@ -777,7 +739,7 @@ class AIAgent:
         # Turn counter (added after reset_session_state was first written)
         self._user_turn_count = 0
 
-        # Copilot x-initiator: True for the first API call of a user turn,
+        # x-initiator: True for the first API call of a user turn,
         # False for tool-loop follow-ups.
         self._is_user_initiated_turn = False
 
@@ -1182,24 +1144,6 @@ class AIAgent:
         from agent.stream_diag import flatten_exception_chain
         return flatten_exception_chain(error)
 
-    def _is_provider_stream_parse_error(self, error: BaseException) -> bool:
-        """Return True for malformed provider streaming data from SDK parsers.
-
-        Some Anthropic-compatible streaming providers can send a malformed
-        event-stream frame.  The Anthropic SDK surfaces that as a plain
-        ``ValueError`` such as ``expected ident at line 1 column 149``.  That
-        is provider wire-format trouble, not local request validation, so it
-        should follow the same retry path as a truncated JSON body.
-        """
-        if getattr(self, "api_mode", None) != "anthropic_messages":
-            return False
-        if not isinstance(error, ValueError):
-            return False
-        if isinstance(error, (UnicodeEncodeError, json.JSONDecodeError)):
-            return False
-        message = str(error).strip().lower()
-        return "expected ident at line" in message
-
     def _log_stream_retry(
         self,
         *,
@@ -1291,18 +1235,6 @@ class AIAgent:
             url = getattr(self, "_base_url_lower", "") or ""
         return base_url_host_matches(url, "openai.azure.com")
 
-    def _is_github_copilot_url(self, base_url: str = None) -> bool:
-        """Return True when a base URL targets GitHub Copilot's OpenAI-compatible API."""
-        if base_url is not None:
-            hostname = base_url_hostname(base_url)
-        else:
-            hostname = getattr(self, "_base_url_hostname", "") or base_url_hostname(
-                getattr(self, "_base_url_lower", "")
-            )
-        if not hostname:
-            return False
-        return hostname == "api.githubcopilot.com" or hostname.endswith(".githubcopilot.com")
-
     def _resolved_api_call_timeout(self) -> float:
         """Resolve the effective per-call request timeout in seconds.
 
@@ -1350,8 +1282,7 @@ class AIAgent:
             return float(env_timeout), False
 
         # Reasoning-model floor: auto-mitigation for known reasoning models
-        # (Nemotron 3 Ultra, OpenAI o1/o3, Anthropic Opus 4.x thinking,
-        # DeepSeek R1, Qwen QwQ, xAI Grok reasoning, etc.) whose cloud
+        # (Nemotron 3 Ultra, OpenAI o1/o3, xAI Grok reasoning, etc.) whose cloud
         # gateways idle-kill before the model's thinking phase ends.
         # uses_implicit_default is False here so the local-endpoint
         # short-circuit in _compute_non_stream_stale_timeout does not
@@ -1437,32 +1368,6 @@ class AIAgent:
             " for symptom history."
         )
 
-    def _is_openrouter_url(self) -> bool:
-        """Return True when the base URL targets OpenRouter."""
-        return base_url_host_matches(self._base_url_lower, "openrouter.ai")
-
-    def _is_copilot_url(self) -> bool:
-        """Return True when the base URL targets GitHub Copilot or GitHub Models."""
-        return (
-            base_url_host_matches(self._base_url_lower, "api.githubcopilot.com")
-            or base_url_host_matches(self._base_url_lower, "models.github.ai")
-        )
-
-    def _is_copilot_provider(self) -> bool:
-        """True when the active provider is GitHub Copilot, however spelled.
-
-        ``self.provider`` is not always the normalized slug: ``/model`` and
-        profile configs can leave the alias ``github-copilot`` (or ``github``)
-        in place — a single session log can show both ``provider=copilot`` and
-        ``provider=github-copilot`` for the same account. A bare
-        ``provider == "copilot"`` gate silently skips credential recovery for
-        the alias spellings, so this is the single owner of the check; the
-        Copilot base URL is accepted as a fallback signal.
-        """
-        if (self.provider or "").strip().lower() in {"copilot", "github-copilot", "github"}:
-            return True
-        return self._is_copilot_url()
-
     def _is_codex_backend(self) -> bool:
         """Return True for the ChatGPT OAuth Codex Responses backend."""
         return (
@@ -1472,44 +1377,13 @@ class AIAgent:
             in (getattr(self, "_base_url_lower", "") or "")
         )
 
-    def _anthropic_prompt_cache_policy(
-        self,
-        *,
-        provider: Optional[str] = None,
-        base_url: Optional[str] = None,
-        api_mode: Optional[str] = None,
-        model: Optional[str] = None,
-    ) -> tuple[bool, bool]:
-        """Forwarder — see ``agent.agent_runtime_helpers.anthropic_prompt_cache_policy``."""
-        from agent.agent_runtime_helpers import anthropic_prompt_cache_policy
-        return anthropic_prompt_cache_policy(self, provider=provider, base_url=base_url, api_mode=api_mode, model=model)
-
-    def _direct_native_anthropic_tool_cache_capability(
-        self,
-        *,
-        provider: Optional[str] = None,
-        base_url: Optional[str] = None,
-        api_mode: Optional[str] = None,
-        model: Optional[str] = None,
-    ) -> bool:
-        """Forwarder for the request-local native Anthropic tool capability."""
-        from agent.agent_runtime_helpers import _direct_native_anthropic_tool_cache_capability
-        return _direct_native_anthropic_tool_cache_capability(
-            self,
-            provider=provider,
-            base_url=base_url,
-            api_mode=api_mode,
-            model=model,
-        )
-
     @staticmethod
     def _model_requires_responses_api(model: str) -> bool:
         """Return True for models that require the Responses API path.
 
-        GPT-5.x models are rejected on /v1/chat/completions by both
-        OpenAI and OpenRouter (error: ``unsupported_api_for_model``).
-        Detect these so the correct api_mode is set regardless of
-        which provider is serving the model.
+        GPT-5.x models are rejected on /v1/chat/completions by OpenAI
+        (error: ``unsupported_api_for_model``). Detect these so the correct
+        api_mode is set regardless of which provider is serving the model.
         """
         m = model.lower()
         # Strip vendor prefix (e.g. "openai/gpt-5.4" → "gpt-5.4")
@@ -1536,13 +1410,13 @@ class AIAgent:
         """Return the correct max tokens kwarg for the current provider.
 
         OpenAI's newer models (gpt-4o, gpt-4.1, gpt-5+, o-series) require
-        'max_completion_tokens'. Azure OpenAI and GitHub Copilot also require
-        'max_completion_tokens' for those families served via their
-        OpenAI-compatible endpoints. OpenRouter, local models, and older
-        OpenAI models use 'max_tokens'.
+        'max_completion_tokens'. Azure OpenAI also requires
+        'max_completion_tokens' for those families served via its
+        OpenAI-compatible endpoint. Local models and older OpenAI models use
+        'max_tokens'.
 
-        The check is URL-first (api.openai.com / Azure / Copilot all use the
-        new kwarg), then falls back to a model-name check so third-party
+        The check is URL-first (api.openai.com / Azure both use the new
+        kwarg), then falls back to a model-name check so third-party
         OpenAI-compatible endpoints fronting those models are recognised —
         URL-only detection misses that case and silently sends the wrong
         kwarg, which the upstream model rejects with a 400.
@@ -1550,7 +1424,6 @@ class AIAgent:
         if (
             self._is_direct_openai_url()
             or self._is_azure_openai_url()
-            or self._is_github_copilot_url()
             or model_forces_max_completion_tokens(self.model)
         ):
             return {"max_completion_tokens": value}
@@ -1598,79 +1471,6 @@ class AIAgent:
         """Forwarder — see ``agent.agent_runtime_helpers.strip_think_blocks``."""
         from agent.agent_runtime_helpers import strip_think_blocks
         return strip_think_blocks(self, content)
-
-    @staticmethod
-    def _has_natural_response_ending(content: str) -> bool:
-        """Heuristic: does visible assistant text look intentionally finished?"""
-        if not content:
-            return False
-        stripped = content.rstrip()
-        if not stripped:
-            return False
-        if stripped.endswith("```"):
-            return True
-        if stripped.endswith('^'):
-            return True
-        last = stripped[-1]
-        if last in '.!?:)"\']}。！？：）】」』》^':
-            return True
-        # Emoji ranges (Misc Symbols, Dingbats, Emoticons, Supplemental, etc.)
-        if ord(last) >= 0x1F300:
-            return True
-        return False
-
-    def _is_ollama_glm_backend(self) -> bool:
-        """Detect Ollama-hosted GLM models affected by stop misreports.
-
-        Ollama can misreport truncated output as finish_reason='stop'.
-        Detection relies on explicit Ollama signatures:
-        - Port 11434 (Ollama default)
-        - "ollama" in the base URL (e.g. ollama.local, /ollama/ path)
-        - provider explicitly set to "ollama"
-
-        Crucially it does NOT match arbitrary local/private endpoints
-        (LiteLLM/sglang/vLLM/LM Studio proxies, Tailscale boxes), which
-        report finish_reason correctly and were the source of's
-        false-positive truncation continuations.
-        """
-        model_lower = (self.model or "").lower()
-        provider_lower = (self.provider or "").lower()
-        if "glm" not in model_lower and provider_lower != "zai":
-            return False
-        if "ollama" in self._base_url_lower or ":11434" in self._base_url_lower:
-            return True
-        return provider_lower == "ollama"
-
-    def _should_treat_stop_as_truncated(
-        self,
-        finish_reason: str,
-        assistant_message,
-        messages: Optional[list] = None,
-    ) -> bool:
-        """Detect conservative stop->length misreports for Ollama-hosted GLM models."""
-        if finish_reason != "stop" or self.api_mode != "chat_completions":
-            return False
-        if not self._is_ollama_glm_backend():
-            return False
-        if not any(
-            isinstance(msg, dict) and msg.get("role") == "tool"
-            for msg in (messages or [])
-        ):
-            return False
-        if assistant_message is None or getattr(assistant_message, "tool_calls", None):
-            return False
-
-        content = getattr(assistant_message, "content", None)
-        if not isinstance(content, str):
-            return False
-
-        visible_text = self._strip_think_blocks(content).strip()
-        if not visible_text:
-            return False
-        if len(visible_text) < 20 or not re.search(r"\s", visible_text):
-            return False
-
-        return not self._has_natural_response_ending(visible_text)
 
     def _looks_like_codex_intermediate_ack(
         self,
@@ -2451,14 +2251,7 @@ class AIAgent:
                 parts.append(f"Ray {ray_id}")
             return " — ".join(parts)
 
-        # GeminiAPIError (agent/gemini_native_adapter.py) already composes a
-        # clean one-liner and may have appended actionable guidance (free-tier
-        # 429, legacy Standard-key 401). Prefer its message over re-extracting
-        # the raw response body below, which would strip that guidance.
-        if type(error).__name__ == "GeminiAPIError":
-            return redact_sensitive_text(raw[:1000])
-
-        # JSON body errors from OpenAI/Anthropic SDKs
+        # JSON body errors from the OpenAI SDK
         body = getattr(error, "body", None)
         if isinstance(body, dict):
             msg = body.get("error", {}).get("message") if isinstance(body.get("error"), dict) else body.get("message")
@@ -2637,7 +2430,7 @@ class AIAgent:
             if hasattr(value, "model_dump"):
                 try:
                     # warnings=False: pydantic's serializer UserWarnings on
-                    # generic-union SDK models (Anthropic ParsedMessage etc.)
+                    # generic-union SDK models
                     # would otherwise leak to the terminal mid-response.
                     dumped = value.model_dump(mode="json", warnings=False)
                 except TypeError:
@@ -2836,7 +2629,7 @@ class AIAgent:
     def _redact_message_content(content):
         """Apply secret redaction to message content (str or list-of-parts).
 
-        Handles both plain-string content and the OpenAI/Anthropic multimodal
+        Handles both plain-string content and the OpenAI-style multimodal
         shape where ``content`` is a list of ``{"type": "text", "text": ...}``
         / ``{"type": "image_url", ...}`` / ``{"type": "input_text", "content": ...}``
         parts. Image / binary parts are left untouched; only text fields are
@@ -3586,12 +3379,6 @@ class AIAgent:
                 + "the per-turn iteration/cost budget was exhausted before a "
                 "final answer. Send `continue` to keep going."
             )
-        if reason == "ollama_runtime_context_too_small":
-            return (
-                prefix
-                + "the local model's context window was too small to finish. "
-                "Increase the context size or use a larger model."
-            )
         if reason.startswith("max_iterations_reached"):
             return (
                 prefix
@@ -3818,28 +3605,6 @@ class AIAgent:
     def get_rate_limit_state(self):
         """Return the last captured RateLimitState, or None."""
         return self._rate_limit_state
-
-    def _check_openrouter_cache_status(self, http_response: Any) -> None:
-        """Read X-OpenRouter-Cache-Status from response headers and log it.
-
-        Increments ``_or_cache_hits`` on HIT so callers can report savings.
-        """
-        if http_response is None:
-            return
-        headers = getattr(http_response, "headers", None)
-        if not headers:
-            return
-        try:
-            status = headers.get("x-openrouter-cache-status")
-            if not status:
-                return
-            if status.upper() == "HIT":
-                self._or_cache_hits += 1
-                logger.info("OpenRouter response cache HIT (total: %d)", self._or_cache_hits)
-            else:
-                logger.debug("OpenRouter response cache %s", status.upper())
-        except Exception:
-            pass  # Never let header parsing break the agent loop
 
     def get_activity_summary(self) -> dict:
         """Return a snapshot of the agent's current activity for diagnostics.
@@ -4333,10 +4098,10 @@ class AIAgent:
     def _get_tool_call_name_static(tc) -> str:
         """Extract function name from a tool_call entry (dict or object).
 
-        Gemini's OpenAI-compatibility endpoint requires every `role: tool`
-        message to carry the matching function name. OpenAI/Anthropic/ollama
-        tolerate its absence, so the field is best-effort: callers fall back
-        to "" and the message still works elsewhere.
+        Some strict OpenAI-compatible endpoints require every `role: tool`
+        message to carry the matching function name; OpenAI tolerates its
+        absence, so the field is best-effort: callers fall back to "" and the
+        message still works elsewhere.
         """
         if isinstance(tc, dict):
             fn = tc.get("function")
@@ -4363,12 +4128,10 @@ class AIAgent:
         """Return True if ``msg`` is an assistant turn whose only payload is reasoning.
 
         "Thinking-only" means the model emitted reasoning (``reasoning`` or
-        ``reasoning_content``) but no visible text and no tool_calls. When sent
-        back to providers that convert reasoning into thinking blocks (native
-        Anthropic, OpenRouter Anthropic, third-party Anthropic-compatible
-        gateways), the resulting message has only thinking blocks — which
-        Anthropic rejects with HTTP 400 "The final block in an assistant
-        message cannot be `thinking`."
+        ``reasoning_content``) but no visible text and no tool_calls. Sent
+        back to providers that convert reasoning into thinking blocks, the
+        resulting message has only thinking blocks, which strict endpoints
+        reject with HTTP 400.
 
         Symmetric with Claude Code's ``filterOrphanedThinkingOnlyMessages``
         (src/utils/messages.ts). We drop the whole turn from the API copy
@@ -4876,8 +4639,7 @@ class AIAgent:
         # see. Leaving SDK retries on (default 2) compounds with our outer
         # retries and lets a single hung provider request stretch to ~3x
         # the per-call timeout before our stale detector reports it.
-        # Shared/primary clients and the Anthropic path are
-        # unaffected (they don't go through here).
+        # Shared/primary clients don't go through here.
         request_kwargs["max_retries"] = 0
         # Reuse the cached wire client while the effective kwargs are
         # unchanged: constructing openai.OpenAI + its httpx pool costs
@@ -5163,12 +4925,6 @@ class AIAgent:
                 env_url = get_env_prefer_dotenv(pconfig.base_url_env_var).strip().rstrip("/")
             default_base = (pconfig.inference_base_url or "").strip().rstrip("/")
             base_url = env_url or default_base
-            if self.provider == "zai":
-                from pilotage_cli.auth import _resolve_zai_base_url
-
-                base_url = _resolve_zai_base_url(
-                    api_key, pconfig.inference_base_url, env_url
-                ).rstrip("/")
         elif self.provider == "custom":
             # Named custom provider: identity lives in config
             # (``providers.<name>`` / ``custom_providers``), the credential in
@@ -5294,23 +5050,7 @@ class AIAgent:
         *,
         apply_user_headers: bool = True,
     ) -> None:
-        from agent.auxiliary_client import (
-            _AI_GATEWAY_HEADERS,
-            build_nvidia_nim_headers,
-            build_or_headers,
-        )
-
-        if base_url_host_matches(base_url, "openrouter.ai"):
-            self._client_kwargs["default_headers"] = build_or_headers()
-        elif base_url_host_matches(base_url, "ai-gateway.vercel.sh"):
-            self._client_kwargs["default_headers"] = dict(_AI_GATEWAY_HEADERS)
-        elif base_url_host_matches(base_url, "integrate.api.nvidia.com"):
-            self._client_kwargs["default_headers"] = build_nvidia_nim_headers(base_url)
-        elif base_url_host_matches(base_url, "api.routermint.com"):
-            self._client_kwargs["default_headers"] = _routermint_headers()
-        elif base_url_host_matches(base_url, "portal.qwen.ai"):
-            self._client_kwargs["default_headers"] = _qwen_portal_headers()
-        elif base_url_host_matches(base_url, "chatgpt.com"):
+        if base_url_host_matches(base_url, "chatgpt.com"):
             from agent.auxiliary_client import _codex_cloudflare_headers
             self._client_kwargs["default_headers"] = _codex_cloudflare_headers(
                 self._client_kwargs.get("api_key", "")
@@ -5339,17 +5079,16 @@ class AIAgent:
         # custom_providers[].extra_headers) — applied last so the most
         # specific config level survives credential swaps and rebuilds too.
         # SECURITY: values may carry credentials — never log them.
-        if self.api_mode != "anthropic_messages":
-            try:
-                from pilotage_cli.config import (
-                    apply_custom_provider_extra_headers_to_client_kwargs,
-                )
+        try:
+            from pilotage_cli.config import (
+                apply_custom_provider_extra_headers_to_client_kwargs,
+            )
 
-                apply_custom_provider_extra_headers_to_client_kwargs(
-                    self._client_kwargs, base_url,
-                )
-            except Exception:
-                logger.debug("custom-provider extra_headers skipped", exc_info=True)
+            apply_custom_provider_extra_headers_to_client_kwargs(
+                self._client_kwargs, base_url,
+            )
+        except Exception:
+            logger.debug("custom-provider extra_headers skipped", exc_info=True)
 
     def _apply_user_default_headers(self) -> None:
         """Merge user-configured request headers onto the OpenAI client.
@@ -5369,11 +5108,8 @@ class AIAgent:
         ``agent.auxiliary_client._apply_user_default_headers`` so the main and
         auxiliary clients can never drift on precedence or value handling.
 
-        No-op for the Anthropic mode, which doesn't use the OpenAI client,
-        and when no overrides are configured.
+        No-op when no overrides are configured.
         """
-        if self.api_mode == "anthropic_messages":
-            return
         from agent.auxiliary_client import (
             _apply_user_default_headers as _merge_user_headers,
         )
@@ -5840,7 +5576,7 @@ class AIAgent:
             # Suppress reasoning/thinking blocks via the stateful
             # scrubber. Earlier versions ran _strip_think_blocks
             # per-delta here, which destroyed downstream state machines
-            # when a tag was split across deltas (e.g. MiniMax-M2.7
+            # when a tag was split across deltas (e.g. a provider that
             # sends '<think>' and its content as separate deltas —
             # regex case 2 erased the first delta, so the CLI/gateway
             # state machine never saw the open tag and leaked the
@@ -6015,7 +5751,7 @@ class AIAgent:
             "image/jpeg": ".jpg",
             "image/jpg": ".jpg",
         }.get(mime, ".jpg")
-        tmp = tempfile.NamedTemporaryFile(prefix="anthropic_image_", suffix=suffix, delete=False)
+        tmp = tempfile.NamedTemporaryFile(prefix="vision_image_", suffix=suffix, delete=False)
         try:
             with tmp:
                 tmp.write(base64.b64decode(data))
@@ -6108,7 +5844,7 @@ class AIAgent:
     def _provider_supports_vision_tool_messages(self) -> bool:
         """Return True if the active provider accepts list-type tool content.
 
-        Some providers (e.g. Xiaomi MiMo) support multimodal user messages
+        Some OpenAI-compatible providers support multimodal user messages
         but reject list-type tool message content with 400 errors.  This
         checks the provider profile's ``supports_vision_tool_messages`` field.
         """
@@ -6164,7 +5900,7 @@ class AIAgent:
             return prefix
         if suffix:
             return suffix
-        return "[A multimodal message was converted to text for Anthropic compatibility.]"
+        return "[A multimodal message was converted to text for compatibility.]"
 
     def _get_transport(self, api_mode: str = None):
         """Return the cached transport for the given (or current) api_mode.
@@ -6183,34 +5919,6 @@ class AIAgent:
             t = get_transport(mode)
             cache[mode] = t
         return t
-
-    def _prepare_anthropic_messages_for_api(self, api_messages: list) -> list:
-        # Fast exit when no message carries image content at all.
-        if not any(
-            isinstance(msg, dict) and self._content_has_image_parts(msg.get("content"))
-            for msg in api_messages
-        ):
-            return api_messages
-
-        # The Anthropic adapter (agent/anthropic_adapter.py:_convert_content_part_to_anthropic)
-        # already translates OpenAI-style image_url/input_image parts into
-        # native Anthropic ``{"type": "image", "source": ...}`` blocks. When
-        # the active model supports vision we let the adapter do its job and
-        # skip this legacy text-fallback preprocessor entirely.
-        if self._model_supports_vision():
-            return api_messages
-
-        # Non-vision Anthropic model (rare today, but keep the fallback for
-        # compat): replace each image part with a vision_analyze text note.
-        transformed = copy.deepcopy(api_messages)
-        for msg in transformed:
-            if not isinstance(msg, dict):
-                continue
-            msg["content"] = self._preprocess_anthropic_content(
-                msg.get("content"),
-                str(msg.get("role", "user") or "user"),
-            )
-        return transformed
 
     def _prepare_messages_for_non_vision_model(self, api_messages: list) -> list:
         """Strip native image parts when the active model lacks vision.
@@ -6234,10 +5942,9 @@ class AIAgent:
         for msg in transformed:
             if not isinstance(msg, dict):
                 continue
-            # Reuse the Anthropic text-fallback preprocessor — the behaviour is
-            # identical (walk content parts, replace images with cached
-            # descriptions, merge back into a single text or structured
-            # content). Naming is historical.
+            # Historical name: this preprocessor walks content parts and
+            # replaces images with cached vision_analyze descriptions,
+            # merging everything back into a single text content.
             msg["content"] = self._preprocess_anthropic_content(
                 msg.get("content"),
                 str(msg.get("role", "user") or "user"),
@@ -6262,7 +5969,7 @@ class AIAgent:
 
         if self._model_supports_vision():
             # Vision-capable on paper — but if the provider rejects list-type
-            # tool content (e.g. Xiaomi MiMo's 400 "text is not set"), or if
+            # tool content (e.g. a strict endpoint's 400 "text is not set"), or if
             # we've already learned this lesson in-session, short-circuit to
             # a text summary so we don't burn a round-trip relearning it.
             if not self._provider_supports_vision_tool_messages():
@@ -6318,7 +6025,7 @@ class AIAgent:
         """Downgrade list-type tool messages to text summaries in-place.
 
         Recovery path for providers that reject list-type tool message content
-        (e.g. Xiaomi MiMo's 400 "text is not set"; see). Walks
+        (e.g. a strict endpoint's 400 "text is not set"). Walks
         ``api_messages`` for any ``role: "tool"`` message whose ``content`` is
         a list containing image parts, replaces the content with the existing
         text part(s) (or a minimal placeholder if none survive), and by default
@@ -6394,254 +6101,39 @@ class AIAgent:
 
         return changed
 
-    def _anthropic_preserve_dots(self) -> bool:
-        """True when using an anthropic-compatible endpoint that preserves dots in model names.
-        Alibaba/DashScope keeps dots (e.g. qwen3.5-plus).
-        MiniMax keeps dots (e.g. MiniMax-M2.7).
-        Xiaomi MiMo keeps dots (e.g. mimo-v2.5, mimo-v2.5-pro).
-        OpenCode Go/Zen keeps dots for non-Claude models (e.g. minimax-m2.5-free).
-        ZAI/Zhipu keeps dots (e.g. glm-4.7, glm-5.1).
-        Regression for; mirrors the opencode-go fix for
-        (commit f77be22c), which extended this same allowlist."""
-        if (getattr(self, "provider", "") or "").lower() in {
-            "alibaba", "minimax", "minimax-cn",
-            "opencode-go", "opencode-zen",
-            "zai",
-            "xiaomi", "vertex",
-        }:
-            return True
-        base = (getattr(self, "base_url", "") or "").lower()
-        host = base_url_hostname(base)
-        return (
-            "dashscope" in host
-            or base_url_host_matches(base, "aliyuncs.com")
-            or "minimax" in host
-            or (base_url_host_matches(base, "opencode.ai") and "/zen/" in base)
-            or base_url_host_matches(base, "bigmodel.cn")
-            or base_url_host_matches(base, "xiaomimimo.com")
-            # Vertex AI OpenAI-compat endpoint — Gemini model ids keep dots
-            # (e.g. google/gemini-3.5-flash); the hyphenated form is wrong.
-            or base_url_host_matches(base, "aiplatform.googleapis.com")
-        )
-
-    def _is_qwen_portal(self) -> bool:
-        """Return True when the base URL targets Qwen Portal."""
-        return base_url_host_matches(self._base_url_lower, "portal.qwen.ai")
-
-    def _qwen_prepare_chat_messages(self, api_messages: list) -> list:
-        prepared = copy.deepcopy(api_messages)
-        if not prepared:
-            return prepared
-
-        for msg in prepared:
-            if not isinstance(msg, dict):
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                msg["content"] = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                # Normalize: convert bare strings to text dicts, keep dicts as-is.
-                # deepcopy already created independent copies, no need for dict().
-                normalized_parts = []
-                for part in content:
-                    if isinstance(part, str):
-                        normalized_parts.append({"type": "text", "text": part})
-                    elif isinstance(part, dict):
-                        normalized_parts.append(part)
-                if normalized_parts:
-                    msg["content"] = normalized_parts
-
-        # Inject cache_control on the last part of the system message.
-        for msg in prepared:
-            if isinstance(msg, dict) and msg.get("role") == "system":
-                content = msg.get("content")
-                if isinstance(content, list) and content and isinstance(content[-1], dict):
-                    content[-1]["cache_control"] = {"type": "ephemeral"}
-                break
-
-        return prepared
-
-    def _qwen_prepare_chat_messages_inplace(self, messages: list) -> None:
-        """In-place variant — mutates an already-copied message list."""
-        if not messages:
-            return
-
-        for msg in messages:
-            if not isinstance(msg, dict):
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                msg["content"] = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                normalized_parts = []
-                for part in content:
-                    if isinstance(part, str):
-                        normalized_parts.append({"type": "text", "text": part})
-                    elif isinstance(part, dict):
-                        normalized_parts.append(part)
-                if normalized_parts:
-                    msg["content"] = normalized_parts
-
-        for msg in messages:
-            if isinstance(msg, dict) and msg.get("role") == "system":
-                content = msg.get("content")
-                if isinstance(content, list) and content and isinstance(content[-1], dict):
-                    content[-1]["cache_control"] = {"type": "ephemeral"}
-                break
-
     def _build_api_kwargs(self, api_messages: list, tools_for_api: Optional[list] = None) -> dict:
         """Forwarder — see ``agent.chat_completion_helpers.build_api_kwargs``."""
         from agent.chat_completion_helpers import build_api_kwargs
         return build_api_kwargs(self, api_messages, tools_for_api=tools_for_api)
-
-    def _supports_reasoning_extra_body(self) -> bool:
-        """Return True when reasoning extra_body is safe to send for this route/model.
-
-        OpenRouter forwards unknown extra_body fields to upstream providers.
-        Some providers/routes reject `reasoning` with 400s, so gate it to
-        known reasoning-capable model families.
-        """
-        if base_url_host_matches(self._base_url_lower, "ai-gateway.vercel.sh"):
-            return True
-        if not self._is_openrouter_url():
-            return False
-        if base_url_host_matches(self._base_url_lower, "api.mistral.ai"):
-            return False
-
-        model = (self.model or "").lower()
-        reasoning_model_prefixes = (
-            "deepseek/",
-            "anthropic/",
-            "openai/",
-            "x-ai/",
-            "google/gemini-2",
-            "google/gemma-4",
-            "qwen/qwen3",
-            "tencent/hy3",
-            "xiaomi/",
-        )
-        return any(model.startswith(prefix) for prefix in reasoning_model_prefixes)
 
     def _build_assistant_message(self, assistant_message, finish_reason: str) -> dict:
         """Forwarder — see ``agent.chat_completion_helpers.build_assistant_message``."""
         from agent.chat_completion_helpers import build_assistant_message
         return build_assistant_message(self, assistant_message, finish_reason)
 
-    def _needs_thinking_reasoning_pad(self) -> bool:
-        """Return True when the active provider enforces reasoning_content echo-back.
-
-        DeepSeek v4 thinking and Kimi / Moonshot thinking both reject replays
-        of assistant tool-call messages that omit ``reasoning_content`` (refs
-,). Xiaomi MiMo thinking mode has the same requirement.
-
-        Result cached on the AIAgent instance keyed by (provider, model,
-        base_url); invalidated whenever ``switch_model()`` /
-        ``_try_activate_fallback()`` mutate any of those. This is hot — the
-        agent loop hits ~16 invocations per turn, each of which would
-        otherwise re-run ~5 ``base_url_host_matches`` (and therefore
-        ``urlparse``) calls under it. Caching drops the per-turn cost from
-        ~5us × 16 = ~80us to <1us.
-        """
-        key = (self.provider, self.model, getattr(self, "_base_url_lower", self.base_url))
-        cached = getattr(self, "_thinking_pad_cache", None)
-        if cached is not None and cached[0] == key:
-            return cached[1]
-        result = (
-            self._needs_deepseek_tool_reasoning()
-            or self._needs_kimi_tool_reasoning()
-            or self._needs_mimo_tool_reasoning()
-        )
-        self._thinking_pad_cache = (key, result)
-        return result
-
-    def _needs_kimi_tool_reasoning(self) -> bool:
-        """Return True when the current provider is Kimi / Moonshot thinking mode.
-
-        Kimi ``/coding`` and Moonshot thinking mode both require
-        ``reasoning_content`` on every assistant tool-call message; omitting
-        it causes the next replay to fail with HTTP 400.
-
-        Detection is host-driven, not model-name-driven: aggregators like
-        OpenRouter that re-export Kimi/Moonshot models speak their own
-        protocol and reject ``reasoning_content`` echoes. We only enable the
-        kimi-reasoning replay when the request actually targets a
-        kimi/moonshot endpoint.
-
-        Rule table owner: ``agent.message_sanitization.reasoning_echo_family``.
-        """
-        from agent.message_sanitization import matches_reasoning_echo_family
-        return matches_reasoning_echo_family(
-            "kimi", self.provider, None, self.base_url
-        )
-
-    def _needs_deepseek_tool_reasoning(self) -> bool:
-        """Return True when the current provider is DeepSeek thinking mode.
-
-        DeepSeek V4 thinking mode requires ``reasoning_content`` on every
-        assistant tool-call turn; omitting it causes HTTP 400 when the
-        message is replayed in a subsequent API request.
-
-        Rule table owner: ``agent.message_sanitization.reasoning_echo_family``.
-        """
-        from agent.message_sanitization import matches_reasoning_echo_family
-        return matches_reasoning_echo_family(
-            "deepseek", (self.provider or "").lower(), self.model, self.base_url
-        )
-
-    def _needs_mimo_tool_reasoning(self) -> bool:
-        """Return True when the current provider is Xiaomi MiMo thinking mode.
-
-        MiMo thinking mode requires ``reasoning_content`` on every assistant
-        tool-call message when replaying history; omitting it causes HTTP 400.
-        Refs: https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/passing-back-reasoning_content
-
-        Rule table owner: ``agent.message_sanitization.reasoning_echo_family``.
-        """
-        from agent.message_sanitization import matches_reasoning_echo_family
-        return matches_reasoning_echo_family(
-            "mimo", (self.provider or "").lower(), self.model, self.base_url
-        )
-
-    def _copy_reasoning_content_for_api(self, source_msg: dict, api_msg: dict) -> None:
-        """Forwarder — see ``agent.agent_runtime_helpers.copy_reasoning_content_for_api``."""
-        from agent.agent_runtime_helpers import copy_reasoning_content_for_api
-        return copy_reasoning_content_for_api(self, source_msg, api_msg)
-
-    def _reapply_reasoning_echo_for_provider(self, api_messages: list) -> int:
-        """Forwarder — see ``agent.agent_runtime_helpers.reapply_reasoning_echo_for_provider``."""
-        from agent.agent_runtime_helpers import reapply_reasoning_echo_for_provider
-        return reapply_reasoning_echo_for_provider(self, api_messages)
-
     @staticmethod
     def _sanitize_tool_calls_for_strict_api(api_msg: dict, model: "str | None" = None) -> dict:
         """Strip Codex Responses API fields from tool_calls for strict providers.
 
-        Providers like Mistral, Fireworks, and other strict OpenAI-compatible APIs
-        validate the Chat Completions schema and reject unknown fields (call_id,
-        response_item_id) with 400 or 422 errors. These fields are preserved in
-        the internal message history — this method only modifies the outgoing
-        API copy.
+        Strict OpenAI-compatible APIs validate the Chat Completions schema
+        and reject unknown fields (call_id, response_item_id) with 400 or 422
+        errors. These fields are preserved in the internal message history —
+        this method only modifies the outgoing API copy.
 
-        ``extra_content`` (Gemini thought_signature) is also stripped — strict
-        providers reject it with "Extra inputs are not permitted" — UNLESS the
-        outgoing ``model`` is itself Gemini-family, in which case it must be
-        replayed (Gemini 3 thinking models 400 without it). Defaults to
-        stripping when no model is supplied.
+        ``extra_content`` on tool_calls is also stripped — strict providers
+        reject it with "Extra inputs are not permitted".
 
         Creates new tool_call dicts rather than mutating in-place, so the
         original messages list retains call_id/response_item_id for Codex
         Responses API compatibility (e.g. if the session falls back to a
         Codex provider later).
 
-        Fields stripped: call_id, response_item_id, extra_content (model-gated)
+        Fields stripped: call_id, response_item_id, extra_content
         """
         tool_calls = api_msg.get("tool_calls")
         if not isinstance(tool_calls, list):
             return api_msg
-        from agent.transports.chat_completions import _model_consumes_thought_signature
-        _STRIP_KEYS = {"call_id", "response_item_id"}
-        if not _model_consumes_thought_signature(model):
-            _STRIP_KEYS = _STRIP_KEYS | {"extra_content"}
+        _STRIP_KEYS = {"call_id", "response_item_id", "extra_content"}
         api_msg["tool_calls"] = [
             {k: v for k, v in tc.items() if k not in _STRIP_KEYS}
             if isinstance(tc, dict) else tc
@@ -7599,9 +7091,9 @@ def main(
 
     Args:
         query (str): Natural language query for the agent. Defaults to Python 3.13 example.
-        model (str): Model name to use (OpenRouter format: provider/model). Defaults to anthropic/claude-sonnet-4.6.
-        api_key (str): API key for authentication. Uses OPENROUTER_API_KEY env var if not provided.
-        base_url (str): Base URL for the model API. Defaults to https://openrouter.ai/api/v1
+        model (str): Model name to use (e.g. ``gpt-5.4``).
+        api_key (str): API key for authentication.
+        base_url (str): Base URL for the model API.
         max_turns (int): Maximum number of API call iterations. Defaults to 10.
         enabled_toolsets (str): Comma-separated list of toolsets to enable. Supports predefined
                               toolsets (e.g., "research", "development", "safe").

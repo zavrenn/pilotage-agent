@@ -43,7 +43,6 @@ from gateway.session import (
 from pilotage_cli.config import atomic_config_write, cfg_get, clear_model_endpoint_credentials
 from utils import (
     atomic_json_write,
-    base_url_host_matches,
     is_truthy_value,
 )
 
@@ -2341,14 +2340,6 @@ class GatewaySlashCommandsMixin:
                 if mi.max_output:
                     lines.append(t("gateway.model.max_output_label", tokens=f"{mi.max_output:,}"))
                 lines.append(t("gateway.model.capabilities_label", capabilities=mi.format_capabilities()))
-
-            # Cache notice
-            cache_enabled = (
-                (base_url_host_matches(result.base_url or "", "openrouter.ai") and "claude" in result.new_model.lower())
-                or result.api_mode == "anthropic_messages"
-            )
-            if cache_enabled:
-                lines.append(t("gateway.model.prompt_caching_enabled"))
 
             if result.warning_message:
                 lines.append(t("gateway.model.warning_prefix", warning=result.warning_message))

@@ -628,7 +628,7 @@ def init_agent(
     agent._credential_pool = credential_pool
     agent.acp_command = acp_command or command
     agent.acp_args = list(acp_args or args or [])
-    if api_mode in {"chat_completions", "codex_responses", "anthropic_messages", "codex_app_server"}:
+    if api_mode in {"chat_completions", "codex_responses", "codex_app_server"}:
         agent.api_mode = api_mode
     elif agent.provider == "openai-codex":
         agent.api_mode = "codex_responses"
@@ -638,14 +638,6 @@ def init_agent(
     ):
         agent.api_mode = "codex_responses"
         agent.provider = "openai-codex"
-    elif agent.provider == "anthropic" or (provider_name is None and agent._base_url_hostname == "api.anthropic.com"):
-        agent.api_mode = "anthropic_messages"
-        agent.provider = "anthropic"
-    elif agent._base_url_lower.rstrip("/").endswith("/anthropic"):
-        # Third-party Anthropic-compatible endpoints (e.g. MiniMax, DashScope)
-        # use a URL convention ending in /anthropic. Auto-detect these so the
-        # Anthropic Messages API adapter is used instead of chat completions.
-        agent.api_mode = "anthropic_messages"
     else:
         agent.api_mode = "chat_completions"
 
@@ -833,46 +825,6 @@ def init_agent(
     agent.prefill_messages = prefill_messages or []  # Prefilled conversation turns
     agent._force_ascii_payload = False
     
-    # Anthropic prompt caching: auto-enabled for Claude models on native
-    # Anthropic, OpenRouter, and third-party gateways that speak the
-    # Anthropic protocol (``api_mode == 'anthropic_messages'``). Reduces
-    # input costs by ~75% on multi-turn conversations. Uses four breakpoints:
-    # the static system prefix, full system prompt, and last two messages
-    # (falling back to system-and-3 when no static prefix is available). See
-    # ``_anthropic_prompt_cache_policy`` for the layout-vs-transport decision.
-    agent._use_prompt_caching, agent._use_native_cache_layout = (
-        agent._anthropic_prompt_cache_policy()
-    )
-    agent._cache_disabled = False
-    # Anthropic supports "5m" (default) and "1h" cache TTL tiers. Read from
-    # config.yaml under prompt_caching.cache_ttl; unknown values keep "5m".
-    # 1h tier costs 2x on write vs 1.25x for 5m, but amortizes across long
-    # sessions with >5-minute pauses between turns.
-    #
-    # Setting cache_ttl to a falsy value (false / null / "off" / "disabled" /
-    # "no" / "none") disables prompt caching entirely. This is useful for
-    # OAuth subscription users where cache writes bill against "extra usage"
-    # or for third-party proxies that inject their own cache_control markers
-    # The disable propagates through anthropic_prompt_cache_policy
-    # and restore_primary_runtime() so it survives /model switches and
-    # fallback re-derivation.
-    agent._cache_ttl = "5m"
-    try:
-        from pilotage_cli.config import load_config_readonly as _load_pc_cfg
-
-        from agent.agent_runtime_helpers import cache_ttl_means_disabled
-
-        _pc_cfg = _load_pc_cfg().get("prompt_caching", {}) or {}
-        _ttl = _pc_cfg.get("cache_ttl", "5m")
-        if _ttl in {"5m", "1h"}:
-            agent._cache_ttl = _ttl
-        elif cache_ttl_means_disabled(_ttl):
-            agent._use_prompt_caching = False
-            agent._use_native_cache_layout = False
-            agent._cache_ttl = None
-            agent._cache_disabled = True
-    except Exception:
-        pass
 
     # Iteration budget: the LLM is only notified when it actually exhausts
     # the iteration budget (api_call_count >= max_iterations).  At that
@@ -993,8 +945,6 @@ def init_agent(
     # Codex/Anthropic wrapping for all known providers.
     # raw_codex=True because the main agent needs direct responses.stream()
     # access for Codex Responses API streaming.
-    agent._anthropic_client = None
-    agent._is_anthropic_oauth = False
 
     # Resolve per-provider / per-model request timeout once up front so
     # every client construction path below (Anthropic native, OpenAI-wire,
@@ -1320,15 +1270,6 @@ def init_agent(
         prompt_preview = agent.ephemeral_system_prompt[:60] + "..." if len(agent.ephemeral_system_prompt) > 60 else agent.ephemeral_system_prompt
         print(f"🔒 Ephemeral system prompt: '{prompt_preview}' (not saved to trajectories)")
     
-    # Show prompt caching status
-    if agent._use_prompt_caching and not agent.quiet_mode:
-        if agent._use_native_cache_layout and agent.provider == "anthropic":
-            source = "native Anthropic"
-        elif agent._use_native_cache_layout:
-            source = "Anthropic-compatible endpoint"
-        else:
-            source = "Claude via OpenRouter"
-        print(f"💾 Prompt caching: ENABLED ({source}, {agent._cache_ttl} TTL)")
     
     # Session logging setup - auto-save conversation trajectories for debugging
     agent.session_start = datetime.now()
@@ -1394,9 +1335,6 @@ def init_agent(
     
     # Cached system prompt -- built once per session, only rebuilt on compression
     agent._cached_system_prompt: Optional[str] = None
-    # Cross-session-stable prefix of the cached prompt. It remains separate
-    # from the persisted string and is used only to place an early cache marker.
-    agent._cached_system_prompt_static: Optional[str] = None
     
     # Filesystem checkpoint manager (transparent — not a tool)
     from tools.checkpoint_manager import CheckpointManager
@@ -2642,8 +2580,6 @@ def init_agent(
         "api_mode": agent.api_mode,
         "api_key": getattr(agent, "api_key", ""),
         "client_kwargs": dict(agent._client_kwargs),
-        "use_prompt_caching": agent._use_prompt_caching,
-        "use_native_cache_layout": agent._use_native_cache_layout,
         # Context engine state that _try_activate_fallback() overwrites.
         # Use getattr for model/base_url/api_key/provider since plugin
         # engines may not have these (they're ContextCompressor-specific).
@@ -2654,12 +2590,6 @@ def init_agent(
         "compressor_context_length": _cc.context_length,
         "compressor_threshold_tokens": _cc.threshold_tokens,
     }
-    if agent.api_mode == "anthropic_messages":
-        agent._primary_runtime.update({
-            "anthropic_api_key": agent._anthropic_api_key,
-            "anthropic_base_url": agent._anthropic_base_url,
-            "is_anthropic_oauth": agent._is_anthropic_oauth,
-        })
 
 
 

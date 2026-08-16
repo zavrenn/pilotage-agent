@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 
 from pilotage_cli import __version__ as _PILOTAGE_VERSION
 from pilotage_cli.urllib_security import open_credentialed_url
-from utils import base_url_host_matches
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +147,7 @@ try:
     for _pp in _list_providers_for_canonical():
         if _pp.name in _canonical_slugs:
             continue
-        if _pp.auth_type in {"oauth_device_code", "oauth_external", "external_process", "aws_sdk", "copilot", "vertex"}:
+        if _pp.auth_type in {"oauth_device_code", "oauth_external", "external_process", "copilot", "vertex"}:
             continue  # non-api-key flows need bespoke picker UX; skip auto-inject
         _label = _pp.display_name or _pp.name
         _desc = _pp.description or f"{_label} (direct API)"
@@ -334,7 +333,7 @@ def get_default_model_for_provider(provider: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Pricing helpers — fetch live pricing from OpenRouter-compatible /v1/models
+# Pricing helpers — fetch live pricing from OpenAI-compatible /v1/models
 # ---------------------------------------------------------------------------
 
 # Cache: maps model_id → {"prompt": str, "completion": str} per endpoint
@@ -418,7 +417,7 @@ def _format_price_per_mtok(per_token_str: str) -> str:
 
 def fetch_models_with_pricing(
     api_key: str | None = None,
-    base_url: str = "https://openrouter.ai/api",
+    base_url: str = "https://api.openai.com",
     timeout: float = 8.0,
     *,
     force_refresh: bool = False,
@@ -426,7 +425,7 @@ def fetch_models_with_pricing(
     """Fetch ``/v1/models`` and return ``{model_id: {prompt, completion, ...}}``.
 
     Results are cached per *base_url* so repeated calls are free.
-    Works with any OpenRouter-compatible endpoint.
+    Works with any OpenAI-compatible endpoint.
     """
     cache_key = (base_url or "").rstrip("/")
     if not force_refresh:
@@ -468,10 +467,13 @@ def fetch_models_with_pricing(
 
 
 def get_pricing_for_provider(provider: str, *, force_refresh: bool = False) -> dict[str, dict[str, str]]:
-    """Return live pricing for providers that support it."""
-    normalized = normalize_provider(provider)
-    if normalized == "deepinfra":
-        return _fetch_deepinfra_pricing(force_refresh=force_refresh)
+    """Return live pricing for providers that support it.
+
+    No built-in provider publishes a per-slug pricing catalog today; the
+    generic endpoint-level fetch lives in :func:`fetch_models_with_pricing`
+    (used with explicit base URLs by auxiliary surfaces). Kept as a stable
+    seam for the picker/pricing call sites, which all handle an empty map.
+    """
     return {}
 
 
@@ -507,12 +509,10 @@ def list_available_providers() -> list[dict[str, str]]:
         # Check if this provider has credentials available
         has_creds = False
         try:
-            from pilotage_cli.auth import get_auth_status, has_usable_secret
+            from pilotage_cli.auth import get_auth_status
             if pid == "custom":
                 custom_base_url = _get_custom_base_url() or ""
                 has_creds = bool(custom_base_url.strip())
-            elif pid == "openrouter":
-                has_creds = has_usable_secret(os.getenv("OPENROUTER_API_KEY", ""))
             else:
                 status = get_auth_status(pid)
                 has_creds = bool(status.get("logged_in") or status.get("configured"))
@@ -532,14 +532,13 @@ def parse_model_input(raw: str, current_provider: str) -> tuple[str, str]:
 
     Supports ``provider:model`` syntax to switch providers at runtime::
 
-        openrouter:anthropic/claude-sonnet-4.5  →  ("openrouter", "anthropic/claude-sonnet-4.5")
-        nous:hermes-3                             →  ("nous", "hermes-3")
-        anthropic/claude-sonnet-4.5             →  (current_provider, "anthropic/claude-sonnet-4.5")
+        openai-api:gpt-5.4                       →  ("openai-api", "gpt-5.4")
+        custom:local:qwen                        →  ("custom:local", "qwen")
         gpt-5.4                                 →  (current_provider, "gpt-5.4")
 
     The colon is only treated as a provider delimiter if the left side is a
     recognized provider name or alias.  This avoids misinterpreting model names
-    that happen to contain colons (e.g. ``anthropic/claude-3.5-sonnet:beta``).
+    that happen to contain colons.
 
     Returns ``(provider, model)`` where *provider* is either the explicit
     provider from the input or *current_provider* if none was specified.
@@ -582,21 +581,6 @@ def _get_model_config_dict() -> dict[str, Any]:
     return {}
 
 
-def _base_url_looks_like_anthropic_messages(base_url: str) -> bool:
-    normalized = str(base_url or "").strip().lower().rstrip("/")
-    if not normalized:
-        return False
-    path = urllib.parse.urlparse(normalized).path.rstrip("/")
-    return path.endswith("/anthropic") or path.endswith("/anthropic/v1")
-
-
-def _anthropic_models_url(base_url: Optional[str] = None) -> str:
-    endpoint = str(base_url or "https://api.anthropic.com").strip().rstrip("/")
-    if endpoint.endswith("/v1"):
-        return endpoint + "/models"
-    return endpoint + "/v1/models"
-
-
 def curated_models_for_provider(
     provider: Optional[str],
     *,
@@ -609,7 +593,7 @@ def curated_models_for_provider(
     is unreachable.
     """
     normalized = normalize_provider(provider)
-    # Try live API first (Codex, Nous, etc. all support /models)
+    # Try live API first (Codex and OpenAI-compatible endpoints support /models)
     live = provider_model_ids(normalized)
     if live:
         return [(m, "") for m in live]
@@ -625,18 +609,9 @@ def _provider_keys(provider: str) -> set[str]:
     return {k for k in (key, normalized) if k}
 
 
-# Retired model IDs kept for /model auto-detect only — not shown in pickers.
-# DeepSeek cut these off on 2026-07-24; model_normalize remaps them on the wire.
-_PROVIDER_RETIRED_ALIASES: dict[str, tuple[str, ...]] = {
-    "deepseek": ("deepseek-chat", "deepseek-reasoner"),
-}
-
-
 def _provider_catalog_names(provider: str) -> tuple[str, ...]:
-    """Active picker models plus retired aliases recognized for detection."""
-    active = tuple(_PROVIDER_MODELS.get(provider, []))
-    retired = _PROVIDER_RETIRED_ALIASES.get(provider, ())
-    return active + retired
+    """Active picker models recognized for detection."""
+    return tuple(_PROVIDER_MODELS.get(provider, []))
 
 
 def _model_in_provider_catalog(name_lower: str, providers: set[str]) -> bool:
@@ -711,8 +686,8 @@ def _resolve_static_model_alias(
             return provider, matched
 
     # Last resort: providers that re-expose other vendors' models. Only reached
-    # when no native-vendor catalog matched — so `sonnet` resolves to anthropic.
-    # None are currently defined (_BORROWED_MODEL_PROVIDERS is empty).
+    # when no native-vendor catalog matched. None are currently defined
+    # (_BORROWED_MODEL_PROVIDERS is empty).
     for provider in _BORROWED_MODEL_PROVIDERS:
         if provider in current_keys and (matched := _match(provider)):
             return provider, matched
@@ -742,12 +717,11 @@ def detect_static_provider_for_model(
         return alias_match
 
     # --- Step 0: bare provider name typed as model ---
-    # If someone types `/model nous` or `/model anthropic`, treat it as a
-    # provider switch and pick the first model from that provider's catalog.
-    # Skip "custom" and "openrouter" — custom has no model catalog, and
-    # openrouter requires an explicit model name to be useful.
+    # If someone types `/model openai-api`, treat it as a provider switch and
+    # pick the first model from that provider's catalog. Skip "custom" — it
+    # has no model catalog.
     resolved_provider = _PROVIDER_ALIASES.get(name_lower, name_lower)
-    if resolved_provider not in {"custom", "openrouter"}:
+    if resolved_provider != "custom":
         default_models = _PROVIDER_MODELS.get(resolved_provider, [])
         if (
             resolved_provider in _PROVIDER_LABELS
@@ -755,10 +729,10 @@ def detect_static_provider_for_model(
             and resolved_provider not in current_keys
         ):
             # Route through the cost-safe default rather than picking
-            # ``default_models[0]`` directly. For metered aggregators whose
-            # curated list is ordered most-capable-first (e.g. Nous Portal),
-            # entry [0] is the priciest flagship, and typing ``/model nous``
-            # would silently escalate to it — the exact billing footgun the
+            # ``default_models[0]`` directly. For metered providers whose
+            # curated list is ordered most-capable-first, entry [0] is also
+            # the priciest flagship, and typing the bare provider name would
+            # silently escalate to it — the exact billing footgun the
             # catalog-labeled silent default (``_SILENT_DEFAULT_PROVIDERS``)
             # exists to prevent. For providers outside that set this is
             # unchanged (it returns ``models[0]``).
@@ -837,18 +811,18 @@ def normalize_provider(provider: Optional[str]) -> str:
     ``pilotage_cli.auth.resolve_provider()`` to resolve it to a concrete
     provider based on credentials and environment.
     """
-    normalized = (provider or "openrouter").strip().lower()
+    normalized = (provider or "openai-api").strip().lower()
     return _PROVIDER_ALIASES.get(normalized, normalized)
 
 
 def provider_label(provider: Optional[str]) -> str:
     """Return a human-friendly label for a provider id or alias."""
-    original = (provider or "openrouter").strip()
+    original = (provider or "openai-api").strip()
     normalized = original.lower()
     if normalized == "auto":
         return "Auto"
     normalized = normalize_provider(normalized)
-    return _PROVIDER_LABELS.get(normalized, original or "OpenRouter")
+    return _PROVIDER_LABELS.get(normalized, original or "OpenAI API")
 
 
 # Models that support OpenAI Priority Processing (service_tier="priority").
@@ -856,8 +830,8 @@ def provider_label(provider: Optional[str]) -> str:
 #
 # Pattern-based matching — any OpenAI flagship model (gpt-*, o1*, o3*, o4*)
 # is assumed to support Priority Processing. service_tier=priority is silently
-# ignored by non-OpenAI endpoints (OpenRouter/Copilot/opencode-zen proxies
-# strip the field), so false positives are harmless. Codex-series models
+# ignored by non-OpenAI endpoints (OpenAI-compatible proxies strip the field),
+# so false positives are harmless. Codex-series models
 # (gpt-5-codex, gpt-5.3-codex, etc.) are excluded — they don't expose the
 # service_tier parameter through the Codex Responses API.
 _OPENAI_FAST_MODE_PREFIXES: tuple[str, ...] = (
@@ -881,17 +855,8 @@ def _is_openai_fast_model(model_id: Optional[str]) -> bool:
     return any(base.startswith(prefix) for prefix in _OPENAI_FAST_MODE_PREFIXES)
 
 
-# Models that support Anthropic Fast Mode (speed="fast").
-# See https://platform.claude.com/docs/en/build-with-claude/fast-mode
-#
-# Pattern-based matching — any claude-* model is eligible. The anthropic
-# adapter gates speed=fast on native Anthropic endpoints only (see
-# _is_third_party_anthropic_endpoint in agent/anthropic_adapter.py), so
-# third-party proxies that would reject the beta header are protected.
-
-
 def _strip_vendor_prefix(model_id: str) -> str:
-    """Strip vendor/ prefix from a model ID (e.g. 'anthropic/claude-opus-4-6' -> 'claude-opus-4-6')."""
+    """Strip vendor/ prefix from a model ID (e.g. 'openai/gpt-5.4' -> 'gpt-5.4')."""
     raw = str(model_id or "").strip().lower()
     if "/" in raw:
         raw = raw.split("/", 1)[1]
@@ -900,43 +865,19 @@ def _strip_vendor_prefix(model_id: str) -> str:
 
 def model_supports_fast_mode(model_id: Optional[str]) -> bool:
     """Return whether Pilotage should expose the /fast toggle for this model."""
-    return _is_anthropic_fast_model(model_id) or _is_openai_fast_model(model_id)
-
-
-def _is_anthropic_fast_model(model_id: Optional[str]) -> bool:
-    """Return True if the model accepts the Anthropic Fast Mode ``speed`` param.
-
-    This gates the *speed=fast request parameter*, which Anthropic supports on
-    Opus 4.6 only (Opus 4.7 explicitly 400s). It is deliberately NOT a general
-    "is this a fast model" check: for Opus 4.8 the fast offering is a SEPARATE
-    model id (``…-opus-4.8-fast``) selected via the model field, not the speed
-    parameter — see ``agent.anthropic_adapter._supports_fast_mode`` and its
-    test. Keep this in lock-step with that adapter gate so the UI never shows a
-    Fast toggle that the runtime would silently drop.
-    """
-    raw = _strip_vendor_prefix(str(model_id or ""))
-    base = raw.split(":")[0]
-    if not base.startswith("claude-"):
-        return False
-    # Only Opus 4.6 supports the speed=fast parameter at present.
-    return "opus-4-6" in base or "opus-4.6" in base
+    return _is_openai_fast_model(model_id)
 
 
 def resolve_fast_mode_overrides(model_id: Optional[str]) -> dict[str, Any] | None:
     """Return request_overrides for fast/priority mode, or None if unsupported.
 
-    Returns provider-appropriate overrides:
-    - OpenAI models: ``{"service_tier": "priority"}`` (Priority Processing)
-    - Anthropic models: ``{"speed": "fast"}`` (Anthropic Fast Mode beta)
-
-    The overrides are injected into the API request kwargs by
-    ``_build_api_kwargs`` in run_agent.py — each API path handles its own
-    keys (service_tier for OpenAI/Codex, speed for Anthropic Messages).
+    Returns ``{"service_tier": "priority"}`` (OpenAI Priority Processing) for
+    eligible OpenAI models. The overrides are injected into the API request
+    kwargs by ``_build_api_kwargs`` in run_agent.py — the OpenAI/Codex paths
+    handle the service_tier key.
     """
     if not model_supports_fast_mode(model_id):
         return None
-    if _is_anthropic_fast_model(model_id):
-        return {"speed": "fast"}
     return {"service_tier": "priority"}
 
 
@@ -946,29 +887,11 @@ def resolve_fast_mode_overrides(model_id: Optional[str]) -> dict[str, Any] | Non
 # curated list to be merged with fresh models.dev entries (fresh first, any
 # curated-only names appended) for both the CLI and the gateway /model picker.
 #
-# DELIBERATELY EXCLUDED:
-#   - "openrouter": curated list is already a hand-picked agentic subset of
-#     OpenRouter's 400+ catalog. Blindly merging would dump everything.
-# Also excluded: providers that already have dedicated live-endpoint
-# branches below (ai-gateway, ollama-cloud, custom, openai-codex) —
-# those paths handle freshness themselves.
-_MODELS_DEV_PREFERRED: frozenset[str] = frozenset({
-    "opencode-go",
-    "opencode-zen",
-    "deepseek",
-    "kilocode",
-    "fireworks",
-    "mistral",
-    "togetherai",
-    "cohere",
-    "perplexity",
-    "groq",
-    "nvidia",
-    "huggingface",
-    "zai",
-    "gemini",
-    "google",
-})
+# Empty in the OpenAI-only registry: openai-codex / openai-api handle catalog
+# freshness through their own live endpoints below, and custom endpoints are
+# probed live. Kept as the mechanism so a future provider can opt in with a
+# one-line addition.
+_MODELS_DEV_PREFERRED: frozenset[str] = frozenset()
 
 
 def _model_dedup_key(model_id: str) -> str:
@@ -993,7 +916,7 @@ def _merge_with_models_dev(provider: str, curated: list[str]) -> list[str]:
 
     Returns models.dev entries first (in models.dev order), then any
     curated-only entries appended. Preserves case for curated fallbacks
-    (e.g. ``MiniMax-M2.7``) while trusting models.dev for newer variants.
+    while trusting models.dev for newer variants.
 
     If models.dev is unreachable or returns nothing, the curated list is
     returned unchanged — this is the offline/CI fallback path.
@@ -1053,11 +976,11 @@ def _openai_discovery_base_url(provider: str) -> str:
 def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) -> list[str]:
     """Return the best known model catalog for a provider.
 
-    Tries live API endpoints for providers that support them (Codex, Nous),
-    falling back to static lists. For providers in ``_MODELS_DEV_PREFERRED``
-    (opencode-go/zen, xiaomi, deepseek, smaller inference providers, etc.),
-    models.dev entries are merged on top of curated so new models released
-    on the platform appear in ``/model`` without a Pilotage release.
+    Tries live API endpoints for providers that support them (Codex, OpenAI,
+    custom endpoints), falling back to static lists. For providers in
+    ``_MODELS_DEV_PREFERRED``, models.dev entries are merged on top of
+    curated so new models released on the platform appear in ``/model``
+    without a Pilotage release.
     """
     normalized = normalize_provider(provider)
     if normalized == "openai-codex":
@@ -1076,11 +999,6 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
         except Exception:
             access_token = None
         return get_codex_model_ids(access_token=access_token)
-    if normalized == "deepinfra":
-        # DeepInfra's generic /models endpoint mixes chat, image, video,
-        # speech, and embedding models. The tagged catalog helper is the only
-        # safe source for the chat picker, including its empty/failure result.
-        return _fetch_deepinfra_models(force_refresh=force_refresh) or []
     if normalized in ("openai", "openai-api"):
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if api_key:
@@ -1115,19 +1033,6 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                     return live
             except Exception:
                 pass
-    if normalized == "gmi":
-        try:
-            from pilotage_cli.auth import resolve_api_key_provider_credentials
-
-            creds = resolve_api_key_provider_credentials("gmi")
-            api_key = str(creds.get("api_key") or "").strip()
-            base_url = str(creds.get("base_url") or "").strip()
-            if api_key and base_url:
-                live = fetch_api_models(api_key, base_url)
-                if live:
-                    return live
-        except Exception:
-            pass
     if normalized == "custom":
         base_url = _get_custom_base_url()
         if base_url:
@@ -1137,15 +1042,13 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                 str(model_cfg.get("api_key", "") or "").strip()
                 or os.getenv("CUSTOM_API_KEY", "")
                 or os.getenv("OPENAI_API_KEY", "")
-                or os.getenv("OPENROUTER_API_KEY", "")
             )
-            api_mode = "anthropic_messages" if _base_url_looks_like_anthropic_messages(base_url) else None
-            live = fetch_api_models(api_key, base_url, api_mode=api_mode)
+            live = fetch_api_models(api_key, base_url)
             if live:
                 return live
     # ── Profile-based generic live fetch (all simple api-key providers) ──
     # Handles any provider registered in providers/ with auth_type="api_key".
-    # Replaces per-provider copy-paste blocks (gmi, zai, etc.).
+    # Replaces per-provider copy-paste blocks.
     try:
         from providers import get_provider_profile
         from pilotage_cli.auth import resolve_api_key_provider_credentials
@@ -1166,19 +1069,14 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                     # Merge static curated list with live API results so
                     # models that the live endpoint omits (stale cache,
                     # partial rollout) still appear in the picker.
-                    #
-                    # Single providers (e.g. zai) use curated-first
-                    # (commit 658ac1d86) to surface newest models even when live
-                    # API lags. OpenCode Zen / Go are different: their
-                    # live API is the authoritative catalog, so they merge
-                    # live-first — live entries lead and stale curated entries
-                    # no longer pollute the top of the picker.
+                    # Curated-first: the curated list leads so the picker's
+                    # agentic ordering is preserved; live-only entries are
+                    # appended after it.
                     #
                     # Plugin providers with no static _PROVIDER_MODELS entry fall
                     # back to the profile's curated fallback_models so their
                     # agentic picks lead the picker instead of whatever the live
-                    # catalog happens to return first (e.g. Fireworks lists an
-                    # image model, flux-*, ahead of its chat models).
+                    # catalog happens to return first.
                     curated = list(_PROVIDER_MODELS.get(normalized, [])) or list(
                         _p.fallback_models or ()
                     )
@@ -1213,9 +1111,9 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
 # ---------------------------------------------------------------------------
 #
 # Without this layer, every /model picker open re-fetches every authed
-# provider's /v1/models endpoint. On a well-configured user (anthropic +
-# openai + copilot + gemini + huggingface + ...) that's 2+ seconds of cold
-# HTTP roundtrips just to render the provider list.
+# provider's /v1/models endpoint. On a user with several configured
+# providers that's multiple seconds of cold HTTP roundtrips just to
+# render the provider list.
 #
 # Cache strategy:
 #   - One JSON file at $PILOTAGE_HOME/provider_models_cache.json
@@ -1307,11 +1205,10 @@ def _credential_fingerprint(provider: str) -> str:
     Rotating any of the relevant env vars invalidates the cached entry
     for that provider. We hash AT LEAST the api-key + base-url env vars
     declared in ``PROVIDER_REGISTRY``. For OAuth-backed providers
-    (codex, copilot, anthropic-via-claude-code, nous portal), the
-    relevant tokens live in ``$PILOTAGE_HOME/auth.json`` and external
-    credential files. Rather than parse every shape, we additionally
-    fold the mtime of those files into the fingerprint so refreshes
-    after re-auth bust the cache.
+    (codex), the relevant tokens live in ``$PILOTAGE_HOME/auth.json``
+    and external credential files. Rather than parse every shape, we
+    additionally fold the mtime of those files into the fingerprint so
+    refreshes after re-auth bust the cache.
     """
     import hashlib
     import os as _os
@@ -1359,9 +1256,6 @@ def _credential_fingerprint(provider: str) -> str:
     # External well-known credential file locations
     for path in (
         _os.path.expanduser("~/.codex/auth.json"),
-        _os.path.expanduser("~/.claude/.credentials.json"),
-        _os.path.expanduser("~/.config/github-copilot/hosts.json"),
-        _os.path.expanduser("~/.minimax/credentials.json"),
     ):
         try:
             mt = _os.stat(path).st_mtime_ns
@@ -1515,10 +1409,8 @@ def probe_api_models(
 ) -> dict[str, Any]:
     """Probe a ``/models`` endpoint with light URL heuristics.
 
-    For ``anthropic_messages`` mode, uses ``x-api-key`` and
-    ``anthropic-version`` headers (Anthropic's native auth) instead of
-    ``Authorization: Bearer``.  The response shape (``data[].id``) is
-    identical, so the same parser works for both.
+    Authenticated probes send ``Authorization: Bearer``; the response
+    shape (``data[].id``) follows the OpenAI-compatible convention.
     """
     normalized = (base_url or "").strip().rstrip("/")
     if not normalized:
@@ -1541,12 +1433,7 @@ def probe_api_models(
 
     tried: list[str] = []
     headers: dict[str, str] = {"User-Agent": _PILOTAGE_USER_AGENT}
-    if urllib.parse.urlparse(normalized).hostname == "generativelanguage.googleapis.com":
-        headers["X-Goog-Api-Client"] = f"pilotage-agent/{_PILOTAGE_VERSION}"
-    if api_key and api_mode == "anthropic_messages":
-        headers["x-api-key"] = api_key
-        headers["anthropic-version"] = "2023-06-01"
-    elif api_key:
+    if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     if isinstance(request_headers, dict):
         # Per-provider custom headers can contain auth/proxy secrets. Merge
@@ -1724,26 +1611,6 @@ def _fetch_deepinfra_models_by_tag(
     return matched
 
 
-def _fetch_deepinfra_models(
-    timeout: float = 5.0,
-    *,
-    force_refresh: bool = False,
-) -> Optional[list[str]]:
-    """Return DeepInfra chat-model ids (tag-aware, regex fallback).
-
-    Thin wrapper over :func:`_fetch_deepinfra_models_by_tag` so historical
-    callers in :func:`provider_model_ids` keep their string-list contract.
-    Returns ``None`` on network failure, an empty list if the catalog
-    contains no chat-tagged ids (which would itself be surprising).
-    """
-    items = _fetch_deepinfra_models_by_tag(
-        "chat", timeout=timeout, force_refresh=force_refresh
-    )
-    if items is None:
-        return None
-    return [item["id"] for item in items] or None
-
-
 def deepinfra_model_ids(tag: str, *, force_refresh: bool = False) -> list[str]:
     """Return DeepInfra model ids carrying surface *tag* (``[]`` on failure).
 
@@ -1766,47 +1633,6 @@ def deepinfra_base_url(section: Optional[dict] = None) -> str:
     candidate = section.get("base_url") if isinstance(section, dict) else None
     value = candidate or os.getenv("DEEPINFRA_BASE_URL") or _DEEPINFRA_DEFAULT_BASE_URL
     return str(value).strip().rstrip("/")
-
-
-def _fetch_deepinfra_pricing(
-    timeout: float = 5.0,
-    *,
-    force_refresh: bool = False,
-) -> dict[str, dict[str, str]]:
-    """Return picker-shape pricing for DeepInfra chat models.
-
-    DeepInfra publishes ``input_tokens`` / ``output_tokens`` /
-    ``cache_read_tokens`` in $/MTok; the picker expects per-token strings
-    under ``prompt`` / ``completion`` / ``input_cache_read`` (mirrors the
-    OpenRouter shape consumed by
-    :func:`format_model_pricing_table`). Cached via the catalog helper so
-    repeated picker renders are free.
-    """
-    items = _fetch_deepinfra_models_by_tag(
-        "chat", timeout=timeout, force_refresh=force_refresh
-    )
-    if not items:
-        return {}
-
-    result: dict[str, dict[str, str]] = {}
-    for item in items:
-        metadata = item.get("metadata") or {}
-        pricing = metadata.get("pricing") if isinstance(metadata, dict) else None
-        if not isinstance(pricing, dict):
-            continue
-        entry: dict[str, str] = {}
-        inp = pricing.get("input_tokens")
-        out = pricing.get("output_tokens")
-        cache_read = pricing.get("cache_read_tokens")
-        if inp is not None:
-            entry["prompt"] = str(float(inp) / 1_000_000)
-        if out is not None:
-            entry["completion"] = str(float(out) / 1_000_000)
-        if cache_read is not None:
-            entry["input_cache_read"] = str(float(cache_read) / 1_000_000)
-        if entry:
-            result[item["id"]] = entry
-    return result
 
 
 def fetch_api_models(
@@ -1987,8 +1813,6 @@ def validate_requested_model(
     """
     requested = (model_name or "").strip()
     normalized = normalize_provider(provider)
-    if normalized == "openrouter" and base_url and not base_url_host_matches(base_url, "openrouter.ai"):
-        normalized = "custom"
     requested_for_lookup = requested
 
     if not requested:
@@ -2009,11 +1833,7 @@ def validate_requested_model(
 
 
     if normalized == "custom" or normalized.startswith("custom:"):
-        # Try probing with correct auth for the api_mode.
-        if api_mode == "anthropic_messages":
-            probe = probe_api_models(api_key, base_url, api_mode=api_mode)
-        else:
-            probe = probe_api_models(api_key, base_url)
+        probe = probe_api_models(api_key, base_url)
         api_models = probe.get("models")
         if api_models is not None:
             if requested_for_lookup in set(api_models):
@@ -2062,16 +1882,11 @@ def validate_requested_model(
             f"Note: could not reach this custom endpoint's model listing at `{probe.get('probed_url')}`. "
             f"Pilotage will still save `{requested}`, but the endpoint should expose `/models` for verification."
         )
-        if api_mode == "anthropic_messages":
-            message += (
-                "\n  Many Anthropic-compatible proxies do not implement the Models API "
-                "(GET /v1/models).  The model name has been accepted without verification."
-            )
         if probe.get("suggested_base_url"):
             message += f"\n  If this server expects `/v1`, try base URL: `{probe.get('suggested_base_url')}`"
 
         return {
-            "accepted": api_mode == "anthropic_messages",
+            "accepted": True,
             "persist": True,
             "recognized": False,
             "message": message,
@@ -2106,11 +1921,11 @@ def validate_requested_model(
             if suggestions:
                 suggestion_text = "\n  Similar models: " + ", ".join(f"`{s}`" for s in suggestions)
             provider_label = "OpenAI Codex"
-            # Plausibility gate: the soft-accept /) exists
+            # Plausibility gate: the soft-accept exists
             # for entitlement-gated *hidden* slugs the curated listing hasn't
             # caught up with — but those are always the provider's own family
-            # (openai-codex -> gpt-*; xai-oauth -> grok-*). Accepting an
-            # unrelated typed name (e.g. `qwen3.5-4b`, `llama-3.1-8b`) here turns
+            # (openai-codex -> gpt-*). Accepting an
+            # unrelated typed name (e.g. `llama-3.1-8b`) here turns
             # what should be an actionable "did you mean --provider <x>?" error
             # into a confusing success that 400s on the next turn. Only soft-
             # accept names that share the provider's family prefix; reject the
@@ -2147,100 +1962,10 @@ def validate_requested_model(
                 ),
             }
 
-    # MiniMax providers don't expose a /models endpoint — validate against
-    # the static catalog instead, similar to openai-codex.
-    if normalized in {"minimax", "minimax-cn"}:
-        try:
-            catalog_models = provider_model_ids(normalized)
-        except Exception:
-            catalog_models = []
-        if catalog_models:
-            # Case-insensitive lookup (catalog uses mixed case like MiniMax-M2.7)
-            catalog_lower = {m.lower(): m for m in catalog_models}
-            if requested_for_lookup.lower() in catalog_lower:
-                return {
-                    "accepted": True,
-                    "persist": True,
-                    "recognized": True,
-                    "message": None,
-                }
-            # Auto-correct close matches (case-insensitive)
-            catalog_lower_list = list(catalog_lower.keys())
-            auto = get_close_matches(requested_for_lookup.lower(), catalog_lower_list, n=1, cutoff=0.9)
-            if auto:
-                corrected = catalog_lower[auto[0]]
-                return {
-                    "accepted": True,
-                    "persist": True,
-                    "recognized": True,
-                    "corrected_model": corrected,
-                    "message": f"Auto-corrected `{requested}` → `{corrected}`",
-                }
-            suggestions = get_close_matches(requested_for_lookup.lower(), catalog_lower_list, n=3, cutoff=0.5)
-            suggestion_text = ""
-            if suggestions:
-                suggestion_text = "\n  Similar models: " + ", ".join(f"`{catalog_lower[s]}`" for s in suggestions)
-            return {
-                "accepted": True,
-                "persist": True,
-                "recognized": False,
-                "message": (
-                    f"Note: `{requested}` was not found in the MiniMax catalog."
-                    f"{suggestion_text}"
-                    "\n  MiniMax does not expose a /models endpoint, so Pilotage cannot verify the model name."
-                    "\n  The model may still work if it exists on the server."
-                ),
-            }
-
-    # Anthropic Messages API: many proxies don't implement /v1/models.
-    # Try probing with correct auth; if it fails, accept with a warning.
-    if api_mode == "anthropic_messages":
-        api_models = fetch_api_models(api_key, base_url, api_mode=api_mode)
-        if api_models is not None:
-            if requested_for_lookup in set(api_models):
-                return {
-                    "accepted": True,
-                    "persist": True,
-                    "recognized": True,
-                    "message": None,
-                }
-            auto = get_close_matches(requested_for_lookup, api_models, n=1, cutoff=0.9)
-            if auto:
-                return {
-                    "accepted": True,
-                    "persist": True,
-                    "recognized": True,
-                    "corrected_model": auto[0],
-                    "message": f"Auto-corrected `{requested}` → `{auto[0]}`",
-                }
-        # Probe failed or model not found — accept anyway (proxy likely
-        # doesn't implement the Anthropic Models API).
-        return {
-            "accepted": True,
-            "persist": True,
-            "recognized": False,
-            "message": (
-                f"Note: could not verify `{requested}` against this endpoint's "
-                f"model listing.  Many Anthropic-compatible proxies do not "
-                f"implement GET /v1/models.  The model name has been accepted "
-                f"without verification."
-            ),
-        }
-
     # Probe the live API to check if the model actually exists
     api_models = fetch_api_models(api_key, base_url)
 
     if api_models is not None:
-        # Gemini's OpenAI-compat /v1beta/openai/models endpoint returns IDs
-        # prefixed with "models/" (e.g. "models/gemini-2.5-flash") — native
-        # Gemini-API convention.  Our curated list and user input both use
-        # the bare ID, so a direct set-membership check drops every known
-        # Gemini model. Strip the prefix before comparison. See.
-        if normalized == "gemini":
-            api_models = [
-                m[len("models/"):] if isinstance(m, str) and m.startswith("models/") else m
-                for m in api_models
-            ]
         if requested_for_lookup in set(api_models):
             # API confirmed the model exists
             return {
@@ -2252,8 +1977,7 @@ def validate_requested_model(
         else:
             # API responded but model is not listed.  Accept anyway —
             # the user may have access to models not shown in the public
-            # listing (e.g. Z.AI Pro/Max plans can use glm-5 on coding
-            # endpoints even though it's not in /models).  Warn but allow.
+            # listing (gated previews, staged rollouts).  Warn but allow.
 
             # Auto-correct if the top match is very similar (e.g. typo)
             auto = get_close_matches(requested_for_lookup, api_models, n=1, cutoff=0.9)
@@ -2317,7 +2041,7 @@ def validate_requested_model(
 
     # Static-catalog fallback: when the /models probe was unreachable,
     # validate against the curated list from provider_model_ids() — same
-    # pattern as the openai-codex and minimax branches above.  This keeps
+    # pattern as the openai-codex branch above.  This keeps
     # /model switches working in the gateway for providers whose /models
     # endpoint is temporarily unreachable or returns a non-JSON payload.
     # Without this block, validate_requested_model would reject every model

@@ -32,7 +32,7 @@ dependencies = [
   # introduce ranges back without a written justification.
   #
   # Scope rule: only packages used by EVERY pilotage session belong here.
-  # Anything that's provider-specific (`anthropic`, `firecrawl-py`,
+  # Anything that's provider-specific (`mistralai`, `firecrawl-py`,
   # `exa-py`, `fal-client`, `edge-tts`, `parallel-web`) belongs in an
   # extra and gets lazy-installed via `tools/lazy_deps.py` when the
   # user picks that backend. Smaller `dependencies` = smaller blast
@@ -114,7 +114,7 @@ dependencies = [
   # Image resize recovery for the vision tools. Pillow shrinks oversized images
   # (>5 MB or >8000px) at embed time; without it the byte AND pixel-dimension
   # shrink paths no-op, so an oversized image bakes into immutable history and
-  # bricks the session on Anthropic's non-retryable 400. Pure-wheel, no system
+  # bricks the session on a non-retryable 400. Pure-wheel, no system
   # libs required for the codecs we use, so it's safe to ship in the base
   # install rather than gating it behind an extra + a mid-session lazy install
   # (which deadlocked the CLI under prompt_toolkit — see).
@@ -151,9 +151,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Native Anthropic provider — only needed when provider=anthropic (not via
-# OpenRouter or other aggregators).
-anthropic = ["anthropic==0.87.0"]  # CVE-2026-34450, CVE-2026-34452
 # Web search backends — each only loaded when the user picks it as their
 # search provider (configured via `pilotage tools` or config.yaml).
 exa = ["exa-py==2.10.2"]
@@ -241,9 +238,6 @@ mistral = ["mistralai==2.4.8"]
 # tools/lazy_deps.py on first use; never a core dependency and deliberately
 # NOT in [all].
 otlp = ["opentelemetry-sdk==1.39.1", "opentelemetry-exporter-otlp-proto-http==1.39.1"]
-bedrock = ["boto3==1.42.89"]
-vertex = ["google-auth==2.55.1"]
-azure-identity = ["azure-identity==1.25.3"]
 termux = [
   # Baseline Android / Termux path for reliable fresh installs.
   "python-telegram-bot[webhooks]==22.8",
@@ -295,9 +289,9 @@ all = [
   # release breaks every fresh install.
   #
   # Removed from [all] on 2026-05-12 (covered by lazy-install):
-  #   anthropic, exa, firecrawl, parallel-web, fal, edge-tts,
+  #   exa, firecrawl, parallel-web, fal, edge-tts,
   #   modal, daytona, vercel, messaging (telegram/whatsapp),
-  #   honcho, voice (faster-whisper), bedrock,
+  #   honcho, voice (faster-whisper),
   #   tts-premium (elevenlabs)
   #
   # Why: heavy extras with platform-specific build paths broke

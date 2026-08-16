@@ -550,11 +550,6 @@ def _is_known_provider_base_url(base_url: str) -> bool:
 def _endpoint_scoped_context_length(model: str, base_url: str) -> Optional[int]:
     """Return context metadata confirmed for one provider endpoint.
 
-    Kimi Coding serves K3 under the bare slug ``k3``, but users may also
-    configure or select the public-facing aliases ``kimi-k3`` and
-    ``kimi-k3-cot``. Only canonical ``https://api.kimi.com/coding`` endpoints
-    (legacy Moonshot keys do not serve K3) get the 1 Mi context window.
-
     NVIDIA NIM serves ``deepseek-ai/deepseek-v4-pro`` with a 262,144-token
     window even though DeepSeek's native endpoint serves the V4 family with a
     1M window. Keep the lower limit scoped to NVIDIA instead of weakening the
@@ -566,18 +561,6 @@ def _endpoint_scoped_context_length(model: str, base_url: str) -> Optional[int]:
         port = parsed.port
     except ValueError:
         return None
-    if (
-        parsed.scheme.lower() == "https"
-        and (parsed.hostname or "").lower() == "api.kimi.com"
-        and port in (None, 443)
-        and parsed.username is None
-        and parsed.password is None
-        and parsed.path.rstrip("/") in {"/coding", "/coding/v1"}
-        and not parsed.query
-        and not parsed.fragment
-        and model.strip().lower() in {"k3", "kimi-k3", "kimi-k3-cot"}
-    ):
-        return 1_048_576
     if (
         parsed.scheme.lower() == "https"
         and (parsed.hostname or "").lower() == "integrate.api.nvidia.com"
@@ -1803,18 +1786,6 @@ def _query_ollama_api_show_uncached(model: str, base_url: str, api_key: str = ""
     return None
 
 
-def _model_name_suggests_kimi(model: str) -> bool:
-    """Return True if the model name looks like a Kimi-family model.
-
-    Catches ``kimi-k2.6``, ``kimi-k2.5``, ``kimi-k2-thinking``,
-    ``moonshotai/Kimi-K2.6``, and similar variants.  Used as a guard
-    against stale OpenRouter metadata that underreports these models
-    as 32K context when they actually support 262K+.
-    """
-    lower = model.lower()
-    return lower.startswith("kimi") or "moonshot" in lower
-
-
 def _model_name_suggests_minimax_m3(model: str) -> bool:
     """Return True if the model name looks like MiniMax M3.
 
@@ -1888,7 +1859,7 @@ def _model_name_suggests_minimax(model: str) -> bool:
 
 def _model_name_suggests_stale_32k_underreport(model: str) -> bool:
     """Return True for model families known to be wrongly underreported as 32K."""
-    return _model_name_suggests_kimi(model) or _model_name_suggests_minimax(model)
+    return _model_name_suggests_minimax(model)
 
 
 def _query_local_context_length(model: str, base_url: str, api_key: str = "") -> Optional[int]:
@@ -2581,11 +2552,7 @@ def get_model_context_length(
         entry = metadata.get(model)
         if entry:
             or_ctx = entry.get("context_length")
-            # Guard against the known OpenRouter Kimi-family 32k underreport
-            # (same class the hardcoded overrides exist to mitigate).
-            if isinstance(or_ctx, int) and or_ctx > 0 and not (
-                or_ctx == 32768 and _model_name_suggests_kimi(model)
-            ):
+            if isinstance(or_ctx, int) and or_ctx > 0:
                 return or_ctx
 
     if effective_provider:

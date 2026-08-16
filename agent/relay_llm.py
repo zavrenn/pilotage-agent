@@ -1193,8 +1193,6 @@ def _codec(relay: Any, metadata: dict[str, Any] | None) -> Any:
         return None
     if api_mode == "chat_completions":
         codec = getattr(codecs, "OpenAIChatCodec", None)
-    elif api_mode == "anthropic_messages":
-        codec = getattr(codecs, "AnthropicMessagesCodec", None)
     elif api_mode == "codex_responses":
         codec = getattr(codecs, "OpenAIResponsesCodec", None)
     else:

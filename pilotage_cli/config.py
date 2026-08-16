@@ -1253,9 +1253,6 @@ _API_MODE_ALIASES = {
     "responses": "codex_responses",
     "openai_responses": "codex_responses",
     "openai-responses": "codex_responses",
-    "anthropic": "anthropic_messages",
-    "anthropic-messages": "anthropic_messages",
-    "messages": "anthropic_messages",
 }
 
 
@@ -4222,20 +4219,6 @@ def save_anthropic_oauth_token(value: str, save_fn=None):
     writer("ANTHROPIC_API_KEY", "")
 
 
-def use_anthropic_claude_code_credentials(save_fn=None):
-    """Use Claude Code's own credential files instead of persisting env tokens."""
-    writer = save_fn or save_env_value
-    writer("ANTHROPIC_TOKEN", "")
-    writer("ANTHROPIC_API_KEY", "")
-
-
-def save_anthropic_api_key(value: str, save_fn=None):
-    """Persist an Anthropic API key and clear the OAuth/setup-token slot."""
-    writer = save_fn or save_env_value
-    writer("ANTHROPIC_API_KEY", value)
-    writer("ANTHROPIC_TOKEN", "")
-
-
 def save_env_value_secure(key: str, value: str) -> Dict[str, Any]:
     # Route through the unified credential lifecycle so a rotation via the
     # secret-capture path also refreshes any config.yaml mirror of the old
@@ -4473,9 +4456,6 @@ def show_config():
     for env_key, name in keys:
         value = get_env_value(env_key)
         print(f"  {name:<14} {redact_key(value)}")
-    from pilotage_cli.auth import get_anthropic_key
-    anthropic_value = get_anthropic_key()
-    print(f"  {'Anthropic':<14} {redact_key(anthropic_value)}")
     
     # Model settings
     print()

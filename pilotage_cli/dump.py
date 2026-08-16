@@ -353,23 +353,7 @@ def run_dump(args):
     lines.append("")
     lines.append("api_keys:")
     api_keys = [
-        ("OPENROUTER_API_KEY", "openrouter"),
         ("OPENAI_API_KEY", "openai"),
-        ("ANTHROPIC_API_KEY", "anthropic"),
-        ("ANTHROPIC_TOKEN", "anthropic_token"),
-        ("GOOGLE_API_KEY", "google/gemini"),
-        ("GEMINI_API_KEY", "gemini"),
-        ("GLM_API_KEY", "glm/zai"),
-        ("ZAI_API_KEY", "zai"),
-        ("MINIMAX_API_KEY", "minimax"),
-        ("DEEPSEEK_API_KEY", "deepseek"),
-        ("DASHSCOPE_API_KEY", "dashscope"),
-        ("HF_TOKEN", "huggingface"),
-        ("NVIDIA_API_KEY", "nvidia"),
-        ("AI_GATEWAY_API_KEY", "ai_gateway"),
-        ("OPENCODE_ZEN_API_KEY", "opencode_zen"),
-        ("OPENCODE_GO_API_KEY", "opencode_go"),
-        ("KILOCODE_API_KEY", "kilocode"),
         ("FIRECRAWL_API_KEY", "firecrawl"),
         ("TAVILY_API_KEY", "tavily"),
         ("BROWSERBASE_API_KEY", "browserbase"),
@@ -393,17 +377,6 @@ def run_dump(args):
         # (the actual cause of gated tools like web_search going missing).
         if val and env_var not in dotenv_keys:
             display += " (shell only — not in .env; managed/desktop backend may not see it)"
-        # A credential added via `pilotage auth add openrouter` lives in the
-        # credential pool, not as an env var — surface it so the dump doesn't
-        # misleadingly read "not set" while `pilotage auth list` shows it.
-        if not val and label == "openrouter":
-            try:
-                from agent.credential_pool import load_pool as _load_pool
-
-                if _load_pool("openrouter").has_credentials():
-                    display = "set (auth pool)"
-            except Exception:
-                pass
         lines.append(f"  {label:<20} {display}")
 
     # Features summary

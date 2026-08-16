@@ -2257,7 +2257,7 @@ def select_provider_and_model(args=None):
             active = None  # no provider yet; default to first in list
 
     # Detect custom endpoint
-    if active == "openrouter" and get_env_value("OPENAI_BASE_URL"):
+    if active == "openai-api" and get_env_value("OPENAI_BASE_URL"):
         active = "custom"
 
     from pilotage_cli.models import (
@@ -2420,26 +2420,7 @@ def select_provider_and_model(args=None):
         _model_flow_named_custom(config, provider_info)
     elif selected_provider == "remove-custom":
         _remove_custom_provider(config)
-    elif selected_provider in {
-        "openai-api",
-        "gemini",
-        "deepseek",
-        "zai",
-        "minimax",
-        "minimax-cn",
-        "kilocode",
-        "opencode-zen",
-        "opencode-go",
-        "alibaba",
-        "huggingface",
-        "xiaomi",
-        "arcee",
-        "gmi",
-        "nvidia",
-        "ollama-cloud",
-        "tencent-tokenhub",
-        "lmstudio",
-    } or _is_profile_api_key_provider(selected_provider):
+    elif selected_provider == "openai-api" or _is_profile_api_key_provider(selected_provider):
         _model_flow_api_key_provider(config, selected_provider, current_model)
 
     # ── Post-switch cleanup: clear stale OPENAI_BASE_URL ──────────────
@@ -2912,12 +2893,6 @@ def _prompt_provider_choice(choices, *, default=0, title="Select provider:"):
 
 
 
-_DEFAULT_QWEN_PORTAL_MODELS = [
-    "qwen3-coder-plus",
-    "qwen3-coder",
-]
-
-
 def _prompt_custom_api_mode_selection(base_url: str, current_api_mode: str = "") -> Optional[str]:
     """Prompt for a custom provider API mode.
 
@@ -2945,11 +2920,6 @@ def _prompt_custom_api_mode_selection(base_url: str, current_api_mode: str = "")
             "Responses / Codex",
             "Use /responses for Codex-compatible tool-calling backends.",
         ),
-        (
-            "anthropic_messages",
-            "Anthropic Messages",
-            "Use /v1/messages for Anthropic-compatible endpoints.",
-        ),
     ]
 
     print()
@@ -2966,7 +2936,7 @@ def _prompt_custom_api_mode_selection(base_url: str, current_api_mode: str = "")
 
     try:
         raw = input(
-            "Choice [1-4, Enter to keep current/detected]: "
+            "Choice [1-3, Enter to keep current/detected]: "
         ).strip().lower()
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.")
@@ -2981,8 +2951,6 @@ def _prompt_custom_api_mode_selection(base_url: str, current_api_mode: str = "")
         return "chat_completions"
     if raw in {"3", "responses", "codex", "codex_responses"}:
         return "codex_responses"
-    if raw in {"4", "anthropic", "anthropic_messages", "messages"}:
-        return "anthropic_messages"
 
     print(f"Invalid API mode choice: {raw}. Falling back to auto-detect.")
     return None
@@ -3438,24 +3406,18 @@ def _prompt_api_key(
     ``return`` immediately — the user cancelled entry, declined to replace, or
     cleared the key and is now unconfigured.
     """
-    from pilotage_cli.auth import LMSTUDIO_NOAUTH_PLACEHOLDER
     from pilotage_cli.config import save_env_value
     from pilotage_cli.secret_prompt import masked_secret_prompt
 
     key_env = pconfig.api_key_env_vars[0] if pconfig.api_key_env_vars else ""
 
-    def _prompt_new_key(*, allow_lmstudio_default: bool) -> str:
-        if provider_id == "lmstudio" and allow_lmstudio_default:
-            prompt = f"{key_env} (Enter for no-auth default {LMSTUDIO_NOAUTH_PLACEHOLDER!r}): "
-        else:
-            prompt = f"{key_env} (or Enter to cancel): "
+    def _prompt_new_key() -> str:
+        prompt = f"{key_env} (or Enter to cancel): "
         try:
             entered = masked_secret_prompt(prompt).strip()
         except (KeyboardInterrupt, EOFError):
             print()
             return ""
-        if not entered and provider_id == "lmstudio" and allow_lmstudio_default:
-            return LMSTUDIO_NOAUTH_PLACEHOLDER
         return entered
 
     # First-time entry ────────────────────────────────────────────────────
@@ -3463,7 +3425,7 @@ def _prompt_api_key(
         print(f"No {pconfig.name} API key configured.")
         if not key_env:
             return "", True
-        new_key = _prompt_new_key(allow_lmstudio_default=True)
+        new_key = _prompt_new_key()
         if not new_key:
             print("Cancelled.")
             return "", True
@@ -3494,7 +3456,7 @@ def _prompt_api_key(
         choice = "k"
 
     if choice.startswith("r"):
-        new_key = _prompt_new_key(allow_lmstudio_default=False)
+        new_key = _prompt_new_key()
         if not new_key:
             print("  No change.")
             print()
@@ -6095,11 +6057,7 @@ def _build_provider_choices() -> list[str]:
     except Exception:
         # Fallback: static list guarantees the CLI always works
         return [
-            "auto", "openrouter", "nous", "openai-codex", "copilot-acp", "copilot",
-            "anthropic", "gemini", "vertex", "azure-foundry",
-            "ollama-cloud", "huggingface", "zai",
-            "minimax", "minimax-cn", "kilocode", "novita", "xiaomi", "arcee",
-            "nvidia", "deepseek", "alibaba", "qwen-oauth", "opencode-zen", "opencode-go",
+            "auto", "openai-codex", "openai-api", "custom",
         ]
 
 
@@ -7317,7 +7275,7 @@ def main():
         p.add_argument(
             "--provider",
             help="Only match sessions billed through this provider "
-            "(e.g. openrouter, anthropic, nous)",
+            "(e.g. openai-codex, openai-api, custom)",
         )
         p.add_argument(
             "--user", help="Only match sessions from this user ID"

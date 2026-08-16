@@ -34,49 +34,20 @@ runtime:
 model:
   # Default model to use (can be overridden with --model flag)
   # Both "default" and "model" work as the key name here.
-  default: "anthropic/claude-opus-4.6"
-  
+  default: "gpt-5.6"
+
   # Inference provider selection:
   #   "auto"         - Auto-detect from credentials (default)
-  #   "openrouter"   - OpenRouter (requires: OPENROUTER_API_KEY or OPENAI_API_KEY)
-  #   "nous"         - Nous Portal OAuth (requires: pilotage auth add nous)
-  #   "nous-api"     - Nous Portal API key (requires: NOUS_API_KEY)
-  #   "anthropic"    - Direct Anthropic API (requires: ANTHROPIC_API_KEY)
   #   "openai-codex" - OpenAI Codex (requires: pilotage auth)
-  #   "copilot"      - GitHub Copilot / GitHub Models (requires: GITHUB_TOKEN)
-  #   "zai"         - Use z.ai / ZhipuAI GLM models (requires: GLM_API_KEY)
-  #   "kimi-coding"  - Kimi / Moonshot AI (requires: KIMI_API_KEY)
-  #   "minimax"      - MiniMax global (requires: MINIMAX_API_KEY)
-  #   "minimax-cn"   - MiniMax China (requires: MINIMAX_CN_API_KEY)
-  #   "huggingface"  - Hugging Face Inference (requires: HF_TOKEN)
-  #   "nvidia"       - NVIDIA NIM / build.nvidia.com (requires: NVIDIA_API_KEY)
-  #   "xiaomi"       - Xiaomi MiMo (requires: XIAOMI_API_KEY)
-  #   "arcee"        - Arcee AI Trinity models (requires: ARCEEAI_API_KEY)
-  #   "ollama-cloud" - Ollama Cloud (requires: OLLAMA_API_KEY — https://ollama.com/settings)
-  #   "ai-gateway"   - Vercel AI Gateway (requires: AI_GATEWAY_API_KEY)
-  #   "azure-foundry" - Microsoft Foundry / Azure OpenAI (API key or Entra ID)
-  #   "lmstudio"     - LM Studio local server (optional: LM_API_KEY, defaults to http://127.0.0.1:1234/v1)
-  #
-  # Local servers (LM Studio, Ollama, vLLM, llama.cpp):
+  #   "openai-api"   - OpenAI API (requires: OPENAI_API_KEY)
   #   "custom"       - Any other OpenAI-compatible endpoint. Set base_url below.
-  #   Aliases: "ollama", "vllm", "llamacpp" all map to "custom".
-  #   LM Studio is first-class and uses provider: "lmstudio".
-  #   It works with both no-auth and auth-enabled server modes.
   #
   # Can also be overridden for a single invocation with the --provider flag.
   provider: "auto"
-  
-  # API configuration (falls back to OPENROUTER_API_KEY env var)
-  # api_key: "your-key-here"  # Uncomment to set here instead of .env
-  base_url: "https://openrouter.ai/api/v1"
 
-  # Azure Foundry keyless auth example:
-  # provider: "azure-foundry"
-  # base_url: "https://<resource>.openai.azure.com/openai/v1"
-  # auth_mode: "entra_id"      # DefaultAzureCredential: az login, managed identity, workload identity, etc.
-  # default: "gpt-4o"          # Deployment/model name
-  # entra:
-  #   scope: "https://ai.azure.com/.default"  # Optional; this is the default.
+  # API configuration (falls back to OPENAI_API_KEY env var)
+  # api_key: "your-key-here"  # Uncomment to set here instead of .env
+  base_url: "https://api.openai.com/v1"
 
   # ── Token limits — two settings, easy to confuse ──────────────────────────
   #
@@ -90,8 +61,8 @@ model:
   #
   # max_tokens: OUTPUT cap — maximum tokens the model may generate per response.
   #   Unrelated to how long your conversation history can be.
-  #   The OpenAI-standard name "max_tokens" is a misnomer; Anthropic's native
-  #   API has since renamed it "max_output_tokens" for clarity.
+  #   The OpenAI-standard name "max_tokens" is a misnomer; some other APIs
+  #   call it "max_output_tokens" for clarity.
   #   Leave unset to use the model's native output ceiling (recommended).
   #   Set only if you want to deliberately limit individual response length.
   #
@@ -106,7 +77,7 @@ model:
   #   X-Stainless-*) when a custom provider sits behind a gateway/WAF that
   #   rejects them — e.g. an upstream that returns "502 Upstream access
   #   forbidden" for the SDK default User-Agent but accepts a plain one.
-  #   Applies on the OpenAI wire only (not native Anthropic / Bedrock).
+  #   Applies on the OpenAI wire only.
   #
   # default_headers:
   #   User-Agent: "curl/8.7.1"
@@ -133,31 +104,28 @@ model:
 # Named provider overrides (optional)
 # Use this for per-provider request timeouts, non-stream stale timeouts,
 # and per-model exceptions.
-# Applies to the primary turn client on every api_mode (OpenAI-wire, native
-# Anthropic, and Anthropic-compatible providers), the fallback chain, and
-# client rebuilds during credential rotation.  For OpenAI-wire chat
-# completions (streaming and non-streaming) the configured value is also
-# used as the per-request ``timeout=`` kwarg so it wins over the legacy
-# PILOTAGE_API_TIMEOUT env var (which still applies when no config is set).
+# Applies to the primary turn client on every api_mode (OpenAI-wire), the
+# fallback chain, and client rebuilds during credential rotation.  For
+# OpenAI-wire chat completions (streaming and non-streaming) the configured
+# value is also used as the per-request ``timeout=`` kwarg so it wins over
+# the legacy PILOTAGE_API_TIMEOUT env var (which still applies when no
+# config is set).
 # ``stale_timeout_seconds`` controls the non-streaming stale-call detector and
 # wins over the legacy PILOTAGE_API_CALL_STALE_TIMEOUT env var. Leaving these
 # unset keeps the legacy defaults (PILOTAGE_API_TIMEOUT=1800s,
-# PILOTAGE_API_CALL_STALE_TIMEOUT=90s, native Anthropic 900s). The
+# PILOTAGE_API_CALL_STALE_TIMEOUT=90s). The
 # implicit non-stream stale detector is auto-disabled for local endpoints
 # and can scale upward for very large contexts.
 #
-# Not currently wired for AWS Bedrock (bedrock_converse + AnthropicBedrock
-# SDK paths) — those use boto3 with its own timeout configuration.
-#
 # providers:
-#   ollama-local:
+#   my-local-server:
 #     request_timeout_seconds: 300   # Longer timeout for local cold-starts
 #     stale_timeout_seconds: 900     # Explicitly re-enable stale detection on local endpoints
-#   anthropic:
+#   openai-api:
 #     request_timeout_seconds: 30    # Fast-fail cloud requests
 #     models:
-#       claude-opus-4.6:
-#         timeout_seconds: 600       # Longer timeout for extended-thinking Opus calls
+#       gpt-5.6:
+#         timeout_seconds: 600       # Longer timeout for slow large-context turns
 #   openai-codex:
 #     models:
 #       gpt-5.4:
@@ -182,44 +150,6 @@ model:
 #                             # Defaults to concurrent_batch's value so the two
 #                             # executor paths stay in sync; human waits
 #                             # (approval prompts, clarify) never count against it.
-
-# =============================================================================
-# OpenRouter Provider Routing (only applies when using OpenRouter)
-# =============================================================================
-# Control how requests are routed across providers on OpenRouter.
-# See: https://openrouter.ai/docs/guides/routing/provider-selection
-#
-# provider_routing:
-#   # Sort strategy: "price" (default), "throughput", or "latency"
-#   # Append :nitro to model name for a shortcut to throughput sorting.
-#   sort: "throughput"
-#
-#   # Only allow these providers (provider slugs from OpenRouter)
-#   # only: ["anthropic", "google"]
-#
-#   # Skip these providers entirely
-#   # ignore: ["together", "deepseek"]
-#
-#   # Try providers in this order (overrides default load balancing)
-#   # order: ["anthropic", "google", "together"]
-#
-#   # Require providers to support all parameters in your request
-#   # require_parameters: true
-#
-#   # Data policy: "allow" (default) or "deny" to exclude providers that may store data
-#   # data_collection: "deny"
-
-# =============================================================================
-# OpenRouter Response Caching (only applies when using OpenRouter)
-# =============================================================================
-# Cache identical API responses at the OpenRouter edge for free instant replays.
-# When enabled, identical requests (same model, messages, parameters) return
-# cached responses with zero billing. Separate from Anthropic prompt caching.
-# See: https://openrouter.ai/docs/guides/features/response-caching
-#
-# openrouter:
-#   response_cache: true         # Enable response caching (default: true)
-#   response_cache_ttl: 300      # Cache TTL in seconds, 1-86400 (default: 300)
 
 # =============================================================================
 # Git Worktree Isolation
@@ -491,8 +421,8 @@ compression:
   # model needs to compress earlier (0.60). The small-context floor (75% for
   # <512K models) still applies on top of per-model overrides.
   # model_thresholds:
-  #   "glm-5.2": 0.40
-  #   "claude-sonnet": 0.35
+  #   "gpt-5.6": 0.40
+  #   "gpt-5.4": 0.35
   #   "gpt-5": 0.30
 
   # Optional absolute token cap for the compression trigger (default: null = disabled).
@@ -510,7 +440,7 @@ compression:
 
   # Fraction of the threshold to preserve as recent tail (default: 0.20 = 20%)
   # e.g. 20% of 50% threshold = 10% of total context kept as recent messages.
-  # Summary output is separately capped at 12K tokens (Gemini output limit).
+  # Summary output is separately capped at 12K tokens (model output limit).
   # Range: 0.10 - 0.80
   target_ratio: 0.20
 
@@ -608,56 +538,41 @@ compression:
   # auxiliary section below (auxiliary.compression.provider / model).
 
 # =============================================================================
-# Anthropic prompt caching TTL
-# =============================================================================
-# When prompt caching is active (Claude via OpenRouter or native Anthropic),
-# Anthropic supports two TTL tiers for cached prefixes: "5m" (default) and
-# "1h". Other values are ignored and "5m" is used.
-#
-prompt_caching:
-  cache_ttl: "5m" # use "1h" for long sessions with pauses between turns
-
-# =============================================================================
 # Auxiliary Models (Advanced — Experimental)
 # =============================================================================
 # Pilotage uses lightweight "auxiliary" models for side tasks: image analysis,
 # browser screenshot analysis, web page summarization, TTS audio-tag insertion,
 # and context compression.
 #
-# By default these use Gemini Flash via OpenRouter or Nous Portal and are
-# auto-detected from your credentials.  You do NOT need to change anything
-# here for normal usage.
+# By default these follow your main model/provider and are auto-detected
+# from your credentials.  You do NOT need to change anything here for
+# normal usage.
 #
-# WARNING: Overriding these with providers other than OpenRouter or Nous Portal
-# is EXPERIMENTAL and may not work.  Not all models/providers support vision,
-# produce usable summaries, or accept the same API format.  Change at your own
-# risk — if things break, reset to "auto" / empty values.
+# WARNING: Overriding these is EXPERIMENTAL and may not work.  Not all
+# models/providers support vision, produce usable summaries, or accept the
+# same API format.  Change at your own risk — if things break, reset to
+# "auto" / empty values.
 #
 # Each task has its own provider + model pair so you can mix providers.
-# For example: OpenRouter for vision (needs multimodal), but your main
+# For example: OpenAI for vision (needs multimodal), but your main
 # local endpoint for compression (just needs text).
 #
 # Provider options:
-#   "auto"       - Best available: OpenRouter → Nous Portal → main endpoint (default)
-#   "openrouter" - Force OpenRouter (requires OPENROUTER_API_KEY)
-#   "nous"       - Force Nous Portal (requires: pilotage auth add nous)
-#   "gemini"      - Force Google AI Studio direct (requires: GOOGLE_API_KEY or GEMINI_API_KEY)
-#   "ollama-cloud" - Ollama Cloud (requires: OLLAMA_API_KEY)
+#   "auto"       - Best available: OpenAI providers → main endpoint (default)
+#   "openai-api" - Force the OpenAI API (requires OPENAI_API_KEY)
 #   "codex"       - Force Codex OAuth (requires: pilotage model → Codex).
 #                  Uses gpt-5.3-codex which supports vision.
 #   "main"       - Use your custom endpoint (OPENAI_BASE_URL + OPENAI_API_KEY).
 #                  Works with OpenAI API, local models, or any OpenAI-compatible
 #                  endpoint.  Also falls back to Codex OAuth and API-key providers.
 #
-# Model: leave empty to use the provider's default.  When empty, OpenRouter
-# uses "google/gemini-3-flash-preview" and Nous uses "gemini-3-flash".
-# Other providers pick a sensible default automatically.
+# Model: leave empty to use the provider's default.
 #
 # auxiliary:
 #   # Image analysis: vision_analyze tool + browser screenshots
 #   vision:
 #     provider: "auto"
-#     model: ""              # e.g. "google/gemini-2.5-flash", "openai/gpt-4o"
+#     model: ""              # e.g. "gpt-4o"
 #     timeout: 30            # LLM API call timeout (seconds)
 #     download_timeout: 30   # Image HTTP download timeout (seconds)
 #                            # Increase for slow connections or self-hosted image servers
@@ -700,7 +615,7 @@ prompt_caching:
 #                           # reasoning controls:
 #                           # extra_body:
 #                           #   enable_thinking: false
-#                           # Some vLLM/Qwen deployments expect this nested:
+#                           # Some local-server deployments expect this nested:
 #                           # extra_body:
 #                           #   chat_template_kwargs:
 #                           #     enable_thinking: false
@@ -812,17 +727,17 @@ group_sessions_per_user: true
 #       extra:
 #         key: "your-api-server-secret"
 #         model_routes:
-#           # Xiaozhi clients send model="minimax-m2" → routed to MiniMax via OpenRouter
-#           minimax-m2:
-#             model: "minimax/minimax-m1"
-#             provider: "openrouter"          # optional — overrides global provider
+#           # Clients send model="fast" → routed to a fast OpenAI model
+#           fast:
+#             model: "gpt-5.4-mini"
+#             provider: "openai-api"          # optional — overrides global provider
 #             # api_key: "sk-..."             # optional — per-route UPSTREAM provider
 #             #                                 key (NOT caller auth; never logged)
 #             # base_url: "https://..."       # optional — per-route base URL
 #           # GPT clients keep their own alias
 #           gpt-5:
-#             model: "openai/gpt-5"
-#             provider: "openrouter"
+#             model: "gpt-5"
+#             provider: "openai-api"
 #
 # Configured aliases are automatically listed by GET /v1/models so clients
 # can discover them without manual coordination.  Caller authentication is
@@ -968,7 +883,7 @@ agent:
   # Enable verbose logging
   verbose: false
   
-  # Reasoning effort level (OpenRouter and Nous Portal)
+  # Reasoning effort level (provider-dependent)
   # Controls how much "thinking" the model does before responding.
   # Options: "xhigh" (max), "high", "medium", "low", "minimal", "none" (disable)
   reasoning_effort: "medium"
@@ -980,10 +895,9 @@ agent:
   # Override the global reasoning_effort for that specific model.
   # NOTE: no `pilotage config set` support for this key -- edit YAML directly.
   # reasoning_overrides:
-  #   "openrouter/anthropic/claude-opus-4.5": "xhigh"
   #   "openai/gpt-5": "low"
-  #   "claude-opus-4.6": "high"           # bare model name also works
-  #   "deepseek/deepseek-v4-pro": "xhigh" # dots and dashes are interchangeable
+  #   "gpt-5.6": "high"           # bare model name also works
+  #   "gpt-5.4-codex": "xhigh"    # dots and dashes are interchangeable
   reasoning_overrides: {}
   
   # Custom personalities (use with /personality command).
@@ -1111,7 +1025,7 @@ platform_toolsets:
 #   browser      - browser_navigate, browser_snapshot, browser_click, browser_type,
 #                  browser_scroll, browser_back, browser_press,
 #                  browser_get_images, browser_vision  (requires BROWSERBASE_API_KEY)
-#   vision       - vision_analyze  (requires OPENROUTER_API_KEY)
+#   vision       - vision_analyze  (requires OPENAI_API_KEY)
 #   image_gen    - image_generate  (requires FAL_KEY)
 #   skills       - skills_list, skill_view
 #   skills_hub   - skill_hub (search/install/manage from online registries — user-driven only)
@@ -1142,7 +1056,7 @@ platform_toolsets:
 #   skills       - Load skill documents (skills_list, skill_view)
 #   todo         - Task planning and tracking for multi-step work
 #   memory       - Persistent memory across sessions (personal notes + user profile)
-#   session_search - Search and recall past conversations (FTS5 + Gemini Flash summarization)
+#   session_search - Search and recall past conversations (FTS5)
 #   tts          - Text-to-speech (Edge TTS free, ElevenLabs, OpenAI, MiniMax, Mistral)
 #   cronjob      - Schedule and manage automated tasks (CLI-only)
 #
@@ -1202,7 +1116,7 @@ platform_toolsets:
 #     args: ["-y", "analysis-server"]
 #     sampling:
 #       enabled: true           # default: true
-#       model: "gemini-3-flash" # override model (optional)
+#       model: "gpt-5.4-mini" # override model (optional)
 #       max_tokens_cap: 4096    # max tokens per request
 #       timeout: 30             # LLM call timeout (seconds)
 #       max_rpm: 10             # max requests per minute
@@ -1352,10 +1266,10 @@ delegation:
                                               # The parent TUI owns stdin, so blocking would deadlock; non-interactive resolution is required.
                                               # Both choices emit a logger.warning audit line. Flip to true only for cron/batch pipelines.
   # inherit_mcp_toolsets: true                # When explicit child toolsets are narrowed, also keep the parent's MCP toolsets (default: true). Set false for strict intersection.
-  # model: "google/gemini-3-flash-preview"    # Override model for subagents (empty = inherit parent)
-  # provider: "openrouter"                    # Override provider for subagents (empty = inherit parent)
+  # model: "gpt-5.4"                          # Override model for subagents (empty = inherit parent)
+  # provider: "openai-api"                    # Override provider for subagents (empty = inherit parent)
   #                                           # Resolves full credentials (base_url, api_key) automatically.
-  #                                           # Supported: openrouter, nous, zai, kimi-coding, minimax
+  #                                           # Supported: openai-codex, openai-api, custom
   #                                           # Cost tip: keep the parent on a frontier model and pin
   #                                           # delegation.model to an inexpensive one — children carry the
   #                                           # vast majority of tokens, so this is where spend is cut while
@@ -1543,20 +1457,16 @@ display:
 # Map short aliases to exact (model, provider, base_url) tuples.
 # Used by /model tab completion and resolve_alias().
 # Aliases are checked BEFORE the models.dev catalog, so they can route
-# to endpoints not in the catalog (e.g. Ollama Cloud, local servers).
+# to endpoints not in the catalog (e.g. local servers).
 #
 # model_aliases:
-#   opus:
-#     model: claude-opus-4-6
-#     provider: anthropic
-#   qwen:
-#     model: "qwen3.5:397b"
+#   gpt:
+#     model: gpt-5.6
+#     provider: openai-api
+#   local:
+#     model: "my-model"
 #     provider: custom
-#     base_url: "https://ollama.com/v1"
-#   glm:
-#     model: glm-4.7
-#     provider: custom
-#     base_url: "https://ollama.com/v1"
+#     base_url: "http://127.0.0.1:8000/v1"
 
 # =============================================================================
 # Privacy
@@ -1758,7 +1668,6 @@ updates:
 #     # single `op read` at startup.
 #     env:
 #       OPENAI_API_KEY: "op://Private/OpenAI/api key"
-#       ANTHROPIC_API_KEY: "op://Private/Anthropic/credential"
 #     account: ""                                   # op --account shorthand; "" = default
 #     service_account_token_env: OP_SERVICE_ACCOUNT_TOKEN  # headless auth; unset = desktop session
 #     binary_path: ""                               # "" = resolve op via PATH; else absolute path

@@ -15,7 +15,7 @@ This module ties together the foundation layers:
 
 Provider switching uses the ``--provider`` flag exclusively.
 No colon-based ``provider:model`` syntax — colons are reserved for
-OpenRouter variant suffixes (``:free``, ``:extended``, ``:fast``).
+vendor variant suffixes (``:free``, ``:extended``, ``:fast``).
 """
 
 from __future__ import annotations
@@ -50,9 +50,11 @@ from agent.models_dev import (
 from utils import base_url_host_matches, base_url_hostname
 
 # Providers whose picker model list should NOT be capped by max_models.
-# OpenCode Zen / Go are aggregators whose full catalogs (70+ models each) must
-# be visible so users can pick any model they have access to.
-_UNCAPPED_PICKER_PROVIDERS: frozenset[str] = frozenset({"opencode-zen", "opencode-go"})
+# Aggregator-style providers whose full catalogs must be visible so users can
+# pick any model they have access to. None are defined in the OpenAI-only
+# registry; the mechanism stays so a plugin aggregator can opt in with a
+# one-line addition.
+_UNCAPPED_PICKER_PROVIDERS: frozenset[str] = frozenset()
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +113,7 @@ def _models_config_is_allowlist(value: Any) -> bool:
     A mapping like ``{model_id: {context_length: N}}`` is per-model *metadata*
     written by ``_save_custom_provider`` / the ``pilotage model`` wizard — not a
     catalog narrow. Treating that shape as an allowlist made Desktop/Telegram
-    pickers show only the saved default for local Ollama (no ``api_key``),
+    pickers show only the saved default for a local endpoint (no ``api_key``),
     while ``pilotage model`` still live-probed the full ``/v1/models`` list.
     Refresh could not help because the same gate skipped probing.
 
@@ -259,12 +261,6 @@ class ModelIdentity(NamedTuple):
 
 
 MODEL_ALIASES: dict[str, ModelIdentity] = {
-    # Anthropic
-    "sonnet":    ModelIdentity("anthropic", "claude-sonnet"),
-    "opus":      ModelIdentity("anthropic", "claude-opus"),
-    "haiku":     ModelIdentity("anthropic", "claude-haiku"),
-    "claude":    ModelIdentity("anthropic", "claude"),
-
     # OpenAI
     "gpt5":      ModelIdentity("openai", "gpt-5"),
     "gpt":       ModelIdentity("openai", "gpt"),
@@ -272,38 +268,14 @@ MODEL_ALIASES: dict[str, ModelIdentity] = {
     "o3":        ModelIdentity("openai", "o3"),
     "o4":        ModelIdentity("openai", "o4"),
 
-    # Google
-    "gemini":    ModelIdentity("google", "gemini"),
-
-    # DeepSeek
-    "deepseek":  ModelIdentity("deepseek", "deepseek-chat"),
-
     # Meta
     "llama":     ModelIdentity("meta-llama", "llama"),
-
-    # Qwen / Alibaba
-    "qwen":      ModelIdentity("qwen", "qwen"),
-
-    # MiniMax
-    "minimax":   ModelIdentity("minimax", "minimax"),
-
-    # Nvidia
-    "nemotron":  ModelIdentity("nvidia", "nemotron"),
-
-    # Z.AI / GLM
-    "glm":       ModelIdentity("z-ai", "glm"),
-
-    # Xiaomi
-    "mimo":      ModelIdentity("xiaomi", "mimo"),
-
-    # Arcee
-    "trinity":   ModelIdentity("arcee-ai", "trinity"),
 }
 
 
 # ---------------------------------------------------------------------------
 # Direct aliases — exact model+provider+base_url for endpoints that aren't
-# in the models.dev catalog (e.g. Ollama Cloud, local servers).
+# in the models.dev catalog (e.g. cloud relays, local servers).
 # Checked BEFORE catalog resolution.  Format:
 #   alias -> (model_id, provider, base_url)
 # These can also be loaded from config.yaml ``model_aliases:`` section.
@@ -329,17 +301,17 @@ def _load_direct_aliases() -> dict[str, DirectAlias]:
     Config format::
 
         model_aliases:
-          qwen:
-            model: "qwen3.5:397b"
+          local:
+            model: "my-model:397b"
             provider: custom
-            base_url: "https://ollama.com/v1"
-          minimax:
-            model: "minimax-m2.7"
+            base_url: "https://my-endpoint.example/v1"
+          other:
+            model: "other-model"
             provider: custom
-            base_url: "https://ollama.com/v1"
+            base_url: "https://my-endpoint.example/v1"
 
     Also reads ``model.aliases`` (set by ``pilotage config set model.aliases.xxx``)
-    and converts simple string entries (``ds-flash: deepseek/deepseek-v4-flash``)
+    and converts simple string entries (``my-fast: vendor/fast-model-v4``)
     into DirectAlias objects.  The provider is parsed from the ``provider/``
     prefix in the value; if no slash, the current provider is used.
     """
@@ -454,14 +426,14 @@ def parse_model_flags_detailed(raw_args: str) -> ModelFlagParseResult:
 
     Examples::
 
-        "sonnet"                         -> ("sonnet", "", False, False, False)
-        "sonnet --global"                -> ("sonnet", "", True, False, False)
-        "sonnet --session"               -> ("sonnet", "", False, False, True)
-        "sonnet --once"                  -> is_once=True
-        "sonnet --provider anthropic"    -> ("sonnet", "anthropic", False, False, False)
-        "--provider my-ollama"           -> ("", "my-ollama", False, False, False)
+        "gpt5"                           -> ("gpt5", "", False, False, False)
+        "gpt5 --global"                  -> ("gpt5", "", True, False, False)
+        "gpt5 --session"                 -> ("gpt5", "", False, False, True)
+        "gpt5 --once"                    -> is_once=True
+        "gpt5 --provider openai-api"     -> ("gpt5", "openai-api", False, False, False)
+        "--provider my-endpoint"         -> ("", "my-endpoint", False, False, False)
         "--refresh"                      -> ("", "", False, True, False)
-        "sonnet --provider anthropic --global" -> ("sonnet", "anthropic", True, False, False)
+        "gpt5 --provider openai-api --global" -> ("gpt5", "openai-api", True, False, False)
     """
     is_global = False
     explicit_provider = ""
@@ -744,13 +716,13 @@ def _model_sort_key(model_id: str, prefix: str) -> tuple:
     that prefers higher versions.  Suffix tokens (``pro``, ``omni``, etc.)
     are used as tiebreakers, with common quality indicators ranked.
 
-    Examples (with prefix ``"mimo"``)::
+    Examples (with prefix ``"model"``)::
 
-        mimo-v2.5-pro   → (-2.5, 0, 'pro')     # highest version wins
-        mimo-v2.5       → (-2.5, 1, '')          # no suffix = lower than pro
-        mimo-v2-pro     → (-2.0, 0, 'pro')
-        mimo-v2-omni    → (-2.0, 1, 'omni')
-        mimo-v2-flash   → (-2.0, 1, 'flash')
+        model-v2.5-pro  → (-2.5, 0, 'pro')     # highest version wins
+        model-v2.5      → (-2.5, 1, '')        # no suffix = lower than pro
+        model-v2-pro    → (-2.0, 0, 'pro')
+        model-v2-omni   → (-2.0, 1, 'omni')
+        model-v2-flash  → (-2.0, 1, 'flash')
     """
     # Strip the prefix (and optional "/" separator for aggregator slugs)
     rest = model_id[len(prefix):]
@@ -920,9 +892,9 @@ def resolve_alias(
     if direct is not None:
         return (direct.provider, direct.model, key)
 
-    # Reverse lookup: match by model ID so full names (e.g. "glm-4.7")
+    # Reverse lookup: match by model ID so full names (e.g. "my-model-4.7")
     # route through direct aliases instead of falling through
-    # to the catalog/OpenRouter.
+    # to catalog resolution.
     for alias_name, da in DIRECT_ALIASES.items():
         if da.model.lower() == key:
             return (da.provider, da.model, alias_name)
@@ -1007,10 +979,9 @@ def _resolve_alias_fallback(
 ) -> Optional[tuple[str, str, str]]:
     """Try to resolve an alias on the user's authenticated providers.
 
-    Falls back to ``("openrouter", "nous")`` only when no authenticated
-    providers are supplied (backwards compat for non-interactive callers).
+    Without authenticated providers there is nothing to fall back to.
     """
-    providers = authenticated_providers or ("openrouter", "nous")
+    providers = authenticated_providers or ()
     for provider in providers:
         # AmbiguousAliasError propagates: the alias exists on this provider,
         # the user just has to choose — trying the next provider instead
@@ -1039,8 +1010,7 @@ def resolve_display_context_length(
     but provider-enforced limits can be lower (e.g. Codex OAuth caps the
     same slug at 272k). The authoritative source is
     ``agent.model_metadata.get_model_context_length`` which already knows
-    about Codex OAuth, Copilot, Nous, and falls back to models.dev for the
-    rest.
+    about Codex OAuth and falls back to models.dev for the rest.
 
     When ``custom_providers`` is provided, per-model ``context_length``
     overrides from ``custom_providers[].models.<id>.context_length`` are
@@ -1103,9 +1073,8 @@ async def resolve_display_context_length_async(
 
     The sync version runs two blocking chains: the route comparison in
     ``should_clear_context_pin`` and the full provider probe ladder in
-    ``get_model_context_length`` (blocking ``requests`` calls to Anthropic
-    ``/v1/models``, Copilot, Nous, Codex, GMI, Ollama, models.dev and
-    OpenRouter).  Async gateway handlers must not run either on the event
+    ``get_model_context_length`` (blocking ``requests`` calls to Codex,
+    models.dev and configured endpoints).  Async gateway handlers must not run either on the event
     loop — see ``agent.model_metadata.get_model_context_length_async`` and
     ``pilotage_cli.route_identity.should_clear_context_pin_async``, which
     offload the same chains for the message path.
@@ -1327,12 +1296,11 @@ def switch_model(
 
         target_provider = pdef.id
 
-        # Guard against silent aggregator hops. A vendor name like bare
-        # "openai" is an alias that resolves to an aggregator ("openrouter").
-        # If the user explicitly asked for that vendor but the aggregator it
-        # routes to has no credentials, do NOT silently switch them onto an
-        # unauthed endpoint (the classic HTTP 401 "Missing Authentication
-        # header"). Point them at the real direct provider instead.
+        # Guard against silent aggregator hops. A vendor name that is an
+        # alias resolving to an aggregator must not silently switch the user
+        # onto an unauthed endpoint (the classic HTTP 401 "Missing
+        # Authentication header"). Point them at the real direct provider
+        # instead.
         from pilotage_cli.models import _AGGREGATOR_PROVIDERS as _AGG_PROVIDERS
         from pilotage_cli.providers import ALIASES as _PROVIDER_ALIAS_TABLE
         _explicit_norm = explicit_provider.strip().lower()
@@ -1487,9 +1455,9 @@ def switch_model(
         # --- Step d: Aggregator catalog search ---
         # Track whether the live catalog of the CURRENT provider resolved the
         # model — if so, step e must not second-guess and switch providers.
-        # Critical for flat-namespace resellers like opencode-go / opencode-zen
-        # whose live /v1/models returns bare IDs (e.g. "deepseek-v4-flash") that
-        # coincidentally match entries in native providers' static catalogs.
+        # Critical for flat-namespace resellers whose live /v1/models returns
+        # bare IDs that coincidentally match entries in native providers'
+        # static catalogs.
         resolved_in_current_catalog = False
         if is_aggregator(target_provider) and not resolved_alias:
             catalog = list_provider_models(target_provider)
@@ -1674,10 +1642,10 @@ def switch_model(
                 requested=current_provider,
                 target_model=new_model,
             )
-            # If resolution fell through to "custom" (e.g. named custom provider like
-            # "ollama-launch" that resolve_runtime_provider doesn't know), keep existing
-            # credentials. Otherwise use the resolved values (picks up credential rotation,
-            # base_url adjustments for OpenCode, etc.).
+            # If resolution fell through to "custom" (e.g. a named custom
+            # provider that resolve_runtime_provider doesn't know), keep existing
+            # credentials. Otherwise use the resolved values (picks up credential
+            # rotation, base_url adjustments, etc.).
             api_key = runtime.get("api_key", "")
             base_url = runtime.get("base_url", "")
             api_mode = runtime.get("api_mode", "")
@@ -1699,8 +1667,8 @@ def switch_model(
     # is actually applied (post the reasoning-unification refactor):
     #   1. api_mode empty (e.g. alias cleared it above) → fill from the endpoint.
     #   2. api_mode carried a STALE value from the previous session state
-    #      (e.g. a same-provider /model switch to gpt-5.x on api.openai.com that
-    #      kept the prior openrouter/chat_completions mode). A host that mandates
+    #      (e.g. a same-provider /model switch that kept the prior
+    #      chat_completions mode). A host that mandates
     #      one wire protocol must override the stale value — otherwise the request
     #      goes out on chat_completions and OpenAI 400s on tools+reasoning_effort.
     _mandated_mode = host_mandated_api_mode(base_url)
@@ -1826,8 +1794,8 @@ def switch_model(
 # ---------------------------------------------------------------------------
 
 # Process-level guard so the picker prewarm thread is spawned at most once per
-# process — mirrors run_agent's _openrouter_prewarm_done. Without a guard a
-# long-lived process (or repeated triggers) would leak one OS thread per call.
+# process. Without a guard a long-lived process (or repeated triggers) would
+# leak one OS thread per call.
 import threading as _threading  # noqa: E402
 
 _picker_prewarm_done = _threading.Event()
@@ -1962,8 +1930,8 @@ def _prefetch_provider_models_parallel(provider_slugs: list[str]) -> None:
     so concurrent writes to ``provider_models_cache.json`` don't clobber each
     other.
 
-    :param provider_slugs: Pilotage provider IDs to prefetch (e.g. ``["openrouter",
-        "anthropic", "deepseek"]``).  Unknown providers are silently skipped.
+    :param provider_slugs: Pilotage provider IDs to prefetch (e.g.
+        ``["openai-codex", "openai-api"]``).  Unknown providers are silently skipped.
     """
     from pilotage_cli.models import cached_provider_model_ids
 
@@ -2118,10 +2086,7 @@ def _collect_authed_provider_slugs(
         if pid.lower() in _excluded_set or pilotage_slug.lower() in _excluded_set:
             continue
         has_creds = False
-        if overlay.auth_type == "aws_sdk":
-            # Skip AWS SDK providers in prefetch — credential detection is heavier
-            continue
-        elif overlay.extra_env_vars:
+        if overlay.extra_env_vars:
             has_creds = any(_scoped_key_env(ev) for ev in overlay.extra_env_vars)
         if not has_creds and overlay.auth_type == "api_key":
             for _key in (pid, pilotage_slug):
@@ -2173,8 +2138,6 @@ def _collect_authed_provider_slugs(
                     _cp_has_creds = True
             except Exception:
                 pass
-        if not _cp_has_creds and _cp_config and getattr(_cp_config, "auth_type", "") == "aws_sdk":
-            continue  # skip AWS SDK in prefetch
         if _cp_has_creds:
             slugs.append(_cp.slug)
             seen.add(_cp.slug.lower())
@@ -2212,9 +2175,6 @@ def list_authenticated_providers(
       - source: str — "built-in", "models.dev", "user-config"
 
     Only includes providers that have API keys set or are user-defined endpoints.
-    ``force_fresh_nous_tier`` bypasses the short Nous tier cache for explicit
-    account-sensitive flows. UI picker opens should leave it false so they do
-    not block on fresh Portal/account checks every time.
 
     ``refresh`` busts the per-provider model-id disk cache
     (``provider_models_cache.json``) up front so every row re-fetches its
@@ -2248,8 +2208,8 @@ def list_authenticated_providers(
     # Explicit refresh: drop every provider's cached model-id list so the
     # cached_provider_model_ids() calls below all re-fetch live. Without this
     # a stale 1h cache can fall back to the curated static list when its live
-    # fetch later fails, silently dropping live-only models (e.g. OpenCode
-    # Zen's free tier) the user had seen before.
+    # fetch later fails, silently dropping live-only models the user had
+    # seen before.
     if refresh:
         try:
             clear_provider_models_cache()
@@ -2266,14 +2226,12 @@ def list_authenticated_providers(
 
     # Normalize the excluded-providers list once for fast membership checks.
     # Compared against pilotage_id / mdev_id (section 1), pid / pilotage_slug
-    # (section 2) and canonical slug (section 2b) so a single entry like
-    # ``copilot`` hides the provider regardless of which key it surfaces under.
+    # (section 2) and canonical slug (section 2b) so a single entry hides the
+    # provider regardless of which key it surfaces under.
     _excluded: set = {str(p).strip().lower() for p in (excluded_providers or []) if p}
     # Effective base URLs of every built-in row we emit (normalized lower+rstrip).
     # Section 4 uses this to hide ``custom_providers`` entries that point at the
-    # same endpoint as a built-in (e.g. a user-defined "my-dashscope" on
-    # https://coding-intl.dashscope.aliyuncs.com/v1 collides with the built-in
-    # alibaba-coding-plan row when DASHSCOPE_API_KEY is present). Fixes.
+    # same endpoint as a built-in provider row.
     _builtin_endpoints: set = set()
 
     def _norm_url(url: str) -> str:
@@ -2282,7 +2240,7 @@ def list_authenticated_providers(
     def _record_builtin_endpoint(slug: str) -> None:
         """Record the effective base URL for a built-in provider row.
 
-        Prefers the live env-override (e.g. DASHSCOPE_BASE_URL) over the
+        Prefers the live env-override (e.g. OPENAI_BASE_URL) over the
         static inference_base_url so the dedup matches what a user typing
         that URL into custom_providers would actually hit."""
         try:
@@ -2334,10 +2292,10 @@ def list_authenticated_providers(
     from pilotage_cli.providers import ALIASES as _PROVIDER_ALIAS_TABLE
     for pilotage_id, mdev_id in PROVIDER_TO_MODELS_DEV.items():
         # Skip vendor names that are merely aliases routing through an
-        # aggregator (e.g. bare "openai" → "openrouter"). These are NOT
+        # aggregator. These are NOT
         # directly-routable providers: emitting them as their own picker
         # row produces a phantom entry that, when selected, resolves via
-        # resolve_provider_full() to the aggregator (OpenRouter) — silently
+        # resolve_provider_full() to the aggregator — silently
         # switching a user off their real provider onto an endpoint they
         # may have no key for (HTTP 401). The user's real provider (e.g.
         # openai-api, or a providers.openai config row) covers this vendor.
@@ -2377,8 +2335,7 @@ def list_authenticated_providers(
             continue
 
         # Prefer auth.py PROVIDER_REGISTRY for env var names — it's our
-        # source of truth.  models.dev can have wrong mappings (e.g.
-        # minimax-cn → MINIMAX_API_KEY instead of MINIMAX_CN_API_KEY).
+        # source of truth.  models.dev mappings can be wrong or stale.
         pconfig = PROVIDER_REGISTRY.get(pilotage_id)
         # Skip non-API-key auth providers here — they are handled in
         # section 2 (PILOTAGE_OVERLAYS) with proper auth store checking.
@@ -2458,20 +2415,20 @@ def list_authenticated_providers(
         seen_slugs.add(slug.lower())
         _record_builtin_endpoint(slug)
 
-    # --- 2. Check Pilotage-only providers (nous, openai-codex, copilot, opencode-go) ---
+    # --- 2. Check Pilotage-only providers (PILOTAGE_OVERLAYS: openai-codex) ---
     from pilotage_cli.providers import PILOTAGE_OVERLAYS
     from pilotage_cli.auth import PROVIDER_REGISTRY as _auth_registry
 
     # Build reverse mapping: models.dev ID → Pilotage provider ID.
-    # PILOTAGE_OVERLAYS keys may be models.dev IDs (e.g. "github-copilot")
-    # while _PROVIDER_MODELS and config.yaml use Pilotage IDs ("copilot").
+    # PILOTAGE_OVERLAYS keys may be models.dev IDs while _PROVIDER_MODELS and
+    # config.yaml use Pilotage IDs.
     _mdev_to_pilotage = {v: k for k, v in PROVIDER_TO_MODELS_DEV.items()}
 
     for pid, overlay in PILOTAGE_OVERLAYS.items():
         if pid.lower() in seen_slugs:
             continue
 
-        # Resolve Pilotage slug — e.g. "github-copilot" → "copilot"
+        # Resolve Pilotage slug through the reverse mapping.
         pilotage_slug = _mdev_to_pilotage.get(pid, pid)
         if pilotage_slug.lower() in seen_slugs:
             continue
@@ -2492,8 +2449,7 @@ def list_authenticated_providers(
                         break
         # Check auth store and credential pool for non-env-var credentials.
         # This applies to OAuth providers AND api_key providers that also
-        # support OAuth (e.g. anthropic supports both API key and Claude Code
-        # OAuth via external credential files).
+        # support OAuth via external credential files.
         if not has_creds:
             try:
                 from pilotage_cli.auth import _load_auth_store
@@ -2515,7 +2471,7 @@ def list_authenticated_providers(
                     # For the interactive /model picker, also show providers
                     # whose credential pool has entries but all are temporarily
                     # rate-limited.  Rate limits are per-model for many
-                    # providers (e.g. Google Gemini) — switching to a different
+                    # providers — switching to a different
                     # model under the same provider may work even when all keys
                     # are in cooldown.
                     try:
@@ -2530,9 +2486,9 @@ def list_authenticated_providers(
         if not has_creds:
             continue
 
-        if pilotage_slug in {"openai-codex", "copilot", "copilot-acp"}:
+        if pilotage_slug in {"openai-codex"}:
             # Use live OAuth-backed discovery so the gateway /model picker
-            # matches what the user's authenticated Codex/Copilot backend
+            # matches what the user's authenticated Codex backend
             # actually serves — including ChatGPT-Pro-only Codex slugs
             # (e.g. gpt-5.3-codex-spark) that aren't in the static curated
             # catalog. ``cached_provider_model_ids()`` falls back to the
@@ -2630,8 +2586,8 @@ def list_authenticated_providers(
     # any overlapping ``custom_providers:`` entries.  Callers typically pass
     # both (gateway/CLI invoke ``get_compatible_custom_providers()`` which
     # merges ``providers:`` into the list) — without this, the same endpoint
-    # produces two picker rows: one bare-slug ("openrouter") from section 3
-    # and one "custom:openrouter" from section 4, both labelled identically.
+    # produces two picker rows: one bare-slug from section 3
+    # and one "custom:<name>" from section 4, both labelled identically.
     _section3_emitted_pairs: set = set()
     if user_providers and isinstance(user_providers, dict):
         # Group ``providers:`` entries by (api_url, key_env, api_mode) so that
@@ -2789,7 +2745,7 @@ def list_authenticated_providers(
             # narrowing (mirrors section 4 /).
             # - A dict-shaped ``models:`` is per-model metadata
             #   (context_length), not an allowlist — still probe so local
-            #   Ollama/llama.cpp match ``pilotage model``. Pin with
+            #   local servers match ``pilotage model``. Pin with
             #   ``discover_models: false`` instead.
             # - Without an api_key AND no allowlist: probe anyway so bare
             #   local endpoints still show their full model catalog.
@@ -2934,10 +2890,10 @@ def list_authenticated_providers(
     # --- 4. Saved custom providers from config ---
     # Each ``custom_providers`` entry represents one model under a named
     # provider. Entries sharing the same endpoint, credential identity, and
-    # wire protocol are grouped into a single picker row, so e.g. four Ollama
-    # entries pointing at ``http://localhost:11434/v1`` with per-model display
-    # names ("Ollama — GLM 5.1", "Ollama — Qwen3-coder", ...) appear as one
-    # "Ollama" row with four models inside instead of four near-duplicates
+    # wire protocol are grouped into a single picker row, so e.g. four entries
+    # pointing at the same local endpoint with per-model display
+    # names ("Local — Model A", "Local — Model B", ...) appear as one
+    # "Local" row with multiple models inside instead of several near-duplicates
     # that differ only by suffix. Same-host entries with different ``key_env``
     # or ``api_mode`` remain distinct providers.
     if custom_providers and isinstance(custom_providers, list):
@@ -2945,7 +2901,7 @@ def list_authenticated_providers(
 
         # Key by endpoint + credential identity + wire protocol + display
         # prefix instead of slug: names frequently differ per model
-        # ("Ollama — X") while the endpoint stays the same.  Keep same-host
+        # ("<endpoint> — X") while the endpoint stays the same.  Keep same-host
         # providers with distinct env-backed credentials or API protocols
         # separate so picker selection cannot route through the wrong
         # credential/mode pair. The display prefix (text before " — " /
@@ -2953,7 +2909,7 @@ def list_authenticated_providers(
         # endpoint (e.g. a proxy fronting cerebras, groq and perplexity at
         # a single base_url) each get their own picker row instead of
         # collapsing into one. Per-model suffix entries that share the same
-        # prefix ("Ollama — A", "Ollama — B") still group together.
+        # prefix ("<endpoint> — A", "<endpoint> — B") still group together.
         groups: "OrderedDict[tuple, dict]" = OrderedDict()
         for entry in custom_providers:
             if not isinstance(entry, dict):
@@ -3104,18 +3060,16 @@ def list_authenticated_providers(
             if _pair_key[0] and _pair_key[1] and _pair_key in _section3_emitted_pairs:
                 continue
             # Skip if a built-in row (sections 1/2/2b) already represents this
-            # endpoint. Fixes: a user-defined "my-dashscope" pointing at
-            # https://coding-intl.dashscope.aliyuncs.com/v1 duplicates the
-            # built-in alibaba-coding-plan row whenever DASHSCOPE_API_KEY is
-            # set. The built-in row carries the curated model list, correct
-            # auth wiring, and canonical slug — keep it and hide the shadow.
+            # endpoint. The built-in row carries the curated model list,
+            # correct auth wiring, and canonical slug — keep it and hide the
+            # shadow.
             _grp_url_norm = _pair_key[1]
             if _grp_url_norm and _grp_url_norm in _builtin_endpoints:
                 continue
             # Live model discovery from custom provider endpoints (matches
             # Section 3 behavior for user ``providers:`` entries).
-            # Also probes when no api_key is set (e.g. local llama.cpp /
-            # Ollama servers) — the /models endpoint often works without
+            # Also probes when no api_key is set (e.g. local servers) —
+            # the /models endpoint often works without
             # auth.  The CLI's _model_flow_named_custom always probes, so
             # the Telegram/Discord picker should do the same for parity.
             # Live-discovery policy:
@@ -3124,8 +3078,8 @@ def list_authenticated_providers(
             #   the (possibly partial) ``models:`` subset with the full
             #   live catalog (Bifrost / aggregator-gateway case).
             # - Without an api_key but with an allowlist-shaped ``models:``
-            #   (list/string), the user narrowed a public endpoint (e.g.
-            #   ollama.com). Preserve that list and skip live discovery.
+            #   (list/string), the user narrowed a public endpoint. Preserve
+            #   that list and skip live discovery.
             # - A dict-shaped ``models:`` is per-model metadata written by
             #   ``_save_custom_provider`` for context_length — not an
             #   allowlist. Still probe so Desktop/Telegram match

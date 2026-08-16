@@ -119,7 +119,7 @@ DEFAULT_CONFIG = {
         # model to actually call tools instead of describing intended actions.
         # Values: "auto" (default — applies to gpt/codex models), true/false
         # (force on/off for all models), or a list of model-name substrings
-        # to match (e.g. ["gpt", "codex", "gemini", "qwen"]).
+        # to match (e.g. ["gpt", "codex"]).
         "tool_use_enforcement": "auto",
         # Intent-ack continuation: when the model opens a turn by narrating an
         # action it will take ("I'll go check the logs...") but emits no tool
@@ -128,7 +128,7 @@ DEFAULT_CONFIG = {
         # per turn). This is the corrective sibling of tool_use_enforcement (the
         # preventive prompt-side guard). Values: "auto" (default — fires only on
         # the codex_responses api_mode, the historical behavior), true (all
-        # api_modes — fixes the Gemini/Claude "stops after stating intent" case),
+        # api_modes — fixes the weak-model "stops after stating intent" case),
         # false (never), or a list of model-name substrings to match.
         "intent_ack_continuation": "auto",
         # Universal "finish the job" guidance — short prompt block applied to
@@ -271,7 +271,7 @@ DEFAULT_CONFIG = {
         # synchronously before the gate runs.  Set to 0 to disable the bound
         # (historical "wait forever" behaviour).
         "gateway_startup_restore_drain_timeout": 30,
-        # Stale-stream ceiling for local providers (Ollama, oMLX, llama-cpp) in
+        # Stale-stream ceiling for local endpoints in
         # seconds. When the base stale timeout is at its default (180s) and a
         # local endpoint is detected, this finite ceiling replaces the former
         # infinite disable so a wedged local server eventually trips the
@@ -764,9 +764,8 @@ DEFAULT_CONFIG = {
                                       # the usable context. Set to False to opt back down to
                                       # the global threshold (e.g. 0.50) for those Codex
                                       # sessions. Only this exact route is affected —
-                                      # gpt-5.4 / 5.5 / 5.6 on OpenAI's direct API,
-                                      # OpenRouter, and Copilot keep the global threshold
-                                      # regardless.
+                                      # gpt-5.4 / 5.5 / 5.6 on OpenAI's direct API
+                                      # keep the global threshold regardless.
         "codex_gpt55_autoraise_notice": True,  # Display the one-time Codex gpt-5.4/5.5/5.6
                                       # autoraise banner. Set False to keep the
                                       # 85% threshold autoraise but suppress the
@@ -810,8 +809,8 @@ DEFAULT_CONFIG = {
                                       # (longest match wins); values replace the
                                       # global `threshold` for that model, e.g.
                                       #   model_thresholds:
-                                      #     "glm-5.2": 0.40
-                                      #     "claude-sonnet": 0.35
+                                      #     "gpt-5.6": 0.40
+                                      #     "gpt-5.4": 0.35
                                       # The small-context floor (0.75 for <512K
                                       # models) still applies on top of overrides
                                       # (raise-only: an override above the floor
@@ -833,81 +832,14 @@ DEFAULT_CONFIG = {
                                       # Example: 1800 = compact after 30 min idle.
     },
 
-    # Anthropic prompt caching (Claude via OpenRouter or native Anthropic API).
-    # cache_ttl: "5m" or "1h" (Anthropic-supported tiers). Other non-falsy
-    # values are silently ignored. Falsy values (false, null, "off",
-    # "disabled", "no", "none") disable prompt caching entirely.
-    "prompt_caching": {
-        "cache_ttl": "5m",
-    },
-
-    # OpenRouter-specific settings.
-    # response_cache: enable OpenRouter response caching (X-OpenRouter-Cache header).
-    #   When enabled, identical requests return cached responses for free (zero billing).
-    #   This is separate from Anthropic prompt caching and works alongside it.
-    #   See: https://openrouter.ai/docs/guides/features/response-caching
-    # response_cache_ttl: how long cached responses remain valid, in seconds (1-86400).
-    #   Default 300 (5 minutes). Only used when response_cache is enabled.
-    # min_coding_score: knob for the openrouter/pareto-code router (0.0-1.0).
-    #   Only applied when model.model is "openrouter/pareto-code". Higher
-    #   values route to stronger (more expensive) coders; lower values open
-    #   up cheaper, faster options. Default 0.65 lands on the mid-tier
-    #   coder on the current Pareto frontier. Empty string = let OpenRouter
-    #   pick the strongest available coder (router's documented default
-    #   when the plugins block is omitted).
-    #   See: https://openrouter.ai/docs/guides/routing/routers/pareto-router
-    "openrouter": {
-        "response_cache": True,
-        "response_cache_ttl": 300,
-        "min_coding_score": 0.65,
-    },
-
-    # AWS Bedrock provider configuration.
-    # Only used when model.provider is "bedrock".
-    "bedrock": {
-        "region": "",  # AWS region for Bedrock API calls (empty = AWS_REGION env var → us-east-1)
-        "discovery": {
-            "enabled": True,           # Auto-discover models via ListFoundationModels
-            "provider_filter": [],     # Only show models from these providers (e.g. ["anthropic", "amazon"])
-            "refresh_interval": 3600,  # Cache discovery results for this many seconds
-        },
-        "guardrail": {
-            # Amazon Bedrock Guardrails — content filtering and safety policies.
-            # Create a guardrail in the Bedrock console, then set the ID and version here.
-            # See: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html
-            "guardrail_identifier": "",  # e.g. "abc123def456"
-            "guardrail_version": "",     # e.g. "1" or "DRAFT"
-            "stream_processing_mode": "async",  # "sync" or "async"
-            "trace": "disabled",         # "enabled", "disabled", or "enabled_full"
-        },
-    },
-
     # Auxiliary model config — provider:model for each side task.
     # Format: provider is the provider name, model is the model slug.
     # "auto" for provider = auto-detect best available provider.
     # Empty model = use provider's default auxiliary model.
-    # All tasks fall back to openrouter:google/gemini-3-flash-preview if
-    # the configured provider is unavailable.
     #
     # extra_body: forwarded verbatim as request body fields on every aux call
     # for that task. Use this to set provider-specific knobs (independent of
-    # main-agent settings). On OpenRouter you can set provider routing prefs
-    # and the Pareto Code coding-score floor here. Example:
-    #
-    #   auxiliary:
-    #     compression:
-    #       provider: openrouter
-    #       model: openrouter/pareto-code
-    #       extra_body:
-    #         provider:           # OpenRouter provider routing
-    #           order: [anthropic, google]
-    #           sort: throughput  # or price | latency
-    #         plugins:            # OpenRouter Pareto Code router
-    #           - id: pareto-router
-    #             min_coding_score: 0.5
-    #
-    # Each aux task is independent — main-agent provider_routing and
-    # openrouter.min_coding_score do NOT propagate to aux calls by design.
+    # main-agent settings).
     "auxiliary": {
         # Same-provider retries for a transient transport blip (connection
         # reset / timeout / 5xx / 408) on ANY auxiliary call before falling
@@ -916,30 +848,14 @@ DEFAULT_CONFIG = {
         # not a meaningful recovery, so an unretried blip silently loses the
         # call.
         "transient_retries": 2,
-        # Restrict the auxiliary auto-chain's OpenRouter fallback to free
-        # (:free) SKUs. When true, the OpenRouter step is skipped entirely
-        # unless the resolved fallback model ends in ":free" — a PAID lane
-        # is never engaged for background auxiliary traffic (compression,
-        # title generation, session search, vision, web extract) even when
-        # OPENROUTER_API_KEY is present. Default false keeps the historical
-        # paid fallback for users who want it.
-        "free_only": False,
-        # Override the auxiliary auto-chain's OpenRouter fallback model
-        # (default: google/gemini-3.6-flash, a PAID model). Set e.g.
-        # "nvidia/nemotron-3-ultra-550b-a55b:free" together with
-        # free_only: true to keep auxiliary traffic free-only. A one-time
-        # WARNING is logged whenever a non-":free" model is engaged.
-        "openrouter_model": "",
-        # Endpoints that reject NON-streaming chat requests outright (e.g.
-        # Tencent Copilot returns HTTP 400 "Non-stream chat request is
-        # currently not supported"). Auxiliary calls to a matching endpoint
-        # are sent with stream=True and aggregated client-side. Entries are
-        # case-insensitive substrings matched against the endpoint URL;
-        # copilot.tencent.com is always treated as stream-only.
+        # Endpoints that reject NON-streaming chat requests outright.
+        # Auxiliary calls to a matching endpoint are sent with stream=True
+        # and aggregated client-side. Entries are case-insensitive
+        # substrings matched against the endpoint URL.
         "stream_only_base_urls": [],
         "vision": {
-            "provider": "auto",    # auto | openrouter | codex | custom
-            "model": "",           # e.g. "google/gemini-2.5-flash", "gpt-4o"
+            "provider": "auto",    # auto | codex | custom
+            "model": "",           # e.g. "gpt-4o"
             "base_url": "",        # direct OpenAI-compatible endpoint (takes precedence over provider)
             "api_key": "",         # API key for base_url (falls back to OPENAI_API_KEY)
             "timeout": 120,        # seconds — LLM API call timeout; vision payloads need generous timeout
@@ -980,7 +896,7 @@ DEFAULT_CONFIG = {
         },
         "approval": {
             "provider": "auto",
-            "model": "",           # fast/cheap model recommended (e.g. gemini-flash, haiku)
+            "model": "",           # fast/cheap model recommended (e.g. gpt-4o-mini)
             "base_url": "",
             "api_key": "",
             "timeout": 30,
@@ -1028,7 +944,7 @@ DEFAULT_CONFIG = {
         # Triage specifier — flesh out a rough one-liner in the Kanban
         # Triage column into a concrete spec, then promote it to ``todo``.
         # Invoked by ``pilotage kanban specify`` (single id or --all). Set a
-        # cheap, capable model here (gemini-flash works well); the main
+        # cheap, capable model here; the main
         # model is overkill for short spec expansion.
         "triage_specifier": {
             "provider": "auto",
@@ -1082,7 +998,7 @@ DEFAULT_CONFIG = {
         # review pass can take several minutes on reasoning models (umbrella
         # building over hundreds of candidate skills). "auto" = use main chat
         # model; override via `pilotage model` → auxiliary → Curator to route
-        # to a cheaper aux model (e.g. openrouter google/gemini-3-flash-preview).
+        # to a cheaper aux model.
         "curator": {
             "provider": "auto",
             "model": "",
@@ -1096,8 +1012,8 @@ DEFAULT_CONFIG = {
         # monitor catalog automation (cron/scripts/classify_items.py). Scores
         # candidate items 0-10 against the user's criteria so only above-
         # threshold items get delivered. "auto" = main chat model; override to
-        # a cheap fast model (e.g. openrouter google/gemini-3-flash-preview,
-        # haiku) since per-item scoring is high-volume and a small model is fine.
+        # a cheap fast model since per-item scoring is high-volume and a small
+        # model is fine.
         "monitor": {
             "provider": "auto",
             "model": "",
@@ -1111,9 +1027,8 @@ DEFAULT_CONFIG = {
         # whether to save a memory / patch a skill. "auto" (default) = run on
         # the main chat model, replaying the full conversation, which is already
         # warm in the prompt cache (cheap cache reads) — unchanged, optimal.
-        # Set provider/model to a cheaper model (e.g. openrouter
-        # google/gemini-3-flash-preview) to run the review there for ~3-5x lower
-        # cost. A different model can't reuse the main prompt cache anyway, so
+        # Set provider/model to a cheaper model to run the review there for
+        # ~3-5x lower cost. A different model can't reuse the main prompt cache anyway, so
         # the fork automatically replays a compact digest instead of the full
         # transcript when routed (minimises the cold-write). Same model = full
         # replay; different model = digest. Quality holds (memory capture
@@ -1599,15 +1514,14 @@ DEFAULT_CONFIG = {
     # Subagent delegation — override the provider:model used by delegate_task
     # so child agents can run on a different (cheaper/faster) provider and model.
     # Uses the same runtime provider resolution as CLI/gateway startup, so all
-    # configured providers (OpenRouter, Z.ai, Kimi, etc.) are supported.
+    # configured providers (OpenAI, custom endpoints) are supported.
     "delegation": {
-        "model": "",       # e.g. "google/gemini-3-flash-preview" (empty = inherit parent model)
-        "provider": "",    # e.g. "openrouter" (empty = inherit parent provider + credentials)
+        "model": "",       # e.g. "gpt-5.4" (empty = inherit parent model)
+        "provider": "",    # e.g. "openai-api" (empty = inherit parent provider + credentials)
         "base_url": "",    # direct OpenAI-compatible endpoint for subagents
         "api_key": "",     # API key for delegation.base_url (falls back to OPENAI_API_KEY)
-        "api_mode": "",    # wire protocol for delegation.base_url: "chat_completions",
-                           # "codex_responses", or "anthropic_messages". Empty = auto-detect
-                           # from URL (e.g. /anthropic suffix → anthropic_messages). Set this
+        "api_mode": "",    # wire protocol for delegation.base_url: "chat_completions"
+                           # or "codex_responses". Empty = auto-detect from URL. Set this
                            # explicitly for non-standard endpoints the heuristic can't detect.
         # When delegate_task narrows child toolsets explicitly, preserve any
         # MCP toolsets the parent already has enabled. On by default so
@@ -2215,7 +2129,7 @@ DEFAULT_CONFIG = {
     },
 
     # Remotely-hosted model catalog manifest.  When enabled, the CLI fetches
-    # curated model lists for OpenRouter from this URL,
+    # curated model lists from this URL,
     # falling back to the in-repo snapshot on network failure.  Lets us
     # update model picker lists without shipping a pilotage-agent release.
     # The default URL is served by the docs site GitHub Pages deploy.
@@ -2233,7 +2147,7 @@ DEFAULT_CONFIG = {
         # to self-host their own curation list using the same schema.
         # Example:
         #   providers:
-        #     openrouter:
+        #     openai:
         #       url: https://example.com/my-curation.json
         "providers": {},
     },
@@ -2246,7 +2160,7 @@ DEFAULT_CONFIG = {
     #
     # Semantics:
     #   1. Explicit (model_overrides.<provider>.<model_id>): wins over
-    #      models.dev, OpenRouter, and hardcoded defaults for the fields
+    #      models.dev and hardcoded defaults for the fields
     #      it sets. NOTE: an explicit model.context_length (global) and a
     #      custom_providers per-model context_length are user settings at
     #      other layers and are consulted in the resolution chain order
@@ -2269,12 +2183,7 @@ DEFAULT_CONFIG = {
     #
     # Example:
     #   model_overrides:
-    #     upstage:
-    #       solar-pro4:
-    #         context_window: 524288
-    #       syn-pro:
-    #         context_window: 65536
-    #     custom:my-local-vllm:
+    #     custom:my-local-server:
     #       my-llava-model:
     #         context_window: 8192
     #         supports_vision: true
@@ -2893,10 +2802,10 @@ DEFAULT_CONFIG = {
         # outbound with real credentials in the sandbox (the legacy posture).
         "enforce_on_docker": True,
         # NOTE: ``fail_on_uncovered_providers`` was removed.  It gated a
-        # refuse-start when Anthropic / Azure OpenAI / Gemini env vars were
+        # refuse-start when third-party provider env vars were
         # present — those providers are now first-class swapped providers
-        # via per-provider match_headers rules (x-api-key, api-key,
-        # x-goog-api-key), so the fail-closed tier is empty.  A leftover
+        # via per-provider match_headers rules, so the fail-closed tier is
+        # empty.  A leftover
         # key in existing user configs is ignored harmlessly.
         # When credential_source is bitwarden but the BWS access token /
         # project_id is missing OR the bws fetch returns no values for
@@ -2913,27 +2822,8 @@ DEFAULT_CONFIG = {
         # tests that need to reach a loopback upstream).
         "upstream_deny_cidrs": None,
         # Extra allowed upstream hosts beyond the bundled defaults (which
-        # cover OpenRouter, OpenAI, Anthropic, Google, xAI, Mistral, Groq,
-        # Together, DeepSeek).  Wildcards (`*.foo.com`) are supported.
+        # cover OpenAI).  Wildcards (`*.foo.com`) are supported.
         "extra_allowed_hosts": [],
-    },
-
-    # Google Vertex AI provider (Gemini via the OpenAI-compatible endpoint).
-    # Auth is OAuth2 (short-lived access tokens minted from a service-account
-    # JSON or Application Default Credentials) — NOT a static API key. The
-    # credential *path* is a secret-adjacent pointer and lives in .env
-    # (VERTEX_CREDENTIALS_PATH / GOOGLE_APPLICATION_CREDENTIALS); these two
-    # settings are non-secret routing config and live here. Both are bridged to
-    # the VERTEX_PROJECT_ID / VERTEX_REGION env vars the adapter reads, so an
-    # explicit env var still wins over config.yaml.
-    "vertex": {
-        # GCP project ID. Empty → use the project_id embedded in the service
-        # account JSON (or ADC-resolved project).
-        "project_id": "",
-        # Vertex region. "global" is required for the Gemini 3.x preview models
-        # (regional endpoints silently 404 them). Override to a regional value
-        # (e.g. "us-central1") only if your models are pinned to a region.
-        "region": "global",
     },
 
     # Config schema version - bump this when adding new required fields
@@ -2942,405 +2832,6 @@ DEFAULT_CONFIG = {
 
 # Optional environment variables that enhance functionality
 OPTIONAL_ENV_VARS = {
-    # ── Provider (handled in provider selection, not shown in checklists) ──
-    "OPENROUTER_API_KEY": {
-        "description": "OpenRouter API key (for vision, web scraping helpers, and MoA)",
-        "prompt": "OpenRouter API key",
-        "url": "https://openrouter.ai/keys",
-        "password": True,
-        "tools": ["vision_analyze"],
-        "category": "provider",
-        "advanced": True,
-    },
-    "GOOGLE_API_KEY": {
-        "description": "Google AI Studio API key (also recognized as GEMINI_API_KEY)",
-        "prompt": "Google AI Studio API key",
-        "url": "https://aistudio.google.com/app/apikey",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GEMINI_API_KEY": {
-        "description": "Google AI Studio API key (alias for GOOGLE_API_KEY)",
-        "prompt": "Gemini API key",
-        "url": "https://aistudio.google.com/app/apikey",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GEMINI_BASE_URL": {
-        "description": "Google AI Studio base URL override",
-        "prompt": "Gemini base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "VERTEX_CREDENTIALS_PATH": {
-        "description": "Path to a Google Cloud service account JSON for Vertex AI (Gemini). "
-                       "Vertex uses OAuth2, not a static API key — this points at the "
-                       "credentials Pilotage mints short-lived tokens from. Falls back to "
-                       "GOOGLE_APPLICATION_CREDENTIALS, then to ADC (gcloud auth "
-                       "application-default login). Set project/region under vertex: in config.yaml.",
-        "prompt": "Vertex service account JSON path (leave empty to use ADC / GOOGLE_APPLICATION_CREDENTIALS)",
-        "url": "https://cloud.google.com/iam/docs/keys-create-delete",
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "NVIDIA_API_KEY": {
-        "description": "NVIDIA NIM API key (build.nvidia.com or local NIM endpoint)",
-        "prompt": "NVIDIA NIM API key",
-        "url": "https://build.nvidia.com/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "NVIDIA_BASE_URL": {
-        "description": "NVIDIA NIM base URL override (e.g. http://localhost:8000/v1 for local NIM)",
-        "prompt": "NVIDIA NIM base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "LM_API_KEY": {
-        "description": "LM Studio bearer token for auth-enabled local servers",
-        "prompt": "LM Studio API key / bearer token",
-        "url": None,
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "LM_BASE_URL": {
-        "description": "LM Studio base URL override",
-        "prompt": "LM Studio base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GLM_API_KEY": {
-        "description": "Z.AI / GLM API key (also recognized as ZAI_API_KEY / Z_AI_API_KEY)",
-        "prompt": "Z.AI / GLM API key",
-        "url": "https://z.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "ZAI_API_KEY": {
-        "description": "Z.AI API key (alias for GLM_API_KEY)",
-        "prompt": "Z.AI API key",
-        "url": "https://z.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "Z_AI_API_KEY": {
-        "description": "Z.AI API key (alias for GLM_API_KEY)",
-        "prompt": "Z.AI API key",
-        "url": "https://z.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GLM_BASE_URL": {
-        "description": "Z.AI / GLM base URL override",
-        "prompt": "Z.AI / GLM base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "KIMI_API_KEY": {
-        "description": "Kimi / Moonshot API key",
-        "prompt": "Kimi API key",
-        "url": "https://platform.moonshot.cn/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "KIMI_BASE_URL": {
-        "description": "Kimi / Moonshot base URL override",
-        "prompt": "Kimi base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "KIMI_CN_API_KEY": {
-        "description": "Kimi / Moonshot China API key",
-        "prompt": "Kimi (China) API key",
-        "url": "https://platform.moonshot.cn/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "STEPFUN_API_KEY": {
-        "description": "StepFun Step Plan API key",
-        "prompt": "StepFun Step Plan API key",
-        "url": "https://platform.stepfun.com/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "STEPFUN_BASE_URL": {
-        "description": "StepFun Step Plan base URL override",
-        "prompt": "StepFun Step Plan base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "ARCEEAI_API_KEY": {
-        "description": "Arcee AI API key",
-        "prompt": "Arcee AI API key",
-        "url": "https://chat.arcee.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "ARCEE_BASE_URL": {
-        "description": "Arcee AI base URL override",
-        "prompt": "Arcee base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GMI_API_KEY": {
-        "description": "GMI Cloud API key",
-        "prompt": "GMI Cloud API key",
-        "url": "https://www.gmicloud.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GMI_BASE_URL": {
-        "description": "GMI Cloud base URL override",
-        "prompt": "GMI Cloud base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "ACTUAL_API_KEY": {
-        "description": "Actual Computer inference key (ac_...)",
-        "prompt": "Actual Computer inference key",
-        "url": "https://actual.inc/user/keys",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "ACTUAL_BASE_URL": {
-        "description": "Actual Computer base URL override (set to http://127.0.0.1:8080 for the local offline daemon)",
-        "prompt": "Actual Computer base URL (leave empty for hosted relay)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "FIREWORKS_API_KEY": {
-        "description": "Fireworks AI API key",
-        "prompt": "Fireworks AI API key",
-        "url": "https://app.fireworks.ai/settings/users/api-keys",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MINIMAX_API_KEY": {
-        "description": "MiniMax API key (international)",
-        "prompt": "MiniMax API key",
-        "url": "https://www.minimax.io/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MINIMAX_BASE_URL": {
-        "description": "MiniMax base URL override",
-        "prompt": "MiniMax base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MINIMAX_CN_API_KEY": {
-        "description": "MiniMax API key (China endpoint)",
-        "prompt": "MiniMax (China) API key",
-        "url": "https://www.minimaxi.com/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MINIMAX_CN_BASE_URL": {
-        "description": "MiniMax (China) base URL override",
-        "prompt": "MiniMax (China) base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "DEEPSEEK_API_KEY": {
-        "description": "DeepSeek API key for direct DeepSeek access",
-        "prompt": "DeepSeek API Key",
-        "url": "https://platform.deepseek.com/api_keys",
-        "password": True,
-        "category": "provider",
-    },
-    "DEEPSEEK_BASE_URL": {
-        "description": "Custom DeepSeek API base URL (advanced)",
-        "prompt": "DeepSeek Base URL",
-        "url": "",
-        "password": False,
-        "category": "provider",
-    },
-    "DASHSCOPE_API_KEY": {
-        "description": "Alibaba Cloud DashScope API key (Qwen + multi-provider models)",
-        "prompt": "DashScope API Key",
-        "url": "https://modelstudio.console.alibabacloud.com/",
-        "password": True,
-        "category": "provider",
-    },
-    "DASHSCOPE_BASE_URL": {
-        "description": "Custom DashScope base URL (default: coding-intl OpenAI-compat endpoint)",
-        "prompt": "DashScope Base URL",
-        "url": "",
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "PILOTAGE_QWEN_BASE_URL": {
-        "description": "Qwen Portal base URL override (default: https://portal.qwen.ai/v1)",
-        "prompt": "Qwen Portal base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OPENCODE_ZEN_API_KEY": {
-        "description": "OpenCode Zen API key (pay-as-you-go access to curated models)",
-        "prompt": "OpenCode Zen API key",
-        "url": "https://opencode.ai/auth",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OPENCODE_ZEN_BASE_URL": {
-        "description": "OpenCode Zen base URL override",
-        "prompt": "OpenCode Zen base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OPENCODE_GO_API_KEY": {
-        "description": "OpenCode Go API key ($10/month subscription for open models)",
-        "prompt": "OpenCode Go API key",
-        "url": "https://opencode.ai/auth",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OPENCODE_GO_BASE_URL": {
-        "description": "OpenCode Go base URL override",
-        "prompt": "OpenCode Go base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "HF_TOKEN": {
-        "description": "Hugging Face token for Inference Providers (20+ open models via router.huggingface.co)",
-        "prompt": "Hugging Face Token",
-        "url": "https://huggingface.co/settings/tokens",
-        "password": True,
-        "category": "provider",
-    },
-    "HF_BASE_URL": {
-        "description": "Hugging Face Inference Providers base URL override",
-        "prompt": "HF base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OLLAMA_API_KEY": {
-        "description": "Ollama Cloud API key (ollama.com — cloud-hosted open models)",
-        "prompt": "Ollama Cloud API key",
-        "url": "https://ollama.com/settings",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OLLAMA_BASE_URL": {
-        "description": "Ollama Cloud base URL override (default: https://ollama.com/v1)",
-        "prompt": "Ollama base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "XIAOMI_API_KEY": {
-        "description": "Xiaomi MiMo API key for MiMo models (mimo-v2.5-pro, mimo-v2.5, mimo-v2-pro, mimo-v2-omni, mimo-v2-flash)",
-        "prompt": "Xiaomi MiMo API Key",
-        "url": "https://platform.xiaomimimo.com",
-        "password": True,
-        "category": "provider",
-    },
-    "XIAOMI_BASE_URL": {
-        "description": "Xiaomi MiMo base URL override (default: https://api.xiaomimimo.com/v1)",
-        "prompt": "Xiaomi base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "UPSTAGE_API_KEY": {
-        "description": "Upstage API key for Solar LLM models",
-        "prompt": "Upstage API Key",
-        "url": "https://console.upstage.ai/api-keys",
-        "password": True,
-        "category": "provider",
-    },
-    "UPSTAGE_BASE_URL": {
-        "description": "Upstage base URL override (default: https://api.upstage.ai/v1)",
-        "prompt": "Upstage base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "AWS_REGION": {
-        "description": "AWS region for Bedrock API calls (e.g. us-east-1, eu-central-1)",
-        "prompt": "AWS Region",
-        "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-regions.html",
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "AWS_PROFILE": {
-        "description": "AWS named profile for Bedrock authentication (from ~/.aws/credentials)",
-        "prompt": "AWS Profile",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "AZURE_FOUNDRY_API_KEY": {
-        "description": "Azure Foundry API key for custom Azure endpoints",
-        "prompt": "Azure Foundry API Key",
-        "url": "https://ai.azure.com/",
-        "password": True,
-        "category": "provider",
-    },
-    "AZURE_FOUNDRY_BASE_URL": {
-        "description": "Azure Foundry base URL (set via 'pilotage model' for endpoint-specific config)",
-        "prompt": "Azure Foundry base URL",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
     # ── Tool API keys ──
     "EXA_API_KEY": {
         "description": "Exa API key for AI-native web search and contents",

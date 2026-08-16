@@ -32,8 +32,6 @@ load_pilotage_dotenv(pilotage_home=_env_path.parent, project_env=PROJECT_ROOT / 
 
 from pilotage_cli.colors import Colors, color
 from pilotage_cli.models import _PILOTAGE_USER_AGENT
-from pilotage_constants import OPENROUTER_MODELS_URL
-from utils import base_url_host_matches
 
 
 _PROVIDER_ENV_HINTS = (
@@ -764,43 +762,22 @@ def _build_apikey_providers_list() -> list:
     already present — adding plugins/model-providers/<name>/ is sufficient to get into doctor.
     """
     _static = [
-        ("Z.AI / GLM",      ("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"), "https://api.z.ai/api/paas/v4/models", "GLM_BASE_URL", True),
-        ("Arcee AI",         ("ARCEEAI_API_KEY",),                           "https://api.arcee.ai/api/v1/models",  "ARCEE_BASE_URL", True),
-        ("GMI Cloud",        ("GMI_API_KEY",),                               "https://api.gmi-serving.com/v1/models", "GMI_BASE_URL", True),
-        ("DeepSeek",         ("DEEPSEEK_API_KEY",),                          "https://api.deepseek.com/v1/models",  "DEEPSEEK_BASE_URL", True),
-        ("Hugging Face",     ("HF_TOKEN",),                                  "https://router.huggingface.co/v1/models", "HF_BASE_URL", True),
-        ("NVIDIA NIM",       ("NVIDIA_API_KEY",),                            "https://integrate.api.nvidia.com/v1/models", "NVIDIA_BASE_URL", True),
-        ("Alibaba/DashScope", ("DASHSCOPE_API_KEY",),                        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models", "DASHSCOPE_BASE_URL", True),
-        # MiniMax global: /v1 endpoint supports /models.
-        ("MiniMax",          ("MINIMAX_API_KEY",),                           "https://api.minimax.io/v1/models",    "MINIMAX_BASE_URL", True),
-        # MiniMax CN: /v1 endpoint does NOT support /models (returns 404).
-        ("MiniMax (China)",  ("MINIMAX_CN_API_KEY",),                        "https://api.minimaxi.com/v1/models",  "MINIMAX_CN_BASE_URL", False),
-        ("Vercel AI Gateway", ("AI_GATEWAY_API_KEY",),                       "https://ai-gateway.vercel.sh/v1/models", "AI_GATEWAY_BASE_URL", True),
-        ("Kilo Code",        ("KILOCODE_API_KEY",),                          "https://api.kilo.ai/api/gateway/models", "KILOCODE_BASE_URL", True),
-        ("OpenCode Zen",     ("OPENCODE_ZEN_API_KEY",),                      "https://opencode.ai/zen/v1/models",  "OPENCODE_ZEN_BASE_URL", True),
-        # OpenCode Go has no shared /models endpoint; skip the health check.
-        ("OpenCode Go",      ("OPENCODE_GO_API_KEY",),                       None,                                  "OPENCODE_GO_BASE_URL", False),
+        ("OpenAI API",       ("OPENAI_API_KEY",),                            "https://api.openai.com/v1/models",    "OPENAI_BASE_URL", True),
     ]
     _known_names = {t[0] for t in _static}
     # Also index by profile canonical name so profiles without display_name
     # don't create duplicate entries for providers already in the static list.
     _known_canonical: set[str] = set()
     _name_to_canonical = {
-        "Z.AI / GLM": "zai",
-        "Arcee AI": "arcee", "GMI Cloud": "gmi", "DeepSeek": "deepseek",
-        "Hugging Face": "huggingface", "NVIDIA NIM": "nvidia",
-        "Alibaba/DashScope": "alibaba", "MiniMax": "minimax",
-        "MiniMax (China)": "minimax-cn", "Vercel AI Gateway": "ai-gateway",
-        "Kilo Code": "kilocode", "OpenCode Zen": "opencode-zen",
-        "OpenCode Go": "opencode-go",
+        "OpenAI API": "openai-api",
     }
     for _label, _canonical in _name_to_canonical.items():
         _known_canonical.add(_canonical)
     # Providers that already have a dedicated health check above the generic
     # API-key loop (with custom headers/auth). Skip their pluggable profiles
     # here so the generic Bearer-auth loop doesn't run a duplicate, broken
-    # check (e.g. Anthropic native API requires x-api-key, not Bearer).
-    _dedicated_canonical = {"anthropic", "openrouter"}
+    # check. None are currently defined.
+    _dedicated_canonical: set[str] = set()
     _known_canonical.update(_dedicated_canonical)
     try:
         from providers import list_providers
@@ -1140,7 +1117,7 @@ def run_doctor(args):
                     PROVIDER_REGISTRY,
                     resolve_provider as _resolve_auth_provider,
                 )
-                known_providers = set(PROVIDER_REGISTRY.keys()) | {"openrouter", "custom", "auto"}
+                known_providers = set(PROVIDER_REGISTRY.keys()) | {"custom", "auto"}
             except Exception:
                 _resolve_auth_provider = None
                 pass
@@ -1234,29 +1211,11 @@ def run_doctor(args):
             # Warn if model is set to a provider-prefixed name on a provider that doesn't use them.
             # Vendor/model slugs are valid on aggregator-style providers and on any custom
             # provider — bare "custom" or a named "custom:<name>" that fronts an OpenAI-compatible
-            # aggregator (e.g. custom:hpc-ai serving deepseek/deepseek-v4-flash) requires the prefix.
+            # aggregator requires the prefix.
             provider_for_policy = runtime_provider or catalog_provider
             provider_policy_id = str(provider_for_policy or "").strip().lower()
-            providers_accepting_vendor_slugs = {
-                "openrouter",
-                "auto",
-                "ai-gateway",
-                "kilocode",
-                "opencode-zen",
-                "huggingface",
-                "lmstudio",
-                "nvidia",
-                # Fireworks' native model IDs are slash-form
-                # (accounts/fireworks/models/... and .../routers/...), so a "/"
-                # is expected, not an aggregator vendor prefix.
-                "fireworks",
-                # DeepInfra is an aggregator-style gateway: its catalog
-                # is exclusively ``vendor/model`` slugs (Qwen/Qwen3.5-…,
-                # meta-llama/Llama-3-…, anthropic/claude-opus-4-7, …).
-                "deepinfra",
-            }
             provider_accepts_vendor_slug = (
-                provider_policy_id in providers_accepting_vendor_slugs
+                provider_policy_id == "auto"
                 or provider_policy_id == "custom"
                 or provider_policy_id.startswith("custom:")
             )
@@ -1268,40 +1227,32 @@ def run_doctor(args):
             ):
                 check_warn(
                     f"model.default '{default_model}' uses a vendor/model slug but provider is '{provider_raw}'",
-                    "(vendor-prefixed slugs belong to aggregators like openrouter)",
+                    "(vendor-prefixed slugs belong to aggregator-style endpoints)",
                 )
                 issues.append(
                     f"model.default '{default_model}' is vendor-prefixed but model.provider is '{provider_raw}'. "
-                    "Either set model.provider to 'openrouter', or drop the vendor prefix."
+                    "Either point model.provider at a custom aggregator endpoint, or drop the vendor prefix."
                 )
 
             # Check credentials for the configured provider.
             # Limit to API-key providers in PROVIDER_REGISTRY — other provider
-            # types (OAuth, SDK, anthropic/custom/auto) have their own env-var
+            # types (OAuth, SDK, custom/auto) have their own env-var
             # checks elsewhere in doctor, and get_auth_status() returns a bare
             # {logged_in: False} for anything it doesn't explicitly dispatch,
             # which would produce false positives.
             if runtime_provider and runtime_provider not in ("auto", "custom"):
                 try:
-                    if runtime_provider == "openrouter":
-                        from pilotage_cli.config import get_env_value
+                    from pilotage_cli.auth import PROVIDER_REGISTRY, get_auth_status
 
+                    pconfig = PROVIDER_REGISTRY.get(runtime_provider)
+                    configured = True
+                    if pconfig and getattr(pconfig, "auth_type", "") == "api_key":
+                        status = get_auth_status(runtime_provider) or {}
                         configured = bool(
-                            str(get_env_value("OPENROUTER_API_KEY") or "").strip()
-                            or str(get_env_value("OPENAI_API_KEY") or "").strip()
+                            status.get("configured")
+                            or status.get("logged_in")
+                            or status.get("api_key")
                         )
-                    else:
-                        from pilotage_cli.auth import PROVIDER_REGISTRY, get_auth_status
-
-                        pconfig = PROVIDER_REGISTRY.get(runtime_provider)
-                        configured = True
-                        if pconfig and getattr(pconfig, "auth_type", "") == "api_key":
-                            status = get_auth_status(runtime_provider) or {}
-                            configured = bool(
-                                status.get("configured")
-                                or status.get("logged_in")
-                                or status.get("api_key")
-                            )
                     if not configured:
                         _fail_and_issue(
                             f"model.provider '{runtime_provider}' is set but no API key is configured",
@@ -2234,67 +2185,6 @@ def run_doctor(args):
     )
     _probes: list = []  # list of (label, callable) submitted in display order
 
-    def _probe_openrouter() -> _ConnectivityResult:
-        key = os.getenv("OPENROUTER_API_KEY")
-        if not key:
-            return _ConnectivityResult(
-                "OpenRouter API",
-                [(color("⚠", Colors.YELLOW), "OpenRouter API",
-                  color("(not configured)", Colors.DIM))],
-                [],
-            )
-        try:
-            import httpx
-            r = httpx.get(
-                OPENROUTER_MODELS_URL,
-                headers={"Authorization": f"Bearer {key}"},
-                timeout=10,
-            )
-            if r.status_code == 200:
-                return _ConnectivityResult(
-                    "OpenRouter API",
-                    [(color("✓", Colors.GREEN), "OpenRouter API", "")],
-                    [],
-                )
-            if r.status_code == 401:
-                return _ConnectivityResult(
-                    "OpenRouter API",
-                    [(color("✗", Colors.RED), "OpenRouter API",
-                      color("(invalid API key)", Colors.DIM))],
-                    ["Check OPENROUTER_API_KEY in .env"],
-                )
-            if r.status_code == 402:
-                return _ConnectivityResult(
-                    "OpenRouter API",
-                    [(color("✗", Colors.RED), "OpenRouter API",
-                      color("(out of credits — payment required)", Colors.DIM))],
-                    ["OpenRouter account has insufficient credits. "
-                     "Fix: run 'pilotage config set model.provider <provider>' "
-                     "to switch providers, or fund your OpenRouter account "
-                     "at https://openrouter.ai/settings/credits"],
-                )
-            if r.status_code == 429:
-                return _ConnectivityResult(
-                    "OpenRouter API",
-                    [(color("✗", Colors.RED), "OpenRouter API",
-                      color("(rate limited)", Colors.DIM))],
-                    ["OpenRouter rate limit hit — consider switching to "
-                     "a different provider or waiting"],
-                )
-            return _ConnectivityResult(
-                "OpenRouter API",
-                [(color("✗", Colors.RED), "OpenRouter API",
-                  color(f"(HTTP {r.status_code})", Colors.DIM))],
-                [],
-            )
-        except Exception as e:
-            return _ConnectivityResult(
-                "OpenRouter API",
-                [(color("✗", Colors.RED), "OpenRouter API",
-                  color(f"({e})", Colors.DIM))],
-                ["Check network connectivity"],
-            )
-
     def _probe_apikey_provider(pname, env_vars, default_url, base_env,
                                supports_health_check) -> _ConnectivityResult:
         key = ""
@@ -2315,35 +2205,12 @@ def run_doctor(args):
         try:
             import httpx
             base = os.getenv(base_env, "") if base_env else ""
-            # Anthropic-compat endpoints (/anthropic) don't support /models.
-            # Rewrite to OpenAI-compat /v1 surface for health checks.
-            if base and base.rstrip("/").endswith("/anthropic"):
-                from agent.auxiliary_client import _to_openai_base_url
-                base = _to_openai_base_url(base)
             url = (base.rstrip("/") + "/models") if base else default_url
             headers = {
                 "Authorization": f"Bearer {key}",
                 "User-Agent": _PILOTAGE_USER_AGENT,
             }
-            # Google's Generative Language API (generativelanguage.googleapis.com)
-            # rejects ``Authorization: Bearer <api-key>`` with 401
-            # ``ACCESS_TOKEN_TYPE_UNSUPPORTED`` — that header is reserved for
-            # OAuth 2 access tokens, not plain API keys. Plain keys use
-            # ``x-goog-api-key`` (or ``?key=``). Without this, a perfectly valid
-            # GOOGLE_API_KEY/GEMINI_API_KEY always shows red in ``pilotage doctor``.
-            if url and base_url_host_matches(url, "generativelanguage.googleapis.com"):
-                headers.pop("Authorization", None)
-                headers["x-goog-api-key"] = key
             r = httpx.get(url, headers=headers, timeout=10)
-            if (
-                pname == "Alibaba/DashScope"
-                and not base
-                and r.status_code == 401
-            ):
-                r = httpx.get(
-                    "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
-                    headers=headers, timeout=10,
-                )
             if r.status_code == 200:
                 return _ConnectivityResult(
                     pname,
@@ -2372,8 +2239,6 @@ def run_doctor(args):
             )
 
     # Build the probe submission list in display order
-    _probes.append(("OpenRouter API", _probe_openrouter))
-
     global _APIKEY_PROVIDERS_CACHE
     if _APIKEY_PROVIDERS_CACHE is None:
         _APIKEY_PROVIDERS_CACHE = _build_apikey_providers_list()

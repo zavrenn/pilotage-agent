@@ -1600,33 +1600,9 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
     if tools_for_api is None:
         tools_for_api = agent.tools
 
-    if agent.api_mode == "anthropic_messages":
-        _transport = agent._get_transport()
-        anthropic_messages = agent._prepare_anthropic_messages_for_api(api_messages)
-        ctx_len = getattr(agent, "context_compressor", None)
-        ctx_len = ctx_len.context_length if ctx_len else None
-        ephemeral_out = getattr(agent, "_ephemeral_max_output_tokens", None)
-        if ephemeral_out is not None:
-            agent._ephemeral_max_output_tokens = None  # consume immediately
-        anthropic_kwargs = _transport.build_kwargs(
-            model=agent.model,
-            messages=anthropic_messages,
-            tools=tools_for_api,
-            max_tokens=ephemeral_out if ephemeral_out is not None else agent.max_tokens,
-            reasoning_config=agent.reasoning_config,
-            is_oauth=agent._is_anthropic_oauth,
-            preserve_dots=agent._anthropic_preserve_dots(),
-            context_length=ctx_len,
-            base_url=getattr(agent, "_anthropic_base_url", None),
-            fast_mode=(agent.request_overrides or {}).get("speed") == "fast",
-            drop_context_1m_beta=bool(getattr(agent, "_oauth_1m_beta_disabled", False)),
-        )
-        return anthropic_kwargs
-
     # Rotation-stable logical cache scope, shared by every OpenAI-wire branch
     # below (codex + both chat_completions paths). Memoized on the agent —
-    # cheap after the first call. Resolved after the anthropic early
-    # return above, which doesn't use prompt_cache_key.
+    # cheap after the first call.
     _cache_scope_id = _prompt_cache_scope_for_agent(agent)
 
     if agent.api_mode == "codex_responses":
@@ -1686,24 +1662,8 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         or base_url_host_matches(agent._base_url_lower, "githubcopilot.com")
     )
     _is_nvidia = base_url_host_matches(agent._base_url_lower, "integrate.api.nvidia.com")
-    _is_kimi = (
-        base_url_host_matches(agent.base_url, "api.kimi.com")
-        or base_url_host_matches(agent.base_url, "moonshot.ai")
-        or base_url_host_matches(agent.base_url, "moonshot.cn")
-    )
     _is_tokenhub = base_url_host_matches(agent._base_url_lower, "tokenhub.tencentmaas.com")
     _is_lmstudio = (agent.provider or "").strip().lower() == "lmstudio"
-
-    # Temperature: _fixed_temperature_for_model may return OMIT_TEMPERATURE
-    # sentinel (temperature omitted entirely), a numeric override, or None.
-    try:
-        from agent.auxiliary_client import _fixed_temperature_for_model, OMIT_TEMPERATURE
-        _ft = _fixed_temperature_for_model(agent.model, agent.base_url)
-        _omit_temp = _ft is OMIT_TEMPERATURE
-        _fixed_temp = _ft if not _omit_temp else None
-    except Exception:
-        _omit_temp = False
-        _fixed_temp = None
 
     # Provider preferences (aggregator profile decides whether to emit them).
     _prefs = _provider_preferences_for_agent(agent)
@@ -1797,7 +1757,6 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         is_qwen_portal=_is_qwen,
         is_github_models=_is_gh,
         is_nvidia_nim=_is_nvidia,
-        is_kimi=_is_kimi,
         is_tokenhub=_is_tokenhub,
         is_lmstudio=_is_lmstudio,
         is_custom_provider=agent.provider == "custom",
@@ -1807,11 +1766,8 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         qwen_prepare_fn=agent._qwen_prepare_chat_messages if _is_qwen else None,
         qwen_prepare_inplace_fn=agent._qwen_prepare_chat_messages_inplace if _is_qwen else None,
         qwen_session_metadata=_qwen_meta,
-        fixed_temperature=_fixed_temp,
-        omit_temperature=_omit_temp,
         supports_reasoning=agent._supports_reasoning_extra_body(),
         github_reasoning_extra=None,
-        lmstudio_reasoning_options=None,
         anthropic_max_output=_ant_max,
         provider_name=agent.provider,
     )
@@ -2224,19 +2180,6 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         fb_api_mode = "chat_completions"
         if fb_api_mode_explicit:
             fb_api_mode = str(fb.get("api_mode")).strip()
-        elif fb_provider == "anthropic":
-            # Provider-name check must not be gated on fb_base_url_hint:
-            # an entry that names provider: anthropic without an explicit
-            # base_url uses the provider's default endpoint and must still
-            # resolve to anthropic_messages, not chat_completions.
-            fb_api_mode = "anthropic_messages"
-        elif fb_base_url_hint:
-            _orig_url = fb_base_url_hint.rstrip("/").lower()
-            if (
-                _orig_url.endswith("/anthropic")
-                or base_url_hostname(fb_base_url_hint) == "api.anthropic.com"
-            ):
-                fb_api_mode = "anthropic_messages"
         
         # For Ollama Cloud endpoints, pull OLLAMA_API_KEY from env
         # when no explicit key is in the fallback config. Host match
@@ -2276,16 +2219,6 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         if not fb_api_mode_explicit and fb_api_mode == "chat_completions":
             if fb_provider == "openai-codex":
                 fb_api_mode = "codex_responses"
-            elif (
-                fb_base_url.rstrip("/").lower().endswith("/anthropic")
-                or base_url_hostname(fb_base_url) == "api.anthropic.com"
-            ):
-                # Named custom providers (e.g. cron-anthropic) resolve their
-                # base_url from config rather than the fallback entry, so the
-                # pre-resolve hint check above never sees it. Match the host
-                # the same way determine_api_mode() and _detect_api_mode_for_url()
-                # do on the primary path.
-                fb_api_mode = "anthropic_messages"
             elif _fb_is_azure:
                 # Azure OpenAI serves gpt-5.x on /chat/completions — does NOT
                 # support the Responses API. Stay on chat_completions.
@@ -2389,15 +2322,6 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         from agent.agent_runtime_helpers import sync_credential_pool_entry_id
         sync_credential_pool_entry_id(agent)
 
-        # Re-evaluate prompt caching for the new provider/model
-        agent._use_prompt_caching, agent._use_native_cache_layout = (
-            agent._anthropic_prompt_cache_policy(
-                provider=fb_provider,
-                base_url=fb_base_url,
-                api_mode=fb_api_mode,
-                model=fb_model,
-            )
-        )
 
         # Update context compressor limits for the fallback model.
         # Without this, compression decisions use the primary model's
@@ -2587,18 +2511,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                     api_msg.pop(internal_key, None)
 
         summary_extra_body = {}
-        try:
-            from agent.auxiliary_client import _fixed_temperature_for_model, OMIT_TEMPERATURE as _OMIT_TEMP
-        except Exception:
-            _fixed_temperature_for_model = None
-            _OMIT_TEMP = None
-        _raw_summary_temp = (
-            _fixed_temperature_for_model(agent.model, agent.base_url)
-            if _fixed_temperature_for_model is not None
-            else None
-        )
-        _omit_summary_temperature = _raw_summary_temp is _OMIT_TEMP
-        _summary_temperature = None if _omit_summary_temperature else _raw_summary_temp
         # LM Studio uses top-level `reasoning_effort` (not extra_body.reasoning).
         # Mirror ChatCompletionsTransport.build_kwargs() so the summary path
         # — which calls chat.completions.create() directly without going
@@ -2626,8 +2538,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                 "model": agent.model,
                 "messages": api_messages,
             }
-            if _summary_temperature is not None:
-                summary_kwargs["temperature"] = _summary_temperature
             if agent.max_tokens is not None:
                 summary_kwargs.update(agent._max_tokens_param(agent.max_tokens))
             if _lm_reasoning_effort is not None:
@@ -2720,8 +2630,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                     "model": agent.model,
                     "messages": api_messages,
                 }
-                if _summary_temperature is not None:
-                    summary_kwargs["temperature"] = _summary_temperature
                 if agent.max_tokens is not None:
                     summary_kwargs.update(agent._max_tokens_param(agent.max_tokens))
                 if _lm_reasoning_effort is not None:
@@ -4174,27 +4082,6 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             # Circuit breaker: count the stale kill. See the
             # canonical comment block above ``_stale_streak()``.
             _bump_stale_streak(agent)
-            # Rebuild the primary client too — its connection pool
-            # may hold dead sockets from the same provider outage.
-            if agent.api_mode == "anthropic_messages":
-                #: the stale stream ran on a request-local anthropic
-                # client, already socket-aborted above via
-                # _close_request_client_once (which unblocks the worker and
-                # preserves the no-hang guarantee). The shared
-                # _anthropic_client is NOT the in-flight transport, so we must
-                # not close it from this poll (stranger) thread — that was the
-                # FD-recycle corruption vector. Nothing further is needed.
-                pass
-            else:
-                #: same FD-recycle corruption vector as.
-                # The shared OpenAI client's connection pool must NOT be
-                # closed from this watchdog/poll thread — worker threads
-                # from previous stale-killed attempts may still be
-                # unwinding their SSL BIOs.  The request-local client is
-                # already closed above via _close_request_client_once.
-                # The shared client will be replaced lazily by
-                # _ensure_primary_openai_client on the next request.
-                pass
             # Reset the timer so we don't kill repeatedly while
             # the inner thread processes the closure.
             last_chunk_time["t"] = time.time()

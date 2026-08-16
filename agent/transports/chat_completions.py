@@ -435,7 +435,6 @@ class ChatCompletionsTransport(ProviderTransport):
             is_qwen_portal: bool
             is_github_models: bool
             is_nvidia_nim: bool
-            is_kimi: bool
             is_tokenhub: bool
             is_lmstudio: bool
             is_custom_provider: bool
@@ -446,13 +445,9 @@ class ChatCompletionsTransport(ProviderTransport):
             qwen_prepare_fn: callable | None — runs AFTER codex sanitization
             qwen_prepare_inplace_fn: callable | None — in-place variant for deepcopied lists
             qwen_session_metadata: dict | None
-            # Temperature
-            fixed_temperature: Any — from _fixed_temperature_for_model()
-            omit_temperature: bool
             # Reasoning
             supports_reasoning: bool
             github_reasoning_extra: dict | None
-            lmstudio_reasoning_options: list[str] | None  # raw allowed_options from /api/v1/models
             # Claude on OpenRouter max output
             anthropic_max_output: int | None
             extra_body_additions: dict | None
@@ -504,7 +499,6 @@ class ChatCompletionsTransport(ProviderTransport):
         ephemeral = params.get("ephemeral_max_output_tokens")
         max_tokens = params.get("max_tokens")
         anthropic_max_out = params.get("anthropic_max_output")
-        is_kimi = params.get("is_kimi", False)
         is_tokenhub = params.get("is_tokenhub", False)
         reasoning_config = _reasoning_config_for_model(model, params.get("reasoning_config"))
 
@@ -514,21 +508,6 @@ class ChatCompletionsTransport(ProviderTransport):
             api_kwargs.update(max_tokens_fn(max_tokens))
         elif anthropic_max_out is not None:
             api_kwargs["max_tokens"] = anthropic_max_out
-
-        # Kimi: top-level reasoning_effort (unless thinking disabled)
-        if is_kimi:
-            _kimi_thinking_off = bool(
-                reasoning_config
-                and isinstance(reasoning_config, dict)
-                and reasoning_config.get("enabled") is False
-            )
-            if not _kimi_thinking_off:
-                _kimi_effort = "medium"
-                if reasoning_config and isinstance(reasoning_config, dict):
-                    _e = (reasoning_config.get("effort") or "").strip().lower()
-                    if _e in {"low", "medium", "high"}:
-                        _kimi_effort = _e
-                api_kwargs["reasoning_effort"] = _kimi_effort
 
         # Tencent TokenHub: top-level reasoning_effort (unless thinking disabled)
         if is_tokenhub:
@@ -571,16 +550,6 @@ class ChatCompletionsTransport(ProviderTransport):
                     extra_body["plugins"] = [
                         {"id": "pareto-router", "min_coding_score": _pareto_score_f}
                     ]
-
-        # Kimi extra_body.thinking
-        if is_kimi:
-            _kimi_thinking_enabled = True
-            if reasoning_config and isinstance(reasoning_config, dict):
-                if reasoning_config.get("enabled") is False:
-                    _kimi_thinking_enabled = False
-            extra_body["thinking"] = {
-                "type": "enabled" if _kimi_thinking_enabled else "disabled",
-            }
 
         # Reasoning. LM Studio is handled above via top-level reasoning_effort,
         # so skip emitting extra_body.reasoning for it.
