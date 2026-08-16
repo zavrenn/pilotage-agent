@@ -385,7 +385,6 @@ py-modules = [
   "hermes_time",
   "hermes_logging",
   "utils",
-  "mcp_serve",
 ]
 
 [tool.setuptools.packages.find]

@@ -89,7 +89,6 @@ TIPS = [
     "hermes skills tap add myorg/skills-repo adds a custom GitHub skill source.",
     "hermes skills snapshot export setup.json exports your skill configuration for backup or sharing.",
     "hermes mcp add github --command npx adds MCP servers from the command line.",
-    "hermes mcp serve runs Hermes itself as an MCP server for other agents.",
     "hermes auth add lets you add multiple API keys for credential pool rotation.",
     "hermes completion bash >> ~/.bashrc enables tab completion for all commands and profiles.",
     "hermes logs -f follows agent.log in real time. --level WARNING --since 1h filters output.",

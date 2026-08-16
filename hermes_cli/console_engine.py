@@ -1194,7 +1194,6 @@ class HermesConsoleEngine:
             return f"`hermes {first}` is not available in Hermes Console."
         blocked_pairs = {
             ("config", "edit"): "`config edit` opens an editor and is not available in Hermes Console.",
-            ("mcp", "serve"): "`mcp serve` starts a server and is not available in Hermes Console.",
             ("profile", "alias"): "`profile alias` creates shell wrappers and is not available in Hermes Console.",
             ("skills", "config"): "`skills config` is interactive and is not available in Hermes Console.",
             ("skills", "publish"): "`skills publish` is not available in Hermes Console.",
