@@ -203,31 +203,6 @@ def _bare_custom_provider_def(current_base_url: str) -> Optional[ProviderDef]:
 
 
 # ---------------------------------------------------------------------------
-# Non-agentic model warning
-# ---------------------------------------------------------------------------
-
-_PILOTAGE_MODEL_WARNING = (
-    "Nous Research Hermes 3 & 4 models are NOT agentic and are not designed "
-    "for use with Pilotage Agent. They lack the tool-calling capabilities "
-    "required for agent workflows. Consider using an agentic model instead "
-    "(Claude, GPT, Gemini, DeepSeek, etc.)."
-)
-
-# Match only the real Nous Research Hermes 3 / Hermes 4 chat families.
-# The previous substring check (`"hermes" in name.lower()`) false-positived on
-# unrelated local Modelfiles like ``hermes-brain:qwen3-14b-ctx16k`` that just
-# happen to carry "hermes" in their tag but are fully tool-capable.
-#
-# Positive examples the regex must match:
-#   NousResearch/Hermes-3-Llama-3.1-70B, hermes-4-405b, openrouter/hermes3:70b
-# Negative examples it must NOT match:
-#   hermes-brain:qwen3-14b-ctx16k, qwen3-14b, claude-opus-4-6
-_NOUS_HERMES_NON_AGENTIC_RE = re.compile(
-    r"(?:^|[/:])hermes[-_ ]?[34](?:[-_.:]|$)",
-    re.IGNORECASE,
-)
-
-
 # Opaque internal model-ID display
 # ---------------------------------------------------------------------------
 # Some proxies (notably Palantir Foundry's LLM-proxy) identify models by
@@ -270,26 +245,6 @@ def format_model_for_display(model_name: str) -> str:
             tail = model_name[len(prefix):]
             return tail if tail else model_name
     return model_name
-
-
-# ---------------------------------------------------------------------------
-def is_nous_hermes_non_agentic(model_name: str) -> bool:
-    """Return True if *model_name* is a real Nous Hermes 3/4 chat model.
-
-    Used to decide whether to surface the non-agentic warning at startup.
-    Callers in :mod:`cli.py` and here should go through this single helper
-    so the two sites don't drift.
-    """
-    if not model_name:
-        return False
-    return bool(_NOUS_HERMES_NON_AGENTIC_RE.search(model_name))
-
-
-def _check_hermes_model_warning(model_name: str) -> str:
-    """Return a warning string if *model_name* is a Nous Hermes 3/4 chat model."""
-    if is_nous_hermes_non_agentic(model_name):
-        return _PILOTAGE_MODEL_WARNING
-    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -1923,9 +1878,6 @@ def switch_model(
     warnings: list[str] = []
     if validation.get("message"):
         warnings.append(validation["message"])
-    pilotage_warn = _check_hermes_model_warning(new_model)
-    if pilotage_warn:
-        warnings.append(pilotage_warn)
 
     # --- Build result ---
     return ModelSwitchResult(
