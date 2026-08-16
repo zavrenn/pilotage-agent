@@ -44,7 +44,6 @@ model:
   #   "anthropic"    - Direct Anthropic API (requires: ANTHROPIC_API_KEY)
   #   "openai-codex" - OpenAI Codex (requires: hermes auth)
   #   "copilot"      - GitHub Copilot / GitHub Models (requires: GITHUB_TOKEN)
-  #   "gemini"      - Use Google AI Studio direct (requires: GOOGLE_API_KEY or GEMINI_API_KEY)
   #   "zai"         - Use z.ai / ZhipuAI GLM models (requires: GLM_API_KEY)
   #   "kimi-coding"  - Kimi / Moonshot AI (requires: KIMI_API_KEY)
   #   "minimax"      - MiniMax global (requires: MINIMAX_API_KEY)
@@ -54,8 +53,6 @@ model:
   #   "xiaomi"       - Xiaomi MiMo (requires: XIAOMI_API_KEY)
   #   "arcee"        - Arcee AI Trinity models (requires: ARCEEAI_API_KEY)
   #   "ollama-cloud" - Ollama Cloud (requires: OLLAMA_API_KEY — https://ollama.com/settings)
-  #   "deepinfra"    - DeepInfra (requires: DEEPINFRA_API_KEY)
-  #   "kilocode"     - KiloCode gateway (requires: KILOCODE_API_KEY)
   #   "ai-gateway"   - Vercel AI Gateway (requires: AI_GATEWAY_API_KEY)
   #   "azure-foundry" - Microsoft Foundry / Azure OpenAI (API key or Entra ID)
   #   "lmstudio"     - LM Studio local server (optional: LM_API_KEY, defaults to http://127.0.0.1:1234/v1)
@@ -201,7 +198,7 @@ model:
 #   # only: ["anthropic", "google"]
 #
 #   # Skip these providers entirely
-#   # ignore: ["deepinfra", "fireworks"]
+#   # ignore: ["together", "deepseek"]
 #
 #   # Try providers in this order (overrides default load balancing)
 #   # order: ["anthropic", "google", "together"]
@@ -250,7 +247,7 @@ model:
 # First-class review tasks are dispatched automatically by default. The worker
 # is spawned with the bundled sdlc-review skill and can approve, request changes
 # back to the original implementer, or escalate a genuine external blocker.
-# Disable this only when every review is performed manually from the dashboard.
+# Disable this only when every review is performed manually.
 kanban:
   review_dispatch: true
 
@@ -472,7 +469,7 @@ compression:
 
   # Opt-in compression progress notices on chat platforms (default: false).
   # By design, routine automatic compression is SILENT on human-facing chat
-  # gateways (Telegram, Discord, Slack, ...) — it happens in the background
+  # gateways (Telegram, WhatsApp, ...) — it happens in the background
   # with server-side logging only. Set true to also deliver the routine
   # progress statuses (compacting started, preflight/pre-API compression,
   # idle compaction, retry progress, and the compaction-complete notice) to
@@ -709,7 +706,7 @@ prompt_caching:
 #                           #     enable_thinking: false
 #
 #   # Auto-generated short session titles after the first exchange.
-#   # Each active Discord/Telegram channel can spawn a background title
+#   # Each active Telegram/WhatsApp chat can spawn a background title
 #   # call.  Cap concurrency to keep retries during provider incidents
 #   # from amplifying the request burst.  Leave unset for legacy behavior
 #   # (unlimited).
@@ -759,7 +756,7 @@ memory:
 # =============================================================================
 # Session Reset Policy (Messaging Platforms)
 # =============================================================================
-# Controls when messaging sessions (Telegram, Discord, WhatsApp, Slack) are
+# Controls when messaging sessions (Telegram, WhatsApp) are
 # automatically cleared. Default is "none": sessions never auto-reset —
 # conversation context lives until you /reset or /new manually, or context
 # compression kicks in. Opt in to automatic resets if you prefer sessions to
@@ -837,7 +834,7 @@ group_sessions_per_user: true
 # ─────────────────────────────────────────────────────────────────────────────
 # Stream tokens to messaging platforms in real-time. The bot sends a message
 # on first token, then progressively edits it as more tokens arrive.
-# Disabled by default — enable to try the streaming UX on Telegram/Discord/Slack.
+# Disabled by default — enable to try the streaming UX on Telegram/WhatsApp.
 # For Telegram, partial edits are sent as plain text and only the final edit uses MarkdownV2.
 streaming:
   enabled: false
@@ -944,7 +941,7 @@ agent:
   # After the agent edits code without fresh passing verification, nudge it to
   # verify before finishing. The default "auto" enables it on interactive
   # coding surfaces (CLI, TUI, desktop) and programmatic callers, and disables
-  # it on conversational messaging surfaces (Telegram, Discord, etc.) where the
+  # it on conversational messaging surfaces (Telegram, WhatsApp, etc.) where the
   # verification summary would reach a human as chat noise. Set true or false to
   # force it on or off; the HERMES_VERIFY_ON_STOP env var (1/0) takes precedence.
   # verify_on_stop: auto
@@ -1019,7 +1016,7 @@ agent:
 #   - A preset like "hermes-cli" or "hermes-telegram" (curated tool set)
 #   - A list of individual toolsets to compose your own (see list below)
 #
-# Supported platform keys: cli, telegram, discord, whatsapp, slack, qqbot, teams, google_chat
+# Supported platform keys: cli, telegram, whatsapp, whatsapp_cloud, api_server, webhook
 #
 # Examples:
 #
@@ -1036,34 +1033,19 @@ agent:
 #   platform_toolsets:
 #     cli: [web, terminal, file, skills, todo, tts, cronjob]
 #
-#   # Restrictive: Discord gets read-only tools only:
+#   # Restrictive: WhatsApp gets read-only tools only:
 #   platform_toolsets:
-#     discord: [web, vision, skills, todo]
+#     whatsapp: [web, vision, skills, todo]
 #
 # If not set, defaults are:
 #   cli:           hermes-cli            (everything + cronjob management)
 #   telegram:      hermes-telegram       (terminal, file, web, vision, image, tts, browser, skills, todo, cronjob, messaging)
-#   discord:       hermes-discord        (same as telegram)
 #   whatsapp:      hermes-whatsapp       (same as telegram)
-#   slack:         hermes-slack          (same as telegram)
-#   signal:        hermes-signal         (same as telegram)
-#   homeassistant: hermes-homeassistant  (same as telegram)
-#   qqbot:            hermes-qqbot            (same as telegram)
-#   teams:            hermes-teams            (same as telegram)
-#   google_chat:      hermes-google_chat      (same as telegram)
 #
 platform_toolsets:
   cli: [hermes-cli]
   telegram: [hermes-telegram]
-  discord: [hermes-discord]
   whatsapp: [hermes-whatsapp]
-  slack: [hermes-slack]
-  signal: [hermes-signal]
-  homeassistant: [hermes-homeassistant]
-  qqbot: [hermes-qqbot]
-  yuanbao: [hermes-yuanbao]
-  teams: [hermes-teams]
-  google_chat: [hermes-google_chat]
 
 # =============================================================================
 # Gateway Platform Settings
@@ -1262,11 +1244,11 @@ platform_toolsets:
 # Set the corresponding API key in .env: GROQ_API_KEY, OPENAI_API_KEY, or MISTRAL_API_KEY.
 stt:
   enabled: true
-  # provider: "local"          # auto-detected if omitted
-  # --- Cloud pre-upload silence trim (groq/openai/mistral/xai/elevenlabs/deepinfra) ---
-  # Local whisper gets Silero VAD; cloud endpoints otherwise receive raw audio —
-  # silence inflates upload time, per-audio-minute billing, and hallucination risk.
-  # Collapses pauses with ffmpeg client-side; clips under 12s skip the trim, and
+  # provider: "openai"         # "openai" (default) or a plugin-registered name
+  # --- Cloud pre-upload silence trim ---
+  # Cloud endpoints otherwise receive raw audio — silence inflates upload
+  # time, per-audio-minute billing, and hallucination risk. Collapses
+  # pauses with ffmpeg client-side; clips under 12s skip the trim, and
   # on any failure the original uploads untouched.
   # cloud_trim_silence: true   # set false to always upload the original audio
   # cloud_trim_threshold_db: -40  # audio quieter than this counts as silence
@@ -1280,45 +1262,19 @@ stt:
   # the audio. Do not include secrets or session context you would not send to
   # that provider.
   #
-  # Length / truncation contract: Whisper-family backends (local, openai,
-  # groq, deepinfra) only use the final ~224 prompt tokens, so Hermes
-  # truncates longer prompts client-side (keeping the tail) with a WARNING
-  # log — never an error. Other backends own their own validation.
+  # Length / truncation contract: Whisper-family backends (openai) only use
+  # the final ~224 prompt tokens, so Hermes truncates longer prompts
+  # client-side (keeping the tail) with a WARNING log — never an error.
+  # Other backends own their own validation.
   #
   # Provider behavior:
-  #   local (faster-whisper)  -> `initial_prompt`, forwarded unchanged
-  #   openai / groq          -> `prompt`, forwarded unchanged
-  #   mistral                -> `prompt`, forwarded unchanged
-  #   deepinfra              -> OpenAI-compatible `prompt`, unchanged
-  #   local_command/xai/
-  #   elevenlabs             -> unsupported; DEBUG log, then continue
+  #   openai                 -> `prompt`, forwarded unchanged
   #   plugin providers       -> `prompt` in `**extra`; plugin owns limits
   # prompt: "Hermes, Teknium, Nous Research, kanban"
-  local:
-    model: "base"              # tiny | base | small | medium | large-v3 | turbo
-    # language: ""             # auto-detect; set to "en", "es", "fr", etc. to force
-    # initial_prompt: ""       # Optional faster-whisper prompt, e.g. bias Chinese output to simplified Chinese
-    # --- Anti-hallucination hardening (whisper decodes junk from silence without these) ---
-    # vad: true                # Silero VAD filter (default on) — silence never reaches whisper.
-    #                          # Set false to restore raw behavior (e.g. transcribing music/ambient audio).
-    # vad_min_silence_ms: 500  # min silence (ms) that splits speech chunks when vad is on
-    # no_speech_prob_threshold: 0.6  # drop a segment only if no_speech_prob > this...
-    # logprob_threshold: -1.0       # ...AND avg_logprob < this (both must hit — quiet real speech survives)
-    # unload_after_idle_seconds: 0  # 0=never unload (default); e.g. 300 releases the model after 5min idle (frees VRAM on GPU; next voice message reloads it)
   language: "en"               # GLOBAL language hint for every STT provider (per-provider language wins). Set "" for auto-detect.
-  # groq:
-  #   model: "whisper-large-v3-turbo"
-  #   language: ""             # blank = stt.language > HERMES_LOCAL_STT_LANGUAGE > auto-detect
   openai:
     model: "whisper-1"         # whisper-1 | gpt-4o-mini-transcribe | gpt-4o-transcribe | gpt-transcribe
     language: ""               # auto-detect; set to "en", "es", "fr", etc. to force
-  # mistral:
-  #   model: "voxtral-mini-latest"  # voxtral-mini-latest | voxtral-mini-2602
-  # deepinfra:
-  #   # Model id is discovered live from the DeepInfra catalog filtered
-  #   # by the `stt` surface tag — leave `model` blank to take the first
-  #   # live result. Pin only when you need a specific Whisper variant.
-  #   model: ""
 
 # Text-to-speech. Only the deepinfra block is documented here — the
 # remaining providers (edge, openai, xai, minimax, mistral, gemini,
@@ -1346,15 +1302,13 @@ stt:
 #                      # client: always desktop-streamed PCM (detection stays
 #                      #         on the backend).
 
-# Image generation. Each provider plugin reads its own ``image_gen.<name>``
-# block; deepinfra discovers models live from
-# api.deepinfra.com/v1/openai/models filtered by the ``image-gen`` tag —
-# no model id is hardcoded, so retired models disappear automatically.
+# Image generation. Providers: "openai-codex" (ChatGPT OAuth, the
+# recommended path) and "openai" (API key). Each reads its own
+# ``image_gen.<name>`` block.
 # image_gen:
-#   provider: "deepinfra"
-#   deepinfra:
-#     # Leave `model` blank for the first live `image-gen`-tagged result.
-#     model: ""
+#   provider: "openai-codex"
+#   openai-codex:
+#     model: "gpt-image-2-high"
 
 # =============================================================================
 # Response Pacing (Messaging Platforms)
