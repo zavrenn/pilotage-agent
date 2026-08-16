@@ -106,15 +106,9 @@ dependencies = [
   # Browser CDP supervisor + browser_dialog import this directly. Keep core
   # so browser tool discovery doesn't fail on lean installs.
   "websockets==15.0.1",
-  # .gitignore-aware file matching for web build stamps.
-  "pathspec==1.1.1",
-  "fastapi>=0.104.0,<1",
-  "uvicorn[standard]>=0.24.0,<1",
-  # Streaming multipart uploads for the dashboard file manager (NS-501).
-  # FastAPI's UploadFile/Form depend on python-multipart; it is NOT pulled in
-  # by fastapi itself, so the dashboard's multipart upload endpoint would 500
-  # without an explicit dependency here (and in the `web` extra below).
-  "python-multipart>=0.0.9,<1",
+  # PTY support for the `process` tool's interactive CLI mode (Codex,
+  # Claude Code, Python REPL). tools/process_registry.py falls back to
+  # plain Popen when absent, degraded but functional.
   "ptyprocess>=0.7.0,<1; sys_platform != 'win32'",
   "pywinpty>=2.0.0,<3; sys_platform == 'win32'",
   # Image resize recovery for the vision tools. Pillow shrinks oversized images
