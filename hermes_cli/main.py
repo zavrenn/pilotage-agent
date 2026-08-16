@@ -37,7 +37,6 @@ Usage:
     hermes version             Show version
     hermes update              Update to latest version
     hermes uninstall           Uninstall Hermes Agent
-    hermes acp                 Run as an ACP server for editor integration
     hermes sessions browse     Interactive session picker with search
 
     hermes claw migrate --dry-run  # Preview migration without changes
@@ -381,7 +380,6 @@ from hermes_cli.subcommands.uninstall import build_uninstall_parser
 from hermes_cli.subcommands.logs import build_logs_parser
 from hermes_cli.subcommands.prompt_size import build_prompt_size_parser
 from hermes_cli.subcommands.memory import build_memory_parser
-from hermes_cli.subcommands.acp import build_acp_parser
 from hermes_cli.subcommands.tools import build_tools_parser
 from hermes_cli.subcommands.insights import build_insights_parser
 from hermes_cli.subcommands.monitoring import build_monitoring_parser
@@ -3344,7 +3342,6 @@ _LAZY_COMMAND_EXPORTS = {
         "_defer_update_for_self_lock",
         "_discard_lockfile_churn",
         "_discard_stashed_changes",
-        "_ensure_acp_launcher",
         "_ensure_fhs_path_guard",
         "_ensure_uv_for_termux",
         "_for_each_systemd_gateway_unit",
@@ -4936,7 +4933,7 @@ def _hermes_exe_shims(scripts_dir: Path) -> list[Path]:
     if not _is_windows():
         return []
 
-    names = set(_load_console_script_names()) or {"hermes", "hermes-agent", "hermes-acp"}
+    names = set(_load_console_script_names()) or {"hermes", "hermes-agent"}
     # The gateway shim is not a [project.scripts] entry point, but older
     # update/install paths still rewrite and quarantine it.
     names.add("hermes-gateway")
@@ -6872,7 +6869,7 @@ def _build_provider_choices() -> list[str]:
 # to parse.
 _BUILTIN_SUBCOMMANDS = frozenset(
     {
-        "acp", "approvals", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
+        "approvals", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
         "config", "console", "cron", "curator", "debug", "doctor",
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
@@ -7005,11 +7002,10 @@ def _resolve_deferred_platform_cli_command(command_name: str | None) -> None:
         )
 
 
-_AGENT_COMMANDS = {None, "chat", "acp", "rl"}
+_AGENT_COMMANDS = {None, "chat", "rl"}
 _AGENT_SUBCOMMANDS = {
     "cron": ("cron_command", {"run", "tick"}),
     "gateway": ("gateway_command", {"run"}),
-    "mcp": ("mcp_action", {"serve"}),
 }
 
 
@@ -7018,8 +7014,6 @@ def _is_tui_chat_launch(args) -> bool:
 
 
 def _command_has_dedicated_mcp_startup(args) -> bool:
-    if args.command == "acp":
-        return True
     if args.command == "gateway" and getattr(args, "gateway_command", None) == "run":
         return True
     if args.command == "cron" and getattr(args, "cron_command", None) in {"run", "tick"}:
@@ -7347,29 +7341,6 @@ def cmd_memory(args):
         from hermes_cli.memory_setup import memory_command
 
         memory_command(args)
-
-
-def cmd_acp(args):
-    """Launch Hermes Agent as an ACP server."""
-    try:
-        from acp_adapter.entry import main as acp_main
-
-        acp_argv = []
-        if getattr(args, "acp_version", False):
-            acp_argv.append("--version")
-        if getattr(args, "check", False):
-            acp_argv.append("--check")
-        if getattr(args, "setup", False):
-            acp_argv.append("--setup")
-        if getattr(args, "setup_browser", False):
-            acp_argv.append("--setup-browser")
-        if getattr(args, "assume_yes", False):
-            acp_argv.append("--yes")
-        acp_main(acp_argv)
-    except ImportError:
-        print("ACP dependencies not installed.", file=sys.stderr)
-        print("Install them with:  pip install -e '.[acp]'", file=sys.stderr)
-        sys.exit(1)
 
 
 def cmd_tools(args):
@@ -8576,11 +8547,6 @@ def main():
     # uninstall command  (parser built in hermes_cli/subcommands/uninstall.py)
     # =========================================================================
     build_uninstall_parser(subparsers, cmd_uninstall=cmd_uninstall)
-
-    # =========================================================================
-    # acp command  (parser built in hermes_cli/subcommands/acp.py)
-    # =========================================================================
-    build_acp_parser(subparsers, cmd_acp=cmd_acp)
 
     # =========================================================================
     # profile command  (parser built in hermes_cli/subcommands/profile.py)

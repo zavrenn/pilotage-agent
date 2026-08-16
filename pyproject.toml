@@ -233,7 +233,6 @@ mcp = ["mcp==1.28.1", "starlette==1.3.1"]  # starlette: CVE-2026-48710
 nemo-relay = []
 homeassistant = ["aiohttp==3.14.3"]
 whatsapp = ["aiohttp==3.14.3"]
-acp = ["agent-client-protocol==0.9.0"]
 # mistral: Voxtral STT + TTS. Pinned to an exact verified-clean version.
 # The `mistralai` PyPI project was quarantined 2026-05-12 after the malicious
 # 2.4.6 release (Mini Shai-Hulud worm); 2.4.6 was removed from PyPI and the
@@ -257,7 +256,6 @@ termux = [
   "hermes-agent[cron]",
   "hermes-agent[mcp]",
   "hermes-agent[honcho]",
-  "hermes-agent[acp]",
 ]
 termux-all = [
   # Best-effort "install all" profile for Termux. Same policy as [all]:
@@ -315,7 +313,6 @@ all = [
   "hermes-agent[pty]",
   "hermes-agent[mcp]",
   "hermes-agent[homeassistant]",
-  "hermes-agent[acp]",
   "hermes-agent[google]",
   "hermes-agent[youtube]",
 ]
@@ -327,7 +324,6 @@ build-backend = "setuptools.build_meta"
 [project.scripts]
 hermes = "hermes_cli.main:main"
 hermes-agent = "run_agent:main"
-hermes-acp = "acp_adapter.entry:main"
 
 [tool.uv]
 override-dependencies = [
@@ -388,7 +384,7 @@ py-modules = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "cron", "cron.*", "acp_adapter", "plugins", "plugins.*", "providers", "providers.*"]
+include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
 
 [tool.setuptools.package-data]
 hermes_cli = ["observability/schemas/*.json", "data/*.json"]

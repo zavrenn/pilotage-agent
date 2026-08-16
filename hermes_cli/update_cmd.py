@@ -2647,55 +2647,6 @@ def _ensure_fhs_path_guard() -> None:
     if wrote_any:
         print("    (reload your shell or run 'source ~/.bashrc' to pick it up)")
 
-def _ensure_acp_launcher() -> None:
-    """Self-heal: install a ``hermes-acp`` launcher next to the ``hermes`` one.
-
-    Mirrors the launcher block in ``scripts/install.sh`` so existing installs
-    gain the ACP command on ``hermes update`` without a reinstall.  ACP hosts
-    (Zed, JetBrains, Buzz Desktop) spawn the agent by resolving the
-    ``hermes-acp`` command name against the login-shell PATH; the console
-    script of that name lives inside the install's venv, which is not on that
-    PATH, so those hosts report Hermes as not installed even when it is.
-
-    The shim simply delegates to the sibling ``hermes`` launcher with the
-    ``acp`` subcommand, which makes it correct for every install layout
-    (venv wrapper, FHS symlink, pipx/pip console script) without having to
-    reconstruct interpreter/entrypoint paths.
-
-    No-op on Windows (install.ps1 copies ``hermes.exe`` + ``hermes-acp.exe``
-    into ``$InstallDir\bin`` and puts THAT on the user PATH — never the whole
-    ``venv\Scripts`` dir, which would shadow the user's ``python`` (#83797) —
-    so ``hermes-acp.exe`` already resolves) and wherever a ``hermes-acp`` is
-    already present next to the ``hermes`` command.  Unwritable directories
-    (e.g. ``/usr/local/bin`` as non-root) are skipped silently.  Idempotent.
-    """
-    if _m().sys.platform == "win32":
-        return
-    for bin_dir in (Path.home() / ".local" / "bin", Path("/usr/local/bin")):
-        hermes_cmd = bin_dir / "hermes"
-        acp_cmd = bin_dir / "hermes-acp"
-        try:
-            if not (hermes_cmd.is_file() or hermes_cmd.is_symlink()):
-                continue
-            # Already present — a console script (pip/pipx install), an
-            # earlier shim, or a symlink. is_symlink() catches broken
-            # symlinks that exists() would miss; never follow-and-overwrite
-            # (the #21454 failure mode).
-            if acp_cmd.exists() or acp_cmd.is_symlink():
-                continue
-            shim = (
-                "#!/usr/bin/env bash\n"
-                "# Hermes Agent — ACP launcher (written by `hermes update`).\n"
-                "# ACP hosts (Zed, JetBrains, Buzz) resolve the agent by this\n"
-                "# command name on the login-shell PATH.\n"
-                f'exec "{hermes_cmd}" acp "$@"\n'
-            )
-            acp_cmd.write_text(shim, encoding="utf-8")
-            acp_cmd.chmod(acp_cmd.stat().st_mode | 0o755)
-        except OSError:
-            continue
-        print(f"  ✓ Installed hermes-acp launcher → {acp_cmd}")
-
 _PRE_UPDATE_SNAPSHOT_KEEP = 1
 
 # Per-file size cap for the pre-update quick snapshot. Anything larger is
@@ -5218,14 +5169,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _ensure_fhs_path_guard()
         except Exception as e:
             logger.debug("FHS PATH guard check failed: %s", e)
-
-        # Self-heal the hermes-acp launcher for installs that predate it, so
-        # ACP hosts (Zed, JetBrains, Buzz) can resolve Hermes on PATH without
-        # a reinstall.  No-op on Windows and when already present.
-        try:
-            _ensure_acp_launcher()
-        except Exception as e:
-            logger.debug("hermes-acp launcher self-heal failed: %s", e)
 
         # Write exit code *before* the gateway restart attempt.
         # When running as ``hermes update --gateway`` (spawned by the gateway's

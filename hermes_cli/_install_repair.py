@@ -145,7 +145,6 @@ def _quarantine_running_hermes_exe(scripts_dir: Path) -> list[tuple[Path, Path]]
     names = set(_load_console_script_names(scripts_dir.parent.parent)) or {
         "hermes",
         "hermes-agent",
-        "hermes-acp",
     }
     names.add("hermes-gateway")
     moved: list[tuple[Path, Path]] = []

@@ -2877,7 +2877,7 @@ except Exception:
         # uv on Windows can register hermes.exe in dist-info/RECORD but fail to
         # materialise the .exe (file lock during self-update, distlib edge case).
         # Catch it here so a fresh install/update does not finish with a broken
-        # `hermes` command while hermes-agent.exe / hermes-acp.exe exist
+        # `hermes` command while hermes-agent.exe exists
         $scriptsDir = Join-Path $InstallDir "venv\Scripts"
         $pythonExe = Join-Path $scriptsDir "python.exe"
         if ((Test-Path $scriptsDir) -and (Test-Path $pythonExe)) {
@@ -2976,7 +2976,7 @@ function Set-PathVariable {
         # path, so they work from any location and survive updates.)
         $hermesBin = "$InstallDir\bin"
         New-Item -ItemType Directory -Force -Path $hermesBin | Out-Null
-        foreach ($launcher in @("hermes.exe", "hermes-acp.exe")) {
+        foreach ($launcher in @("hermes.exe")) {
             $src = "$InstallDir\venv\Scripts\$launcher"
             if (Test-Path $src) {
                 Copy-Item -Force $src "$hermesBin\$launcher"

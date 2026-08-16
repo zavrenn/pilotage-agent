@@ -29,18 +29,6 @@ huggingface-hub = false
 overrides = [{ name = "cryptography", specifier = ">=50,<51" }]
 
 [[package]]
-name = "agent-client-protocol"
-version = "0.9.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pydantic" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/eb/13/3b893421369767e7043cc115d6ef0df417c298b84563be3a12df0416158d/agent_client_protocol-0.9.0.tar.gz", hash = "sha256:f744c48ab9af0f0b4452e5ab5498d61bcab97c26dbe7d6feec5fd36de49be30b", size = 71853, upload-time = "2026-03-26T01:21:00.379Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8f/ed/c284543c08aa443a4ef2c8bd120be51da8433dd174c01749b5d87c333f22/agent_client_protocol-0.9.0-py3-none-any.whl", hash = "sha256:06911500b51d8cb69112544e2be01fc5e7db39ef88fecbc3848c5c6f194798ee", size = 56850, upload-time = "2026-03-26T01:20:59.252Z" },
-]
-
-[[package]]
 name = "ai-edge-litert"
 version = "2.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1143,11 +1131,7 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-acp = [
-    { name = "agent-client-protocol" },
-]
 all = [
-    { name = "agent-client-protocol" },
     { name = "aiohttp" },
     { name = "google-api-python-client" },
     { name = "google-auth" },
@@ -1239,14 +1223,12 @@ supermemory = [
     { name = "supermemory" },
 ]
 termux = [
-    { name = "agent-client-protocol" },
     { name = "honcho-ai" },
     { name = "mcp" },
     { name = "python-telegram-bot", extra = ["webhooks"] },
     { name = "starlette" },
 ]
 termux-all = [
-    { name = "agent-client-protocol" },
     { name = "aiohttp" },
     { name = "google-api-python-client" },
     { name = "google-auth" },
@@ -1291,7 +1273,6 @@ youtube = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-client-protocol", marker = "extra == 'acp'", specifier = "==0.9.0" },
     { name = "ai-edge-litert", marker = "sys_platform == 'darwin' and extra == 'wake'", specifier = "==2.1.6" },
     { name = "aiohttp", marker = "extra == 'homeassistant'", specifier = "==3.14.3" },
     { name = "aiohttp", marker = "extra == 'messaging'", specifier = "==3.14.3" },
@@ -1317,8 +1298,6 @@ requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = "==2.55.1" },
     { name = "google-auth-httplib2", marker = "extra == 'google'", specifier = "==0.3.1" },
     { name = "google-auth-oauthlib", marker = "extra == 'google'", specifier = "==1.3.1" },
-    { name = "hermes-agent", extras = ["acp"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["acp"], marker = "extra == 'termux'" },
     { name = "hermes-agent", extras = ["cron"], marker = "extra == 'all'" },
     { name = "hermes-agent", extras = ["cron"], marker = "extra == 'termux'" },
     { name = "hermes-agent", extras = ["google"], marker = "extra == 'all'" },
@@ -1392,7 +1371,7 @@ requires-dist = [
     { name = "websockets", specifier = "==15.0.1" },
     { name = "youtube-transcript-api", marker = "extra == 'youtube'", specifier = "==1.2.4" },
 ]
-provides-extras = ["anthropic", "exa", "firecrawl", "parallel-web", "fal", "edge-tts", "modal", "daytona", "vercel", "hindsight", "dev", "messaging", "cron", "tts-premium", "voice", "wake", "honcho", "supermemory", "mem0", "vision", "pty", "mcp", "nemo-relay", "homeassistant", "whatsapp", "acp", "mistral", "otlp", "bedrock", "vertex", "azure-identity", "termux", "termux-all", "google", "youtube", "all"]
+provides-extras = ["anthropic", "exa", "firecrawl", "parallel-web", "fal", "edge-tts", "modal", "daytona", "vercel", "hindsight", "dev", "messaging", "cron", "tts-premium", "voice", "wake", "honcho", "supermemory", "mem0", "vision", "pty", "mcp", "nemo-relay", "homeassistant", "whatsapp", "mistral", "otlp", "bedrock", "vertex", "azure-identity", "termux", "termux-all", "google", "youtube", "all"]
 
 [[package]]
 name = "hindsight-client"

@@ -206,8 +206,6 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     "skill.youtube": ("youtube-transcript-api==1.2.4",),
 
     # ─── Tools ─────────────────────────────────────────────────────────────
-    # ACP adapter (VS Code / Zed / JetBrains integration)
-    "tool.acp": ("agent-client-protocol==0.9.0",),
     # Vision image-resize recovery (Pillow). Pillow is now a CORE dependency
     # (pyproject `dependencies`), so this entry is a belt-and-suspenders fallback
     # for stripped/source-build installs that somehow dropped it. The vision

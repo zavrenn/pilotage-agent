@@ -310,26 +310,6 @@ TOOLSETS = {
     # the `hermes send` CLI), not by the model deciding to send on its own.
     # ==========================================================================
 
-    "hermes-acp": {
-        "description": "Editor integration (VS Code, Zed, JetBrains) — coding-focused tools without messaging, audio, or clarify UI",
-        "tools": [
-            "web_search", "web_extract",
-            "terminal", "process",
-            "read_file", "write_file", "patch", "search_files",
-            "vision_analyze",
-            "skills_list", "skill_view", "skill_manage",
-            "browser_navigate", "browser_snapshot", "browser_click",
-            "browser_type", "browser_scroll", "browser_back",
-            "browser_press", "browser_get_images",
-            "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
-            "browser_exec",
-            "todo", "memory",
-            "session_search",
-            "execute_code", "delegate_task",
-        ],
-        "includes": []
-    },
-
     "hermes-api-server": {
         "description": "OpenAI-compatible API server — full agent tools accessible via HTTP (no interactive UI tools like clarify or send_message)",
         "tools": [

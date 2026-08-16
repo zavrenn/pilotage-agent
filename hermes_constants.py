@@ -1625,7 +1625,6 @@ def venv_python_path(venv_dir, *, windows: bool | None = None) -> Path:
 FIRST_PARTY_MODULE_ROOTS = frozenset(
     {
         "agent",
-        "acp_adapter",
         "cli",
         "cron",
         "gateway",
