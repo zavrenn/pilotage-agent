@@ -22,8 +22,6 @@ import copy
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from pilotage_cli.nous_subscription import get_nous_subscription_features
-from tools.tool_backend_helpers import managed_nous_tools_enabled
 from pilotage_constants import get_optional_skills_dir
 
 logger = logging.getLogger(__name__)
@@ -412,14 +410,12 @@ def _print_setup_summary(config: dict, pilotage_home):
         print_warning("No inference provider is configured — Pilotage cannot chat yet.")
         print_info("  Finish this one step with either of:")
         print_info("    pilotage model            (pick any provider/model)")
-        print_info("    pilotage setup --portal   (Nous Portal OAuth, no API key)")
 
     # Tool availability summary
     print()
     print_header("Tool Availability Summary")
 
     tool_status = []
-    subscription_features = get_nous_subscription_features(config)
 
     # Vision — use the same runtime resolver as the actual vision tools
     try:
@@ -436,23 +432,44 @@ def _print_setup_summary(config: dict, pilotage_home):
 
 
     # Web tools (Exa, Parallel, Firecrawl, or Tavily)
-    if subscription_features.web.managed_by_nous:
-        tool_status.append(("Web Search & Extract (Nous subscription)", True, None))
-    elif subscription_features.web.available:
-        label = "Web Search & Extract"
-        if subscription_features.web.current_provider:
-            label = f"Web Search & Extract ({subscription_features.web.current_provider})"
-        tool_status.append((label, True, None))
+    _web_keys = [
+        ("EXA_API_KEY", "Exa"),
+        ("PARALLEL_API_KEY", "Parallel"),
+        ("FIRECRAWL_API_KEY", "Firecrawl"),
+        ("FIRECRAWL_API_URL", "Firecrawl"),
+        ("TAVILY_API_KEY", "Tavily"),
+        ("SEARXNG_URL", "SearXNG"),
+    ]
+    _web_provider = next((n for k, n in _web_keys if get_env_value(k)), None)
+    if _web_provider:
+        tool_status.append((f"Web Search & Extract ({_web_provider})", True, None))
     else:
         tool_status.append(("Web Search & Extract", False, "EXA_API_KEY, PARALLEL_API_KEY, FIRECRAWL_API_KEY/FIRECRAWL_API_URL, TAVILY_API_KEY, or SEARXNG_URL"))
 
     # Browser tools (local Chromium, Camofox, Browserbase, Browser Use, or Firecrawl)
-    browser_provider = subscription_features.browser.current_provider
-    if subscription_features.browser.managed_by_nous:
-        tool_status.append(("Browser Automation (Nous Browser Use)", True, None))
-    elif subscription_features.browser.available:
+    from pilotage_cli.browser_probe import has_agent_browser, local_browser_runnable
+
+    _browser_cloud = cfg_get(config, "browser", "cloud_provider", default="local") or "local"
+    _browser_labels = {
+        "local": "Local browser",
+        "browserbase": "Browserbase",
+        "browser_use": "Browser Use",
+        "camofox": "Camofox",
+    }
+    browser_provider = _browser_labels.get(_browser_cloud, _browser_cloud)
+    if _browser_cloud == "camofox":
+        _browser_ready = bool(get_env_value("CAMOFOX_URL"))
+    elif _browser_cloud == "browserbase":
+        _browser_ready = bool(
+            get_env_value("BROWSERBASE_API_KEY") and get_env_value("BROWSERBASE_PROJECT_ID")
+        ) and has_agent_browser()
+    elif _browser_cloud == "browser_use":
+        _browser_ready = bool(get_env_value("BROWSER_USE_API_KEY")) and has_agent_browser()
+    else:
+        _browser_ready = local_browser_runnable()
+    if _browser_ready:
         label = "Browser Automation"
-        if browser_provider:
+        if browser_provider and browser_provider != "Local browser":
             label = f"Browser Automation ({browser_provider})"
         tool_status.append((label, True, None))
     else:
@@ -476,11 +493,8 @@ def _print_setup_summary(config: dict, pilotage_home):
             ("Browser Automation", False, missing_browser_hint)
         )
 
-    # Image generation — FAL (direct or via Nous), or any plugin-registered
-    # provider (OpenAI, etc.)
-    if subscription_features.image_gen.managed_by_nous:
-        tool_status.append(("Image Generation (Nous subscription)", True, None))
-    elif subscription_features.image_gen.available:
+    # Image generation — FAL, or any plugin-registered provider (OpenAI, etc.)
+    if get_env_value("FAL_KEY"):
         tool_status.append(("Image Generation", True, None))
     else:
         # Fall back to probing plugin-registered providers so OpenAI-only
@@ -509,9 +523,7 @@ def _print_setup_summary(config: dict, pilotage_home):
 
     # TTS — show configured provider
     tts_provider = cfg_get(config, "tts", "provider", default="edge")
-    if subscription_features.tts.managed_by_nous:
-        tool_status.append(("Text-to-Speech (OpenAI via Nous subscription)", True, None))
-    elif tts_provider == "elevenlabs" and get_env_value("ELEVENLABS_API_KEY"):
+    if tts_provider == "elevenlabs" and get_env_value("ELEVENLABS_API_KEY"):
         tool_status.append(("Text-to-Speech (ElevenLabs)", True, None))
     elif tts_provider == "openai" and (
         get_env_value("VOICE_TOOLS_OPENAI_KEY") or get_env_value("OPENAI_API_KEY")
@@ -546,10 +558,7 @@ def _print_setup_summary(config: dict, pilotage_home):
 
     # STT — show configured provider
     stt_provider = cfg_get(config, "stt", "provider", default="openai") or "openai"
-    _stt_feature = subscription_features.features.get("stt")
-    if _stt_feature is not None and _stt_feature.managed_by_nous:
-        tool_status.append(("Speech-to-Text (OpenAI via Nous subscription)", True, None))
-    elif stt_provider == "openai" and (
+    if stt_provider == "openai" and (
         get_env_value("VOICE_TOOLS_OPENAI_KEY") or get_env_value("OPENAI_API_KEY")
     ):
         tool_status.append(("Speech-to-Text (OpenAI)", True, None))
@@ -561,15 +570,13 @@ def _print_setup_summary(config: dict, pilotage_home):
             ("Speech-to-Text (OpenAI — no API key)", False, "set VOICE_TOOLS_OPENAI_KEY or OPENAI_API_KEY")
         )
 
-    if subscription_features.modal.managed_by_nous:
-        tool_status.append(("Modal Execution (Nous subscription)", True, None))
-    elif cfg_get(config, "terminal", "backend") == "modal":
-        if subscription_features.modal.direct_override:
+    if cfg_get(config, "terminal", "backend") == "modal":
+        from tools.tool_backend_helpers import has_direct_modal_credentials
+
+        if has_direct_modal_credentials():
             tool_status.append(("Modal Execution (direct Modal)", True, None))
         else:
             tool_status.append(("Modal Execution", False, "run 'pilotage setup terminal'"))
-    elif managed_nous_tools_enabled() and subscription_features.nous_auth_present:
-        tool_status.append(("Modal Execution (optional via Nous subscription)", True, None))
 
     # Home Assistant
     if get_env_value("HASS_TOKEN"):
@@ -874,7 +881,6 @@ def setup_model_provider(config: dict, *, quick: bool = False):
     # `pilotage setup tts`. This keeps both quick and full setup thin.
 
 
-    # Tool Gateway prompt is already shown by _model_flow_nous() above.
     save_config(config)
 
 
@@ -973,74 +979,15 @@ def _install_kittentts_deps() -> bool:
     return False
 
 
-def _xai_oauth_logged_in_for_setup() -> bool:
-    """True iff xAI Grok OAuth credentials are already stored locally.
-
-    Lets TTS / STT setup skip the API-key prompt for users who logged in
-    through ``pilotage model`` -> xAI Grok OAuth (SuperGrok / Premium+).
-    """
-    try:
-        from pilotage_cli.auth import get_xai_oauth_auth_status
-
-        return bool(get_xai_oauth_auth_status().get("logged_in"))
-    except Exception:
-        return False
-
-
-def _run_xai_oauth_login_from_setup() -> bool:
-    """Run the xAI Grok OAuth device-code login from inside the setup wizard.
-
-    Saves OAuth tokens only. Does **not** switch the active inference
-    provider or rewrite ``model.provider`` — callers (TTS setup, tools
-    config) only need credentials for side tools.
-
-    Returns True on success, False on any failure (the caller falls back
-    to whatever the user picked next, e.g. Edge TTS).
-    """
-    try:
-        from pilotage_cli.auth import (
-            _is_remote_session,
-            _save_xai_oauth_tokens,
-            _xai_oauth_device_code_login,
-            unsuppress_credential_source,
-        )
-    except Exception as exc:
-        print_warning(f"xAI Grok OAuth helpers unavailable: {exc}")
-        return False
-
-    open_browser = not _is_remote_session()
-    print()
-    print_info("Signing in to xAI Grok OAuth (SuperGrok / Premium+)...")
-    try:
-        creds = _xai_oauth_device_code_login(open_browser=open_browser)
-        _save_xai_oauth_tokens(
-            creds["tokens"],
-            discovery=creds.get("discovery"),
-            redirect_uri=creds.get("redirect_uri", ""),
-            last_refresh=creds.get("last_refresh"),
-            auth_mode="oauth_device_code",
-            set_active=False,
-        )
-        # Mirror model/dashboard re-login: clear device_code suppression so
-        # the pool can seed from the singleton after a prior `auth remove`.
-        unsuppress_credential_source("xai-oauth", "device_code")
-        return True
-    except Exception as exc:
-        print_warning(f"xAI Grok OAuth login failed: {exc}")
-        return False
-
-
 def _setup_tts_provider(config: dict):
     """Interactive TTS provider selection with install flow for NeuTTS."""
     tts_config = config.get("tts", {})
     current_provider = tts_config.get("provider", "edge")
-    subscription_features = get_nous_subscription_features(config)
 
     provider_labels = {
         "edge": "Edge TTS",
         "elevenlabs": "ElevenLabs",
         "openai": "OpenAI TTS",
-        "xai": "xAI TTS",
         "minimax": "MiniMax TTS",
         "mistral": "Mistral Voxtral TTS",
         "gemini": "Google Gemini TTS",
@@ -1056,15 +1003,11 @@ def _setup_tts_provider(config: dict):
 
     choices = []
     providers = []
-    if managed_nous_tools_enabled() and subscription_features.nous_auth_present:
-        choices.append("Nous Subscription (managed OpenAI TTS, billed to your subscription)")
-        providers.append("nous-openai")
     choices.extend(
         [
             "Edge TTS (free, cloud-based, no setup needed)",
             "ElevenLabs (premium quality, needs API key)",
             "OpenAI TTS (good quality, needs API key)",
-            "xAI TTS (Grok voices — OAuth login or API key)",
             "MiniMax TTS (high quality with voice cloning, needs API key)",
             "Mistral Voxtral TTS (multilingual, native Opus, needs API key)",
             "Google Gemini TTS (30 prebuilt voices, prompt-controllable, needs API key)",
@@ -1072,7 +1015,7 @@ def _setup_tts_provider(config: dict):
             "KittenTTS (local on-device, free, lightweight ~25-80MB ONNX)",
         ]
     )
-    providers.extend(["edge", "elevenlabs", "openai", "xai", "minimax", "mistral", "gemini", "neutts", "kittentts"])
+    providers.extend(["edge", "elevenlabs", "openai", "minimax", "mistral", "gemini", "neutts", "kittentts"])
     choices.append(f"Keep current ({current_label})")
     keep_current_idx = len(choices) - 1
     idx = prompt_choice("Select TTS provider:", choices, keep_current_idx)
@@ -1081,14 +1024,6 @@ def _setup_tts_provider(config: dict):
         return
 
     selected = providers[idx]
-    selected_via_nous = selected == "nous-openai"
-    if selected == "nous-openai":
-        selected = "openai"
-        print_info("OpenAI TTS will use the managed Nous gateway and bill to your subscription.")
-        if get_env_value("VOICE_TOOLS_OPENAI_KEY") or get_env_value("OPENAI_API_KEY"):
-            print_warning(
-                "Direct OpenAI credentials are still configured and may take precedence until removed from ~/.pilotage/.env."
-            )
 
     if selected == "neutts":
         # Check if already installed
@@ -1125,7 +1060,7 @@ def _setup_tts_provider(config: dict):
                 print_warning("No API key provided. Falling back to Edge TTS.")
                 selected = "edge"
 
-    elif selected == "openai" and not selected_via_nous:
+    elif selected == "openai":
         existing = get_env_value("VOICE_TOOLS_OPENAI_KEY") or get_env_value("OPENAI_API_KEY")
         if not existing:
             print()
@@ -1136,68 +1071,6 @@ def _setup_tts_provider(config: dict):
             else:
                 print_warning("No API key provided. Falling back to Edge TTS.")
                 selected = "edge"
-
-    elif selected == "xai":
-        # Resolution order: existing OAuth tokens (free for SuperGrok subscribers
-        # via the Pilotage auth store) > existing XAI_API_KEY > prompt the user.
-        # When neither is configured, offer both options instead of forcing the
-        # API-key path — xAI TTS works fine with OAuth bearer tokens too.
-        oauth_logged_in = _xai_oauth_logged_in_for_setup()
-        existing_api_key = get_env_value("XAI_API_KEY")
-
-        if oauth_logged_in:
-            print_success(
-                "xAI TTS will use your xAI Grok OAuth (SuperGrok / Premium+) "
-                "credentials"
-            )
-        elif existing_api_key:
-            print_success("xAI TTS will use your existing XAI_API_KEY")
-        else:
-            print()
-            choice_idx = prompt_choice(
-                "How do you want xAI TTS to authenticate?",
-                choices=[
-                    "Sign in with xAI Grok OAuth (SuperGrok / Premium+) — browser login",
-                    "Paste an xAI API key (console.x.ai)",
-                    "Skip → fallback to Edge TTS",
-                ],
-                default=0,
-            )
-            if choice_idx == 0:
-                if _run_xai_oauth_login_from_setup():
-                    print_success(
-                        "Logged in — xAI TTS will use these OAuth credentials"
-                    )
-                else:
-                    print_warning(
-                        "xAI Grok OAuth login did not complete. "
-                        "Falling back to Edge TTS."
-                    )
-                    selected = "edge"
-            elif choice_idx == 1:
-                api_key = prompt("xAI API key for TTS", password=True)
-                if api_key:
-                    save_env_value("XAI_API_KEY", api_key)
-                    print_success("xAI TTS API key saved")
-                else:
-                    from pilotage_constants import display_pilotage_home as _dhh
-                    print_warning(
-                        "No xAI API key provided for TTS. Configure XAI_API_KEY "
-                        f"via pilotage setup model or {_dhh()}/.env to use xAI TTS. "
-                        "Falling back to Edge TTS."
-                    )
-                    selected = "edge"
-            else:
-                print_warning("xAI TTS skipped. Falling back to Edge TTS.")
-                selected = "edge"
-
-        if selected == "xai":
-            print()
-            voice_id = prompt("xAI voice_id (Enter for 'eve', or paste a custom voice ID)")
-            if voice_id and voice_id.strip():
-                config.setdefault("tts", {}).setdefault("xai", {})["voice_id"] = voice_id.strip()
-                print_success(f"xAI voice_id set to: {voice_id.strip()}")
-
 
     elif selected == "minimax":
         existing = get_env_value("MINIMAX_API_KEY")
@@ -1391,80 +1264,42 @@ def setup_terminal_backend(config: dict):
     elif selected_backend == "modal":
         print_success("Terminal backend: Modal")
         print_info("Serverless cloud sandboxes. Each session gets its own container.")
-        from tools.managed_tool_gateway import is_managed_tool_gateway_ready
-        from tools.tool_backend_helpers import normalize_modal_mode
+        print_info("Requires a Modal account: https://modal.com")
 
-        managed_modal_available = bool(
-            managed_nous_tools_enabled()
-            and
-            get_nous_subscription_features(config).nous_auth_present
-            and is_managed_tool_gateway_ready("modal")
-        )
-        modal_mode = normalize_modal_mode(cfg_get(config, "terminal", "modal_mode"))
-        use_managed_modal = False
-        if managed_modal_available:
-            modal_choices = [
-                "Use my Nous subscription",
-                "Use my own Modal account",
-            ]
-            if modal_mode == "managed":
-                default_modal_idx = 0
-            elif modal_mode == "direct":
-                default_modal_idx = 1
+        # Check if modal SDK is installed
+        try:
+            __import__("modal")
+        except ImportError:
+            print_info("Installing modal SDK...")
+            from pilotage_cli.tools_config import _pip_install
+
+            result = _pip_install(["modal"])
+            if result.returncode == 0:
+                print_success("modal SDK installed")
             else:
-                default_modal_idx = 1 if get_env_value("MODAL_TOKEN_ID") else 0
-            modal_mode_idx = prompt_choice(
-                "Select how Modal execution should be billed:",
-                modal_choices,
-                default_modal_idx,
-            )
-            use_managed_modal = modal_mode_idx == 0
+                print_warning("Install failed — run manually: uv pip install modal")
 
-        if use_managed_modal:
-            config["terminal"]["modal_mode"] = "managed"
-            print_info("Modal execution will use the managed Nous gateway and bill to your subscription.")
-            if get_env_value("MODAL_TOKEN_ID") or get_env_value("MODAL_TOKEN_SECRET"):
-                print_info(
-                    "Direct Modal credentials are still configured, but this backend is pinned to managed mode."
-                )
-        else:
-            config["terminal"]["modal_mode"] = "direct"
-            print_info("Requires a Modal account: https://modal.com")
-
-            # Check if modal SDK is installed
-            try:
-                __import__("modal")
-            except ImportError:
-                print_info("Installing modal SDK...")
-                from pilotage_cli.tools_config import _pip_install
-
-                result = _pip_install(["modal"])
-                if result.returncode == 0:
-                    print_success("modal SDK installed")
-                else:
-                    print_warning("Install failed — run manually: uv pip install modal")
-
-            # Modal token
-            print()
-            print_info("Modal authentication:")
-            print_info("  Get your token at: https://modal.com/settings")
-            existing_token = get_env_value("MODAL_TOKEN_ID")
-            if existing_token:
-                print_info("  Modal token: already configured")
-                if prompt_yes_no("  Update Modal credentials?", False):
-                    token_id = prompt("    Modal Token ID", password=True)
-                    token_secret = prompt("    Modal Token Secret", password=True)
-                    if token_id:
-                        save_env_value("MODAL_TOKEN_ID", token_id)
-                    if token_secret:
-                        save_env_value("MODAL_TOKEN_SECRET", token_secret)
-            else:
+        # Modal token
+        print()
+        print_info("Modal authentication:")
+        print_info("  Get your token at: https://modal.com/settings")
+        existing_token = get_env_value("MODAL_TOKEN_ID")
+        if existing_token:
+            print_info("  Modal token: already configured")
+            if prompt_yes_no("  Update Modal credentials?", False):
                 token_id = prompt("    Modal Token ID", password=True)
                 token_secret = prompt("    Modal Token Secret", password=True)
                 if token_id:
                     save_env_value("MODAL_TOKEN_ID", token_id)
                 if token_secret:
                     save_env_value("MODAL_TOKEN_SECRET", token_secret)
+        else:
+            token_id = prompt("    Modal Token ID", password=True)
+            token_secret = prompt("    Modal Token Secret", password=True)
+            if token_id:
+                save_env_value("MODAL_TOKEN_ID", token_id)
+            if token_secret:
+                save_env_value("MODAL_TOKEN_SECRET", token_secret)
 
     elif selected_backend == "daytona":
         print_success("Terminal backend: Daytona")
@@ -1599,8 +1434,6 @@ def setup_terminal_backend(config: dict):
     # Sync terminal backend to .env so terminal_tool picks it up directly.
     # config.yaml is the source of truth, but terminal_tool reads TERMINAL_ENV.
     save_env_value("TERMINAL_ENV", selected_backend)
-    if selected_backend == "modal":
-        save_env_value("TERMINAL_MODAL_MODE", config["terminal"].get("modal_mode", "auto"))
     if selected_backend == "vercel_sandbox":
         save_env_value("TERMINAL_VERCEL_RUNTIME", config["terminal"].get("vercel_runtime", "node24"))
     save_config(config)
@@ -2219,7 +2052,7 @@ def _model_section_has_credentials(config: dict) -> bool:
       * ``PROVIDER_REGISTRY`` in ``pilotage_cli.auth`` — lists every supported
         provider along with its ``api_key_env_vars``.
       * ``active_provider`` in the auth store — covers OAuth device-code /
-        external-OAuth providers (Nous, Codex, Qwen, Gemini CLI, ...).
+        external-OAuth providers (Codex, Qwen, Gemini CLI, ...).
       * The legacy OpenRouter aggregator env vars, which route generic
         ``OPENAI_API_KEY`` / ``OPENROUTER_API_KEY`` values through OpenRouter.
     """
@@ -2617,90 +2450,6 @@ SETUP_SECTIONS = [
 ]
 
 
-def _run_portal_one_shot(config: dict) -> None:
-    """One-shot Nous Portal setup — OAuth + model pick + provider + Tool Gateway.
-
-    Wired into ``pilotage setup --portal`` and ``pilotage portal``. This is the
-    Nous-Portal slice of the first-time quick setup, collapsed into a single
-    shareable command so a brand-new user goes from zero to a fully working
-    Pilotage session — model selected, provider set, and web/image/tts/browser
-    tools routed via their Portal sub — without being told to run
-    ``pilotage setup`` and hunt for the quick-setup option.
-
-    The login + model selection + provider switch + Tool Gateway opt-in are all
-    delegated to ``_model_flow_nous`` — the exact same flow quick setup uses
-    (``_run_first_time_quick_setup``) and the same one ``pilotage model`` runs
-    when you pick Nous. Routing through it (instead of hand-rolling the auth +
-    provider write here) means ``pilotage portal`` always offers a model picker,
-    and there is a single source of truth for the Nous onboarding steps.
-    """
-    from pilotage_cli.config import load_config
-
-    print()
-    print(
-        color(
-            "┌─────────────────────────────────────────────────────────┐",
-            Colors.MAGENTA,
-        )
-    )
-    print(color("│     ⚕ Pilotage Setup — Nous Portal (one-shot)             │", Colors.MAGENTA))
-    print(
-        color(
-            "└─────────────────────────────────────────────────────────┘",
-            Colors.MAGENTA,
-        )
-    )
-    print()
-    print_info("  One subscription, 300+ models, plus the Tool Gateway:")
-    print_info("    web search, image generation, TTS, browser automation")
-    print_info("    — all routed through your Nous Portal sub.")
-    print()
-    print_info("  Sign up: https://portal.nousresearch.com/manage-subscription")
-    print()
-
-    # _model_flow_nous handles BOTH the logged-out path (device-code OAuth,
-    # which selects a model internally) and the already-logged-in path (curated
-    # Nous model picker), then offers the Tool Gateway opt-in and sets
-    # provider=nous via the login/model save. This is the same routine quick
-    # setup calls, so `pilotage portal` == quick setup's Nous step.
-    try:
-        from pilotage_cli.main import _model_flow_nous
-
-        _model_flow_nous(config)
-    except (KeyboardInterrupt, EOFError, SystemExit):
-        # _login_nous raises SystemExit(130)/(1) on cancel/failure; the
-        # logged-out path inside _model_flow_nous catches it, but the
-        # expired-session re-login path only catches Exception, so a
-        # SystemExit there would otherwise escape and kill the whole CLI.
-        # Treat all of these as a graceful cancel/abort for the portal flow.
-        print()
-        print_info("  Setup cancelled.")
-        print_info("  You can retry later with `pilotage portal`.")
-        return
-    except Exception as exc:
-        logger.debug("_model_flow_nous error during `pilotage portal`: %s", exc)
-        print()
-        print_error(f"  Nous Portal setup encountered an error: {exc}")
-        print_info("  You can retry later with `pilotage portal`.")
-        return
-
-    # Re-sync the in-memory config from disk — _model_flow_nous (and the
-    # underlying login/model save) write via their own load/save cycle, so any
-    # later save_config(config) by a caller must not clobber those values.
-    try:
-        _refreshed = load_config()
-        if isinstance(_refreshed, dict):
-            config.clear()
-            config.update(_refreshed)
-    except Exception:
-        pass
-
-    print()
-    print_success("Portal setup complete.")
-    print_info("  Run `pilotage portal info` to inspect routing.")
-    print_info("  Run `pilotage` to start chatting.")
-
-
 def run_setup_wizard(args):
     """Run the interactive setup wizard.
 
@@ -2755,11 +2504,6 @@ def run_setup_wizard(args):
         print_noninteractive_setup_guidance(
             "Running in a non-interactive environment (no TTY detected)."
         )
-        return
-
-    # --portal: one-shot Nous Portal setup. Skips the rest of the wizard.
-    if bool(getattr(args, "portal", False)):
-        _run_portal_one_shot(config)
         return
 
     # Check if a specific section was requested
@@ -2877,7 +2621,7 @@ def run_setup_wizard(args):
         setup_mode = prompt_choice(
             "How would you like to set up Pilotage?",
             [
-                "Quick Setup (Nous Portal) — free OAuth login, no API keys, model + tools (recommended)",
+                "Quick Setup (ChatGPT / Codex) — sign in with your ChatGPT account (recommended)",
                 "Full setup — configure every provider, tool & option yourself (bring your own keys)",
                 "Blank Slate — everything off except the bare minimum; opt in to each capability",
             ],
@@ -2943,40 +2687,35 @@ def run_setup_wizard(args):
 
 
 def _run_first_time_quick_setup(config: dict, pilotage_home, is_existing: bool):
-    """Streamlined first-time setup via Nous Portal: OAuth, model, terminal & messaging.
+    """Streamlined first-time setup via ChatGPT/Codex: OAuth, model, terminal & messaging.
 
-    Routes straight to the Nous Portal provider — runs the device-code OAuth
-    login, picks a Nous model, then configures the terminal backend and (optionally)
+    Routes straight to the OpenAI Codex provider — runs the browser OAuth
+    login, picks a model, then configures the terminal backend and (optionally)
     a messaging platform. Applies sensible defaults for everything else (agent
     settings, tools); the user can customize later via ``pilotage setup <section>``
     or switch providers with ``pilotage model``.
     """
     from pilotage_cli.config import load_config
 
-    # Step 1: Nous Portal — OAuth login + model selection.
-    # _model_flow_nous() handles both the logged-out path (device-code OAuth,
-    # which selects a model internally) and the already-logged-in path (curated
-    # Nous model picker). Provider is set to "nous" by the login/model save.
+    # Step 1: ChatGPT / Codex — OAuth login + model selection.
     print()
-    print_header("Nous Portal")
-    print_info("One subscription, 300+ models, plus the Tool Gateway:")
-    print_info("  web search, image generation, TTS, browser automation.")
-    print_info("Sign up: https://portal.nousresearch.com/manage-subscription")
+    print_header("ChatGPT (Codex)")
+    print_info("Sign in with your ChatGPT account — no API key needed.")
     print()
     try:
-        from pilotage_cli.main import _model_flow_nous
-        _model_flow_nous(config)
-    except (KeyboardInterrupt, EOFError):
+        from pilotage_cli.main import _model_flow_openai_codex
+        _model_flow_openai_codex(config)
+    except (KeyboardInterrupt, EOFError, SystemExit):
         print()
-        print_info("Nous Portal setup cancelled.")
+        print_info("ChatGPT setup cancelled.")
     except Exception as exc:
-        logger.debug("_model_flow_nous error during quick setup: %s", exc)
-        print_warning(f"Nous Portal setup encountered an error: {exc}")
+        logger.debug("_model_flow_openai_codex error during quick setup: %s", exc)
+        print_warning(f"ChatGPT setup encountered an error: {exc}")
         print_info("You can try again later with: pilotage model")
 
-    # Re-sync the wizard's config dict from disk — _model_flow_nous (and the
-    # underlying login/model save) write via their own load/save cycle, and the
-    # wizard's later save_config(config) must not clobber those values.
+    # Re-sync the wizard's config dict from disk — the login/model save writes
+    # via its own load/save cycle, and the wizard's later save_config(config)
+    # must not clobber those values.
     _refreshed = load_config()
     config.clear()
     config.update(_refreshed)

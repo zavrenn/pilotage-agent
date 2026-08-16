@@ -169,7 +169,6 @@ from agent.prompt_builder import (  # noqa: F401  # re-exported via _ra() / mock
     build_skills_system_prompt,
     build_context_files_prompt,
     build_environment_hints,
-    build_nous_subscription_prompt,
     load_soul_md,
 )
 from agent.process_bootstrap import _get_proxy_from_env  # noqa: F401
@@ -808,67 +807,6 @@ class AIAgent:
                 engine.bind_session_state(getattr(self, "_session_db", None), target_session_id)
             except Exception as exc:
                 logger.debug("context engine bind_session_state during reset: %s", exc)
-
-    @staticmethod
-    def _effective_lmstudio_context_length(
-        config_context_length: Optional[int],
-        runtime_context_length: Any,
-    ) -> Optional[int]:
-        """Return a safe context budget from explicit intent and verified runtime."""
-        explicit = (
-            config_context_length
-            if isinstance(config_context_length, int)
-            and not isinstance(config_context_length, bool)
-            and config_context_length > 0
-            else None
-        )
-        runtime_value = getattr(runtime_context_length, "context_length", runtime_context_length)
-        runtime = (
-            runtime_value
-            if isinstance(runtime_value, int)
-            and not isinstance(runtime_value, bool)
-            and runtime_value > 0
-            else None
-        )
-        if bool(getattr(runtime_context_length, "rejected", False)) or (
-            bool(getattr(runtime_context_length, "load_attempted", False))
-            and runtime is None
-        ):
-            return None
-        if runtime is not None and explicit is not None:
-            return min(runtime, explicit)
-        return runtime if runtime is not None else explicit
-
-    @staticmethod
-    def _lmstudio_load_was_unverified(load_result: Any) -> bool:
-        """Return true when a management load was rejected or unverifiable."""
-        return bool(getattr(load_result, "rejected", False)) or (
-            bool(getattr(load_result, "load_attempted", False))
-            and getattr(load_result, "context_length", None) is None
-        )
-
-    def _ensure_lmstudio_runtime_loaded(
-        self,
-        config_context_length: Optional[int] = None,
-    ) -> Any:
-        """Preload LM Studio unless configured to rely on JIT loading."""
-        if (self.provider or "").strip().lower() != "lmstudio":
-            return None
-        if (getattr(self, "lmstudio_load_mode", "explicit") or "explicit").strip().lower() == "jit":
-            logger.debug("LM Studio explicit preload skipped: lmstudio_load_mode=jit")
-            return None
-
-        from pilotage_cli.models import ensure_lmstudio_model_loaded
-
-        if config_context_length is None:
-            config_context_length = getattr(self, "_config_context_length", None)
-        return ensure_lmstudio_model_loaded(
-            self.model,
-            self.base_url,
-            getattr(self, "api_key", ""),
-            config_context_length,
-            return_load_result=True,
-        )
 
     def switch_model(self, new_model, new_provider, api_key='', base_url='', api_mode=''):
         """Forwarder — see ``agent.agent_runtime_helpers.switch_model``."""
@@ -1587,23 +1525,11 @@ class AIAgent:
     ) -> bool:
         """Return True when this provider/model pair should use Responses API."""
         normalized_provider = (provider or "").strip().lower()
-        # Nous serves GPT-5.x models via its OpenAI-compatible chat
-        # completions endpoint; its /v1/responses endpoint returns 404.
-        if normalized_provider == "nous":
-            return False
         if normalized_provider == "custom":
             # Generic custom endpoints are conservative by default. They may
             # relay GPT-5 models without full Responses semantics, so only
             # direct OpenAI/xAI URL detection should auto-upgrade them.
             return False
-        if normalized_provider == "copilot":
-            try:
-                from pilotage_cli.models import _should_use_copilot_responses_api
-                return _should_use_copilot_responses_api(model)
-            except Exception:
-                # Fall back to the generic GPT-5 rule if Copilot-specific
-                # logic is unavailable for any reason.
-                pass
         return AIAgent._model_requires_responses_api(model)
 
     def _max_tokens_param(self, value: int) -> dict:
@@ -2438,131 +2364,6 @@ class AIAgent:
         _save_trajectory_to_file(trajectory, self.model, completed)
 
     @staticmethod
-    def _is_entitlement_failure(
-        error_context: Optional[Dict[str, Any]],
-        status_code: Optional[int],
-    ) -> bool:
-        """Detect subscription/entitlement 403s that masquerade as auth failures.
-
-        Returned True only when the body text matches a known entitlement
-        shape AND the status is 401/403.  Refreshing an OAuth token cannot
-        fix an unsubscribed account, so callers should surface the error
-        instead of looping the credential pool.
-
-        Current matches:
-          * xAI OAuth: "do not have an active Grok subscription" /
-            "out of available resources" / "does not have permission" + "grok"
-
-        Disambiguator for xAI: the same ``code`` text ("The caller
-        does not have permission to execute the specified operation") is
-        returned for BOTH an unsubscribed account AND a stale OAuth access
-        token.  xAI ships an explicit signal in the ``error`` field that
-        tells the two apart: a ``[WKE=unauthenticated:...]`` suffix (and/or
-        the ``OAuth2 access token could not be validated`` phrasing) means
-        the credentials failed validation — that's recoverable by refreshing
-        the token, NOT by surfacing an entitlement message.  When either
-        signal is present we return False eagerly so the credential-pool
-        refresh path runs, letting long-running TUI sessions recover from
-        stale tokens without an exit/reopen cycle.
-
-        Extend here for new providers as we discover them (Anthropic's
-        Claude Max OAuth entitlement errors look distinct enough today that
-        the existing 1M-context-beta branch handles them; revisit if other
-        subscription tiers start producing the same loop signature).
-        """
-        if status_code not in {401, 403, None}:
-            return False
-        if not isinstance(error_context, dict):
-            return False
-        # Build a single lowercase haystack covering every field shape the
-        # body might land in.  ``_extract_api_error_context`` normalises to
-        # ``message``/``reason``, but callers (and the test suite) may also
-        # hand us the raw body with ``code``/``error`` keys; cover both so
-        # the WKE disambiguator below fires regardless of entry point.
-        message = str(error_context.get("message") or "").lower()
-        reason = str(error_context.get("reason") or "").lower()
-        code = str(error_context.get("code") or "").lower()
-        err = str(error_context.get("error") or "").lower()
-        haystack = f"{message} {reason} {code} {err}"
-        if not haystack.strip():
-            return False
-        # xAI's authoritative disambiguator for "stale token" vs
-        # "unsubscribed account".  Both conditions share the same
-        # permission-denied ``code`` text; only one carries this suffix.
-        # Bail out before the entitlement keyword checks so a stale OAuth
-        # token routes through the credential-refresh path instead of the
-        # surface-error-as-entitlement path. See for the long-
-        # running TUI failure mode this closes.
-        if "[wke=unauthenticated:" in haystack:
-            return False
-        if "oauth2 access token could not be validated" in haystack:
-            return False
-        if "do not have an active grok subscription" in haystack:
-            return True
-        if "out of available resources" in haystack and "grok" in haystack:
-            return True
-        if "does not have permission" in haystack and "grok" in haystack:
-            return True
-        return False
-
-    @staticmethod
-    def _decorate_xai_entitlement_error(detail: str) -> str:
-        """Append a neutral hint when xAI's OAuth surface returns the
-        permission-denied 403.
-
-        xAI's ``/v1/responses`` endpoint replies to several distinct failure
-        modes with the SAME body::
-
-            {"code": "The caller does not have permission to execute the
-             specified operation", "error": "You have either run out of
-             available resources or do not have an active Grok subscription.
-             Manage subscriptions at https://grok.com/?_s=usage or subscribe
-             at https://grok.com/supergrok"}
-
-        That body covers several real causes we cannot distinguish without
-        more info from xAI.  The most common (and least obvious) one is
-        that **X Premium+ does NOT include API access** — only standalone
-        SuperGrok subscribers can use Pilotage against xai-oauth.  Lots of
-        users see Grok in their X app, assume it works here too, and hit
-        this 403 with no idea why.  Lead the hint with that.
-
-        Other possible causes:
-          * No Grok subscription at all
-          * SuperGrok tier doesn't include the requested model (e.g.
-            grok-4.3 may need a higher tier)
-          * Monthly quota exhausted (the ``?_s=usage`` URL hints at this)
-
-        Surface the raw xAI text verbatim and point at
-        https://grok.com/?_s=usage where the user can see WHICH applies.
-
-        Matched once per detail string — won't double-decorate if the
-        upstream already concatenated the same text.
-        """
-        if not detail:
-            return detail
-        lower = detail.lower()
-        is_entitlement = (
-            "do not have an active grok subscription" in lower
-            or ("out of available resources" in lower and "grok" in lower)
-            or ("does not have permission" in lower and "grok" in lower)
-        )
-        if not is_entitlement:
-            return detail
-        hint = (
-            " — xAI rejected this OAuth account. NOTE: X Premium+ does NOT "
-            "include xAI API access — only standalone SuperGrok subscribers "
-            "can use this provider. Other possible causes: no Grok "
-            "subscription, your tier doesn't include this model, or your "
-            "quota is exhausted. Check https://grok.com/?_s=usage to see "
-            "which, or run `/model` to switch providers."
-        )
-        # Idempotency: detect prior decoration by a substring unique to the
-        # hint (not present in xAI's own body text).
-        if "X Premium+ does NOT include" in detail:
-            return detail
-        return f"{detail}{hint}"
-
-    @staticmethod
     def _coerce_api_error_detail(value: Any) -> str:
         """Return a display-safe string for structured provider error fields."""
         if isinstance(value, str):
@@ -2665,7 +2466,7 @@ class AIAgent:
                 status_code = getattr(error, "status_code", None)
                 prefix = f"HTTP {status_code}: " if status_code else ""
                 msg = AIAgent._coerce_api_error_detail(msg)
-                return AIAgent._decorate_xai_entitlement_error(f"{prefix}{msg[:300]}")
+                return f"{prefix}{msg[:300]}"
 
         # SDK may leave body empty while httpx still has the payload.
         # Redact before returning: the raw provider/proxy error body is
@@ -2696,7 +2497,7 @@ class AIAgent:
         # Fallback: truncate the raw string but give more room than 200 chars
         status_code = getattr(error, "status_code", None)
         prefix = f"HTTP {status_code}: " if status_code else ""
-        return AIAgent._decorate_xai_entitlement_error(f"{prefix}{raw[:500]}")
+        return f"{prefix}{raw[:500]}"
 
     def _mask_api_key_for_logs(self, key: Any) -> Optional[str]:
         # Azure Foundry Entra ID bearer providers are callables — never
@@ -4018,171 +3819,6 @@ class AIAgent:
         """Return the last captured RateLimitState, or None."""
         return self._rate_limit_state
 
-    def _capture_anthropic_response_headers(self, http_response: Any) -> None:
-        """Capture out-of-band state from Anthropic Messages response headers.
-
-        The Anthropic SDK's aggregated ``Message`` drops HTTP headers. Portal
-        (and other providers) put rate-limit and credits state there — the same
-        families the OpenAI-wire streaming path captures via
-        ``stream.response``. Fail-open: each capture swallows its own errors.
-        """
-        self._capture_rate_limits(http_response)
-        self._capture_credits(http_response)
-
-    def _capture_credits(self, http_response: Any) -> None:
-        """Parse x-nous-credits-* headers, cache CreditsState, fire threshold notices.
-
-        Fail-open throughout — header issues never break the agent loop. The PARSE is
-        swallowed (any error → treated as a miss → keep last-known). The notice
-        EVALUATION/EMIT is a SEPARATE block that WARNS on failure (R1-M2): a bug in the
-        depletion-notice path must not vanish silently under the parse swallow.
-        """
-        # Dev test fixture (PILOTAGE_DEV_CREDITS_FIXTURE): inject a chosen notice state
-        # each turn for repeatable testing, bypassing real headers. Throwaway scaffolding.
-        try:
-            from agent.credits_tracker import dev_fixture_credits_state
-            _fixture = dev_fixture_credits_state()
-        except Exception:
-            _fixture = None
-        if _fixture is not None:
-            self._credits_state = _fixture
-            if self._credits_session_start_micros is None:
-                self._credits_session_start_micros = _fixture.remaining_micros
-            _latch = getattr(self, "_credits_latch", None)
-            if isinstance(_latch, dict):
-                # Only seen_below_90 — never seen_grant_unspent (priming it would
-                # fire grant_spent on a fixture's first observation, the exact
-                # every-session nag the gate exists to prevent).
-                _latch["seen_below_90"] = True  # let warn90 fire without a real crossing
-            _used = _fixture.used_fraction
-            logger.info(
-                "credits ▸ [FIXTURE] remaining=%d (%s) · paid=%s · denom=%s · used=%s "
-                "(real headers bypassed — `echo clear` / unset PILOTAGE_DEV_CREDITS_FIXTURE to restore)",
-                _fixture.remaining_micros,
-                _fixture.remaining_usd or "?",
-                _fixture.paid_access,
-                _fixture.denominator_kind,
-                ("%.0f%%" % (_used * 100)) if _used is not None else "n/a",
-            )
-            self._emit_credits_notices()
-            return
-        if http_response is None:
-            return
-        headers = getattr(http_response, "headers", None)
-        if not headers:
-            return
-        _dev = is_truthy_value(os.environ.get("PILOTAGE_DEV_CREDITS"))
-
-        # ── Parse (fail-open → miss; never overwrite good state with None) ──
-        try:
-            from agent.credits_tracker import parse_credits_headers
-            state = parse_credits_headers(headers, provider=self.provider)
-        except Exception:
-            return  # parse error → treat as a miss, keep last-known
-        if state is None:
-            if _dev:
-                logger.info(
-                    "credits ▸ response had no valid x-nous-credits-* headers "
-                    "(miss — producer off / non-Nous path / >TTL stale)"
-                )
-            return
-
-        # retain-last-known: only overwrite on a fresh valid parse
-        self._credits_state = state
-        # Latch session-start remaining the first time we ever see a header
-        if self._credits_session_start_micros is None:
-            self._credits_session_start_micros = state.remaining_micros
-        if _dev:
-            # PILOTAGE_DEV_CREDITS: stream each capture to agent.log — watch live with
-            # `pilotage logs -f` (grep 'credits ▸'). Dev-only; silent for normal users.
-            spent = self.get_credits_spent_micros()
-            used = state.used_fraction
-            logger.info(
-                "credits ▸ remaining=%d (%s) · paid=%s · denom=%s · used=%s "
-                "· Δspent=%s · age=%s%s",
-                state.remaining_micros,
-                state.remaining_usd or "?",
-                state.paid_access,
-                state.denominator_kind,
-                ("%.0f%%" % (used * 100)) if used is not None else "n/a",
-                ("%.1f¢" % (spent / 10000)) if spent is not None else "n/a",
-                ("%.0fs" % state.age_seconds) if state.age_seconds != float("inf") else "n/a",
-                (" · disabled=%s" % state.disabled_reason) if state.disabled_reason else "",
-            )
-
-        # Threshold notices — shared with the cold-start seed (see _emit_credits_notices).
-        self._emit_credits_notices()
-
-    def _emit_credits_notices(self) -> None:
-        """Run the threshold policy on the current credits state and emit notices.
-
-        Shared by the warm path (_capture_credits) and the L3 cold-start seed, so a
-        session that opens already depleted warns immediately — not only after the first
-        inference header. Runs only when a notice consumer is bound (messaging binds none
-        → state still cached for /usage, no policy). WARNS on failure rather than
-        swallowing (R1-M2): a depletion-path bug must not vanish silently. Emits clears
-        FIRST, then shows (so depleted lands last in a latest-wins slot).
-        """
-        if getattr(self, "notice_callback", None) is None and getattr(self, "notice_clear_callback", None) is None:
-            return
-        if not self._credits_notices_enabled():
-            return
-        state = getattr(self, "_credits_state", None)
-        if state is None:
-            return
-        try:
-            from agent.credits_tracker import evaluate_credits_notices, is_free_tier_model, new_credits_latch
-            latch = getattr(self, "_credits_latch", None)
-            if latch is None:
-                latch = self._credits_latch = new_credits_latch()
-            # Free-model gate: a depleted account on a free model can still
-            # inference, so the depleted error banner is suppressed. Local-data
-            # only (":free" suffix + pricing-cache peek) — never a network call.
-            model_is_free = is_free_tier_model(
-                getattr(self, "model", "") or "",
-                getattr(self, "base_url", "") or "",
-            )
-            to_show, to_clear = evaluate_credits_notices(state, latch, model_is_free=model_is_free)
-            for key in to_clear:        # clears FIRST …
-                self._emit_notice_clear(key)
-            for notice in to_show:      # … then shows (depleted lands last in a latest-wins slot)
-                self._emit_notice(notice)
-        except Exception:
-            logger.warning("credits notice evaluation/emit failed", exc_info=True)
-
-    def _credits_notices_enabled(self) -> bool:
-        """Whether credits notices are enabled (config display.credits_notices).
-
-        Read once per agent and cached — the policy runs after every API
-        response, and the setting governs UI noise, not correctness, so a
-        config flip applying on the next session is fine.  Fail-open True
-        (preserve current behaviour) on any config error.
-        """
-        cached = getattr(self, "_credits_notices_enabled_cache", None)
-        if cached is not None:
-            return cached
-        enabled = True
-        try:
-            from pilotage_cli.config import load_config as _load_config
-            _cfg = _load_config() or {}
-            _display = _cfg.get("display") if isinstance(_cfg, dict) else None
-            if isinstance(_display, dict) and "credits_notices" in _display:
-                enabled = bool(_display.get("credits_notices"))
-        except Exception:
-            enabled = True
-        self._credits_notices_enabled_cache = enabled
-        return enabled
-
-    def get_credits_state(self):
-        """Return the last captured CreditsState, or None."""
-        return self._credits_state
-
-    def get_credits_spent_micros(self):
-        """Session-cumulative micros spent = first_seen_remaining - current_remaining. None if no data."""
-        if self._credits_session_start_micros is None or self._credits_state is None:
-            return None
-        return self._credits_session_start_micros - self._credits_state.remaining_micros
-
     def _check_openrouter_cache_status(self, http_response: Any) -> None:
         """Read X-OpenRouter-Cache-Status from response headers and log it.
 
@@ -4413,10 +4049,6 @@ class AIAgent:
             self._close_cached_request_openai_client(reason="cache_evict")
         except Exception:
             pass
-        try:
-            self._close_cached_request_anthropic_client(reason="cache_evict")
-        except Exception:
-            pass
 
     def close(self) -> None:
         """Release all resources held by this agent instance.
@@ -4490,10 +4122,6 @@ class AIAgent:
         # sequential LLM calls; see _create_request_openai_client).
         try:
             self._close_cached_request_openai_client(reason="agent_close")
-        except Exception:
-            pass
-        try:
-            self._close_cached_request_anthropic_client(reason="agent_close")
         except Exception:
             pass
 
@@ -5120,10 +4748,6 @@ class AIAgent:
         timeout application, and dead-connection cleanup) still pass through
         this helper, so they must preserve that provider/client invariant.
         """
-        if (getattr(self, "provider", "") or "").strip().lower() == "moa":
-            from agent.moa_loop import build_moa_facade
-
-            return build_moa_facade(self, self.model)
         return self._create_openai_client(
             self._client_kwargs,
             reason=reason,
@@ -5215,11 +4839,6 @@ class AIAgent:
 
         return any(_contains_image(item) for item in candidates)
 
-    def _copilot_headers_for_request(self, *, is_vision: bool) -> dict:
-        from pilotage_cli.copilot_auth import copilot_request_headers
-
-        return copilot_request_headers(is_agent_turn=True, is_vision=is_vision)
-
     # Close reasons the request workers' own ``finally`` unwind reports for
     # a request that produced a response — the only closes that both come
     # from the thread that owns the pool's FDs AND attest a healthy pool.
@@ -5245,8 +4864,6 @@ class AIAgent:
         from unittest.mock import Mock
 
         primary_client = self._ensure_primary_openai_client(reason=reason)
-        if self.provider == "moa":
-            return primary_client
         if isinstance(primary_client, Mock):
             return primary_client
         with self._openai_client_lock():
@@ -5262,11 +4879,6 @@ class AIAgent:
         # Shared/primary clients and Anthropic / Bedrock paths are
         # unaffected (they don't go through here).
         request_kwargs["max_retries"] = 0
-        if (
-            base_url_host_matches(str(request_kwargs.get("base_url", "")), "githubcopilot.com")
-            and self._api_kwargs_have_image_parts(api_kwargs or {})
-        ):
-            request_kwargs["default_headers"] = self._copilot_headers_for_request(is_vision=True)
         # Reuse the cached wire client while the effective kwargs are
         # unchanged: constructing openai.OpenAI + its httpx pool costs
         # ~19-35ms per LLM call (fresh TCP+TLS handshake), ~5x per turn.
@@ -5410,223 +5022,6 @@ class AIAgent:
                 exc,
             )
 
-    def _request_anthropic_client_cache_ref(self) -> dict:
-        # Lazy init — tests build agents via AIAgent.__new__ without __init__.
-        cache = getattr(self, "_request_anthropic_client_cache", None)
-        if cache is None:
-            cache = {"client": None, "key": None, "poisoned": False, "in_use": False}
-            self._request_anthropic_client_cache = cache
-        return cache
-
-    def _request_anthropic_client_key(self) -> tuple:
-        """Cache key covering everything that forces a fresh client: credential
-        rotation, base URL / region changes, timeout changes (model switch),
-        and the 1M-context beta flag."""
-        if getattr(self, "provider", None) == "bedrock":
-            region = getattr(self, "_bedrock_region", "us-east-1") or "us-east-1"
-            return ("bedrock", region)
-        return (
-            "direct",
-            self._anthropic_api_key,
-            getattr(self, "_anthropic_base_url", None),
-            get_provider_request_timeout(self.provider, self.model),
-            bool(getattr(self, "_oauth_1m_beta_disabled", False)),
-        )
-
-    def _create_request_anthropic_client(self, *, reason: str) -> Any:
-        """Build (or reuse) a request-local Anthropic client for one in-flight call.
-
-        The shared ``_anthropic_client`` stays the long-lived primary, but the
-        stale/interrupt watchdog runs on the poll thread and must never call
-        ``close()`` on the client whose TLS socket a worker thread is still
-        reading: releasing that FD from a stranger thread lets the kernel
-        recycle it under a still-live SSL BIO, which then writes a TLS record
-        into an unrelated SQLite header / ). A per-request client
-        lets the stranger thread ``shutdown()`` the socket while the owning
-        worker performs the SDK-level close from its own context — the same
-        ownership contract the OpenAI-wire path already uses.
-
-        Also mirrors the OpenAI-wire path's single-slot cache
-        (``_create_request_openai_client``): building ``anthropic.Anthropic``
-        means a fresh httpx pool and TCP+TLS handshake per call, so the client
-        is kept warm across sequential calls whose cache key (credentials,
-        base URL/region, timeout, 1M-beta flag) hasn't changed. ``in_use``
-        keeps a second concurrent call from sharing one pool's close/abort
-        lifecycle — it gets a fresh untracked client instead.
-
-        Mirrors ``_rebuild_anthropic_client`` construction (direct + Bedrock,
-        1M-beta drop) but returns a fresh/cached client instead of swapping
-        the shared one.
-        """
-        if self.api_mode == "anthropic_messages":
-            self._try_refresh_anthropic_client_credentials()
-        key = self._request_anthropic_client_key()
-
-        stale = None
-        with self._openai_client_lock():
-            cache = self._request_anthropic_client_cache_ref()
-            cached = cache["client"]
-            if cached is not None and not cache["in_use"]:
-                if (
-                    not cache["poisoned"]
-                    and cache["key"] == key
-                    and not self._is_openai_client_closed(cached)
-                ):
-                    cache["in_use"] = True
-                    return cached
-                # Key changed (credential rotation, base URL/region, timeout,
-                # 1M-beta flip), poisoned by a cross-thread abort, or
-                # externally closed — never reuse; discard and rebuild below.
-                stale = cached
-                cache["client"] = None
-                cache["key"] = None
-                cache["poisoned"] = False
-        if stale is not None:
-            # Safe to close from this thread: in_use was False, so no worker
-            # thread owns the pool's FDs (same reasoning as OpenAI).
-            self._close_request_anthropic_client(stale, reason=f"reuse_evict:{reason}")
-
-        if key[0] == "bedrock":
-            from agent.anthropic_adapter import build_anthropic_bedrock_client
-            client = build_anthropic_bedrock_client(key[1])
-        else:
-            from agent.anthropic_adapter import build_anthropic_client
-            client = build_anthropic_client(
-                self._anthropic_api_key,
-                getattr(self, "_anthropic_base_url", None),
-                timeout=get_provider_request_timeout(self.provider, self.model),
-                drop_context_1m_beta=key[4],
-            )
-        logger.debug(
-            "Anthropic request client created (%s, shared=False) provider=%s model=%s",
-            reason,
-            getattr(self, "provider", None),
-            getattr(self, "model", None),
-        )
-        with self._openai_client_lock():
-            cache = self._request_anthropic_client_cache_ref()
-            if cache["client"] is None:
-                cache["client"] = client
-                cache["key"] = key
-                cache["poisoned"] = False
-                cache["in_use"] = True
-            # else: a concurrent call holds the slot — hand this client out
-            # untracked; _close_request_anthropic_client fully closes
-            # untracked clients, preserving the per-request lifecycle.
-        return client
-
-    def _close_request_anthropic_client(self, client: Any, *, reason: str) -> None:
-        """Owner-thread close of a request-local Anthropic client.
-
-        On a clean finish (``reason`` in ``_REQUEST_CLIENT_REUSE_REASONS``)
-        the pool is kept warm in the cache slot for the next sequential call,
-        mirroring ``_close_request_openai_client``. Any other outcome
-        (error / kill / abort / stale-slot eviction) force-closes the pool's
-        TCP sockets first (CLOSE-WAIT hygiene, parity with
-        ``_close_openai_client``), then does the graceful SDK close. Safe
-        because the caller owns the connection.
-        """
-        if client is None:
-            return
-        with self._openai_client_lock():
-            cache = self._request_anthropic_client_cache_ref()
-            if cache["client"] is client:
-                if reason in self._REQUEST_CLIENT_REUSE_REASONS and not cache["poisoned"]:
-                    cache["in_use"] = False
-                    return
-                cache["client"] = None
-                cache["key"] = None
-                cache["poisoned"] = False
-                cache["in_use"] = False
-        try:
-            self._force_close_tcp_sockets(client)
-            client.close()
-            logger.info(
-                "Anthropic client closed (%s, shared=False) provider=%s model=%s",
-                reason,
-                getattr(self, "provider", None),
-                getattr(self, "model", None),
-            )
-        except Exception as exc:
-            logger.debug(
-                "Anthropic client close failed (%s, shared=False) provider=%s model=%s error=%s",
-                reason,
-                getattr(self, "provider", None),
-                getattr(self, "model", None),
-                exc,
-            )
-
-    def _close_cached_request_anthropic_client(self, *, reason: str) -> None:
-        """Teardown hook: really close the cached per-request Anthropic client."""
-        with self._openai_client_lock():
-            cache = getattr(self, "_request_anthropic_client_cache", None)
-            client = cache["client"] if cache else None
-            in_use = bool(cache["in_use"]) if cache else False
-            if cache is not None:
-                cache["client"] = None
-                cache["key"] = None
-                cache["poisoned"] = False
-                cache["in_use"] = False
-        if client is None:
-            return
-        if in_use:
-            # A worker thread has this client checked out for an in-flight
-            # request — same reasoning as the OpenAI teardown hook.
-            self._abort_request_anthropic_client(client, reason=f"{reason}_in_flight")
-            return
-        try:
-            self._force_close_tcp_sockets(client)
-            client.close()
-        except Exception:
-            pass
-
-    def _abort_request_anthropic_client(self, client: Any, *, reason: str) -> None:
-        """Cross-thread abort for request-local Anthropic clients.
-
-        Stranger threads (the interrupt-check / stale-stream detector loop)
-        must not call the SDK ``close()`` — that races the owning worker's live
-        SSL BIO and can recycle a TLS FD into a SQLite header /
-       ). Only ``shutdown(SHUT_RDWR)`` the pool's sockets so the worker
-        unblocks and releases the FD from its own thread.
-        """
-        if client is None:
-            return
-        # A pool whose sockets were shut down from a stranger thread must
-        # never be reused: poison the cache slot so the owner-thread close
-        # discards it and the next create builds a fresh client.
-        with self._openai_client_lock():
-            cache = self._request_anthropic_client_cache_ref()
-            if cache["client"] is client:
-                cache["poisoned"] = True
-        try:
-            shutdown_count = self._force_close_tcp_sockets(client)
-            # Same visibility contract as the OpenAI abort path:
-            # zero sockets shut down means the abort did not unblock the
-            # worker — log WARNING, not a success-shaped INFO.
-            _log = logger.warning if shutdown_count == 0 else logger.info
-            _log(
-                "Anthropic client aborted (%s, shared=False, tcp_force_closed=%d, "
-                "deferred_close=stranger_thread) provider=%s model=%s%s",
-                reason,
-                shutdown_count,
-                getattr(self, "provider", None),
-                getattr(self, "model", None),
-                (
-                    " — no sockets found; in-flight request may keep running "
-                    "until the provider finishes"
-                    if shutdown_count == 0
-                    else ""
-                ),
-            )
-        except Exception as exc:
-            logger.debug(
-                "Anthropic client abort failed (%s, shared=False) provider=%s model=%s error=%s",
-                reason,
-                getattr(self, "provider", None),
-                getattr(self, "model", None),
-                exc,
-            )
-
     def _run_codex_stream(self, api_kwargs: dict, client: Any = None, on_first_delta: callable = None):
         """Forwarder — see ``agent.codex_runtime.run_codex_stream``."""
         from agent.codex_runtime import run_codex_stream
@@ -5638,13 +5033,13 @@ class AIAgent:
         return run_codex_create_stream_fallback(self, api_kwargs, client)
 
     def _try_refresh_codex_client_credentials(self, *, force: bool = True) -> bool:
-        if self.api_mode != "codex_responses" or self.provider not in {"openai-codex", "xai-oauth"}:
+        if self.api_mode != "codex_responses" or self.provider != "openai-codex":
             return False
 
         # Guard against silent account swap.
         #
         # When an agent is using a non-singleton credential — e.g. a manual
-        # pool entry (``pilotage auth add xai-oauth``) whose tokens belong to
+        # pool entry (a manually added auth entry) whose tokens belong to
         # a different account than the device_code singleton, or an agent
         # constructed with an explicit ``api_key=`` arg — force-refreshing
         # the singleton here and adopting its tokens silently re-routes the
@@ -5654,18 +5049,11 @@ class AIAgent:
         # singleton-only fallback used when the pool can't recover, and
         # MUST only fire when the agent really is on singleton tokens.
         try:
-            if self.provider == "openai-codex":
-                from pilotage_cli.auth import resolve_codex_runtime_credentials
+            from pilotage_cli.auth import resolve_codex_runtime_credentials
 
-                singleton_now = resolve_codex_runtime_credentials(
-                    refresh_if_expiring=False,
-                )
-            else:
-                from pilotage_cli.auth import resolve_xai_oauth_runtime_credentials
-
-                singleton_now = resolve_xai_oauth_runtime_credentials(
-                    refresh_if_expiring=False,
-                )
+            singleton_now = resolve_codex_runtime_credentials(
+                refresh_if_expiring=False,
+            )
         except Exception as exc:
             logger.debug("%s singleton read failed: %s", self.provider, exc)
             return False
@@ -5682,16 +5070,10 @@ class AIAgent:
             return False
 
         try:
-            if self.provider == "openai-codex":
-                from pilotage_cli.auth import resolve_codex_runtime_credentials
+            from pilotage_cli.auth import resolve_codex_runtime_credentials
 
-                old_key = str(self.api_key or "").strip()
-                creds = resolve_codex_runtime_credentials(force_refresh=force)
-            else:
-                from pilotage_cli.auth import resolve_xai_oauth_runtime_credentials
-
-                old_key = str(self.api_key or "").strip()
-                creds = resolve_xai_oauth_runtime_credentials(force_refresh=force)
+            old_key = str(self.api_key or "").strip()
+            creds = resolve_codex_runtime_credentials(force_refresh=force)
         except Exception as exc:
             logger.debug("%s credential refresh failed: %s", self.provider, exc)
             return False
@@ -5722,56 +5104,6 @@ class AIAgent:
         self._client_kwargs["base_url"] = self.base_url
 
         if not self._replace_primary_openai_client(reason=f"{self.provider}_credential_refresh"):
-            return False
-
-        return True
-
-    def _try_refresh_nous_client_credentials(
-        self,
-        *,
-        force: bool = True,
-    ) -> bool:
-        if self.provider != "nous":
-            return False
-        # Portal serves anthropic/* on the native Messages route, so a session
-        # can be holding either client kind when its short-lived invoke JWT
-        # expires. Both need the refresh or the turn dies on a 401.
-        if self.api_mode not in ("chat_completions", "anthropic_messages"):
-            return False
-
-        try:
-            from pilotage_cli.auth import resolve_nous_runtime_credentials
-
-            creds = resolve_nous_runtime_credentials(
-                timeout_seconds=env_float("PILOTAGE_NOUS_TIMEOUT_SECONDS", 15),
-                force_refresh=force,
-            )
-        except Exception as exc:
-            logger.debug("Nous credential refresh failed: %s", exc)
-            return False
-
-        api_key = creds.get("api_key")
-        base_url = creds.get("base_url")
-        if not isinstance(api_key, str) or not api_key.strip():
-            return False
-        if not isinstance(base_url, str) or not base_url.strip():
-            return False
-
-        self.api_key = api_key.strip()
-        self.base_url = base_url.strip().rstrip("/")
-
-        if self.api_mode == "anthropic_messages":
-            self._anthropic_api_key = self.api_key
-            self._anthropic_base_url = self.base_url
-            self._rebuild_anthropic_client()
-            return True
-
-        self._client_kwargs["api_key"] = self.api_key
-        self._client_kwargs["base_url"] = self.base_url
-        # Nous requests should not inherit OpenRouter-only attribution headers.
-        self._client_kwargs.pop("default_headers", None)
-
-        if not self._replace_primary_openai_client(reason="nous_credential_refresh"):
             return False
 
         return True
@@ -5962,222 +5294,6 @@ class AIAgent:
         )
         return True
 
-    def _try_refresh_vertex_client_credentials(self) -> bool:
-        """Re-mint the Vertex OAuth2 access token and rebuild the OpenAI client.
-
-        Vertex tokens live ~1 hour. On a long-lived agent (gateway session) a
-        cached client's bearer token will expire mid-session, producing a 401.
-        This re-resolves credentials via the adapter (which refreshes the
-        underlying google-auth Credentials object when near expiry), swaps the
-        new token into the client kwargs, and rebuilds the primary OpenAI
-        client. Returns True when a usable token+base_url were obtained.
-        """
-        if self.api_mode != "chat_completions" or self.provider != "vertex":
-            return False
-
-        try:
-            from agent.vertex_adapter import get_vertex_config
-
-            token, base_url = get_vertex_config()
-        except Exception as exc:
-            logger.debug("Vertex credential refresh failed: %s", exc)
-            return False
-
-        if not isinstance(token, str) or not token.strip():
-            return False
-        if not isinstance(base_url, str) or not base_url.strip():
-            return False
-
-        self.api_key = token.strip()
-        self.base_url = base_url.strip().rstrip("/")
-        self._client_kwargs["api_key"] = self.api_key
-        self._client_kwargs["base_url"] = self.base_url
-
-        if not self._replace_primary_openai_client(reason="vertex_credential_refresh"):
-            return False
-
-        logger.info("Vertex AI OAuth token refreshed")
-        return True
-
-    def _try_refresh_copilot_client_credentials(self) -> bool:
-        """Refresh Copilot credentials and rebuild the shared OpenAI client.
-
-        The raw GitHub OAuth token (`gh auth token`) is usually stable, but the
-        short-TTL *exchanged* IDE token minted from it is what Copilot actually
-        authenticates — and it expires mid-session. A heavy/long turn whose
-        request straddles that expiry gets a clean `401 IDE token expired:
-        unauthorized: token expired`. Simply re-resolving the (unchanged) raw
-        token and rebuilding the client leaves the SAME expired IDE token on the
-        wire, so the retry 401s again and the turn aborts as non-retryable —
-        only a gateway restart helped, because a cold process re-runs the
-        exchange. Fix: force a fresh exchange (evict the cached exchanged JWT,
-        then mint a new one) so the retry carries a valid IDE token. Mirrors the
-        400 stale-credential recovery; the caller enforces the single-shot guard.
-        """
-        if not self._is_copilot_provider():
-            return False
-
-        try:
-            from pilotage_cli.copilot_auth import (
-                resolve_copilot_token,
-                get_copilot_api_token,
-                evict_cached_exchanged_token,
-            )
-
-            new_token, token_source = resolve_copilot_token()
-        except Exception as exc:
-            logger.debug("Copilot credential refresh failed: %s", exc)
-            return False
-
-        if not isinstance(new_token, str) or not new_token.strip():
-            return False
-
-        new_token = new_token.strip()
-
-        # Force a fresh IDE-token exchange: the cached exchanged JWT is the thing
-        # that expired ("401 IDE token expired"), so evict it and re-mint before
-        # rebuilding the client. Fall back to the resolved (raw) token only if the
-        # exchange itself is unavailable (network blip) — a client rebuild on the
-        # raw token still clears stale client state and may recover on enterprise
-        # seats where headers matter.
-        try:
-            evict_cached_exchanged_token(new_token)
-            api_token, enterprise_base_url = get_copilot_api_token(new_token)
-            if isinstance(api_token, str) and api_token.strip():
-                new_token = api_token.strip()
-                if enterprise_base_url:
-                    self.base_url = enterprise_base_url.rstrip("/")
-        except Exception as exc:
-            logger.debug("Copilot 401 re-exchange failed, using resolved token: %s", exc)
-
-        self.api_key = new_token
-        self._client_kwargs["api_key"] = self.api_key
-        self._client_kwargs["base_url"] = self.base_url
-        self._apply_client_headers_for_base_url(str(self.base_url or ""))
-
-        if not self._replace_primary_openai_client(reason="copilot_credential_refresh"):
-            return False
-
-        logger.info("Copilot credentials refreshed from %s", token_source)
-        return True
-
-    def _try_recover_stale_copilot_credential(self) -> bool:
-        """Force a fresh Copilot token exchange + client rebuild after a 400.
-
-        Copilot surfaces a stale/degraded credential as a
-        ``400 model_not_available_for_integrator`` /
-        ``model_not_supported`` — NOT a clean 401 — so the normal 401 refresh
-        path never fires. The most common trigger is a raw ``ghu_`` OAuth token
-        that got seeded (and cached) when the startup token exchange degraded:
-        the raw token routes the request to the restricted
-        ``copilot-language-server`` integrator whose allowlist omits
-        enterprise-only models (e.g. ``claude-opus-4.8``).
-
-        Recovery = evict the poisoned cache entry, force a fresh exchange to
-        mint the real ~437-char API token, re-apply the Copilot headers, and
-        rebuild the shared client. Single-shot (guarded by the caller) so a
-        genuinely unavailable model can't loop.
-        """
-        if not self._is_copilot_provider():
-            return False
-
-        try:
-            from pilotage_cli.copilot_auth import (
-                resolve_copilot_token,
-                get_copilot_api_token,
-                evict_cached_exchanged_token,
-            )
-
-            raw_token, token_source = resolve_copilot_token()
-            if not isinstance(raw_token, str) or not raw_token.strip():
-                return False
-            raw_token = raw_token.strip()
-
-            # Drop any cached (possibly degraded/raw) exchanged token so the
-            # next exchange hits the network and mints a fresh one.
-            evict_cached_exchanged_token(raw_token)
-
-            api_token, enterprise_base_url = get_copilot_api_token(raw_token)
-        except Exception as exc:
-            logger.debug("Copilot stale-credential recovery failed: %s", exc)
-            return False
-
-        if not isinstance(api_token, str) or not api_token.strip():
-            return False
-
-        # If the exchange STILL degraded to the raw token, a rebuild won't help
-        # — don't burn the single-shot retry on an identical request.
-        if api_token == raw_token and not enterprise_base_url:
-            logger.warning(
-                "Copilot stale-credential recovery: exchange still degraded to "
-                "raw token; skipping retry (network/exchange endpoint unavailable)."
-            )
-            return False
-
-        self.api_key = api_token.strip()
-        if enterprise_base_url:
-            self.base_url = enterprise_base_url.rstrip("/")
-        self._client_kwargs["api_key"] = self.api_key
-        self._client_kwargs["base_url"] = self.base_url
-        self._apply_client_headers_for_base_url(str(self.base_url or ""))
-
-        if not self._replace_primary_openai_client(reason="copilot_stale_credential_recovery"):
-            return False
-
-        logger.info("Copilot credentials re-exchanged after stale-credential 400 (source=%s)", token_source)
-        return True
-
-    def _try_refresh_anthropic_client_credentials(self) -> bool:
-        if self.api_mode != "anthropic_messages" or not hasattr(self, "_anthropic_api_key"):
-            return False
-        # Only refresh credentials for the native Anthropic provider.
-        # Other anthropic_messages providers (MiniMax, Alibaba, etc.) use their own keys.
-        if self.provider != "anthropic":
-            return False
-        # Azure endpoints use static API keys — OAuth token rotation doesn't apply.
-        # Refreshing would pick up ~/.claude/.credentials.json OAuth token and break auth.
-        _base = getattr(self, "_anthropic_base_url", "") or ""
-        if base_url_host_matches(_base, "azure.com"):
-            return False
-
-        try:
-            from agent.anthropic_adapter import resolve_anthropic_token, build_anthropic_client
-
-            new_token = resolve_anthropic_token()
-        except Exception as exc:
-            logger.debug("Anthropic credential refresh failed: %s", exc)
-            return False
-
-        if not isinstance(new_token, str) or not new_token.strip():
-            return False
-        new_token = new_token.strip()
-        if new_token == self._anthropic_api_key:
-            return False
-
-        try:
-            self._anthropic_client.close()
-        except Exception:
-            pass
-
-        try:
-            self._anthropic_client = build_anthropic_client(
-                new_token,
-                getattr(self, "_anthropic_base_url", None),
-                timeout=get_provider_request_timeout(self.provider, self.model),
-            )
-        except Exception as exc:
-            logger.warning("Failed to rebuild Anthropic client after credential refresh: %s", exc)
-            return False
-
-        self._anthropic_api_key = new_token
-        # Update OAuth flag — token type may have changed (API key ↔ OAuth).
-        # Only treat as OAuth on native Anthropic; third-party endpoints using
-        # the Anthropic protocol must not trip OAuth paths & third-party
-        # identity-injection guard).
-        from agent.anthropic_adapter import _is_oauth_token
-        self._is_anthropic_oauth = _is_oauth_token(new_token) if self.provider == "anthropic" else False
-        return True
-
     def _apply_client_headers_for_base_url(
         self,
         base_url: str,
@@ -6198,10 +5314,6 @@ class AIAgent:
             self._client_kwargs["default_headers"] = build_nvidia_nim_headers(base_url)
         elif base_url_host_matches(base_url, "api.routermint.com"):
             self._client_kwargs["default_headers"] = _routermint_headers()
-        elif base_url_host_matches(base_url, "githubcopilot.com"):
-            from pilotage_cli.models import copilot_default_headers
-
-            self._client_kwargs["default_headers"] = copilot_default_headers()
         elif base_url_host_matches(base_url, "api.kimi.com"):
             from agent.auxiliary_client import _AI_GATEWAY_HEADERS
             self._client_kwargs["default_headers"] = dict(_AI_GATEWAY_HEADERS)
@@ -6212,11 +5324,6 @@ class AIAgent:
             self._client_kwargs["default_headers"] = _codex_cloudflare_headers(
                 self._client_kwargs.get("api_key", "")
             )
-        elif base_url_host_matches(base_url, "x.ai"):
-            # Cover both provider=xai and provider=xai-oauth (api.x.ai).
-            from tools.xai_http import pilotage_xai_default_headers
-
-            self._client_kwargs["default_headers"] = pilotage_xai_default_headers()
         else:
             # No URL-specific headers — check profile.default_headers before clearing.
             _ph_headers = None
@@ -6293,24 +5400,6 @@ class AIAgent:
             runtime_base
         )
 
-        if self.api_mode == "anthropic_messages":
-            from agent.anthropic_adapter import build_anthropic_client, _is_oauth_token
-
-            try:
-                self._anthropic_client.close()
-            except Exception:
-                pass
-
-            self._anthropic_api_key = runtime_key
-            self._anthropic_base_url = runtime_base.rstrip("/") if isinstance(runtime_base, str) else runtime_base
-            self._anthropic_client = build_anthropic_client(
-                runtime_key, self._anthropic_base_url,
-                timeout=get_provider_request_timeout(self.provider, self.model),
-            )
-            self._is_anthropic_oauth = _is_oauth_token(runtime_key) if self.provider == "anthropic" else False
-            self.api_key = runtime_key
-            self.base_url = runtime_base.rstrip("/") if isinstance(runtime_base, str) else runtime_base
-            return
 
         self.api_key = runtime_key
         self.base_url = runtime_base.rstrip("/") if isinstance(runtime_base, str) else runtime_base
@@ -6372,53 +5461,6 @@ class AIAgent:
         if pool is None:
             return False
         return pool.has_available()
-
-    def _anthropic_messages_create(self, api_kwargs: dict, *, client: Any = None):
-        # When a request-local client is supplied it was already credential-
-        # refreshed in ``_create_request_anthropic_client``; only the shared
-        # fallback path refreshes here.
-        if client is None and self.api_mode == "anthropic_messages":
-            self._try_refresh_anthropic_client_credentials()
-        # Defensive: strip Responses-only kwargs that can leak in under an
-        # api_mode-flip race (the Anthropic SDK raises a non-retryable
-        # TypeError on them). See.
-        from agent.anthropic_adapter import create_anthropic_message
-        return create_anthropic_message(
-            client or self._anthropic_client,
-            api_kwargs,
-            log_prefix=getattr(self, "log_prefix", ""),
-            prefer_stream=not bool(getattr(self, "_disable_streaming", False)),
-            # Rate-limit + credits state live in response headers, which the
-            # parsed Message drops. No-ops on providers that don't send the
-            # matching header families (x-ratelimit-* / x-nous-credits-*).
-            on_response=self._capture_anthropic_response_headers,
-        )
-
-    def _rebuild_anthropic_client(self) -> None:
-        """Rebuild the Anthropic client after an interrupt or stale call.
-
-        Handles both direct Anthropic and Bedrock-hosted Anthropic models
-        correctly — rebuilding with the Bedrock SDK when provider is bedrock,
-        rather than always falling back to build_anthropic_client() which
-        requires a direct Anthropic API key.
-
-        Honors ``self._oauth_1m_beta_disabled`` (set by the reactive recovery
-        path when an OAuth subscription rejects the 1M-context beta) so the
-        rebuilt client carries the reduced beta set.
-        """
-        _drop_1m = bool(getattr(self, "_oauth_1m_beta_disabled", False))
-        if getattr(self, "provider", None) == "bedrock":
-            from agent.anthropic_adapter import build_anthropic_bedrock_client
-            region = getattr(self, "_bedrock_region", "us-east-1") or "us-east-1"
-            self._anthropic_client = build_anthropic_bedrock_client(region)
-        else:
-            from agent.anthropic_adapter import build_anthropic_client
-            self._anthropic_client = build_anthropic_client(
-                self._anthropic_api_key,
-                getattr(self, "_anthropic_base_url", None),
-                timeout=get_provider_request_timeout(self.provider, self.model),
-                drop_context_1m_beta=_drop_1m,
-            )
 
     def _interruptible_api_call(self, api_kwargs: dict):
         """Forwarder — see ``agent.chat_completion_helpers.interruptible_api_call``."""
@@ -7474,63 +6516,16 @@ class AIAgent:
 
         OpenRouter forwards unknown extra_body fields to upstream providers.
         Some providers/routes reject `reasoning` with 400s, so gate it to
-        known reasoning-capable model families and direct Nous Portal.
+        known reasoning-capable model families.
         """
-        if base_url_host_matches(self._base_url_lower, "nousresearch.com"):
-            return True
         if base_url_host_matches(self._base_url_lower, "ai-gateway.vercel.sh"):
             return True
-        if (
-            base_url_host_matches(self._base_url_lower, "models.github.ai")
-            or base_url_host_matches(self._base_url_lower, "githubcopilot.com")
-        ):
-            try:
-                from pilotage_cli.models import github_model_reasoning_efforts
-
-                return bool(github_model_reasoning_efforts(self.model))
-            except Exception:
-                return False
-        if (self.provider or "").strip().lower() == "lmstudio":
-            opts = self._lmstudio_reasoning_options_cached()
-            # "off-only" (or absent) means no real reasoning capability.
-            return any(opt and opt != "off" for opt in opts)
-        # Ollama Cloud (and any Ollama-compatible server): the native
-        # /api/show capabilities list is authoritative — emit reasoning_effort
-        # only for models that declare the "thinking" capability. deepseek-v4
-        # has it; gemma3 / qwen3-coder don't. Cached per (model, base_url).
-        if base_url_host_matches(self._base_url_lower, "ollama.com"):
-            return self._ollama_supports_thinking_cached()
         if not self._is_openrouter_url():
             return False
         if base_url_host_matches(self._base_url_lower, "api.mistral.ai"):
             return False
 
         model = (self.model or "").lower()
-        # Live-catalog metadata first (ported from
-        # PrimeIntellect-ai/prime-agent): OpenRouter's /v1/models entries
-        # advertise reasoning support via supported_parameters + a reasoning
-        # object, which covers every routed vendor without a hand-maintained
-        # prefix list. The static prefix allowlist below repeatedly went
-        # stale one vendor at a time (nvidia/ missing →; same class
-        # as tencent/, xiaomi/ additions before it) — metadata makes new
-        # vendors work without a code change. One catalog fetch per process,
-        # cached; unknown (catalog unreachable / unlisted model) falls back
-        # to the static list.
-        try:
-            from pilotage_cli.models import (
-                openrouter_model_reasoning_capabilities,
-                warm_openrouter_reasoning_caps_async,
-            )
-            caps = openrouter_model_reasoning_capabilities(self.model)
-            if caps is None:
-                # Cache cold (no picker run this process) — warm it in the
-                # background so subsequent turns get metadata; never block
-                # this turn on HTTP.
-                warm_openrouter_reasoning_caps_async()
-        except Exception:
-            caps = None
-        if caps is not None:
-            return bool(caps.get("supports_reasoning"))
         reasoning_model_prefixes = (
             "deepseek/",
             "anthropic/",
@@ -7543,116 +6538,6 @@ class AIAgent:
             "xiaomi/",
         )
         return any(model.startswith(prefix) for prefix in reasoning_model_prefixes)
-
-    def _lmstudio_reasoning_options_cached(self) -> list[str]:
-        """Probe LM Studio's published reasoning ``allowed_options`` once per
-        (model, base_url). The list (e.g. ``["off","on"]`` or
-        ``["off","minimal","low"]``) is needed both for the supports-reasoning
-        gate and for clamping the emitted ``reasoning_effort`` so toggle-style
-        models don't 400 on ``high``. Cache is keyed on (model, base_url) so
-        ``/model`` swaps and base-URL changes don't reuse a stale list.
-        Non-empty results are cached permanently (model capabilities don't
-        change). Empty results (transient probe failure OR genuinely
-        non-reasoning model) are cached with a 60-second TTL to avoid an
-        HTTP round-trip on every turn while still retrying reasonably soon.
-        """
-        import time as _time
-
-        cache = getattr(self, "_lm_reasoning_opts_cache", None)
-        if cache is None:
-            cache = self._lm_reasoning_opts_cache = {}
-        key = (self.model, self.base_url)
-        cached = cache.get(key)
-        if cached is not None:
-            opts, ts = cached
-            # Non-empty → permanent. Empty → 60s TTL.
-            if opts or (_time.monotonic() - ts) < 60:
-                return opts
-        try:
-            from pilotage_cli.models import lmstudio_model_reasoning_options
-            opts = lmstudio_model_reasoning_options(
-                self.model, self.base_url, getattr(self, "api_key", ""),
-            )
-        except Exception:
-            opts = []
-        cache[key] = (opts, _time.monotonic())
-        return opts
-
-    def _ollama_supports_thinking_cached(self) -> bool:
-        """Probe Ollama's ``/api/show`` capabilities once per (model, base_url).
-
-        Returns True only when the model declares the ``thinking`` capability.
-        Caching mirrors the LM Studio probe: a True/False result is permanent
-        (capabilities don't change), while a probe failure (None) is cached
-        with a 60-second TTL so a transient outage doesn't suppress reasoning
-        for the rest of the session but also doesn't round-trip every turn.
-        """
-        import time as _time
-
-        cache = getattr(self, "_ollama_thinking_cache", None)
-        if cache is None:
-            cache = self._ollama_thinking_cache = {}
-        key = (self.model, self.base_url)
-        cached = cache.get(key)
-        if cached is not None:
-            supported, ts = cached
-            # Definitive True/False → permanent. Unknown (None) → 60s TTL.
-            if supported is not None or (_time.monotonic() - ts) < 60:
-                return bool(supported)
-        try:
-            from pilotage_cli.models import ollama_model_supports_thinking
-            supported = ollama_model_supports_thinking(
-                self.model, self.base_url, getattr(self, "api_key", "")
-            )
-        except Exception:
-            supported = None
-        cache[key] = (supported, _time.monotonic())
-        return bool(supported)
-
-    def _resolve_lmstudio_summary_reasoning_effort(self) -> Optional[str]:
-        """Resolve a safe top-level ``reasoning_effort`` for LM Studio.
-
-        The iteration-limit summary path calls ``chat.completions.create()``
-        directly, bypassing the transport. Share the helper so the two paths
-        can't drift on effort resolution and clamping.
-        """
-        from agent.lmstudio_reasoning import resolve_lmstudio_effort
-        return resolve_lmstudio_effort(
-            self.reasoning_config,
-            self._lmstudio_reasoning_options_cached(),
-        )
-
-    def _github_models_reasoning_extra_body(self) -> dict | None:
-        """Format reasoning payload for GitHub Models/OpenAI-compatible routes."""
-        try:
-            from pilotage_cli.models import github_model_reasoning_efforts
-        except Exception:
-            return None
-
-        supported_efforts = github_model_reasoning_efforts(self.model)
-        if not supported_efforts:
-            return None
-
-        if self.reasoning_config and isinstance(self.reasoning_config, dict):
-            if self.reasoning_config.get("enabled") is False:
-                return None
-            requested_effort = str(
-                self.reasoning_config.get("effort", "medium")
-            ).strip().lower()
-        else:
-            requested_effort = "medium"
-
-        if requested_effort == "xhigh" and "xhigh" not in supported_efforts and "high" in supported_efforts:
-            requested_effort = "high"
-        elif requested_effort not in supported_efforts:
-            if requested_effort == "minimal" and "low" in supported_efforts:
-                requested_effort = "low"
-            elif "medium" in supported_efforts:
-                requested_effort = "medium"
-            else:
-                requested_effort = supported_efforts[0]
-
-        return {"effort": requested_effort}
 
     def _build_assistant_message(self, assistant_message, finish_reason: str) -> dict:
         """Forwarder — see ``agent.chat_completion_helpers.build_assistant_message``."""
@@ -7833,30 +6718,6 @@ class AIAgent:
             resolve_context_compression_timeouts,
             run_compress_context_with_progress_timeout,
         )
-        from agent.portal_tags import (
-            get_conversation_context,
-            reset_conversation_context,
-            set_conversation_context,
-        )
-        # Out-of-turn compaction entry points — ``/compact`` (cli.py), the
-        # gateway ``/compress`` command and its hygiene sweep (both of which
-        # build a throwaway agent), and partial head compression — call this
-        # forwarder directly, outside ``run_conversation``'s ambient scope.
-        # With nothing ambient the summarizer's auxiliary call carries no
-        # conversation tag and no Portal sticky key, so it routes independently
-        # of the conversation it belongs to. Publish the root here as a
-        # fallback; in-turn callers already have it set to the same value, so
-        # this is a no-op for them.
-        #
-        # Note this does NOT keep the compaction turn's own prompt cache warm:
-        # compaction replaces the history with a summary and rebuilds the
-        # system prompt, so that request is a cold write on any endpoint. What
-        # it buys is the turns AFTER compaction reading the cache it wrote.
-        token = None
-        if get_conversation_context() is None:
-            root = self._conversation_root_id()
-            if root:
-                token = set_conversation_context(root)
         # Every AIAgent compression has a fence, including ordinary in-turn and
         # manual paths. hard_interrupt() uses this exact instance to serialize
         # cancel admission against begin_commit().
@@ -8046,10 +6907,6 @@ class AIAgent:
                     vars(self).pop("_active_compression_commit_fence", None)
                 else:
                     self._active_compression_commit_fence = previous_fence
-            # Restore whatever the caller had, so a compaction never leaks its
-            # tag into the surrounding scope.
-            if token is not None:
-                reset_conversation_context(token)
 
     def _set_tool_guardrail_halt(self, decision: ToolGuardrailDecision) -> None:
         """Record the first guardrail decision that should stop this turn."""
@@ -8269,7 +7126,6 @@ class AIAgent:
         persist_user_timestamp: Optional[float] = None,
         persist_user_display_kind: Optional[str] = None,
         persist_user_display_metadata: Optional[Dict[str, Any]] = None,
-        moa_config: Optional[dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Forwarder — see ``agent.conversation_loop.run_conversation``."""
         from agent.aux_accounting import (
@@ -8278,10 +7134,6 @@ class AIAgent:
         )
         from agent import relay_runtime
         from agent.conversation_loop import run_conversation
-        from agent.portal_tags import (
-            reset_conversation_context,
-            set_conversation_context,
-        )
         from pilotage_cli.observability.relay_shared_metrics import (
             finish_task_run,
             start_task_run,
@@ -8311,7 +7163,6 @@ class AIAgent:
         durable_turn_lease_activity_lock = threading.Lock()
         durable_turn_lease_turn_active = False
         durable_turn_lease_interrupt_message = None
-        token = None
         acct_token = None
         task_started = False
         task_finished = False
@@ -8596,12 +7447,6 @@ class AIAgent:
                     parent_session_id=getattr(self, "_parent_session_id", None) or "",
                 )
                 task_started = True
-            # Publish the conversation id for ambient Nous Portal tagging. Every
-            # LLM call made inside this turn — main loop, compression, vision,
-            # web_extract, session_search, MoA slots, background-review forks
-            # (which copy this Context into their thread) — inherits the
-            # ``conversation=<root>`` tag with zero per-call-site plumbing.
-            token = set_conversation_context(self._conversation_root_id())
             # Publish the session accounting handles the same way so auxiliary
             # calls record their token usage into session_model_usage (task
             # dimension) — the fix for aux spend being invisible in analytics
@@ -8633,7 +7478,6 @@ class AIAgent:
                         persist_user_timestamp=persist_user_timestamp,
                         persist_user_display_kind=persist_user_display_kind,
                         persist_user_display_metadata=persist_user_display_metadata,
-                        moa_config=moa_config,
                     )
                 finally:
                     # The lease remains held through relay/task finalization, but
@@ -8725,8 +7569,6 @@ class AIAgent:
                         self._relay_pending_turn_id = None
                     if acct_token is not None:
                         reset_accounting_context(acct_token)
-                    if token is not None:
-                        reset_conversation_context(token)
 
     def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:
         """

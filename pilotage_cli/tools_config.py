@@ -24,13 +24,6 @@ from pilotage_cli.config import (
     load_config, save_config, get_env_value, save_env_value,
 )
 from pilotage_cli.colors import Colors, color
-from pilotage_cli.nous_subscription import (
-    MANAGED_FEATURE_COVERAGE_CATEGORY,
-    NousSubscriptionFeatures,
-    apply_nous_managed_defaults,
-    get_nous_subscription_features,
-)
-from pilotage_cli.nous_account import format_nous_portal_entitlement_message
 from tools.tool_backend_helpers import fal_key_is_configured
 from utils import base_url_hostname, is_truthy_value
 
@@ -102,7 +95,6 @@ CONFIGURABLE_TOOLSETS = [
     ("vision",          "👁️  Vision / Image Analysis",  "vision_analyze"),
     ("video",           "🎬 Video Analysis",            "video_analyze (requires video-capable model)"),
     ("image_gen",       "🎨 Image Generation",          "image_generate"),
-    ("x_search",        "🐦 X (Twitter) Search",        "x_search (requires xAI OAuth or XAI_API_KEY)"),
     ("tts",             "🔊 Text-to-Speech",            "text_to_speech"),
     ("stt",             "🎙️ Speech-to-Text",           "voice transcription (gateway voice messages + voice mode)"),
     ("skills",          "📚 Skills",                    "list, view, manage"),
@@ -135,14 +127,7 @@ def gui_toolset_label(label: str) -> str:
 # Toolsets that are OFF by default for new installs.
 # They're still in _PILOTAGE_CORE_TOOLS (available at runtime if enabled),
 # but the setup checklist won't pre-select them for first-time users.
-#
-# X search is off by default for users without xAI credentials, but
-# auto-enables when SuperGrok OAuth tokens are stored OR XAI_API_KEY is
-# set — mirroring the HASS_TOKEN → homeassistant auto-enable below. The
-# `pilotage tools` → X (Twitter) Search setup walks users through credential
-# setup. The tool's check_fn means the schema still won't appear to the
-# model if the credential later goes missing or expires.
-_DEFAULT_OFF_TOOLSETS = {"homeassistant", "video", "x_search", "a2a"}
+_DEFAULT_OFF_TOOLSETS = {"homeassistant", "video", "a2a"}
 
 
 # Config-only capabilities: they appear in `pilotage tools` for provider/API-key
@@ -152,38 +137,6 @@ _DEFAULT_OFF_TOOLSETS = {"homeassistant", "video", "x_search", "a2a"}
 # per-platform enable/disable checklist; configured via the "Reconfigure an
 # existing tool" flow and the GUI provider matrix instead.
 _CONFIG_ONLY_TOOLSETS = {"stt"}
-
-
-def _xai_credentials_present() -> bool:
-    """Cheap, side-effect-free check for usable xAI credentials.
-
-    Used to auto-enable the ``x_search`` toolset when the user has either
-    completed xAI Grok OAuth (SuperGrok / Premium+) or set
-    ``XAI_API_KEY``. Does NOT hit the network — only inspects the local
-    auth store and environment. The tool's runtime ``check_fn`` still
-    gates schema registration if creds later expire or get revoked.
-    Also reused by ``provider_readiness_status`` for ``post_setup:
-    "xai_grok"`` picker rows (xAI TTS, Grok OAuth x_search).
-    """
-    try:
-        from pilotage_cli.auth import _read_xai_oauth_tokens
-
-        _read_xai_oauth_tokens()
-        return True
-    except Exception:
-        pass
-    try:
-        from tools.xai_http import get_env_value as _xai_get_env_value
-
-        if str(_xai_get_env_value("XAI_API_KEY") or "").strip():
-            return True
-    except Exception:
-        pass
-    try:
-        from agent.secret_scope import get_secret
-    except ImportError:  # pragma: no cover — secret_scope is in-repo
-        return bool(str(os.environ.get("XAI_API_KEY") or "").strip())
-    return bool(str(get_secret("XAI_API_KEY") or "").strip())
 
 
 def _homeassistant_credentials_present() -> bool:
@@ -320,16 +273,6 @@ TOOL_CATEGORIES = {
                 "tts_provider": "edge",
             },
             {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed OpenAI TTS billed to your subscription",
-                "env_vars": [],
-                "tts_provider": "openai",
-                "requires_nous_auth": True,
-                "managed_nous_feature": "tts",
-                "override_env_vars": ["VOICE_TOOLS_OPENAI_KEY", "OPENAI_API_KEY"],
-            },
-            {
                 "name": "OpenAI TTS",
                 "badge": "paid",
                 "tag": "High quality voices",
@@ -337,13 +280,6 @@ TOOL_CATEGORIES = {
                     {"key": "VOICE_TOOLS_OPENAI_KEY", "prompt": "OpenAI API key", "url": "https://platform.openai.com/api-keys"},
                 ],
                 "tts_provider": "openai",
-            },
-            {
-                "name": "xAI TTS",
-                "tag": "Grok voices — uses xAI Grok OAuth or XAI_API_KEY",
-                "env_vars": [],
-                "tts_provider": "xai",
-                "post_setup": "xai_grok",
             },
             {
                 "name": "ElevenLabs",
@@ -405,16 +341,6 @@ TOOL_CATEGORIES = {
         "icon": "🎙️",
         "providers": [
             {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed OpenAI transcription billed to your subscription",
-                "env_vars": [],
-                "stt_provider": "openai",
-                "requires_nous_auth": True,
-                "managed_nous_feature": "stt",
-                "override_env_vars": ["VOICE_TOOLS_OPENAI_KEY", "OPENAI_API_KEY"],
-            },
-            {
                 "name": "OpenAI",
                 "badge": "★ recommended",
                 "tag": "whisper-1, gpt-4o-transcribe, gpt-transcribe",
@@ -439,61 +365,10 @@ TOOL_CATEGORIES = {
         "name": "Image Generation",
         "icon": "🎨",
         # Per-provider rows for FAL.ai (`plugins/image_gen/fal`), OpenAI,
-        # OpenAI Codex, and xAI are injected at runtime from each
+        # and OpenAI Codex are injected at runtime from each
         # ``plugins.image_gen.<vendor>`` package via
         # ``_plugin_image_gen_providers()`` in ``_visible_providers``.
-        # Only non-provider UX setup-flow rows remain here:
-        #   - "Nous Subscription" — managed FAL billed via the Nous
-        #     subscription (requires_nous_auth + override_env_vars).
-        #     Uses the fal plugin as the underlying backend but has a
-        #     distinct setup UX.
-        "providers": [
-            {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed FAL image generation billed to your subscription",
-                "env_vars": [],
-                "requires_nous_auth": True,
-                "managed_nous_feature": "image_gen",
-                "override_env_vars": ["FAL_KEY"],
-                "imagegen_backend": "fal",
-            },
-        ],
-    },
-    "x_search": {
-        "name": "X (Twitter) Search",
-        "setup_title": "Select xAI Credential Source",
-        "setup_note": (
-            "Pilotage routes X searches through xAI's built-in x_search "
-            "Responses tool for read-only public X discovery. Use the xurl "
-            "skill for authenticated X API reads and account actions. Both "
-            "credential sources hit the same "
-            "https://api.x.ai/v1/responses endpoint — pick whichever you "
-            "already have. SuperGrok OAuth is preferred when both are set "
-            "(uses your subscription quota instead of API spend)."
-        ),
-        "icon": "🐦",
-        "providers": [
-            {
-                "name": "xAI Grok OAuth (SuperGrok / Premium+)",
-                "badge": "subscription",
-                "tag": "Browser login at accounts.x.ai — no API key required",
-                "env_vars": [],
-                "post_setup": "xai_grok",
-            },
-            {
-                "name": "xAI API key",
-                "badge": "paid",
-                "tag": "Direct xAI API billing via XAI_API_KEY",
-                "env_vars": [
-                    {
-                        "key": "XAI_API_KEY",
-                        "prompt": "xAI API key",
-                        "url": "https://console.x.ai/",
-                    },
-                ],
-            },
-        ],
+        "providers": [],
     },
     "browser": {
         "name": "Browser Automation",
@@ -665,7 +540,7 @@ def _ensure_browser_use_cli(*, verbose_hints: bool = False) -> None:
     The Browser Use CLI 3.0 is the primary driver engine for EVERY browser
     backend except Camofox (which is Firefox-based with no CDP surface, so
     the CDP-only browser-use harness cannot drive it). Local, Browserbase,
-    Firecrawl, and the Nous-managed cloud rows all execute through
+    and Firecrawl all execute through
     ``browser_exec`` when the CLI is runnable — so every one of those
     picker selections must attempt this install, not just the explicit
     "Browser Use" row. Failure is non-fatal: ``browser_exec`` can still run
@@ -763,7 +638,7 @@ def _run_post_setup(post_setup_key: str):
                 "    Pull the latest image to get the bundled Chromium:"
             )
             _print_info(
-                "      docker pull ghcr.io/nousresearch/pilotage-agent:latest"
+                "      docker pull ghcr.io/pilotage/pilotage-agent:latest"
             )
             return
 
@@ -914,73 +789,6 @@ def _run_post_setup(post_setup_key: str):
                 return
         _print_info("    No API key required. DuckDuckGo enforces server-side rate limits.")
         _print_info("    Pair with an extract provider if you also need web_extract.")
-
-    elif post_setup_key == "xai_grok":
-        # Shared credential bootstrap for any picker entry that talks to xAI
-        # (TTS, future Image Gen, etc.). Accepts either a
-        # SuperGrok-tier OAuth bearer token (preferred — billed against the
-        # user's existing subscription) or a raw XAI_API_KEY from
-        # console.x.ai. The picker entries declare empty env_vars so we
-        # drive the full auth UX here.
-        try:
-            from pilotage_cli.auth import get_xai_oauth_auth_status
-            oauth_logged_in = bool(get_xai_oauth_auth_status().get("logged_in"))
-        except Exception:
-            oauth_logged_in = False
-        existing_api_key = get_env_value("XAI_API_KEY")
-
-        if oauth_logged_in:
-            _print_success(
-                "    xAI will use your xAI Grok OAuth (SuperGrok / Premium+) credentials"
-            )
-            return
-        if existing_api_key:
-            _print_success("    xAI will use your existing XAI_API_KEY")
-            return
-
-        _print_info("    xAI needs credentials. Choose one:")
-        try:
-            from pilotage_cli.setup import (
-                _run_xai_oauth_login_from_setup,
-                prompt_choice,
-                prompt as _setup_prompt,
-            )
-            from pilotage_cli.config import save_env_value
-        except Exception as exc:
-            _print_warning(f"    Could not load setup helpers: {exc}")
-            _print_info("    Run later: pilotage auth add xai-oauth   (or set XAI_API_KEY)")
-            return
-
-        idx = prompt_choice(
-            "    How do you want xAI to authenticate?",
-            choices=[
-                "Sign in with xAI Grok OAuth (SuperGrok / Premium+) — browser login",
-                "Paste an xAI API key (console.x.ai)",
-                "Skip — configure later via `pilotage auth add xai-oauth`",
-            ],
-            default=0,
-        )
-        if idx == 0:
-            if _run_xai_oauth_login_from_setup():
-                _print_success(
-                    "    Logged in — xAI will use these OAuth credentials"
-                )
-            else:
-                _print_warning(
-                    "    xAI Grok OAuth login did not complete. "
-                    "Run later: pilotage auth add xai-oauth"
-                )
-        elif idx == 1:
-            api_key = _setup_prompt("    xAI API key", password=True)
-            if api_key:
-                save_env_value("XAI_API_KEY", api_key)
-                _print_success("    XAI_API_KEY saved")
-            else:
-                _print_warning(
-                    "    No API key provided. Run later: pilotage auth add xai-oauth"
-                )
-        else:
-            _print_info("    xAI will remain inactive until credentials are configured.")
 
 
 def valid_post_setup_keys() -> Set[str]:
@@ -1165,11 +973,9 @@ def _exempt_explicit_platform_native(
 #: Landing late — or leaving an entry here for a second release — converts a
 #: back-fill into a stuck checkbox.
 #:
-#: Not gated on a Nous sign-in here: the six ``bfl_flux3_*`` tools carry
+#: Not gated on a credential probe here: the six ``bfl_flux3_*`` tools carry
 #: ``check_fn=check_bfl_requirements``, so an enabled toolset still ships zero
-#: schemas to a user with no Nous credential — the same split Home Assistant
-#: uses. Probing the portal from this path would put a network call on every
-#: CLI start, gateway session and cron tick.
+#: schemas to a user with no credential — the same split Home Assistant uses.
 _RECENTLY_SHIPPED_TOOLSETS = frozenset({"bfl"})
 
 
@@ -1319,23 +1125,6 @@ def _get_platform_tools(
             if ts_tools and ts_tools.issubset(all_tool_names):
                 enabled_toolsets.add(ts_key)
 
-        # Auto-enable ``x_search`` when xAI credentials are configured.
-        # Unlike ``homeassistant`` (whose ``ha_*`` tools live inside the
-        # platform composite and thus pass the subset check above),
-        # ``x_search`` is its own one-tool toolset that the composite does
-        # NOT include, so the subset loop never picks it up. Inject it
-        # directly here, mirroring the HASS_TOKEN → ``homeassistant`` rule
-        # below: once you have working creds, you don't have to also click
-        # through ``pilotage tools`` to flip the toolset on. Only fires when
-        # the user has not yet saved an explicit toolset list — once they
-        # do, the saved list is authoritative.
-        x_search_auto_enabled = (
-            _toolset_allowed_for_platform("x_search", platform)
-            and _xai_credentials_present()
-        )
-        if x_search_auto_enabled:
-            enabled_toolsets.add("x_search")
-
         default_off = set(_DEFAULT_OFF_TOOLSETS)
         # Legacy safety: if the platform's own name matches a default-off
         # toolset (e.g. `homeassistant` platform + `homeassistant` toolset),
@@ -1353,11 +1142,6 @@ def _get_platform_tools(
         # regressed after made cron honor per-platform tool config.
         if "homeassistant" in default_off and _homeassistant_credentials_present():
             default_off.remove("homeassistant")
-        # Symmetric carve-out for x_search auto-enable (see the inject
-        # block above). Without this, the default_off subtraction would
-        # strip the entry we just added.
-        if x_search_auto_enabled and "x_search" in default_off:
-            default_off.remove("x_search")
         _exempt_explicit_platform_native(
             default_off, platform, explicitly_configured=explicitly_configured
         )
@@ -1611,7 +1395,6 @@ def _toolset_has_keys(
     config: dict = None,
     *,
     force_fresh: bool = False,
-    features: Optional[NousSubscriptionFeatures] = None,
 ) -> bool:
     """Check if a toolset's required API keys are configured."""
     if config is None:
@@ -1626,24 +1409,10 @@ def _toolset_has_keys(
         except Exception:
             return False
 
-    if ts_key in {"web", "image_gen", "tts", "stt", "browser"}:
-        if features is None:
-            features = get_nous_subscription_features(
-                config, force_fresh=force_fresh
-            )
-        feature = features.features.get(ts_key)
-        if feature and (feature.available or feature.managed_by_nous):
-            return True
-
     # Check TOOL_CATEGORIES first (provider-aware)
     cat = TOOL_CATEGORIES.get(ts_key)
     if cat:
-        for provider in _visible_providers(
-            cat,
-            config,
-            force_fresh=force_fresh,
-            features=features,
-        ):
+        for provider in _visible_providers(cat, config, force_fresh=force_fresh):
             env_vars = provider.get("env_vars", [])
             if not env_vars:
                 return True  # No-key provider (e.g. Local Browser, Edge TTS)
@@ -1851,11 +1620,10 @@ def _plugin_image_gen_providers() -> list[dict]:
 # Mirror of _plugin_image_gen_providers for web search backends. Surfaces
 # every plugin-registered web provider so it appears in the
 # "Web Search & Extract" picker. Providers live as plugins, so this
-# helper is the sole source of truth for the category's provider rows. The hardcoded entries that used to drive the category
-# were deleted in the same PR; only the two non-provider UX rows
-# ("Nous Subscription" managed-gateway entry, "Firecrawl Self-Hosted")
-# remain in TOOL_CATEGORIES because they describe alternative *setup
-# flows* for the firecrawl backend rather than distinct providers.
+# helper is the sole source of truth for the category's provider rows. The only hardcoded entry left in
+# TOOL_CATEGORIES is "Firecrawl Self-Hosted", which describes an
+# alternative *setup flow* for the firecrawl backend rather than a
+# distinct provider.
 def _plugin_web_search_providers() -> list[dict]:
     """Build picker-row dicts from plugin-registered web search providers.
 
@@ -1931,14 +1699,12 @@ def web_provider_capabilities(backend: str) -> list:
     return ["search", "extract"]
 
 
-# Mirror of _plugin_web_search_providers for cloud browser backends. After
-#, Browserbase / Browser Use / Firecrawl live as plugins under
+# Mirror of _plugin_web_search_providers for cloud browser backends.
+# Browserbase / Browser Use / Firecrawl live as plugins under
 # plugins/browser/<vendor>/; this helper is the sole source of provider rows
-# for those three in the "Browser Automation" picker. The hardcoded
-# ``TOOL_CATEGORIES["browser"]`` entries that drove the category before
-# were deleted in the same PR; only non-provider UX setup-flow rows remain
-# ("Nous Subscription", "Local Browser", "Camofox") — see the comment block
-# in ``TOOL_CATEGORIES["browser"]`` for why each one stays hardcoded.
+# for those three in the "Browser Automation" picker. Only non-provider UX
+# setup-flow rows remain hardcoded in ``TOOL_CATEGORIES["browser"]``
+# ("Local Browser", "Camofox").
 def _plugin_browser_providers() -> list[dict]:
     """Build picker-row dicts from plugin-registered cloud browser providers.
 
@@ -2047,50 +1813,22 @@ def _visible_providers(
     config: dict,
     *,
     force_fresh: bool = False,
-    features: Optional[NousSubscriptionFeatures] = None,
 ) -> list[dict]:
-    """Return provider entries visible for the current auth/config state.
+    """Return provider entries visible for the current auth/config state."""
+    visible = list(cat.get("providers", []))
 
-    Nous-managed Tool Gateway rows (``managed_nous_feature``) are always
-    shown — even to logged-out / unentitled users — so the picker advertises
-    that the capability exists.  Selecting one drives an inline Nous Portal
-    login + entitlement check (see ``_configure_provider``); the row only
-    *activates* the gateway once paid access is confirmed.
-    """
-    if features is None:
-        features = get_nous_subscription_features(config, force_fresh=force_fresh)
-    visible = []
-    for provider in cat.get("providers", []):
-        # Nous-managed Tool Gateway rows stay visible regardless of auth —
-        # selecting one drives an inline Portal login. A `requires_nous_auth`
-        # row that is NOT a managed gateway feature (pure pre-auth UX) is
-        # still hidden until the user is logged in.
-        if (
-            provider.get("requires_nous_auth")
-            and not provider.get("managed_nous_feature")
-            and not features.nous_auth_present
-        ):
-            continue
-        visible.append(provider)
-
-    # Inject plugin-registered image_gen backends (OpenAI today, more
-    # later) so the picker lists them alongside FAL / Nous Subscription.
+    # Inject plugin-registered image_gen backends.
     if cat.get("name") == "Image Generation":
         visible.extend(_plugin_image_gen_providers())
 
-    # Inject plugin-registered web search backends. After, this
-    # is the SOLE source of provider rows for the Web Search & Extract
-    # category — the per-provider hardcoded entries were deleted. The two
-    # remaining hardcoded rows ("Nous Subscription", "Firecrawl
-    # Self-Hosted") are non-provider UX setup-flow rows for firecrawl.
+    # Inject plugin-registered web search backends — the sole source of
+    # provider rows for the Web Search & Extract category.
     if cat.get("name") == "Web Search & Extract":
         visible.extend(_plugin_web_search_providers())
 
-    # Inject plugin-registered cloud browser backends. After,
-    # Browserbase / Browser Use / Firecrawl are the plugin-supplied rows;
-    # the hardcoded "Nous Subscription" / "Local Browser" / "Camofox" rows
-    # stay because they're non-provider UX setup flows (subscription auth,
-    # local fallback, and the REST-API anti-detection backend respectively).
+    # Inject plugin-registered cloud browser backends (Browserbase,
+    # Browser Use, Firecrawl). The hardcoded "Local Browser" / "Camofox"
+    # rows stay because they're non-provider UX setup flows.
     if cat.get("name") == "Browser Automation":
         visible.extend(_plugin_browser_providers())
 
@@ -2101,25 +1839,6 @@ def _visible_providers(
         visible.extend(_plugin_tts_providers())
 
     return visible
-
-
-def _hidden_nous_gateway_message(
-    cat: dict,
-    config: dict,
-    capability: str,
-    *,
-    force_fresh: bool = False,
-) -> str:
-    """Deprecated: Nous Tool Gateway rows are no longer hidden.
-
-    Previously this returned a "log in / upgrade" banner shown above a
-    category when its Nous-managed rows were filtered out for unentitled
-    users. Those rows are now always listed (see ``_visible_providers``), and
-    the login + entitlement guidance happens inline when the user selects one
-    (``ensure_nous_portal_access``). Kept as a no-op so call sites stay simple;
-    always returns an empty string.
-    """
-    return ""
 
 
 _POST_SETUP_INSTALLED: dict = {
@@ -2208,7 +1927,7 @@ def _agent_browser_installed() -> bool:
     no-op."""
     import sys
 
-    from pilotage_cli.nous_subscription import _local_browser_runnable
+    from pilotage_cli.browser_probe import local_browser_runnable
 
     # The install hook runs in a spawned ``pilotage tools post-setup`` process,
     # but this probe runs in the long-lived web-server/CLI process, whose
@@ -2219,7 +1938,7 @@ def _agent_browser_installed() -> bool:
     if bt is not None:
         bt._cached_chromium_installed = None
 
-    return _local_browser_runnable()
+    return local_browser_runnable()
 
 
 def _camofox_installed() -> bool:
@@ -2232,8 +1951,7 @@ def _camofox_installed() -> bool:
 # satisfied. Used by ``provider_readiness_status`` to decide whether a keyless
 # post_setup row (KittenTTS, Piper, Local Browser, …) is honestly "ready" or
 # still "needs_setup". Mirrors the installed-checks ``_run_post_setup`` itself
-# performs before installing. ``xai_grok`` is intentionally absent — it is a
-# credential bootstrap, not an install, and is handled as an auth check.
+# performs before installing.
 _POST_SETUP_READY: dict = {
     "kittentts": lambda: _module_installed("kittentts"),
     "piper": lambda: _module_installed("piper"),
@@ -2249,16 +1967,15 @@ def _cloud_agent_browser_installed() -> bool:
 
     Cloud providers host their own Chromium, so their hook only installs the
     agent-browser npm package — presence of the CLI is the whole contract."""
-    from pilotage_cli.nous_subscription import _has_agent_browser
+    from pilotage_cli.browser_probe import has_agent_browser
 
-    return _has_agent_browser()
+    return has_agent_browser()
 
 
 def provider_readiness_status(
     provider: dict,
     config: dict,
     *,
-    features=None,
     is_active: Optional[bool] = None,
 ) -> str:
     """Compute an honest readiness state for a provider picker row.
@@ -2267,19 +1984,14 @@ def provider_readiness_status(
 
     - ``"ready"``       — usable as-is (keys set / entitled / installed).
     - ``"needs_keys"``  — declares env vars and at least one is unset.
-    - ``"needs_auth"``  — needs a sign-in: Nous Portal login/entitlement for
-      managed Tool Gateway rows, or xAI Grok OAuth / XAI_API_KEY for
-      ``post_setup: "xai_grok"`` rows.
     - ``"needs_setup"`` — keyless row whose ``post_setup`` install hook has
       verifiably not run yet (see ``_POST_SETUP_READY``).
 
     Keyless ≠ usable: this is the server-side truth the GUI "Ready" pill
     renders from (the old client-side heuristic showed Ready for every
-    zero-env-var row, including logged-out Nous Subscription rows).
+    zero-env-var row).
 
-    ``features`` (a ``NousSubscriptionFeatures``) can be passed to avoid
-    re-fetching portal state per row. ``is_active`` is the completed-setup
-    fallback signal for post_setup hooks with no registered installed-check
+    ``is_active`` is the completed-setup fallback signal for post_setup hooks with no registered installed-check
     (selecting a row runs its hook, so the active row has been set up).
     """
     env_vars = provider.get("env_vars", [])
@@ -2288,36 +2000,9 @@ def provider_readiness_status(
             return "ready"
         return "needs_keys"
 
-    managed_feature = provider.get("managed_nous_feature")
-    if provider.get("requires_nous_auth") or managed_feature:
-        if features is None:
-            features = get_nous_subscription_features(config)
-        if not features.nous_auth_present:
-            return "needs_auth"
-        if managed_feature:
-            # Same per-category entitlement gate the CLI applies at selection
-            # time (free tool-pool users get a limited managed set).
-            acct = features.account_info
-            category = MANAGED_FEATURE_COVERAGE_CATEGORY.get(managed_feature)
-            entitled = bool(
-                acct
-                and acct.logged_in
-                and (
-                    acct.tool_gateway_entitled_for(category)
-                    if category
-                    else acct.tool_gateway_entitled
-                )
-            )
-            if not entitled:
-                return "needs_auth"
-        # Signed in and entitled — fall through: a managed row may still
-        # carry a local install hook (e.g. the managed browser row needs
-        # the agent-browser CLI on this machine).
 
     post_setup = provider.get("post_setup")
     if post_setup:
-        if post_setup == "xai_grok":
-            return "ready" if _xai_credentials_present() else "needs_auth"
         predicate = _POST_SETUP_READY.get(post_setup)
         if predicate is not None:
             try:
@@ -2396,12 +2081,6 @@ def _configure_tool_category(
     icon = cat.get("icon", "")
     name = cat["name"]
     providers = _visible_providers(cat, config, force_fresh=force_fresh)
-    hidden_nous_message = _hidden_nous_gateway_message(
-        cat,
-        config,
-        f"the Nous Subscription provider for {name}",
-        force_fresh=force_fresh,
-    )
 
     # Check Python version requirement
     if cat.get("requires_python"):
@@ -2422,9 +2101,6 @@ def _configure_tool_category(
         # For single-provider tools, show a note if available
         if cat.get("setup_note"):
             _print_info(f"  {cat['setup_note']}")
-        if hidden_nous_message:
-            for line in hidden_nous_message.splitlines():
-                _print_warning(f"  {line}")
         _configure_provider(provider, config, force_fresh=force_fresh)
     else:
         # Multiple providers - let user choose
@@ -2434,25 +2110,9 @@ def _configure_tool_category(
         print(color(f"  --- {icon} {name} - {title} ---", Colors.CYAN))
         if cat.get("setup_note"):
             _print_info(f"  {cat['setup_note']}")
-        if hidden_nous_message:
-            for line in hidden_nous_message.splitlines():
-                _print_warning(f"  {line}")
         print()
 
         # Plain text labels only (no ANSI codes in menu items)
-        # When the user is logged into Nous, surface a marker on providers
-        # whose access is included in their subscription so it's visually
-        # obvious which options cost extra vs. cost nothing on top of Nous.
-        try:
-            _nous_logged_in = bool(
-                get_nous_subscription_features(
-                    config,
-                    force_fresh=force_fresh,
-                ).nous_auth_present
-            )
-        except Exception:
-            _nous_logged_in = False
-
         provider_choices = []
         for p in providers:
             badge = f" [{p['badge']}]" if p.get("badge") else ""
@@ -2466,18 +2126,7 @@ def _configure_tool_category(
                     configured = ""
                 else:
                     configured = " [configured]"
-            # Mark Nous-managed entries. Logged-in paid subscribers get the
-            # "included" star; everyone else gets a "via Nous Portal" hint so
-            # it's clear selecting the row triggers a Portal login. The rows
-            # are always shown now (see _visible_providers) — selecting one
-            # drives an inline login + entitlement check.
-            sub_marker = ""
-            if p.get("managed_nous_feature"):
-                if _nous_logged_in:
-                    sub_marker = "  ★ Included with your Nous subscription"
-                else:
-                    sub_marker = "  ★ via Nous Portal (login on select)"
-            provider_choices.append(f"{p['name']}{badge}{tag}{configured}{sub_marker}")
+            provider_choices.append(f"{p['name']}{badge}{tag}{configured}")
 
         # Add skip option
         provider_choices.append("Skip — keep defaults / configure later")
@@ -2510,42 +2159,6 @@ def _is_provider_active(
     if plugin_name:
         image_cfg = config.get("image_gen", {})
         return isinstance(image_cfg, dict) and image_cfg.get("provider") == plugin_name
-
-    managed_feature = provider.get("managed_nous_feature")
-    if managed_feature:
-        features = get_nous_subscription_features(config, force_fresh=force_fresh)
-        feature = features.features.get(managed_feature)
-        if feature is None:
-            return False
-        if managed_feature == "image_gen":
-            image_cfg = config.get("image_gen", {})
-            if isinstance(image_cfg, dict):
-                configured_provider = image_cfg.get("provider")
-                if configured_provider not in {None, "", "fal"}:
-                    return False
-                if image_cfg.get("use_gateway") is not None and not is_truthy_value(image_cfg.get("use_gateway"), default=False):
-                    return False
-            return feature.managed_by_nous
-        if provider.get("tts_provider"):
-            return (
-                feature.managed_by_nous
-                and cfg_get(config, "tts", "provider") == provider["tts_provider"]
-            )
-        if provider.get("stt_provider"):
-            return (
-                feature.managed_by_nous
-                and cfg_get(config, "stt", "provider") == provider["stt_provider"]
-            )
-        if "browser_provider" in provider:
-            # Browser Use mode is a driver on top of the provider (it attaches
-            # to the provider's CDP endpoint), so the provider row stays
-            # active alongside the Browser Use row.
-            current = cfg_get(config, "browser", "cloud_provider")
-            return feature.managed_by_nous and provider["browser_provider"] == current
-        if provider.get("web_backend"):
-            current = cfg_get(config, "web", "backend")
-            return feature.managed_by_nous and current == provider["web_backend"]
-        return feature.managed_by_nous
 
     if provider.get("tts_provider"):
         return cfg_get(config, "tts", "provider") == provider["tts_provider"]
@@ -2601,7 +2214,6 @@ def _is_provider_active(
         return (
             provider["imagegen_backend"] == "fal"
             and configured_provider in {None, "", "fal"}
-            and not is_truthy_value(image_cfg.get("use_gateway"), default=False)
         )
     return False
 
@@ -2805,49 +2417,6 @@ def _configure_imagegen_model_for_plugin(plugin_name: str, config: dict) -> None
     _print_success(f"  Model set to: {chosen}")
 
 
-def _configure_xai_imagine_storage(section_name: str, config: dict) -> None:
-    """Prompt for xAI Imagine stored public URL behavior."""
-    section = config.setdefault(section_name, {})
-    if not isinstance(section, dict):
-        section = {}
-        config[section_name] = section
-    xai_cfg = section.setdefault("xai", {})
-    if not isinstance(xai_cfg, dict):
-        xai_cfg = {}
-        section["xai"] = xai_cfg
-    storage_cfg = xai_cfg.setdefault("storage", {})
-    if not isinstance(storage_cfg, dict):
-        storage_cfg = {}
-        xai_cfg["storage"] = storage_cfg
-
-    _print_warning(
-        "  xAI Imagine can store generated media and create reusable public URLs. "
-        "xAI may bill for stored files and public URL hosting."
-    )
-    idx = _prompt_choice(
-        "  Stored public URLs:",
-        [
-            "Enable public URLs without automatic expiry (recommended)",
-            "Disable stored public URLs",
-            "Enable public URLs for 2 days",
-        ],
-        default=0,
-    )
-    if idx == 1:
-        storage_cfg["enabled"] = False
-        _print_success("  xAI stored public URLs disabled")
-    elif idx == 2:
-        storage_cfg["enabled"] = True
-        storage_cfg["public_url"] = True
-        storage_cfg["expires_after"] = 2 * 24 * 60 * 60
-        _print_success("  xAI stored public URLs enabled for 2 days")
-    else:
-        storage_cfg["enabled"] = True
-        storage_cfg["public_url"] = True
-        storage_cfg["expires_after"] = None
-        _print_success("  xAI stored public URLs enabled without automatic expiry")
-
-
 def _select_plugin_image_gen_provider(plugin_name: str, config: dict) -> None:
     """Persist a plugin-backed image generation provider selection."""
     img_cfg = config.setdefault("image_gen", {})
@@ -2855,11 +2424,8 @@ def _select_plugin_image_gen_provider(plugin_name: str, config: dict) -> None:
         img_cfg = {}
         config["image_gen"] = img_cfg
     img_cfg["provider"] = plugin_name
-    img_cfg["use_gateway"] = False
     _print_success(f"  image_gen.provider set to: {plugin_name}")
     _configure_imagegen_model_for_plugin(plugin_name, config)
-    if plugin_name == "xai":
-        _configure_xai_imagine_storage("image_gen", config)
 
 
 # Per-provider STT model catalogs for the interactive picker. Keys are
@@ -2897,27 +2463,24 @@ def _configure_stt_model(stt_provider: str, config: dict) -> None:
     _print_success(f"  STT model set to: {chosen}")
 
 
-def _write_provider_config(provider: dict, config: dict, *, managed_feature) -> None:
+def _write_provider_config(provider: dict, config: dict) -> None:
     """Persist the provider/backend config keys for a selected provider.
 
     This is the pure, non-interactive core of :func:`_configure_provider` —
     it writes ``tts.provider`` / ``browser.cloud_provider`` / ``web.backend``
-    and the ``use_gateway`` flags based on the provider's markers, but does
-    NOT prompt for env vars, run post-setup hooks, gate on Nous auth, or run
-    interactive model pickers. Both the CLI configurator and the desktop GUI
+    based on the provider's markers, but does NOT prompt for env vars, run
+    post-setup hooks, or run interactive model pickers. Both the CLI configurator and the desktop GUI
     ``PUT .../provider`` endpoint call through here so there is one code path.
     """
     # Set TTS provider in config if applicable
     if provider.get("tts_provider"):
         tts_cfg = config.setdefault("tts", {})
         tts_cfg["provider"] = provider["tts_provider"]
-        tts_cfg["use_gateway"] = bool(managed_feature)
 
     # Set STT provider in config if applicable
     if provider.get("stt_provider"):
         stt_cfg = config.setdefault("stt", {})
         stt_cfg["provider"] = provider["stt_provider"]
-        stt_cfg["use_gateway"] = bool(managed_feature)
 
     # Set browser cloud provider in config if applicable
     if "browser_provider" in provider:
@@ -2927,7 +2490,6 @@ def _write_provider_config(provider: dict, config: dict, *, managed_feature) -> 
             browser_cfg["cloud_provider"] = bp
         # Browser Use mode (browser.backend) composes with the provider —
         # switching providers keeps the driver choice intact.
-        browser_cfg["use_gateway"] = bool(managed_feature)
 
     if provider.get("browser_backend"):
         browser_cfg = config.setdefault("browser", {})
@@ -2937,21 +2499,6 @@ def _write_provider_config(provider: dict, config: dict, *, managed_feature) -> 
     if provider.get("web_backend"):
         web_cfg = config.setdefault("web", {})
         web_cfg["backend"] = provider["web_backend"]
-        web_cfg["use_gateway"] = bool(managed_feature)
-
-    # For tools without a specific config key (e.g. image_gen), still
-    # track use_gateway so the runtime knows the user's intent.
-    if managed_feature and managed_feature not in {"web", "tts", "stt", "browser"}:
-        config.setdefault(managed_feature, {})["use_gateway"] = True
-    elif not managed_feature:
-        # User picked a non-gateway provider — find which category this
-        # belongs to and clear use_gateway if it was previously set.
-        for cat_key, cat in TOOL_CATEGORIES.items():
-            if provider in cat.get("providers", []):
-                section = config.get(cat_key)
-                if isinstance(section, dict) and section.get("use_gateway"):
-                    section["use_gateway"] = False
-                break
 
 
 def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> None:
@@ -2961,8 +2508,7 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
     rows the GUI/CLI picker shows via :func:`_visible_providers`) and writes
     the corresponding backend/provider config keys. Unlike
     :func:`_configure_provider`, this does NOT prompt for API keys, run
-    post-setup hooks, gate on Nous Portal auth, or run interactive model
-    pickers — those are handled separately (env endpoints, post-setup
+    post-setup hooks, or run interactive model pickers — those are handled separately (env endpoints, post-setup
     endpoints, the model picker) in the desktop GUI.
 
     Raises ``KeyError`` if the toolset has no category or the provider name
@@ -2977,8 +2523,7 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
     if provider is None:
         raise KeyError(f"Unknown provider {provider_name!r} for toolset {ts_key!r}")
 
-    managed_feature = provider.get("managed_nous_feature")
-    _write_provider_config(provider, config, managed_feature=managed_feature)
+    _write_provider_config(provider, config)
 
     # Plugin-registered image gen backends record the provider name in
     # their own config section. Write that here (without the interactive
@@ -2991,7 +2536,6 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
             img_cfg = {}
             config["image_gen"] = img_cfg
         img_cfg["provider"] = plugin_name
-        img_cfg["use_gateway"] = bool(managed_feature)
 
     # In-tree FAL imagegen backend: keep image_gen.provider on the legacy
     # path (mirrors _configure_provider).
@@ -3009,51 +2553,10 @@ def _configure_provider(
 ):
     """Configure a single provider - prompt for API keys and set config."""
     env_vars = provider.get("env_vars", [])
-    managed_feature = provider.get("managed_nous_feature")
-
-    # Nous-managed Tool Gateway backends are always listed (see
-    # _visible_providers), but only *activate* once the user has paid Nous
-    # Portal access. Selecting one runs an inline Portal login when needed —
-    # auth + entitlement only, no inference-provider switch and no bulk
-    # "enable all tools" prompt (that lives in `pilotage model`).
-    if managed_feature:
-        from pilotage_cli.nous_subscription import (
-            MANAGED_FEATURE_COVERAGE_CATEGORY,
-            ensure_nous_portal_access,
-        )
-
-        if not ensure_nous_portal_access(
-            capability=f"{provider.get('name', 'the Nous Tool Gateway')}",
-            coverage_category=MANAGED_FEATURE_COVERAGE_CATEGORY.get(managed_feature),
-        ):
-            _print_warning(
-                "  Not enabled — Nous Portal access is required for this backend."
-            )
-            return
-
-    # Pure pre-auth UX rows (requires_nous_auth without a managed gateway
-    # feature) keep the old gate. Managed rows are handled by the inline
-    # login above, so don't double-check them here.
-    if provider.get("requires_nous_auth") and not managed_feature:
-        features = get_nous_subscription_features(config, force_fresh=force_fresh)
-        entitled = bool(
-            features.account_info and features.account_info.paid_service_access is True
-        )
-        if not features.nous_auth_present or not entitled:
-            message = format_nous_portal_entitlement_message(
-                features.account_info,
-                capability=f"{provider.get('name', 'Nous Subscription')}",
-            )
-            _print_warning(
-                f"  {message or 'Nous Subscription is only available after logging into Nous Portal.'}"
-            )
-            return
 
     # Set TTS provider in config if applicable
     if provider.get("tts_provider"):
-        tts_cfg = config.setdefault("tts", {})
-        tts_cfg["provider"] = provider["tts_provider"]
-        tts_cfg["use_gateway"] = bool(managed_feature)
+        _print_success(f"  TTS provider set to: {provider['tts_provider']}")
 
     # Set STT provider in config if applicable
     if provider.get("stt_provider"):
@@ -3074,17 +2577,15 @@ def _configure_provider(
     if provider.get("web_backend"):
         _print_success(f"  Web backend set to: {provider['web_backend']}")
 
-    # Persist the provider/backend config keys + use_gateway flags. Shared
-    # with the GUI provider-select endpoint via apply_provider_selection so
-    # there is a single source of truth for these writes.
-    _write_provider_config(provider, config, managed_feature=managed_feature)
+    # Persist the provider/backend config keys. Shared with the GUI
+    # provider-select endpoint via apply_provider_selection so there is a
+    # single source of truth for these writes.
+    _write_provider_config(provider, config)
 
     if not env_vars:
         if provider.get("post_setup"):
             _run_post_setup(provider["post_setup"])
         _print_success(f"  {provider['name']} - no configuration needed!")
-        if managed_feature:
-            _print_info("  Requests for this tool will be billed to your Nous subscription.")
         # Plugin-registered image_gen provider: write image_gen.provider
         # and route model selection to the plugin's own catalog.
         plugin_name = provider.get("image_gen_plugin_name")
@@ -3101,41 +2602,13 @@ def _configure_provider(
             img_cfg = config.setdefault("image_gen", {})
             if isinstance(img_cfg, dict) and img_cfg.get("provider") not in {None, "", "fal"}:
                 img_cfg["provider"] = "fal"
-        # STT providers prompt for model selection after provider pick
-        # (skipped for managed rows — the gateway pins the model).
-        if provider.get("stt_provider") and not managed_feature:
+        # STT providers prompt for model selection after provider pick.
+        if provider.get("stt_provider"):
             _configure_stt_model(provider["stt_provider"], config)
         return
 
     # Prompt for each required env var
     all_configured = True
-    # If this BYOK provider lives in a category that ALSO has a
-    # Nous-managed sibling, show a single dim hint so users know
-    # they can avoid the key entirely via a Portal subscription.
-    # Suppressed when the user is already authed to Nous.
-    _show_portal_hint = False
-    if env_vars and not managed_feature and not provider.get("requires_nous_auth"):
-        try:
-            _has_managed_sibling = False
-            for _cat_key, _cat in TOOL_CATEGORIES.items():
-                _providers = _cat.get("providers", [])
-                if provider in _providers and any(
-                    sib.get("managed_nous_feature") for sib in _providers
-                ):
-                    _has_managed_sibling = True
-                    break
-            if _has_managed_sibling:
-                _features = get_nous_subscription_features(
-                    config,
-                    force_fresh=force_fresh,
-                )
-                _show_portal_hint = not _features.nous_auth_present
-        except Exception:
-            _show_portal_hint = False
-
-    if _show_portal_hint:
-        _print_info("  Available through Nous Portal subscription.")
-
     for var in env_vars:
         existing = get_env_value(var["key"])
         if existing:
@@ -3178,7 +2651,7 @@ def _configure_provider(
             if isinstance(img_cfg, dict) and img_cfg.get("provider") not in {None, "", "fal"}:
                 img_cfg["provider"] = "fal"
         # STT providers prompt for model selection after env vars are in.
-        if provider.get("stt_provider") and not managed_feature:
+        if provider.get("stt_provider"):
             _configure_stt_model(provider["stt_provider"], config)
 
 
@@ -3455,27 +2928,15 @@ def _configure_tool_category_for_reconfig(
     icon = cat.get("icon", "")
     name = cat["name"]
     providers = _visible_providers(cat, config, force_fresh=force_fresh)
-    hidden_nous_message = _hidden_nous_gateway_message(
-        cat,
-        config,
-        f"the Nous Subscription provider for {name}",
-        force_fresh=force_fresh,
-    )
 
     if len(providers) == 1:
         provider = providers[0]
         print()
         print(color(f"  --- {icon} {name} ({provider['name']}) ---", Colors.CYAN))
-        if hidden_nous_message:
-            for line in hidden_nous_message.splitlines():
-                _print_warning(f"  {line}")
         _reconfigure_provider(provider, config, force_fresh=force_fresh)
     else:
         print()
         print(color(f"  --- {icon} {name} - Choose a provider ---", Colors.CYAN))
-        if hidden_nous_message:
-            for line in hidden_nous_message.splitlines():
-                _print_warning(f"  {line}")
         print()
 
         provider_choices = []
@@ -3515,52 +2976,15 @@ def _reconfigure_provider(
 ):
     """Reconfigure a provider - update API keys."""
     env_vars = provider.get("env_vars", [])
-    managed_feature = provider.get("managed_nous_feature")
-
-    # Same inline Nous Portal login + entitlement gate as _configure_provider:
-    # managed Tool Gateway backends only activate with paid Portal access.
-    if managed_feature:
-        from pilotage_cli.nous_subscription import (
-            MANAGED_FEATURE_COVERAGE_CATEGORY,
-            ensure_nous_portal_access,
-        )
-
-        if not ensure_nous_portal_access(
-            capability=f"{provider.get('name', 'the Nous Tool Gateway')}",
-            coverage_category=MANAGED_FEATURE_COVERAGE_CATEGORY.get(managed_feature),
-        ):
-            _print_warning(
-                "  Not enabled — Nous Portal access is required for this backend."
-            )
-            return
-
-    # Pure pre-auth UX rows keep the old gate; managed rows already handled
-    # by the inline login above.
-    if provider.get("requires_nous_auth") and not managed_feature:
-        features = get_nous_subscription_features(config, force_fresh=force_fresh)
-        entitled = bool(
-            features.account_info and features.account_info.paid_service_access is True
-        )
-        if not features.nous_auth_present or not entitled:
-            message = format_nous_portal_entitlement_message(
-                features.account_info,
-                capability=f"{provider.get('name', 'Nous Subscription')}",
-            )
-            _print_warning(
-                f"  {message or 'Nous Subscription is only available after logging into Nous Portal.'}"
-            )
-            return
 
     if provider.get("tts_provider"):
         tts_cfg = config.setdefault("tts", {})
         tts_cfg["provider"] = provider["tts_provider"]
-        tts_cfg["use_gateway"] = bool(managed_feature)
         _print_success(f"  TTS provider set to: {provider['tts_provider']}")
 
     if provider.get("stt_provider"):
         stt_cfg = config.setdefault("stt", {})
         stt_cfg["provider"] = provider["stt_provider"]
-        stt_cfg["use_gateway"] = bool(managed_feature)
         _print_success(f"  STT provider set to: {provider['stt_provider']}")
 
     if "browser_provider" in provider:
@@ -3574,7 +2998,6 @@ def _reconfigure_provider(
             _print_success(f"  Browser cloud provider set to: {bp}")
         # Browser Use mode (browser.backend) composes with the provider —
         # switching providers keeps the driver choice intact.
-        browser_cfg["use_gateway"] = bool(managed_feature)
 
     if provider.get("browser_backend"):
         browser_cfg = config.setdefault("browser", {})
@@ -3585,29 +3008,12 @@ def _reconfigure_provider(
     if provider.get("web_backend"):
         web_cfg = config.setdefault("web", {})
         web_cfg["backend"] = provider["web_backend"]
-        web_cfg["use_gateway"] = bool(managed_feature)
         _print_success(f"  Web backend set to: {provider['web_backend']}")
-
-    if managed_feature and managed_feature not in {"web", "tts", "stt", "browser"}:
-        section = config.setdefault(managed_feature, {})
-        if not isinstance(section, dict):
-            section = {}
-            config[managed_feature] = section
-        section["use_gateway"] = True
-    elif not managed_feature:
-        for cat_key, cat in TOOL_CATEGORIES.items():
-            if provider in cat.get("providers", []):
-                section = config.get(cat_key)
-                if isinstance(section, dict) and section.get("use_gateway"):
-                    section["use_gateway"] = False
-                break
 
     if not env_vars:
         if provider.get("post_setup"):
             _run_post_setup(provider["post_setup"])
         _print_success(f"  {provider['name']} - no configuration needed!")
-        if managed_feature:
-            _print_info("  Requests for this tool will be billed to your Nous subscription.")
         plugin_name = provider.get("image_gen_plugin_name")
         if plugin_name:
             _select_plugin_image_gen_provider(plugin_name, config)
@@ -3620,9 +3026,8 @@ def _reconfigure_provider(
                 img_cfg = config.setdefault("image_gen", {})
                 if isinstance(img_cfg, dict):
                     img_cfg["provider"] = "fal"
-                    img_cfg["use_gateway"] = False
         # STT providers prompt for model selection on reconfig too.
-        if provider.get("stt_provider") and not managed_feature:
+        if provider.get("stt_provider"):
             _configure_stt_model(provider["stt_provider"], config)
         return
 
@@ -3657,10 +3062,9 @@ def _reconfigure_provider(
             img_cfg = config.setdefault("image_gen", {})
             if isinstance(img_cfg, dict):
                 img_cfg["provider"] = "fal"
-                img_cfg["use_gateway"] = False
 
     # STT providers prompt for model selection on reconfig too.
-    if provider.get("stt_provider") and not managed_feature:
+    if provider.get("stt_provider"):
         _configure_stt_model(provider["stt_provider"], config)
 
 
@@ -3769,15 +3173,6 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
                     label = next((l for k, l, _ in _get_effective_configurable_toolsets() if k == ts), ts)
                     print(color(f"  - {label}", Colors.RED))
 
-            auto_configured = apply_nous_managed_defaults(
-                config,
-                enabled_toolsets=new_enabled,
-                force_fresh=True,
-            )
-            for ts_key in sorted(auto_configured):
-                label = next((l for k, l, _ in CONFIGURABLE_TOOLSETS if k == ts_key), ts_key)
-                print(color(f"  ✓ {label}: using your Nous subscription defaults", Colors.GREEN))
-
             # Walk through ALL selected tools that have provider options or
             # need API keys.  This ensures browser (Local vs Browserbase),
             # TTS (Edge vs OpenAI vs ElevenLabs), etc. are shown even when
@@ -3785,7 +3180,6 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
             to_configure = [
                 ts_key for ts_key in sorted(new_enabled)
                 if (TOOL_CATEGORIES.get(ts_key) or TOOLSET_ENV_REQUIREMENTS.get(ts_key))
-                and ts_key not in auto_configured
             ]
 
             if to_configure:

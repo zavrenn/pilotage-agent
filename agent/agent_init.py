@@ -104,43 +104,6 @@ def _ra():
     return run_agent
 
 
-def _moa_reference_output_allowed(agent: Any) -> bool:
-    """Keep MoA display events off only the machine-readable ``-Q`` surface."""
-    return not (
-        getattr(agent, "platform", None) == "cli"
-        and getattr(agent, "tool_progress_mode", "all") == "off"
-    )
-
-
-def _relay_moa_reference_event(agent: Any, event: str, **kwargs: Any) -> None:
-    """Relay MoA display events while preserving the ``-Q`` stdout contract."""
-    if not _moa_reference_output_allowed(agent):
-        return
-    cb = getattr(agent, "tool_progress_callback", None)
-    if cb is None:
-        return
-    try:
-        if event == "moa.reference":
-            cb(
-                "moa.reference",
-                str(kwargs.get("label") or ""),
-                str(kwargs.get("text") or ""),
-                None,
-                moa_index=kwargs.get("index"),
-                moa_count=kwargs.get("count"),
-            )
-        elif event == "moa.aggregating":
-            cb(
-                "moa.aggregating",
-                str(kwargs.get("aggregator") or ""),
-                None,
-                None,
-                moa_ref_count=kwargs.get("ref_count"),
-            )
-    except Exception:
-        pass
-
-
 def _normalize_route_base_url(base_url: Any) -> str:
     """Canonicalize an endpoint URL for model-route identity comparisons."""
     return normalize_route_base_url(base_url)
@@ -669,17 +632,12 @@ def init_agent(
         agent.api_mode = api_mode
     elif agent.provider == "openai-codex":
         agent.api_mode = "codex_responses"
-    elif agent.provider in {"xai", "xai-oauth"}:
-        agent.api_mode = "codex_responses"
     elif (provider_name is None) and (
         agent._base_url_hostname == "chatgpt.com"
         and "/backend-api/codex" in agent._base_url_lower
     ):
         agent.api_mode = "codex_responses"
         agent.provider = "openai-codex"
-    elif (provider_name is None) and agent._base_url_hostname == "api.x.ai":
-        agent.api_mode = "codex_responses"
-        agent.provider = "xai"
     elif agent.provider == "anthropic" or (provider_name is None and agent._base_url_hostname == "api.anthropic.com"):
         agent.api_mode = "anthropic_messages"
         agent.provider = "anthropic"
@@ -695,13 +653,6 @@ def init_agent(
         # AWS Bedrock — auto-detect from provider name or base URL
         # (bedrock-runtime.<region>.amazonaws.com).
         agent.api_mode = "bedrock_converse"
-    elif agent.provider in {"nous", "nous-portal", "nousresearch"}:
-        # Portal is dual-wire: anthropic/* → Messages, everything else →
-        # chat_completions. Callers that already pass api_mode win above;
-        # this covers direct AIAgent construction without a resolved runtime.
-        from pilotage_cli.providers import nous_api_mode
-
-        agent.api_mode = nous_api_mode(agent.model)
     else:
         agent.api_mode = "chat_completions"
 
@@ -964,17 +915,6 @@ def init_agent(
     # after each API call.  Accessed by /usage slash command.
     agent._rate_limit_state: Optional["RateLimitState"] = None
 
-    # Credits tracking (dev-only, L0 usage-aware-credits) — updated from
-    # x-nous-credits-* response headers after each API call.  Session-start
-    # remaining is latched the first time a header is ever seen so we can
-    # report cumulative micros spent.  Surfaced behind PILOTAGE_DEV_CREDITS.
-    agent._credits_state = None
-    agent._credits_session_start_micros = None
-    # Threshold-notice latch (L4): active sticky-notice keys + the crossing gates.
-    from agent.credits_tracker import new_credits_latch
-
-    agent._credits_latch = new_credits_latch()
-
     # OpenRouter response cache hit counter — incremented when
     # X-OpenRouter-Cache-Status: HIT is seen in streaming response headers.
     agent._or_cache_hits: int = 0
@@ -1069,373 +1009,231 @@ def init_agent(
     # Claude uses its own timeout path and is not covered here.
     _provider_timeout = get_provider_request_timeout(agent.provider, agent.model)
 
-    if agent.api_mode == "anthropic_messages":
-        from agent.anthropic_adapter import build_anthropic_client, resolve_anthropic_token
-        # Bedrock + Claude → use AnthropicBedrock SDK for full feature parity
-        # (prompt caching, thinking budgets, adaptive thinking).
-        _is_bedrock_anthropic = agent.provider == "bedrock"
-        if _is_bedrock_anthropic:
-            from agent.anthropic_adapter import build_anthropic_bedrock_client
-            _region_match = re.search(r"bedrock-runtime\.([a-z0-9-]+)\.", base_url or "")
-            _br_region = _region_match.group(1) if _region_match else "us-east-1"
-            agent._bedrock_region = _br_region
-            agent._anthropic_client = build_anthropic_bedrock_client(_br_region)
-            agent._anthropic_api_key = "aws-sdk"
-            agent._anthropic_base_url = base_url
-            agent._is_anthropic_oauth = False
-            agent.api_key = "aws-sdk"
-            agent.client = None
-            agent._client_kwargs = {}
-            if not agent.quiet_mode:
-                print(f"🤖 AI Agent initialized with model: {agent.model} (AWS Bedrock + AnthropicBedrock SDK, {_br_region})")
+    if api_key and base_url:
+        # Explicit credentials from CLI/gateway — construct directly.
+        # The runtime provider resolver already handled auth for us.
+        # Extract query params (e.g. Azure api-version) from base_url
+        # and pass via default_query to prevent loss during SDK URL
+        # joining (httpx drops query string when joining paths).
+        _parsed_url = urlparse(base_url)
+        if _parsed_url.query:
+            _clean_url = urlunparse(_parsed_url._replace(query=""))
+            _query_params = {
+                k: v[0] for k, v in parse_qs(_parsed_url.query).items()
+            }
+            client_kwargs = {
+                "api_key": api_key,
+                "base_url": _clean_url,
+                "default_query": _query_params,
+            }
         else:
-            # Only fall back to ANTHROPIC_TOKEN when the provider is actually Anthropic.
-            # Other anthropic_messages providers (MiniMax, Alibaba, etc.) must use their own API key.
-            # Falling back would send Anthropic credentials to third-party endpoints (Fixes, #minimax-401).
-            _is_native_anthropic = agent.provider == "anthropic"
-            effective_key = (api_key or resolve_anthropic_token() or "") if _is_native_anthropic else (api_key or "")
-
-            # MiniMax OAuth issues short-lived (~15-min) access tokens. The
-            # Anthropic SDK caches ``api_key`` as a static string at client
-            # construction time, so a session that resolves the bearer once
-            # at startup will keep sending the same token until MiniMax
-            # returns 401 mid-session. Swap the static string for a callable
-            # token provider — ``build_anthropic_client`` recognizes the
-            # callable and installs an httpx event hook that mints a fresh
-            # bearer per outbound request (re-reading auth.json so a refresh
-            # persisted by another process is visible immediately).
-            # The cached refresh path is a no-op when the token still has
-            # ``MINIMAX_OAUTH_REFRESH_SKEW_SECONDS`` of life left, so steady-
-            # state cost is one file read + one timestamp compare per request.
-            if agent.provider == "minimax-oauth" and isinstance(effective_key, str) and effective_key:
-                try:
-                    from pilotage_cli.auth import build_minimax_oauth_token_provider
-                    effective_key = build_minimax_oauth_token_provider()
-                except Exception as _mm_exc:  # noqa: BLE001 — never block startup on this
-                    import logging as _logging
-                    _logging.getLogger(__name__).warning(
-                        "MiniMax OAuth: failed to install per-request token provider "
-                        "(%s); falling back to static bearer that will expire ~15min in.",
-                        _mm_exc,
-                    )
-
-            agent.api_key = effective_key
-            agent._anthropic_api_key = effective_key
-            agent._anthropic_base_url = base_url
-            # Only mark the session as OAuth-authenticated when the token
-            # genuinely belongs to native Anthropic.  Third-party providers
-            # (MiniMax, Kimi, GLM, LiteLLM proxies) that accept the
-            # Anthropic protocol must never trip OAuth code paths — doing
-            # so injects Claude-Code identity headers and system prompts
-            # that cause 401/403 on their endpoints. Guards and
-            # the third-party identity-injection bug.
-            from agent.anthropic_adapter import _is_oauth_token as _is_oat
-            agent._is_anthropic_oauth = _is_oat(effective_key) if (_is_native_anthropic and isinstance(effective_key, str)) else False
-            agent._anthropic_client = build_anthropic_client(effective_key, base_url, timeout=_provider_timeout)
-            # No OpenAI client needed for Anthropic mode
-            agent.client = None
-            agent._client_kwargs = {}
-            if not agent.quiet_mode:
-                print(f"🤖 AI Agent initialized with model: {agent.model} (Anthropic native)")
-                # ``effective_key`` may be a callable Entra ID bearer
-                # provider for Azure Foundry anthropic_messages mode.
-                # The Anthropic adapter installs an httpx event hook
-                # that mints a fresh JWT per request — we never
-                # invoke or inspect the callable in the banner.
-                from agent.azure_identity_adapter import is_token_provider
-
-                if is_token_provider(effective_key):
-                    print("🔑 Using credentials: Microsoft Entra ID")
-                elif isinstance(effective_key, str) and len(effective_key) > 12:
-                    print(f"🔑 Using token: {effective_key[:8]}...{effective_key[-4:]}")
-    elif agent.provider == "moa":
-        from agent.moa_loop import build_moa_facade
-        agent.api_mode = "chat_completions"
-
-        # build_moa_facade wires the reference relay that routes
-        # reference-model outputs to the agent's tool_progress_callback so
-        # every surface that already consumes it (CLI spinner/scrollback, TUI,
-        # desktop, gateway) can show each reference's answer as a labelled
-        # block before the aggregator acts. The facade emits "moa.reference",
-        # "moa.progress", "moa.phase", and "moa.aggregating" events, forwarded
-        # through the same callback the tool lifecycle uses. Best-effort and
-        # cache-safe — display-only events, they never touch the message
-        # history. The factory is shared with the fallback-restore/recovery
-        # paths so a restored facade keeps emitting these events.
-        agent.client = build_moa_facade(agent, agent.model)
-        agent._client_kwargs = {}
-        agent.api_key = api_key or "moa-virtual-provider"
-        agent.base_url = "moa://local"
-        if not agent.quiet_mode:
-            print(f"🤖 AI Agent initialized with MoA preset: {agent.model}")
-    elif agent.api_mode == "bedrock_converse":
-        # AWS Bedrock — uses boto3 directly, no OpenAI client needed.
-        # Region is extracted from the base_url or defaults to us-east-1.
-        _region_match = re.search(r"bedrock-runtime\.([a-z0-9-]+)\.", base_url or "")
-        agent._bedrock_region = _region_match.group(1) if _region_match else "us-east-1"
-        # Guardrail config — read from config.yaml at init time.
-        agent._bedrock_guardrail_config = None
-        try:
-            from pilotage_cli.config import load_config_readonly as _load_br_cfg
-            _gr = _load_br_cfg().get("bedrock", {}).get("guardrail", {})
-            if _gr.get("guardrail_identifier") and _gr.get("guardrail_version"):
-                agent._bedrock_guardrail_config = {
-                    "guardrailIdentifier": _gr["guardrail_identifier"],
-                    "guardrailVersion": _gr["guardrail_version"],
-                }
-                if _gr.get("stream_processing_mode"):
-                    agent._bedrock_guardrail_config["streamProcessingMode"] = _gr["stream_processing_mode"]
-                if _gr.get("trace"):
-                    agent._bedrock_guardrail_config["trace"] = _gr["trace"]
-        except Exception:
-            pass
-        agent.client = None
-        agent._client_kwargs = {}
-        if not agent.quiet_mode:
-            _gr_label = " + Guardrails" if agent._bedrock_guardrail_config else ""
-            print(f"🤖 AI Agent initialized with model: {agent.model} (AWS Bedrock, {agent._bedrock_region}{_gr_label})")
+            client_kwargs = {"api_key": api_key, "base_url": base_url}
+        if _provider_timeout is not None:
+            client_kwargs["timeout"] = _provider_timeout
+        if agent.provider == "copilot-acp":
+            client_kwargs["command"] = agent.acp_command
+            client_kwargs["args"] = agent.acp_args
+        effective_base = base_url
+        if base_url_host_matches(effective_base, "openrouter.ai"):
+            from agent.auxiliary_client import build_or_headers
+            client_kwargs["default_headers"] = build_or_headers()
+        elif base_url_host_matches(effective_base, "integrate.api.nvidia.com"):
+            from agent.auxiliary_client import build_nvidia_nim_headers
+            client_kwargs["default_headers"] = build_nvidia_nim_headers(effective_base)
+        elif base_url_host_matches(effective_base, "api.routermint.com"):
+            client_kwargs["default_headers"] = _ra()._routermint_headers()
+        elif base_url_host_matches(effective_base, "api.kimi.com"):
+            client_kwargs["default_headers"] = {
+                "User-Agent": "claude-code/0.1.0",
+            }
+        elif base_url_host_matches(effective_base, "portal.qwen.ai"):
+            client_kwargs["default_headers"] = _ra()._qwen_portal_headers()
+        elif base_url_host_matches(effective_base, "chatgpt.com"):
+            from agent.auxiliary_client import _codex_cloudflare_headers
+            client_kwargs["default_headers"] = _codex_cloudflare_headers(api_key)
+        elif "default_headers" not in client_kwargs:
+            # Fall back to profile.default_headers for providers that
+            # declare custom headers (e.g. Vercel AI Gateway attribution,
+            # Kimi User-Agent on non-kimi.com endpoints).
+            try:
+                from providers import get_provider_profile as _gpf
+                _ph = _gpf(agent.provider)
+                if _ph and _ph.default_headers:
+                    client_kwargs["default_headers"] = dict(_ph.default_headers)
+            except Exception:
+                pass
     else:
-        if api_key and base_url:
-            # Explicit credentials from CLI/gateway — construct directly.
-            # The runtime provider resolver already handled auth for us.
-            # Extract query params (e.g. Azure api-version) from base_url
-            # and pass via default_query to prevent loss during SDK URL
-            # joining (httpx drops query string when joining paths).
-            _parsed_url = urlparse(base_url)
-            if _parsed_url.query:
-                _clean_url = urlunparse(_parsed_url._replace(query=""))
-                _query_params = {
-                    k: v[0] for k, v in parse_qs(_parsed_url.query).items()
-                }
-                client_kwargs = {
-                    "api_key": api_key,
-                    "base_url": _clean_url,
-                    "default_query": _query_params,
-                }
-            else:
-                client_kwargs = {"api_key": api_key, "base_url": base_url}
+        # No explicit creds — use the centralized provider router
+        from agent.auxiliary_client import resolve_provider_client
+        _routed_client, _ = resolve_provider_client(
+            agent.provider or "auto", model=agent.model, raw_codex=True)
+        if _routed_client is not None:
+            client_kwargs = {
+                "api_key": _routed_client.api_key,
+                "base_url": str(_routed_client.base_url),
+            }
             if _provider_timeout is not None:
                 client_kwargs["timeout"] = _provider_timeout
-            if agent.provider == "copilot-acp":
-                client_kwargs["command"] = agent.acp_command
-                client_kwargs["args"] = agent.acp_args
-            effective_base = base_url
-            if base_url_host_matches(effective_base, "openrouter.ai"):
-                from agent.auxiliary_client import build_or_headers
-                client_kwargs["default_headers"] = build_or_headers()
-            elif base_url_host_matches(effective_base, "integrate.api.nvidia.com"):
-                from agent.auxiliary_client import build_nvidia_nim_headers
-                client_kwargs["default_headers"] = build_nvidia_nim_headers(effective_base)
-            elif base_url_host_matches(effective_base, "api.routermint.com"):
-                client_kwargs["default_headers"] = _ra()._routermint_headers()
-            elif base_url_host_matches(effective_base, "githubcopilot.com"):
-                from pilotage_cli.models import copilot_default_headers
-
-                client_kwargs["default_headers"] = copilot_default_headers()
-            elif base_url_host_matches(effective_base, "api.kimi.com"):
-                client_kwargs["default_headers"] = {
-                    "User-Agent": "claude-code/0.1.0",
-                }
-            elif base_url_host_matches(effective_base, "portal.qwen.ai"):
-                client_kwargs["default_headers"] = _ra()._qwen_portal_headers()
-            elif base_url_host_matches(effective_base, "chatgpt.com"):
-                from agent.auxiliary_client import _codex_cloudflare_headers
-                client_kwargs["default_headers"] = _codex_cloudflare_headers(api_key)
-            elif base_url_host_matches(effective_base, "x.ai"):
-                from tools.xai_http import pilotage_xai_default_headers
-
-                client_kwargs["default_headers"] = pilotage_xai_default_headers()
-            elif "default_headers" not in client_kwargs:
-                # Fall back to profile.default_headers for providers that
-                # declare custom headers (e.g. Vercel AI Gateway attribution,
-                # Kimi User-Agent on non-kimi.com endpoints).
+            # Preserve provider-specific headers the router set.  The
+            # OpenAI SDK stores caller-provided default_headers in
+            # _custom_headers; older/mocked clients may expose
+            # _default_headers instead.
+            _routed_headers = getattr(_routed_client, "_custom_headers", None)
+            if not _routed_headers:
+                _routed_headers = getattr(_routed_client, "default_headers", None)
+            if not _routed_headers:
+                _routed_headers = getattr(_routed_client, "_default_headers", None)
+            if _routed_headers:
+                client_kwargs["default_headers"] = dict(_routed_headers)
+        else:
+            # When the user explicitly chose a non-OpenRouter provider
+            # but no credentials were found, fail fast with a clear
+            # message instead of silently routing through OpenRouter.
+            _explicit = (agent.provider or "").strip().lower()
+            if _explicit and _explicit not in {"auto", "openrouter", "custom"}:
+                # Look up the actual env var name from the provider
+                # config — some providers use non-standard names
+                # (e.g. alibaba → DASHSCOPE_API_KEY, not ALIBABA_API_KEY).
+                _env_hint = f"{_explicit.upper()}_API_KEY"
                 try:
-                    from providers import get_provider_profile as _gpf
-                    _ph = _gpf(agent.provider)
-                    if _ph and _ph.default_headers:
-                        client_kwargs["default_headers"] = dict(_ph.default_headers)
+                    from pilotage_cli.auth import PROVIDER_REGISTRY
+                    _pcfg = PROVIDER_REGISTRY.get(_explicit)
+                    if _pcfg and _pcfg.api_key_env_vars:
+                        _env_hint = _pcfg.api_key_env_vars[0]
                 except Exception:
                     pass
-        else:
-            # No explicit creds — use the centralized provider router
-            from agent.auxiliary_client import resolve_provider_client
-            _routed_client, _ = resolve_provider_client(
-                agent.provider or "auto", model=agent.model, raw_codex=True)
-            if _routed_client is not None:
-                client_kwargs = {
-                    "api_key": _routed_client.api_key,
-                    "base_url": str(_routed_client.base_url),
-                }
-                if _provider_timeout is not None:
-                    client_kwargs["timeout"] = _provider_timeout
-                # Preserve provider-specific headers the router set.  The
-                # OpenAI SDK stores caller-provided default_headers in
-                # _custom_headers; older/mocked clients may expose
-                # _default_headers instead.
-                _routed_headers = getattr(_routed_client, "_custom_headers", None)
-                if not _routed_headers:
-                    _routed_headers = getattr(_routed_client, "default_headers", None)
-                if not _routed_headers:
-                    _routed_headers = getattr(_routed_client, "_default_headers", None)
-                if _routed_headers:
-                    client_kwargs["default_headers"] = dict(_routed_headers)
-            else:
-                # When the user explicitly chose a non-OpenRouter provider
-                # but no credentials were found, fail fast with a clear
-                # message instead of silently routing through OpenRouter.
-                _explicit = (agent.provider or "").strip().lower()
-                if _explicit and _explicit not in {"auto", "openrouter", "custom"}:
-                    # Look up the actual env var name from the provider
-                    # config — some providers use non-standard names
-                    # (e.g. alibaba → DASHSCOPE_API_KEY, not ALIBABA_API_KEY).
-                    _env_hint = f"{_explicit.upper()}_API_KEY"
+                # --- Init-time fallback ---
+                _fb_entries = []
+                if isinstance(fallback_model, list):
+                    _fb_entries = [
+                        f for f in fallback_model
+                        if isinstance(f, dict) and f.get("provider") and f.get("model")
+                    ]
+                elif isinstance(fallback_model, dict) and fallback_model.get("provider") and fallback_model.get("model"):
+                    _fb_entries = [fallback_model]
+                _fb_resolved = False
+                for _fb in _fb_entries:
                     try:
-                        from pilotage_cli.auth import PROVIDER_REGISTRY
-                        _pcfg = PROVIDER_REGISTRY.get(_explicit)
-                        if _pcfg and _pcfg.api_key_env_vars:
-                            _env_hint = _pcfg.api_key_env_vars[0]
-                    except Exception:
-                        pass
-                    # --- Init-time fallback ---
-                    _fb_entries = []
-                    if isinstance(fallback_model, list):
-                        _fb_entries = [
-                            f for f in fallback_model
-                            if isinstance(f, dict) and f.get("provider") and f.get("model")
-                        ]
-                    elif isinstance(fallback_model, dict) and fallback_model.get("provider") and fallback_model.get("model"):
-                        _fb_entries = [fallback_model]
-                    _fb_resolved = False
-                    for _fb in _fb_entries:
-                        try:
-                            from pilotage_cli.fallback_config import resolve_entry_api_key
-                            _fb_explicit_key = resolve_entry_api_key(_fb)
-                            _fb_client, _fb_model = resolve_provider_client(
-                                _fb["provider"], model=_fb["model"], raw_codex=True,
-                                explicit_base_url=_fb.get("base_url"),
-                                explicit_api_key=_fb_explicit_key,
-                            )
-                        except Exception as _fb_exc:
-                            logger.debug(
-                                "Init-time fallback entry %s failed: %s",
-                                _fb.get("provider"), _fb_exc,
-                            )
-                            continue
-                        if _fb_client is not None:
-                            agent.provider = _fb["provider"]
-                            agent.model = _fb_model or _fb["model"]
-                            agent._fallback_activated = True
-                            client_kwargs = {
-                                "api_key": _fb_client.api_key,
-                                "base_url": str(_fb_client.base_url),
-                            }
-                            if _provider_timeout is not None:
-                                client_kwargs["timeout"] = _provider_timeout
-                            _fb_headers = getattr(_fb_client, "_custom_headers", None)
-                            if not _fb_headers:
-                                _fb_headers = getattr(_fb_client, "default_headers", None)
-                            if not _fb_headers:
-                                _fb_headers = getattr(_fb_client, "_default_headers", None)
-                            if _fb_headers:
-                                client_kwargs["default_headers"] = dict(_fb_headers)
-                            _fb_resolved = True
-                            break
-                    if not _fb_resolved:
-                        raise RuntimeError(
-                            f"Provider '{_explicit}' is set in config.yaml but no API key "
-                            f"was found. Set the {_env_hint} environment "
-                            f"variable, or switch to a different provider with `pilotage model`."
+                        from pilotage_cli.fallback_config import resolve_entry_api_key
+                        _fb_explicit_key = resolve_entry_api_key(_fb)
+                        _fb_client, _fb_model = resolve_provider_client(
+                            _fb["provider"], model=_fb["model"], raw_codex=True,
+                            explicit_base_url=_fb.get("base_url"),
+                            explicit_api_key=_fb_explicit_key,
                         )
-                if not getattr(agent, "_fallback_activated", False):
-                    # No provider configured — reject with a clear message.
+                    except Exception as _fb_exc:
+                        logger.debug(
+                            "Init-time fallback entry %s failed: %s",
+                            _fb.get("provider"), _fb_exc,
+                        )
+                        continue
+                    if _fb_client is not None:
+                        agent.provider = _fb["provider"]
+                        agent.model = _fb_model or _fb["model"]
+                        agent._fallback_activated = True
+                        client_kwargs = {
+                            "api_key": _fb_client.api_key,
+                            "base_url": str(_fb_client.base_url),
+                        }
+                        if _provider_timeout is not None:
+                            client_kwargs["timeout"] = _provider_timeout
+                        _fb_headers = getattr(_fb_client, "_custom_headers", None)
+                        if not _fb_headers:
+                            _fb_headers = getattr(_fb_client, "default_headers", None)
+                        if not _fb_headers:
+                            _fb_headers = getattr(_fb_client, "_default_headers", None)
+                        if _fb_headers:
+                            client_kwargs["default_headers"] = dict(_fb_headers)
+                        _fb_resolved = True
+                        break
+                if not _fb_resolved:
                     raise RuntimeError(
-                        "No LLM provider configured. Run `pilotage model` to "
-                        "select a provider, or run `pilotage setup` for first-time "
-                        "configuration."
+                        f"Provider '{_explicit}' is set in config.yaml but no API key "
+                        f"was found. Set the {_env_hint} environment "
+                        f"variable, or switch to a different provider with `pilotage model`."
                     )
-        
-        agent._client_kwargs = client_kwargs  # stored for rebuilding after interrupt
+            if not getattr(agent, "_fallback_activated", False):
+                # No provider configured — reject with a clear message.
+                raise RuntimeError(
+                    "No LLM provider configured. Run `pilotage model` to "
+                    "select a provider, or run `pilotage setup` for first-time "
+                    "configuration."
+                )
+    
+    agent._client_kwargs = client_kwargs  # stored for rebuilding after interrupt
 
-        # Enable fine-grained tool streaming for Claude on OpenRouter.
-        # Without this, Anthropic buffers the entire tool call and goes
-        # silent for minutes while thinking — OpenRouter's upstream proxy
-        # times out during the silence.  The beta header makes Anthropic
-        # stream tool call arguments token-by-token, keeping the
-        # connection alive.
-        _effective_base = str(client_kwargs.get("base_url", "")).lower()
-        if base_url_host_matches(_effective_base, "openrouter.ai") and "claude" in (agent.model or "").lower():
-            headers = client_kwargs.get("default_headers") or {}
-            existing_beta = headers.get("x-anthropic-beta", "")
-            _FINE_GRAINED = "fine-grained-tool-streaming-2025-05-14"
-            if _FINE_GRAINED not in existing_beta:
-                if existing_beta:
-                    headers["x-anthropic-beta"] = f"{existing_beta},{_FINE_GRAINED}"
-                else:
-                    headers["x-anthropic-beta"] = _FINE_GRAINED
-                client_kwargs["default_headers"] = headers
+    # Enable fine-grained tool streaming for Claude on OpenRouter.
+    # Without this, Anthropic buffers the entire tool call and goes
+    # silent for minutes while thinking — OpenRouter's upstream proxy
+    # times out during the silence.  The beta header makes Anthropic
+    # stream tool call arguments token-by-token, keeping the
+    # connection alive.
+    _effective_base = str(client_kwargs.get("base_url", "")).lower()
+    if base_url_host_matches(_effective_base, "openrouter.ai") and "claude" in (agent.model or "").lower():
+        headers = client_kwargs.get("default_headers") or {}
+        existing_beta = headers.get("x-anthropic-beta", "")
+        _FINE_GRAINED = "fine-grained-tool-streaming-2025-05-14"
+        if _FINE_GRAINED not in existing_beta:
+            if existing_beta:
+                headers["x-anthropic-beta"] = f"{existing_beta},{_FINE_GRAINED}"
+            else:
+                headers["x-anthropic-beta"] = _FINE_GRAINED
+            client_kwargs["default_headers"] = headers
 
-        # User-configured request headers (model.default_headers in
-        # config.yaml) override provider/SDK defaults. Lets custom
-        # OpenAI-compatible endpoints behind a gateway/WAF that rejects the
-        # OpenAI SDK's identifying headers swap in a plain User-Agent.
-        # client_kwargs is the same dict object as agent._client_kwargs, so
-        # this mutation is reflected in the client built just below.
-        agent._apply_user_default_headers()
+    # User-configured request headers (model.default_headers in
+    # config.yaml) override provider/SDK defaults. Lets custom
+    # OpenAI-compatible endpoints behind a gateway/WAF that rejects the
+    # OpenAI SDK's identifying headers swap in a plain User-Agent.
+    # client_kwargs is the same dict object as agent._client_kwargs, so
+    # this mutation is reflected in the client built just below.
+    agent._apply_user_default_headers()
 
-        try:
-            from pilotage_cli.config import (
-                apply_custom_provider_extra_headers_to_client_kwargs,
-                apply_custom_provider_tls_to_client_kwargs,
-                get_compatible_custom_providers,
-                load_config,
-            )
+    try:
+        from pilotage_cli.config import (
+            apply_custom_provider_extra_headers_to_client_kwargs,
+            apply_custom_provider_tls_to_client_kwargs,
+            get_compatible_custom_providers,
+            load_config,
+        )
 
-            _cp_config = load_config()
-            _cp_entries = get_compatible_custom_providers(_cp_config)
-            _cp_base_url = str(client_kwargs.get("base_url") or agent.base_url or "")
-            apply_custom_provider_tls_to_client_kwargs(
-                client_kwargs,
-                _cp_base_url,
-                _cp_entries,
-            )
-            # Per-provider extra HTTP headers (providers.<name>.extra_headers /
-            # custom_providers[].extra_headers) — proxies, gateways, custom
-            # auth. Applied last so the most specific config level wins.
-            # SECURITY: values may carry credentials — never log them.
-            apply_custom_provider_extra_headers_to_client_kwargs(
-                client_kwargs,
-                _cp_base_url,
-                _cp_entries,
-            )
-        except Exception:
-            logger.debug("custom-provider TLS resolution skipped", exc_info=True)
+        _cp_config = load_config()
+        _cp_entries = get_compatible_custom_providers(_cp_config)
+        _cp_base_url = str(client_kwargs.get("base_url") or agent.base_url or "")
+        apply_custom_provider_tls_to_client_kwargs(
+            client_kwargs,
+            _cp_base_url,
+            _cp_entries,
+        )
+        # Per-provider extra HTTP headers (providers.<name>.extra_headers /
+        # custom_providers[].extra_headers) — proxies, gateways, custom
+        # auth. Applied last so the most specific config level wins.
+        # SECURITY: values may carry credentials — never log them.
+        apply_custom_provider_extra_headers_to_client_kwargs(
+            client_kwargs,
+            _cp_base_url,
+            _cp_entries,
+        )
+    except Exception:
+        logger.debug("custom-provider TLS resolution skipped", exc_info=True)
 
-        agent.api_key = client_kwargs.get("api_key", "")
-        agent.base_url = client_kwargs.get("base_url", agent.base_url)
-        try:
-            from agent.ssl_guard import verify_ca_bundle_with_fallback
+    agent.api_key = client_kwargs.get("api_key", "")
+    agent.base_url = client_kwargs.get("base_url", agent.base_url)
+    try:
+        from agent.ssl_guard import verify_ca_bundle_with_fallback
 
-            verify_ca_bundle_with_fallback()
-            agent.client = agent._create_openai_client(client_kwargs, reason="agent_init", shared=True)
-            if not agent.quiet_mode:
-                print(f"🤖 AI Agent initialized with model: {agent.model}")
-                if base_url:
-                    print(f"🔗 Using custom base URL: {base_url}")
-                # ``api_key`` may be a callable Entra ID bearer
-                # provider (Azure Foundry). The OpenAI SDK mints a
-                # fresh JWT per request internally — the banner
-                # never invokes or inspects the callable.
-                from agent.azure_identity_adapter import is_token_provider
-
-                key_used = client_kwargs.get("api_key", "none")
-                if is_token_provider(key_used):
-                    print("🔑 Using credentials: Microsoft Entra ID")
-                elif isinstance(key_used, str) and key_used and key_used != "dummy-key" and len(key_used) > 12:
-                    print(f"🔑 Using API key: {key_used[:8]}...{key_used[-4:]}")
-                else:
-                    print("⚠️  Warning: API key appears invalid or missing")
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
+        verify_ca_bundle_with_fallback()
+        agent.client = agent._create_openai_client(client_kwargs, reason="agent_init", shared=True)
+        if not agent.quiet_mode:
+            print(f"🤖 AI Agent initialized with model: {agent.model}")
+            if base_url:
+                print(f"🔗 Using custom base URL: {base_url}")
+            key_used = client_kwargs.get("api_key", "none")
+            if isinstance(key_used, str) and key_used and key_used != "dummy-key" and len(key_used) > 12:
+                print(f"🔑 Using API key: {key_used[:8]}...{key_used[-4:]}")
+            else:
+                print("⚠️  Warning: API key appears invalid or missing")
+    except Exception as e:
+        raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
 
     # Keep a stable identity for the pool entry that supplied this runtime.
     # OAuth refreshes can replace the runtime token before a failed request is
@@ -2293,7 +2091,6 @@ def init_agent(
         _custom_provider_candidate = bool(_configured_provider_norm)
         _runtime_first_provider_ids = {
             "auto",
-            "moa",
             "vertex",
             "google-vertex",
             "vertex-ai",
@@ -2475,18 +2272,7 @@ def init_agent(
     # AFTER the custom_providers branch so per-model overrides aren't lost.
     agent._config_context_length = _config_context_length
 
-    _lmstudio_runtime_context_length = agent._ensure_lmstudio_runtime_loaded(
-        _config_context_length
-    )
-    if agent._lmstudio_load_was_unverified(_lmstudio_runtime_context_length):
-        _ra().logger.warning(
-            "LM Studio model activation was rejected or completed without a "
-            "verifiable active context length; falling back to configured context"
-        )
-    _effective_context_length = agent._effective_lmstudio_context_length(
-        _config_context_length,
-        _lmstudio_runtime_context_length,
-    )
+    _effective_context_length = _config_context_length
 
 
 

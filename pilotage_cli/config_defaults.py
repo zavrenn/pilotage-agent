@@ -304,7 +304,6 @@ DEFAULT_CONFIG = {
 
     "terminal": {
         "backend": "local",
-        "modal_mode": "auto",
         # Remote-backend graceful degradation: when a connection-class
         # infrastructure failure occurs (SSH host unreachable, Docker daemon
         # down), "warn" (default) returns a structured degraded tool result
@@ -939,7 +938,7 @@ DEFAULT_CONFIG = {
         # copilot.tencent.com is always treated as stream-only.
         "stream_only_base_urls": [],
         "vision": {
-            "provider": "auto",    # auto | openrouter | nous | codex | custom
+            "provider": "auto",    # auto | openrouter | codex | custom
             "model": "",           # e.g. "google/gemini-2.5-flash", "gpt-4o"
             "base_url": "",        # direct OpenAI-compatible endpoint (takes precedence over provider)
             "api_key": "",         # API key for base_url (falls back to OPENAI_API_KEY)
@@ -1127,27 +1126,6 @@ DEFAULT_CONFIG = {
             "timeout": 120,
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
-        },
-        "moa_reference": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 900,
-            "extra_body": {},
-            # NOTE: no reasoning_effort here by design — MoA reasoning depth is
-            # configured PER SLOT in the MoA preset (moa.presets.<name>.
-            # reference_models[].reasoning_effort / aggregator.reasoning_effort),
-            # not at the auxiliary-task level.
-        },
-        "moa_aggregator": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 900,
-            "extra_body": {},
-            # NOTE: no reasoning_effort here by design — see moa_reference above.
         },
     },
     
@@ -1410,11 +1388,11 @@ DEFAULT_CONFIG = {
     # Text-to-speech configuration
     # Each provider supports an optional `max_text_length:` override for the
     # per-request input-character cap. Omit it to use the provider's documented
-    # limit (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5k-40k model-aware,
+    # limit (OpenAI 4096, MiniMax 10000, ElevenLabs 5k-40k model-aware,
     # Gemini 32000, Edge 5000, Mistral 4000, NeuTTS/KittenTTS 2000).
     "tts": {
         # Set explicitly to pin a backend:
-        # "edge" (free) | "elevenlabs" (premium) | "openai" | "xai" | "minimax" | "mistral" | "gemini" | "deepinfra" | "neutts" (local) | "kittentts" (local) | "piper" (local)
+        # "edge" (free) | "elevenlabs" (premium) | "openai" | "minimax" | "mistral" | "gemini" | "deepinfra" | "neutts" (local) | "kittentts" (local) | "piper" (local)
         "provider": "edge",
         "edge": {
             "voice": "en-US-AriaNeural",
@@ -1443,15 +1421,6 @@ DEFAULT_CONFIG = {
             # SAMPLE CONTEXT, and either a `{transcript}` placeholder or no
             # transcript section; Pilotage appends the live transcript when absent.
             "persona_prompt_file": "",
-        },
-        "xai": {
-            "voice_id": "eve",  # or custom voice ID — see https://docs.x.ai/developers/model-capabilities/audio/custom-voices
-            "language": "en",  # BCP-47 code ("en", "pt-BR") or "auto"
-            "speed": 1.0,  # 0.7–1.5, playback speed
-            "auto_speech_tags": False,  # insert expressive audio tags via LLM rewrite
-            "optimize_streaming_latency": 0,  # 0–2, trades quality for lower latency
-            "sample_rate": 24000,  # 22050 / 24000 / 44100 / 48000
-            "bit_rate": 128000,  # MP3 bitrate; only applies when codec=mp3
         },
         "mistral": {
             "model": "voxtral-mini-tts-2603",
@@ -1630,7 +1599,7 @@ DEFAULT_CONFIG = {
     # Subagent delegation — override the provider:model used by delegate_task
     # so child agents can run on a different (cheaper/faster) provider and model.
     # Uses the same runtime provider resolution as CLI/gateway startup, so all
-    # configured providers (OpenRouter, Nous, Z.ai, Kimi, etc.) are supported.
+    # configured providers (OpenRouter, Z.ai, Kimi, etc.) are supported.
     "delegation": {
         "model": "",       # e.g. "google/gemini-3-flash-preview" (empty = inherit parent model)
         "provider": "",    # e.g. "openrouter" (empty = inherit parent provider + credentials)
@@ -1729,43 +1698,6 @@ DEFAULT_CONFIG = {
         # Self-paced cadence bounds (seconds).
         "self_paced_floor_seconds": 60,
         "self_paced_ceiling_seconds": 900,
-    },
-
-    # Mixture of Agents — named presets used by /moa. A preset is an execution
-    # mode around the main model, not a provider/model itself: references +
-    # aggregator synthesize private guidance before each main-model iteration.
-    "moa": {
-        "default_preset": "default",
-        "active_preset": "",
-        # When true, every MoA turn that runs the reference fan-out writes the
-        # FULL turn (each reference's exact input messages + output + usage/cost,
-        # and the aggregator's exact input + output) to a JSONL file at
-        # <pilotage_home>/moa-traces/<session_id>.jsonl. Off by default — turn it
-        # on to audit / improve MoA behavior from real runs. Set trace_dir to
-        # override the output directory.
-        "save_traces": False,
-        "trace_dir": "",
-        # Privacy redaction filter for advisor (reference) outputs. Advisors
-        # can echo PII from the conversation (emails, formatted phone numbers)
-        # and credential shapes into reference blocks, traces, and the
-        # aggregator prompt. Modes ('' = off, the default):
-        #   "display" — redact user-visible surfaces only (reference blocks
-        #               shown in the UI + saved MoA trace records); the
-        #               aggregator still sees raw advisor text.
-        #   "full"    — additionally redact the advisor text injected into
-        # the aggregator prompt.
-        "privacy_filter": "",
-        "presets": {
-            "default": {
-                "reference_models": [
-                    {"provider": "openai-codex", "model": "gpt-5.5"},
-                    {"provider": "openrouter", "model": "deepseek/deepseek-v4-pro"},
-                ],
-                "aggregator": {"provider": "openrouter", "model": "anthropic/claude-opus-4.8"},
-                "max_tokens": 4096,
-                "enabled": True,
-            }
-        },
     },
 
     # Skills — external skill directories for sharing skills across tools/agents.
@@ -2283,7 +2215,7 @@ DEFAULT_CONFIG = {
     },
 
     # Remotely-hosted model catalog manifest.  When enabled, the CLI fetches
-    # curated model lists for OpenRouter and Nous Portal from this URL,
+    # curated model lists for OpenRouter from this URL,
     # falling back to the in-repo snapshot on network failure.  Lets us
     # update model picker lists without shipping a pilotage-agent release.
     # The default URL is served by the docs site GitHub Pages deploy.
@@ -2819,26 +2751,6 @@ DEFAULT_CONFIG = {
     },
 
 
-    # X (Twitter) Search via xAI's built-in x_search Responses tool.
-    # The tool registers when xAI credentials are available (SuperGrok
-    # OAuth or XAI_API_KEY) AND the x_search toolset is enabled in
-    # `pilotage tools`. These settings tune the backing Responses API call.
-    "x_search": {
-        # xAI model used for the Responses call. grok-4.5 is the
-        # recommended default; any Grok model with x_search tool
-        # access works.
-        "model": "grok-4.5",
-        # Optional reasoning effort sent to xAI Responses API models that
-        # support it. Leave null to preserve the selected model's default.
-        "reasoning_effort": None,
-        # Request timeout in seconds (minimum 30). x_search can take
-        # 60-120s for complex queries — the default is generous.
-        "timeout_seconds": 180,
-        # Number of automatic retries on 5xx / ReadTimeout / ConnectionError.
-        # Each retry backs off (1.5x attempt seconds, capped at 5s).
-        "retries": 2,
-    },
-
     # =========================================================================
     # External secret sources
     # =========================================================================
@@ -3002,7 +2914,7 @@ DEFAULT_CONFIG = {
         "upstream_deny_cidrs": None,
         # Extra allowed upstream hosts beyond the bundled defaults (which
         # cover OpenRouter, OpenAI, Anthropic, Google, xAI, Mistral, Groq,
-        # Together, DeepSeek, Nous).  Wildcards (`*.foo.com`) are supported.
+        # Together, DeepSeek).  Wildcards (`*.foo.com`) are supported.
         "extra_allowed_hosts": [],
     },
 
@@ -3031,14 +2943,6 @@ DEFAULT_CONFIG = {
 # Optional environment variables that enhance functionality
 OPTIONAL_ENV_VARS = {
     # ── Provider (handled in provider selection, not shown in checklists) ──
-    "NOUS_BASE_URL": {
-        "description": "Nous Portal base URL override",
-        "prompt": "Nous Portal base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
     "OPENROUTER_API_KEY": {
         "description": "OpenRouter API key (for vision, web scraping helpers, and MoA)",
         "prompt": "OpenRouter API key",
@@ -3080,22 +2984,6 @@ OPTIONAL_ENV_VARS = {
                        "application-default login). Set project/region under vertex: in config.yaml.",
         "prompt": "Vertex service account JSON path (leave empty to use ADC / GOOGLE_APPLICATION_CREDENTIALS)",
         "url": "https://cloud.google.com/iam/docs/keys-create-delete",
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "XAI_API_KEY": {
-        "description": "xAI API key",
-        "prompt": "xAI API key",
-        "url": "https://console.x.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "XAI_BASE_URL": {
-        "description": "xAI base URL override",
-        "prompt": "xAI base URL (leave empty for default)",
-        "url": None,
         "password": False,
         "category": "provider",
         "advanced": True,

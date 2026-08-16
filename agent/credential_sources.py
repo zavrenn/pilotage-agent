@@ -5,7 +5,7 @@ Pilotage seeds its credential pool from many places:
     env:<VAR>     — os.environ / ~/.pilotage/.env
     claude_code   — ~/.claude/.credentials.json
     pilotage_pkce   — ~/.pilotage/.anthropic_oauth.json
-    device_code   — auth.json providers.<provider> (nous, openai-codex, ...)
+    device_code   — auth.json providers.<provider> (openai-codex, ...)
     qwen-cli      — ~/.qwen/oauth_creds.json
     gh_cli        — gh auth token
     config:<name> — custom_providers config entry
@@ -21,7 +21,7 @@ unify here is **removal**:
 Before this module, every source had an ad-hoc removal branch in
 ``auth_remove_command``, and several sources had no branch at all — so
 ``auth remove`` silently reverted on the next ``load_pool()`` call for
-qwen-cli, nous device_code (partial), pilotage_pkce, copilot gh_cli, and
+qwen-cli, pilotage_pkce, copilot gh_cli, and
 custom-config sources.
 
 Now every source registers a ``RemovalStep`` that does exactly three things
@@ -80,7 +80,7 @@ class RemovalStep:
     """How to remove one specific credential source cleanly.
 
     Attributes:
-        provider: Provider pool key (``"xai"``, ``"anthropic"``, ``"nous"``, ...).
+        provider: Provider pool key (``"xai"``, ``"anthropic"``, ...).
             Special value ``"*"`` means "matches any provider" — used for
             sources like ``manual`` that aren't provider-specific.
         source_id: Source identifier as it appears in
@@ -245,52 +245,6 @@ def _clear_auth_store_provider(provider: str) -> bool:
     return False
 
 
-def _remove_nous_device_code(provider: str, removed) -> RemovalResult:
-    """Nous OAuth lives in auth.json providers.nous — clear it and suppress.
-
-    We suppress in addition to clearing because nothing else stops a future
-    `pilotage auth add nous` (or any other path that writes providers.nous)
-    from re-seeding before the user has decided to.  Suppression forces
-    them to go through `pilotage auth add nous` to re-engage, which is the
-    documented re-add path and clears the suppression atomically.
-    """
-    result = RemovalResult()
-    if _clear_auth_store_provider(provider):
-        result.cleaned.append(f"Cleared {provider} OAuth tokens from auth store")
-    return result
-
-
-def _remove_minimax_oauth(provider: str, removed) -> RemovalResult:
-    """MiniMax OAuth lives in auth.json providers.minimax-oauth — clear it.
-
-    Same pattern as Nous: single-source OAuth state with refresh tokens.
-    Suppression of the `oauth` source ensures the pool reseed path
-    (_seed_from_singletons) doesn't instantly undo the removal.
-    """
-    result = RemovalResult()
-    if _clear_auth_store_provider(provider):
-        result.cleaned.append(f"Cleared {provider} OAuth tokens from auth store")
-    return result
-
-
-def _remove_xai_oauth_device_code(provider: str, removed) -> RemovalResult:
-    """xAI OAuth tokens live in auth.json providers.xai-oauth — clear them.
-
-    Without this step, ``pilotage auth remove xai-oauth <N>`` silently undoes
-    itself: the central dispatcher only removes the in-memory pool entry,
-    leaves ``providers.xai-oauth`` in auth.json intact, and on the next
-    ``load_pool("xai-oauth")`` call ``_seed_from_singletons`` re-seeds the
-    entry from the still-present singleton — credentials reappear with no
-    user feedback. Clearing the singleton in step with the suppression set
-    by the central dispatcher makes the removal stick.
-    """
-    result = RemovalResult()
-    if _clear_auth_store_provider(provider):
-        result.cleaned.append(f"Cleared {provider} OAuth tokens from auth store")
-    result.hints.append(
-        "Run `pilotage model` → xAI Grok OAuth (SuperGrok / Premium+) to re-authenticate if needed."
-    )
-    return result
 
 
 def _remove_codex_device_code(provider: str, removed) -> RemovalResult:
@@ -327,17 +281,6 @@ def _remove_codex_device_code(provider: str, removed) -> RemovalResult:
     return result
 
 
-def _remove_qwen_cli(provider: str, removed) -> RemovalResult:
-    """~/.qwen/oauth_creds.json is owned by the Qwen CLI.
-
-    Same pattern as claude_code — suppress, don't delete.  The user's
-    Qwen CLI install still reads from that file.
-    """
-    return RemovalResult(hints=[
-        "Suppressed qwen-cli credential — it will not be re-seeded.",
-        "Note: Qwen CLI credentials still live in ~/.qwen/oauth_creds.json",
-        "Run `pilotage auth add qwen-oauth` to re-enable if needed.",
-    ])
 
 
 def _remove_copilot_gh(provider: str, removed) -> RemovalResult:
@@ -402,7 +345,7 @@ def _register_all_sources() -> None:
         provider="*", source_id="env:",
         match_fn=lambda src: src.startswith("env:"),
         remove_fn=_remove_env_source,
-        description="Any env-seeded credential (XAI_API_KEY, DEEPSEEK_API_KEY, etc.)",
+        description="Any env-seeded credential (DEEPSEEK_API_KEY, etc.)",
     ))
     register(RemovalStep(
         provider="anthropic", source_id="claude_code",
@@ -415,30 +358,10 @@ def _register_all_sources() -> None:
         description="~/.pilotage/.anthropic_oauth.json",
     ))
     register(RemovalStep(
-        provider="nous", source_id="device_code",
-        remove_fn=_remove_nous_device_code,
-        description="auth.json providers.nous",
-    ))
-    register(RemovalStep(
         provider="openai-codex", source_id="device_code",
         match_fn=lambda src: src == "device_code" or src.endswith(":device_code"),
         remove_fn=_remove_codex_device_code,
         description="auth.json providers.openai-codex + ~/.codex/auth.json",
-    ))
-    register(RemovalStep(
-        provider="xai-oauth", source_id="device_code",
-        remove_fn=_remove_xai_oauth_device_code,
-        description="auth.json providers.xai-oauth",
-    ))
-    register(RemovalStep(
-        provider="qwen-oauth", source_id="qwen-cli",
-        remove_fn=_remove_qwen_cli,
-        description="~/.qwen/oauth_creds.json",
-    ))
-    register(RemovalStep(
-        provider="minimax-oauth", source_id="oauth",
-        remove_fn=_remove_minimax_oauth,
-        description="auth.json providers.minimax-oauth",
     ))
     register(RemovalStep(
         provider="*", source_id="config:",

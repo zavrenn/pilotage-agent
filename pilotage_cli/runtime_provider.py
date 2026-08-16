@@ -23,19 +23,11 @@ from pilotage_cli.auth import (
     ACTUAL_LOCAL_NOAUTH_PLACEHOLDER,
     AuthError,
     DEFAULT_CODEX_BASE_URL,
-    DEFAULT_QWEN_BASE_URL,
-    DEFAULT_XAI_OAUTH_BASE_URL,
     PROVIDER_REGISTRY,
-    _agent_key_is_usable,
-    _nous_inference_env_override,
     format_auth_error,
     resolve_provider,
-    resolve_nous_runtime_credentials,
     resolve_codex_runtime_credentials,
-    resolve_xai_oauth_runtime_credentials,
-    resolve_qwen_runtime_credentials,
     resolve_api_key_provider_credentials,
-    resolve_external_process_provider_credentials,
     has_usable_secret,
     is_actual_local_base_url,
     normalize_actual_base_url,
@@ -126,8 +118,6 @@ def _detect_api_mode_for_url(base_url: str) -> Optional[str]:
     """
     normalized = (base_url or "").strip().lower().rstrip("/")
     hostname = base_url_hostname(base_url)
-    if hostname == "api.x.ai":
-        return "codex_responses"
     # Official OpenAI host family: canonical api.openai.com plus the
     # data-residency regional hosts (us./eu.api.openai.com). Same API
     # surface, same Responses-API mandate. Shared predicate — see
@@ -363,35 +353,6 @@ def _provider_supports_explicit_api_mode(provider: Optional[str], configured_pro
     return normalized_configured == normalized_provider
 
 
-def _copilot_runtime_api_mode(
-    model_cfg: Dict[str, Any],
-    api_key: str,
-    *,
-    target_model: Optional[str] = None,
-) -> str:
-    configured_provider = str(model_cfg.get("provider") or "").strip().lower()
-    configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
-    if configured_mode and _provider_supports_explicit_api_mode("copilot", configured_provider):
-        return configured_mode
-
-    # Use the model being resolved for this runtime, not the persisted global
-    # default. MoA slots, fallback models, and mid-session model switches all
-    # resolve credentials for a target model that can differ from config.yaml's
-    # model.default. If we derive Copilot api_mode from the stale default, a
-    # Claude/Gemini MoA slot can inherit codex_responses from a GPT-5 default and
-    # fail with "model ... does not support Responses API".
-    model_name = str(target_model or model_cfg.get("default") or "").strip()
-    if not model_name:
-        return "chat_completions"
-
-    try:
-        from pilotage_cli.models import copilot_model_api_mode
-
-        return copilot_model_api_mode(model_name, api_key=api_key)
-    except Exception:
-        return "chat_completions"
-
-
 _VALID_API_MODES = {
     "chat_completions",
     "codex_responses",
@@ -421,17 +382,6 @@ def _parse_api_mode(raw: Any) -> Optional[str]:
         if normalized in _VALID_API_MODES:
             return normalized
     return None
-
-
-def _nous_inference_base_url_override() -> str:
-    """Return the trusted Nous runtime base URL override, if configured.
-
-    Delegates to ``auth._nous_inference_env_override`` so every
-    ``NOUS_INFERENCE_BASE_URL`` read shares one normalization path
-    (trailing-slash stripping, blank → empty). The env source is trusted
-    and intentionally bypasses the network host allowlist there.
-    """
-    return _nous_inference_env_override() or ""
 
 
 def _maybe_apply_codex_app_server_runtime(
@@ -483,20 +433,6 @@ def _resolve_runtime_from_pool_entry(
     if provider == "openai-codex":
         api_mode = "codex_responses"
         base_url = base_url or DEFAULT_CODEX_BASE_URL
-    elif provider == "xai-oauth":
-        api_mode = "codex_responses"
-        base_url = base_url or DEFAULT_XAI_OAUTH_BASE_URL
-    elif provider == "qwen-oauth":
-        api_mode = "chat_completions"
-        base_url = base_url or DEFAULT_QWEN_BASE_URL
-    elif provider == "minimax-oauth":
-        # MiniMax OAuth tokens are valid only against the Anthropic Messages
-        # compatible endpoint. Do not honor stale model.api_mode values from a
-        # prior OpenAI-compatible provider, or the client will hit
-        # /chat/completions under /anthropic and receive a bare nginx 404.
-        api_mode = "anthropic_messages"
-        pconfig = PROVIDER_REGISTRY.get(provider)
-        base_url = base_url or (pconfig.inference_base_url if pconfig else "")
     elif provider == "anthropic":
         api_mode = "anthropic_messages"
         cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
@@ -508,46 +444,6 @@ def _resolve_runtime_from_pool_entry(
         base_url = cfg_base_url or base_url or "https://api.anthropic.com"
     elif provider == "openrouter":
         base_url = base_url or OPENROUTER_BASE_URL
-    elif provider == "xai":
-        api_mode = "codex_responses"
-    elif provider == "nous":
-        from pilotage_cli.providers import nous_api_mode
-
-        api_mode = nous_api_mode(effective_model)
-        base_url = _nous_inference_base_url_override() or base_url
-    elif provider == "copilot":
-        api_mode = _copilot_runtime_api_mode(
-            model_cfg,
-            getattr(entry, "runtime_api_key", ""),
-            target_model=effective_model,
-        )
-        base_url = base_url or PROVIDER_REGISTRY["copilot"].inference_base_url
-    elif provider == "azure-foundry":
-        # Azure Foundry: read api_mode and base_url from config
-        cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
-        if cfg_provider == "azure-foundry":
-            cfg_base_url = str(model_cfg.get("base_url") or "").strip().rstrip("/")
-            if cfg_base_url:
-                base_url = cfg_base_url
-            configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
-            if configured_mode:
-                api_mode = configured_mode
-        # Model-family inference for GPT-5.x / codex / o1-o4: Azure rejects
-        # /chat/completions on these with 400 "operation unsupported" — see
-        # azure_foundry_model_api_mode() for rationale.  Skip when the user
-        # explicitly picked anthropic_messages (Anthropic-style endpoint).
-        if effective_model and api_mode != "anthropic_messages":
-            try:
-                from pilotage_cli.models import azure_foundry_model_api_mode
-
-                inferred = azure_foundry_model_api_mode(effective_model)
-            except Exception:
-                inferred = None
-            if inferred:
-                api_mode = inferred
-        # For Anthropic-style endpoints, strip /v1 suffix
-        if api_mode == "anthropic_messages":
-            base_url = re.sub(r"/v1/?$", "", base_url)
     else:
         configured_provider = str(model_cfg.get("provider") or "").strip().lower()
         # Honour model.base_url from config.yaml when the configured provider
@@ -561,40 +457,19 @@ def _resolve_runtime_from_pool_entry(
             if cfg_base_url:
                 base_url = cfg_base_url
         configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
-        if provider in {"opencode-zen", "opencode-go"}:
-            # Re-derive api_mode from the effective model rather than the
-            # persisted api_mode: the opencode providers serve both
-            # anthropic_messages and chat_completions models, so the previous
-            # session's mode must not leak across /model switches.
-            # Refs.
-            from pilotage_cli.models import opencode_model_api_mode
-            api_mode = opencode_model_api_mode(provider, effective_model)
-        elif configured_mode and _provider_supports_explicit_api_mode(provider, configured_provider):
+        if configured_mode and _provider_supports_explicit_api_mode(provider, configured_provider):
             api_mode = configured_mode
         else:
             # URL detection first (Anthropic /anthropic suffix, Kimi /coding,
-            # official OpenAI hosts → codex_responses, api.x.ai →
-            # codex_responses), then the provider's own declared transport.
+            # official OpenAI hosts → codex_responses), then the provider's
+            # own declared transport.
             api_mode = _fallback_api_mode(provider, base_url, effective_model)
-
-    # OpenCode base URLs end with /v1 for OpenAI-compatible models, but the
-    # Anthropic SDK prepends its own /v1/messages to the base_url.  Normalize
-    # symmetrically: strip /v1 for anthropic_messages, re-append it for
-    # chat_completions / codex_responses (heals a stripped URL persisted to
-    # model.base_url by an earlier switch into an anthropic-routed model).
-    if provider in {"opencode-zen", "opencode-go"}:
-        from pilotage_cli.models import normalize_opencode_base_url
-
-        base_url = normalize_opencode_base_url(provider, api_mode, base_url)
 
     # Optional opt-in: route OpenAI/Codex turns through `codex app-server`.
     # Inert when `model.openai_runtime` is unset or "auto".
     api_mode = _maybe_apply_codex_app_server_runtime(
         provider=provider, api_mode=api_mode, model_cfg=model_cfg
     )
-
-    if provider == "lmstudio":
-        base_url = auth_mod._normalize_lmstudio_runtime_base_url(base_url)
 
     return {
         "provider": provider,
@@ -1380,21 +1255,7 @@ def _resolve_azure_foundry_runtime(
         if isinstance(_entra, dict):
             cfg_entra = _entra
 
-    # Model-family inference: Azure Foundry deploys GPT-5.x / codex / o1-o4
-    # reasoning models as Responses-API-only.  Calling /chat/completions
-    # against them returns 400 "The requested operation is unsupported."
-    # Upgrade api_mode when the model name matches, unless the user has
-    # explicitly chosen anthropic_messages (Anthropic-style endpoint).
     effective_model = str(target_model or model_cfg.get("default") or "").strip()
-    if effective_model and cfg_api_mode != "anthropic_messages":
-        try:
-            from pilotage_cli.models import azure_foundry_model_api_mode
-
-            inferred = azure_foundry_model_api_mode(effective_model)
-        except Exception:
-            inferred = None
-        if inferred:
-            cfg_api_mode = inferred
 
     env_base_url = _getenv("AZURE_FOUNDRY_BASE_URL", "").strip().rstrip("/")
     base_url = explicit_base_url_clean or cfg_base_url or env_base_url
@@ -1408,73 +1269,6 @@ def _resolve_azure_foundry_runtime(
     # we inherited from the configured base_url to avoid double-/v1 paths.
     if cfg_api_mode == "anthropic_messages":
         base_url = re.sub(r"/v1/?$", "", base_url)
-
-    # ── Entra ID (Microsoft Foundry recommended path) ──────────────────
-    #
-    # OpenAI-style endpoints use the OpenAI SDK's native callable
-    # ``api_key=`` contract — the SDK mints a fresh JWT per request
-    # automatically.
-    #
-    # Anthropic-style endpoints (Claude on Foundry) take the callable
-    # too: :func:`agent.anthropic_adapter.build_anthropic_client`
-    # detects the callable and constructs an ``httpx.Client`` with a
-    # request event hook that injects a fresh ``Authorization: Bearer``
-    # header per request (the Anthropic SDK does not accept callables
-    # natively). From the runtime resolver's perspective both modes
-    # are identical — return the callable api_key and let the
-    # downstream SDK wrapper handle the contract difference.
-    if cfg_auth_mode == "entra_id":
-        if explicit_api_key:
-            # User passed --api-key on the CLI while config says entra_id —
-            # honour the explicit string (escape hatch for one-off testing).
-            api_key: Any = explicit_api_key
-            source = "explicit"
-            auth_mode = "api_key"
-        else:
-            try:
-                from agent.azure_identity_adapter import (
-                    EntraIdentityConfig,
-                    SCOPE_AI_AZURE_DEFAULT,
-                    build_token_provider,
-                )
-            except Exception as exc:
-                raise AuthError(
-                    "Azure Foundry Entra ID auth requires the 'azure-identity' "
-                    "package. Install it with: pip install azure-identity "
-                    f"(import failed: {exc})"
-                ) from exc
-
-            scope = (
-                str(cfg_entra.get("scope") or "").strip()
-                or SCOPE_AI_AZURE_DEFAULT
-            )
-            try:
-                entra_config = EntraIdentityConfig(
-                    scope=scope,
-                )
-                token_provider = build_token_provider(config=entra_config)
-            except ImportError as exc:
-                raise AuthError(str(exc)) from exc
-            api_key = token_provider
-            source = "entra_id"
-            auth_mode = "entra_id"
-
-        clean_entra = {}
-        if auth_mode == "entra_id":
-            configured_scope = str(cfg_entra.get("scope") or "").strip()
-            if configured_scope:
-                clean_entra["scope"] = configured_scope
-
-        return {
-            "provider": "azure-foundry",
-            "api_mode": cfg_api_mode,
-            "base_url": base_url,
-            "api_key": api_key,
-            "auth_mode": auth_mode,
-            "entra": clean_entra,
-            "source": source,
-            "requested_provider": requested_provider,
-        }
 
     # ── Static API key (legacy / default) ──────────────────────────────
     api_key = explicit_api_key
@@ -1521,33 +1315,6 @@ def _resolve_explicit_runtime(
     if not explicit_api_key and not explicit_base_url:
         return None
 
-    if provider == "anthropic":
-        cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
-        cfg_base_url = ""
-        if cfg_provider == "anthropic":
-            cfg_base_url = str(model_cfg.get("base_url") or "").strip().rstrip("/")
-            if not _anthropic_base_url_override_ok(cfg_base_url):
-                cfg_base_url = ""
-        base_url = explicit_base_url or cfg_base_url or "https://api.anthropic.com"
-        api_key = explicit_api_key
-        if not api_key:
-            from agent.anthropic_adapter import resolve_anthropic_token
-
-            api_key = resolve_anthropic_token()
-            if not api_key:
-                raise AuthError(
-                    "No Anthropic credentials found. Set ANTHROPIC_TOKEN or ANTHROPIC_API_KEY, "
-                    "run 'claude setup-token', or authenticate with 'claude /login'."
-                )
-        return {
-            "provider": "anthropic",
-            "api_mode": "anthropic_messages",
-            "base_url": base_url,
-            "api_key": api_key,
-            "source": "explicit",
-            "requested_provider": requested_provider,
-        }
-
     if provider == "openai-codex":
         base_url = explicit_base_url or DEFAULT_CODEX_BASE_URL
         api_key = explicit_api_key
@@ -1565,45 +1332,6 @@ def _resolve_explicit_runtime(
             "api_key": api_key,
             "source": "explicit",
             "last_refresh": last_refresh,
-            "requested_provider": requested_provider,
-        }
-
-    if provider == "nous":
-        from pilotage_cli.providers import nous_api_mode
-
-        state = auth_mod.get_provider_auth_state("nous") or {}
-        base_url = (
-            explicit_base_url
-            or _nous_inference_base_url_override()
-            or str(state.get("inference_base_url") or auth_mod.DEFAULT_NOUS_INFERENCE_URL).strip().rstrip("/")
-        )
-        # Only use the agent_key compatibility field for inference when it
-        # contains a NAS invoke JWT; raw OAuth access_token fallback is handled
-        # by resolve_nous_runtime_credentials().
-        api_key = explicit_api_key or (
-            str(state.get("agent_key") or "").strip()
-            if _agent_key_is_usable(
-                state,
-                max(60, env_int("PILOTAGE_NOUS_MIN_KEY_TTL_SECONDS", 1800)),
-            )
-            else ""
-        )
-        expires_at = state.get("agent_key_expires_at") or state.get("expires_at")
-        if not api_key:
-            creds = resolve_nous_runtime_credentials(
-                timeout_seconds=float(_getenv("PILOTAGE_NOUS_TIMEOUT_SECONDS", "15")),
-            )
-            api_key = creds.get("api_key", "")
-            expires_at = creds.get("expires_at")
-            if not explicit_base_url:
-                base_url = creds.get("base_url", "").rstrip("/") or base_url
-        return {
-            "provider": "nous",
-            "api_mode": nous_api_mode(target_model or model_cfg.get("default") or ""),
-            "base_url": base_url,
-            "api_key": api_key,
-            "source": "explicit",
-            "expires_at": expires_at,
             "requested_provider": requested_provider,
         }
 
@@ -1643,15 +1371,7 @@ def _resolve_explicit_runtime(
                     base_url = normalize_actual_base_url(base_url)
 
         api_mode = "chat_completions"
-        if provider == "copilot":
-            api_mode = _copilot_runtime_api_mode(
-                model_cfg,
-                api_key,
-                target_model=target_model,
-            )
-        elif provider == "xai":
-            api_mode = "codex_responses"
-        elif provider == "actual":
+        if provider == "actual":
             api_mode = "codex_responses"
         else:
             configured_provider = str(model_cfg.get("provider") or "").strip().lower()
@@ -1720,16 +1440,6 @@ def resolve_runtime_provider(
                 f"(providers.{requested_provider}.enabled: false)"
             )
 
-    if requested_provider == "moa":
-        return {
-            "provider": "moa",
-            "api_mode": "chat_completions",
-            "base_url": "moa://local",
-            "api_key": "moa-virtual-provider",
-            "source": "moa-virtual-provider",
-            "requested_provider": requested_provider,
-        }
-
     # Azure Anthropic short-circuit: when explicitly targeting an Azure endpoint
     # with provider="anthropic", bypass _resolve_named_custom_runtime (which would
     # return provider="custom" with chat_completions api_mode and no valid key).
@@ -1764,39 +1474,6 @@ def resolve_runtime_provider(
             target_model=target_model,
         )
         return azure_runtime
-
-    # Vertex AI: OAuth2-token provider (Gemini via the OpenAI-compatible
-    # endpoint). Resolve BEFORE the custom-runtime / credential-pool / generic
-    # paths. The credential *path* (GOOGLE_APPLICATION_CREDENTIALS /
-    # VERTEX_CREDENTIALS_PATH) must never reach the credential pool or the
-    # generic api_key resolver — those would treat the file path as a static
-    # API key. Instead we mint a short-lived OAuth2 access token here and hand
-    # it to the standard OpenAI client as api_key, with base_url computed from
-    # the project ID + region. The token is re-minted per call (5-min refresh
-    # margin) by get_vertex_config(); mid-session expiry is additionally
-    # recovered on 401 by run_agent._try_refresh_vertex_client_credentials().
-    if requested_provider in ("vertex", "google-vertex", "vertex-ai", "gcp-vertex", "vertexai"):
-        from agent.vertex_adapter import get_vertex_config
-
-        token, base_url = get_vertex_config()
-        if not token or not base_url:
-            raise AuthError(
-                "Vertex AI credentials could not be resolved. Vertex uses "
-                "OAuth2 (not a static API key): provide a service-account JSON "
-                "via GOOGLE_APPLICATION_CREDENTIALS (or VERTEX_CREDENTIALS_PATH) "
-                "in ~/.pilotage/.env, or run 'gcloud auth application-default "
-                "login' for ADC. Set the GCP project/region under vertex: in "
-                "config.yaml if they aren't embedded in the credentials. "
-                "Run `pilotage setup` to install Vertex support."
-            )
-        return {
-            "provider": "vertex",
-            "api_mode": "chat_completions",
-            "base_url": base_url.rstrip("/"),
-            "api_key": token,
-            "source": "vertex-oauth",
-            "requested_provider": requested_provider,
-        }
 
     custom_runtime = _resolve_named_custom_runtime(
         requested_provider=requested_provider,
@@ -1893,40 +1570,6 @@ def resolve_runtime_provider(
                 getattr(entry, "runtime_api_key", None)
                 or getattr(entry, "access_token", "")
             )
-        # For Nous, the pool entry's runtime_api_key is the agent_key
-        # compatibility field. It must be an invoke JWT. The pool doesn't
-        # refresh it during selection (that would trigger network calls in
-        # non-runtime contexts like `pilotage auth list`). If the key is
-        # expired/missing, refresh the selected pool entry before falling back
-        # to singleton auth resolution.
-        if provider == "nous" and entry is not None:
-            min_ttl = max(60, env_int("PILOTAGE_NOUS_MIN_KEY_TTL_SECONDS", 1800))
-            nous_state = {
-                "agent_key": getattr(entry, "agent_key", None),
-                "agent_key_expires_at": getattr(entry, "agent_key_expires_at", None),
-                "scope": getattr(entry, "scope", None),
-            }
-            if not _agent_key_is_usable(nous_state, min_ttl):
-                logger.debug("Nous pool entry agent_key expired/missing, refreshing selected pool entry")
-                try:
-                    refreshed = pool.try_refresh_current()
-                except Exception as exc:
-                    logger.debug("Nous pool entry refresh failed: %s", exc)
-                    refreshed = None
-                if refreshed is not None:
-                    entry = refreshed
-                    pool_api_key = (
-                        getattr(entry, "runtime_api_key", None)
-                        or getattr(entry, "access_token", "")
-                    )
-                    nous_state = {
-                        "agent_key": getattr(entry, "agent_key", None),
-                        "agent_key_expires_at": getattr(entry, "agent_key_expires_at", None),
-                        "scope": getattr(entry, "scope", None),
-                    }
-                if not pool_api_key or not _agent_key_is_usable(nous_state, min_ttl):
-                    logger.debug("Nous pool entry agent_key still unavailable, falling through to runtime resolution")
-                    pool_api_key = ""
         if (
             entry is not None
             and pool_api_key
@@ -1949,30 +1592,6 @@ def resolve_runtime_provider(
                 target_model=target_model,
             )
 
-    if provider == "nous":
-        try:
-            from pilotage_cli.providers import nous_api_mode
-
-            creds = resolve_nous_runtime_credentials(
-                timeout_seconds=float(_getenv("PILOTAGE_NOUS_TIMEOUT_SECONDS", "15")),
-            )
-            return {
-                "provider": "nous",
-                "api_mode": nous_api_mode(target_model or model_cfg.get("default") or ""),
-                "base_url": creds.get("base_url", "").rstrip("/"),
-                "api_key": creds.get("api_key", ""),
-                "source": creds.get("source", "portal"),
-                "expires_at": creds.get("expires_at"),
-                "requested_provider": requested_provider,
-            }
-        except AuthError:
-            if requested_provider != "auto":
-                raise
-            # Auto-detected Nous but credentials are stale/revoked —
-            # fall through to env-var providers (e.g. OpenRouter).
-            logger.info("Auto-detected Nous provider but credentials failed; "
-                        "falling through to next provider.")
-
     if provider == "openai-codex":
         try:
             creds = resolve_codex_runtime_credentials()
@@ -1993,215 +1612,8 @@ def resolve_runtime_provider(
             logger.info("Auto-detected Codex provider but credentials failed; "
                         "falling through to next provider.")
 
-    if provider == "xai-oauth":
-        try:
-            creds = resolve_xai_oauth_runtime_credentials()
-            return {
-                "provider": "xai-oauth",
-                "api_mode": "codex_responses",
-                "base_url": (creds.get("base_url") or "").rstrip("/") or DEFAULT_XAI_OAUTH_BASE_URL,
-                "api_key": creds.get("api_key", ""),
-                "source": creds.get("source", "pilotage-auth-store"),
-                "last_refresh": creds.get("last_refresh"),
-                "requested_provider": requested_provider,
-            }
-        except AuthError:
-            if requested_provider != "auto":
-                raise
-            logger.info("Auto-detected xAI OAuth provider but credentials failed; "
-                        "falling through to next provider.")
-
-    if provider == "qwen-oauth":
-        try:
-            creds = resolve_qwen_runtime_credentials()
-            return {
-                "provider": "qwen-oauth",
-                "api_mode": "chat_completions",
-                "base_url": creds.get("base_url", "").rstrip("/"),
-                "api_key": creds.get("api_key", ""),
-                "source": creds.get("source", "qwen-cli"),
-                "expires_at_ms": creds.get("expires_at_ms"),
-                "requested_provider": requested_provider,
-            }
-        except AuthError:
-            if requested_provider != "auto":
-                raise
-            logger.info("Qwen OAuth credentials failed; "
-                        "falling through to next provider.")
-
-    if provider == "minimax-oauth":
-        pconfig = PROVIDER_REGISTRY.get(provider)
-        if pconfig and pconfig.auth_type == "oauth_minimax":
-            from pilotage_cli.auth import resolve_minimax_oauth_runtime_credentials
-            creds = resolve_minimax_oauth_runtime_credentials()
-            return {
-                "provider": provider,
-                "api_mode": "anthropic_messages",
-                "base_url": creds["base_url"],
-                "api_key": creds["api_key"],
-                "source": creds.get("source", "oauth"),
-                "requested_provider": requested_provider,
-            }
-
-    if provider == "copilot-acp":
-        creds = resolve_external_process_provider_credentials(provider)
-        return {
-            "provider": "copilot-acp",
-            "api_mode": "chat_completions",
-            "base_url": creds.get("base_url", "").rstrip("/"),
-            "api_key": creds.get("api_key", ""),
-            "command": creds.get("command", ""),
-            "args": list(creds.get("args") or []),
-            "source": creds.get("source", "process"),
-            "requested_provider": requested_provider,
-        }
 
     # Anthropic (native Messages API)
-    if provider == "anthropic":
-        # Allow base URL override from config.yaml model.base_url, but only
-        # when the configured provider is anthropic — otherwise a non-Anthropic
-        # base_url (e.g. Codex endpoint) would leak into Anthropic requests.
-        cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
-        cfg_base_url = ""
-        if cfg_provider == "anthropic":
-            cfg_base_url = (model_cfg.get("base_url") or "").strip().rstrip("/")
-            if not _anthropic_base_url_override_ok(cfg_base_url):
-                cfg_base_url = ""
-        base_url = cfg_base_url or "https://api.anthropic.com"
-
-        # For Microsoft Foundry endpoints, use ANTHROPIC_API_KEY directly —
-        # Claude Code OAuth tokens (sk-ant-oat01) are not accepted by Azure.
-        # Azure keys don't start with "sk-ant-" so resolve_anthropic_token()
-        # would find the Claude Code OAuth token first (priority 3) and return
-        # that instead, causing 401s. Detect Azure endpoints and use the env
-        # key directly to bypass the OAuth priority chain.
-        _is_azure_endpoint = base_url_host_matches(base_url, "azure.com") or (
-            cfg_base_url and base_url_host_matches(cfg_base_url, "azure.com")
-        )
-        if _is_azure_endpoint:
-            # Honor user-specified env var hints on the model config before
-            # falling back to the built-in AZURE_ANTHROPIC_KEY / ANTHROPIC_API_KEY
-            # chain.  Accept both `key_env` (Pilotage canonical — matches the
-            # custom_providers field name) and `api_key_env` (documented in the
-            # Azure Foundry guide and read by most Pilotage-compatible importers).
-            # Matches the config.yaml examples in website/docs/guides/azure-foundry.md.
-            token = ""
-            for hint_key in ("key_env", "api_key_env"):
-                env_var = str(model_cfg.get(hint_key) or "").strip()
-                if env_var:
-                    token = _getenv(env_var, "").strip()
-                    if token:
-                        break
-            # Next: an inline api_key on the model config (useful in multi-profile
-            # setups that want to avoid env-var juggling).
-            if not token:
-                token = str(model_cfg.get("api_key") or "").strip()
-            # Finally fall back to the historical fixed names.
-            if not token:
-                token = (
-                    _getenv("AZURE_ANTHROPIC_KEY", "").strip()
-                    or _getenv("ANTHROPIC_API_KEY", "").strip()
-                )
-            if not token:
-                raise AuthError(
-                    "No Azure Anthropic API key found. Set AZURE_ANTHROPIC_KEY or "
-                    "ANTHROPIC_API_KEY, or point key_env/api_key_env in your "
-                    "config.yaml model section at a custom env var."
-                )
-        else:
-            from agent.anthropic_adapter import resolve_anthropic_token
-            token = resolve_anthropic_token()
-            if not token:
-                raise AuthError(
-                    "No Anthropic credentials found. Set ANTHROPIC_TOKEN or ANTHROPIC_API_KEY, "
-                    "run 'claude setup-token', or authenticate with 'claude /login'."
-                )
-        return {
-            "provider": "anthropic",
-            "api_mode": "anthropic_messages",
-            "base_url": base_url,
-            "api_key": token,
-            "source": "env",
-            "requested_provider": requested_provider,
-        }
-
-    # AWS Bedrock (native Converse API via boto3)
-    if provider == "bedrock":
-        from agent.bedrock_adapter import (
-            has_aws_credentials,
-            resolve_aws_auth_env_var,
-            resolve_bedrock_region,
-            is_anthropic_bedrock_model,
-        )
-        # When the user explicitly selected bedrock (not auto-detected),
-        # trust boto3's credential chain — it handles IMDS, ECS task roles,
-        # Lambda execution roles, SSO, and other implicit sources that our
-        # env-var check can't detect.
-        is_explicit = requested_provider in {"bedrock", "aws", "aws-bedrock", "amazon-bedrock", "amazon"}
-        if not is_explicit and not has_aws_credentials():
-            raise AuthError(
-                "No AWS credentials found for Bedrock. Configure one of:\n"
-                "  - AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY\n"
-                "  - AWS_PROFILE (for SSO / named profiles)\n"
-                "  - IAM instance role (EC2, ECS, Lambda)\n"
-                "Or run 'aws configure' to set up credentials.",
-                code="no_aws_credentials",
-            )
-        # Read bedrock-specific config from config.yaml
-        _bedrock_cfg = load_config().get("bedrock", {})
-        # Region priority: config.yaml bedrock.region → env var → us-east-1
-        region = (_bedrock_cfg.get("region") or "").strip() or resolve_bedrock_region()
-        auth_source = resolve_aws_auth_env_var() or "aws-sdk-default-chain"
-        # Build guardrail config if configured
-        _gr = _bedrock_cfg.get("guardrail", {})
-        guardrail_config = None
-        if _gr.get("guardrail_identifier") and _gr.get("guardrail_version"):
-            guardrail_config = {
-                "guardrailIdentifier": _gr["guardrail_identifier"],
-                "guardrailVersion": _gr["guardrail_version"],
-            }
-            if _gr.get("stream_processing_mode"):
-                guardrail_config["streamProcessingMode"] = _gr["stream_processing_mode"]
-            if _gr.get("trace"):
-                guardrail_config["trace"] = _gr["trace"]
-        # Dual-path routing: Claude models use AnthropicBedrock SDK for full
-        # feature parity (prompt caching, thinking budgets, adaptive thinking).
-        # Non-Claude models use the Converse API for multi-model support.
-        #
-        # Exception: Bearer Token auth (AWS_BEARER_TOKEN_BEDROCK) is NOT
-        # supported by the AnthropicBedrock SDK (it only does SigV4 signing —
-        # a bearer-only setup fails at runtime with "could not resolve
-        # credentials from session"). Route these users through the Converse
-        # API regardless of model. Ref:.
-        _current_model = str(target_model or model_cfg.get("default") or "").strip()
-        _has_bearer_token = bool(os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "").strip())
-        if is_anthropic_bedrock_model(_current_model) and not _has_bearer_token:
-            # Claude on Bedrock → AnthropicBedrock SDK → anthropic_messages path
-            runtime = {
-                "provider": "bedrock",
-                "api_mode": "anthropic_messages",
-                "base_url": f"https://bedrock-runtime.{region}.amazonaws.com",
-                "api_key": "aws-sdk",
-                "source": auth_source,
-                "region": region,
-                "bedrock_anthropic": True,  # Signal to use AnthropicBedrock client
-                "requested_provider": requested_provider,
-            }
-        else:
-            # Non-Claude (Nova, DeepSeek, Llama, etc.) → Converse API
-            runtime = {
-                "provider": "bedrock",
-                "api_mode": "bedrock_converse",
-                "base_url": f"https://bedrock-runtime.{region}.amazonaws.com",
-                "api_key": "aws-sdk",
-                "source": auth_source,
-                "region": region,
-                "requested_provider": requested_provider,
-            }
-        if guardrail_config:
-            runtime["guardrail_config"] = guardrail_config
-        return runtime
-
     # API-key providers (z.ai/GLM, Kimi, MiniMax, MiniMax-CN)
     pconfig = PROVIDER_REGISTRY.get(provider)
     if pconfig and pconfig.auth_type == "api_key":
@@ -2248,47 +1660,21 @@ def resolve_runtime_provider(
         if provider == "actual":
             base_url = normalize_actual_base_url(base_url)
         api_mode = "chat_completions"
-        if provider == "copilot":
-            api_mode = _copilot_runtime_api_mode(
-                model_cfg,
-                creds.get("api_key", ""),
-                target_model=target_model,
-            )
-        elif provider == "xai":
-            api_mode = "codex_responses"
-        elif provider == "actual":
+        if provider == "actual":
             api_mode = "codex_responses"
         else:
             configured_provider = str(model_cfg.get("provider") or "").strip().lower()
             # Only honor persisted api_mode when it belongs to the same provider family.
             configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
-            if provider in {"opencode-zen", "opencode-go"}:
-                # opencode-zen/go must always re-derive api_mode from the
-                # target model (not the stale persisted api_mode), because
-                # the same provider serves both anthropic_messages
-                # (e.g. minimax-m2.7) and chat_completions (e.g.
-                # deepseek-v4-flash) and switching models via /model would
-                # otherwise carry the previous mode forward, stripping /v1
-                # from base_url for chat_completions models and 404'ing.
-                # Refs.
-                from pilotage_cli.models import opencode_model_api_mode
-                _effective = target_model or model_cfg.get("default", "")
-                api_mode = opencode_model_api_mode(provider, _effective)
-            elif configured_mode and _provider_supports_explicit_api_mode(provider, configured_provider):
+            if configured_mode and _provider_supports_explicit_api_mode(provider, configured_provider):
                 api_mode = configured_mode
             else:
                 # URL detection first (e.g. https://api.minimax.io/anthropic,
-                # official OpenAI hosts → codex_responses, api.x.ai →
-                # codex_responses), then the provider's declared transport.
+                # official OpenAI hosts → codex_responses), then the
+                # provider's declared transport.
                 api_mode = _fallback_api_mode(
                     provider, base_url, target_model or model_cfg.get("default", "")
                 )
-        # Normalize the /v1 suffix for OpenCode by API mode (see comment above).
-        if provider in {"opencode-zen", "opencode-go"}:
-            from pilotage_cli.models import normalize_opencode_base_url
-            base_url = normalize_opencode_base_url(provider, api_mode, base_url)
-        if provider == "lmstudio":
-            base_url = auth_mod._normalize_lmstudio_runtime_base_url(base_url)
         api_key = creds.get("api_key", "")
         if provider == "actual" and not api_key and is_actual_local_base_url(base_url):
             api_key = ACTUAL_LOCAL_NOAUTH_PLACEHOLDER

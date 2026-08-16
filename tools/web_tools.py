@@ -54,19 +54,6 @@ _async_parallel_client: Optional[Any] = None
 _exa_client: Optional[Any] = None
 
 from tools.debug_helpers import DebugSession
-# Imported solely so unit tests can monkeypatch these names on
-# tools.web_tools (the firecrawl plugin reads them via its own import chain).
-from tools.managed_tool_gateway import (  # noqa: F401 — backward-compat names for tests
-    build_vendor_gateway_url,
-    peek_nous_access_token as _peek_nous_access_token,
-    read_nous_access_token as _read_nous_access_token,
-    resolve_managed_tool_gateway,
-)
-from tools.tool_backend_helpers import (  # noqa: F401
-    managed_nous_tools_enabled,
-    nous_tool_gateway_unavailable_message,
-    prefers_gateway,
-)
 from tools.url_safety import async_is_safe_url, normalize_url_for_request, sensitive_query_param_name
 import sys
 
@@ -132,12 +119,6 @@ def _load_web_config() -> dict:
 # web_search_registry (``is_available()``) instead. Kept as a single named
 # constant so the whitelist early-returns and the availability chokepoint
 # stay in sync.
-#
-# NOTE: this intentionally includes ``xai``, which the registry's
-# ``_LEGACY_PREFERENCE`` does NOT — xai availability is probed via
-# ``has_xai_credentials()`` (env var OR auth.json OAuth), not a registered
-# WebSearchProvider. Keep the two sets aligned by hand: if xai ever ships as
-# a registered provider, drop it here so the registry path takes over.
 _LEGACY_WEB_BACKENDS = frozenset({"ddgs"})
 
 
@@ -288,16 +269,6 @@ def _is_backend_available(backend: str) -> bool:
             return registered
     if backend == "ddgs":
         return _ddgs_package_importable()
-    if backend == "xai":
-        # Cheap probe — env var OR auth.json has OAuth tokens. Must not
-        # call resolve_xai_http_credentials() here because the OAuth path
-        # can trigger a network token refresh, and _is_backend_available
-        # runs on every web_search dispatch + every `pilotage tools` repaint.
-        try:
-            from tools.xai_http import has_xai_credentials
-            return has_xai_credentials()
-        except Exception:
-            return False
     return False
 
 
@@ -328,14 +299,10 @@ def _ddgs_package_importable() -> bool:
 def _web_requires_env() -> list[str]:
     """Return tool metadata env vars for the currently enabled web backends.
 
-    The gateway env vars are always reported — they're metadata strings
-    used by the tool registry to light up the tool when the variable is
-    set.  Gating them on ``managed_nous_tools_enabled()`` only saved
-    string noise in the metadata list, but cost a synchronous HTTP
-    refresh against the Nous portal on every CLI startup (invoked at
-    tool-registration time).  The behavioral contract is: if the env var
-    is set, the tool sees it; if not, it doesn't.  Not-logged-in users
-    simply don't have the vars set, so the extra entries are harmless.
+    All backend env vars are reported unconditionally — they're metadata
+    strings used by the tool registry to light up the tool when the
+    variable is set.  The behavioral contract is: if the env var is set,
+    the tool sees it; if not, it doesn't.
     """
     return [
         "EXA_API_KEY",

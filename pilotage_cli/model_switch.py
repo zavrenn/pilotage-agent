@@ -278,9 +278,6 @@ MODEL_ALIASES: dict[str, ModelIdentity] = {
     # DeepSeek
     "deepseek":  ModelIdentity("deepseek", "deepseek-chat"),
 
-    # X.AI
-    "grok":      ModelIdentity("x-ai", "grok"),
-
     # Meta
     "llama":     ModelIdentity("meta-llama", "llama"),
 
@@ -1291,17 +1288,14 @@ def switch_model(
         ModelSwitchResult with all information the caller needs.
     """
     from pilotage_cli.models import (
-        copilot_model_api_mode,
         detect_provider_for_model,
         validate_requested_model,
-        opencode_model_api_mode,
     )
     from pilotage_cli.runtime_provider import resolve_runtime_provider
 
     resolved_alias = ""
     new_model = raw_input.strip()
     target_provider = current_provider
-    resolved_moa_preset = False
 
     # =================================================================
     # PATH A: Explicit --provider given
@@ -1338,14 +1332,6 @@ def switch_model(
             )
 
         target_provider = pdef.id
-        if target_provider == "moa" and not new_model:
-            try:
-                from pilotage_cli.config import load_config
-                from pilotage_cli.moa_config import normalize_moa_config
-
-                new_model = normalize_moa_config(load_config().get("moa") or {})["default_preset"]
-            except Exception:
-                new_model = "default"
 
         # Guard against silent aggregator hops. A vendor name like bare
         # "openai" is an alias that resolves to an aggregator ("openrouter").
@@ -1437,40 +1423,17 @@ def switch_model(
     # =================================================================
     else:
         try:
-            from pilotage_cli.config import load_config
-            from pilotage_cli.moa_config import exact_moa_preset_name, normalize_moa_config
-
-            _moa_cfg = normalize_moa_config(load_config().get("moa") or {})
-            _moa_match = exact_moa_preset_name(_moa_cfg, raw_input)
-            if _moa_match:
-                target_provider = "moa"
-                new_model = _moa_match
-                resolved_alias = ""
-                resolved_moa_preset = True
-                alias_result = None
-            else:
-                alias_result = resolve_alias(raw_input, current_provider)
+            alias_result = resolve_alias(raw_input, current_provider)
         except AmbiguousAliasError as err:
             return ModelSwitchResult(
                 success=False,
                 is_global=is_global,
                 error_message=_ambiguous_alias_message(err),
             )
-        except Exception:
-            try:
-                alias_result = resolve_alias(raw_input, current_provider)
-            except AmbiguousAliasError as err:
-                return ModelSwitchResult(
-                    success=False,
-                    is_global=is_global,
-                    error_message=_ambiguous_alias_message(err),
-                )
 
         # --- Step a: Try alias resolution on current provider ---
 
-        if resolved_moa_preset:
-            pass
-        elif alias_result is not None:
+        if alias_result is not None:
             target_provider, new_model, resolved_alias = alias_result
             logger.debug(
                 "Alias '%s' resolved to %s on %s",
@@ -1510,7 +1473,7 @@ def switch_model(
                             f"Try specifying the full model name."
                         ),
                     )
-            elif not resolved_moa_preset:
+            else:
                 # --- Step c: On aggregator, convert vendor:model to vendor/model ---
                 # Only convert when there's no slash — a slash means the name
                 # is already in vendor/model format and the colon is a variant
@@ -1829,44 +1792,11 @@ def switch_model(
     if validation.get("corrected_model"):
         new_model = validation["corrected_model"]
 
-    # --- Copilot api_mode override ---
-    if target_provider in {"copilot", "github-copilot"}:
-        api_mode = copilot_model_api_mode(new_model, api_key=api_key)
-
-    # --- OpenCode api_mode override ---
-    if target_provider in {"opencode-zen", "opencode-go", "opencode"}:
-        api_mode = opencode_model_api_mode(target_provider, new_model)
-
-    # --- Nous Portal dual-wire override ---
-    # Portal serves anthropic/* on /v1/messages and everything else on
-    # /chat/completions. resolve_runtime_provider already sets this when it
-    # succeeds; always re-derive from the *final* (post-normalize) model so
-    # alias clears / empty fallbacks cannot leave Claude on the OpenAI wire.
-    if target_provider in {"nous", "nous-portal", "nousresearch"}:
-        from pilotage_cli.providers import nous_api_mode
-
-        api_mode = nous_api_mode(new_model)
-
     # --- Determine api_mode if not already set ---
     if not api_mode:
         api_mode = determine_api_mode(
             target_provider, base_url, model=new_model
         )
-
-    # OpenCode base URLs end with /v1 for OpenAI-compatible models, but the
-    # Anthropic SDK prepends its own /v1/messages to the base_url.  Normalize
-    # symmetrically (strip /v1 for anthropic_messages, re-append it for
-    # chat_completions / codex_responses).  Mirrors the same logic in
-    # pilotage_cli.runtime_provider.resolve_runtime_provider; without the strip,
-    # /model switches into an anthropic_messages-routed OpenCode model
-    # (e.g. `/model minimax-m2.7` on opencode-go, `/model claude-sonnet-4-6`
-    # on opencode-zen) hit a double /v1 and returned OpenCode's website 404
-    # page — and without the re-append, a stripped URL persisted to
-    # model.base_url broke every later chat_completions model (glm, deepseek,
-    # kimi) the same way.
-    if target_provider in {"opencode-zen", "opencode-go"} and isinstance(base_url, str):
-        from pilotage_cli.models import normalize_opencode_base_url
-        base_url = normalize_opencode_base_url(target_provider, api_mode, base_url)
 
     # --- Get capabilities (legacy) ---
     capabilities = get_model_capabilities(target_provider, new_model, allow_network=True)
@@ -2197,12 +2127,6 @@ def _collect_authed_provider_slugs(
         if overlay.auth_type == "aws_sdk":
             # Skip AWS SDK providers in prefetch — credential detection is heavier
             continue
-        elif overlay.auth_type == "vertex":
-            try:
-                from agent.vertex_adapter import has_vertex_credentials
-                has_creds = has_vertex_credentials()
-            except Exception:
-                pass
         elif overlay.extra_env_vars:
             has_creds = any(_scoped_key_env(ev) for ev in overlay.extra_env_vars)
         if not has_creds and overlay.auth_type == "api_key":
@@ -2270,7 +2194,6 @@ def list_authenticated_providers(
     user_providers: dict = None,
     custom_providers: list | None = None,
     *,
-    force_fresh_nous_tier: bool = False,
     max_models: int | None = None,
     current_model: str = "",
     refresh: bool = False,
@@ -2281,8 +2204,8 @@ def list_authenticated_providers(
 ) -> List[dict]:
     """Detect which providers have credentials and list their curated models.
 
-    Uses the curated model lists from pilotage_cli/models.py (OPENROUTER_MODELS,
-    _PROVIDER_MODELS) — NOT the full models.dev catalog.  These are hand-picked
+    Uses the curated model lists from pilotage_cli/models.py
+    (_PROVIDER_MODELS) — NOT the full models.dev catalog.  These are hand-picked
     agentic models that work well as agent backends.
 
     Returns a list of dicts, each with:
@@ -2323,9 +2246,9 @@ def list_authenticated_providers(
     )
     from pilotage_cli.auth import PROVIDER_REGISTRY
     from pilotage_cli.models import (
-        OPENROUTER_MODELS, _PROVIDER_MODELS,
+        _PROVIDER_MODELS,
         _MODELS_DEV_PREFERRED, _merge_with_models_dev, cached_provider_model_ids,
-        clear_provider_models_cache, get_curated_nous_model_ids,
+        clear_provider_models_cache,
     )
 
     # Explicit refresh: drop every provider's cached model-id list so the
@@ -2417,55 +2340,12 @@ def list_authenticated_providers(
             return True
         if slug_norm != current_norm:
             return False
-        try:
-            from agent.bedrock_adapter import has_aws_credentials
-            return bool(has_aws_credentials())
-        except Exception:
-            return False
+        return False
 
     data = fetch_models_dev()
 
     # Build curated model lists keyed by pilotage provider ID
     curated: dict[str, list[str]] = dict(_PROVIDER_MODELS)
-    curated["openrouter"] = [mid for mid, _ in OPENROUTER_MODELS]
-    # "nous" pulls from the remote model-catalog manifest published at
-    # so
-    # newly added Portal models surface in the /model picker without
-    # requiring a Pilotage release. Falls back to the in-repo
-    # _PROVIDER_MODELS["nous"] snapshot when the manifest is unreachable.
-    curated["nous"] = get_curated_nous_model_ids()
-    # Ollama Cloud uses dynamic discovery (no static curated list)
-    if "ollama-cloud" not in curated:
-        from pilotage_cli.models import fetch_ollama_cloud_models
-        curated["ollama-cloud"] = fetch_ollama_cloud_models()
-    # LM Studio has no static catalog — probe its native /api/v1/models
-    # endpoint live so the picker reflects whatever the user has loaded.
-    # Base URL precedence: LM_BASE_URL env var > active config's base_url
-    # (when current provider is lmstudio) > 127.0.0.1 default.
-    # On auth rejection or unreachable server, fall back to the caller-supplied
-    # current model so the picker still shows something when offline / mis-keyed.
-    if "lmstudio" not in curated and (
-        os.environ.get("LM_API_KEY") or os.environ.get("LM_BASE_URL") or current_provider.strip().lower() == "lmstudio"
-    ):
-        from pilotage_cli.models import fetch_lmstudio_models
-        from pilotage_cli.auth import AuthError
-        is_current_lmstudio = current_provider.strip().lower() == "lmstudio"
-        lm_base = (
-            os.environ.get("LM_BASE_URL")
-            or (current_base_url if is_current_lmstudio and current_base_url else None)
-            or "http://127.0.0.1:1234/v1"
-        )
-        try:
-            live = fetch_lmstudio_models(
-                api_key=os.environ.get("LM_API_KEY", ""),
-                base_url=lm_base,
-                timeout=1.5, # Smaller timeout for picker
-            )
-        except AuthError:
-            live = []
-        if not live and is_current_lmstudio and current_model:
-            live = [current_model]
-        curated["lmstudio"] = live
 
     # --- Parallel cache prefetch ---------------------------------------------
     # The serial loops below (sections 1, 2, 2b) each call
@@ -2646,16 +2526,6 @@ def list_authenticated_providers(
         has_creds = False
         if overlay.auth_type == "aws_sdk":
             has_creds = _has_aws_sdk_creds_for_listing(pilotage_slug)
-        elif overlay.auth_type == "vertex":
-            # Vertex authenticates via OAuth2 (service-account JSON / ADC),
-            # not an API key — mirror the aws_sdk gate above, otherwise the
-            # provider is silently hidden from the /model picker even when
-            # fully configured.
-            try:
-                from agent.vertex_adapter import has_vertex_credentials
-                has_creds = has_vertex_credentials()
-            except Exception as exc:
-                logger.debug("Vertex credential check failed: %s", exc)
         elif overlay.extra_env_vars:
             has_creds = any(os.environ.get(ev) for ev in overlay.extra_env_vars)
         # Also check api_key_env_vars from PROVIDER_REGISTRY for api_key auth_type
@@ -2703,26 +2573,6 @@ def list_authenticated_providers(
                         pass
             except Exception as exc:
                 logger.debug("Credential pool check failed for %s: %s", pilotage_slug, exc)
-        # Fallback: check external credential files directly.
-        # The credential pool gates anthropic behind
-        # is_provider_explicitly_configured() to prevent auxiliary tasks
-        # from silently consuming Claude Code tokens.
-        # But the /model picker is discovery-oriented — we WANT to show
-        # providers the user can switch to, even if they aren't currently
-        # configured.
-        if not has_creds and pilotage_slug == "anthropic":
-            try:
-                from agent.anthropic_adapter import (
-                    read_claude_code_credentials,
-                    read_pilotage_oauth_credentials,
-                )
-                pilotage_creds = read_pilotage_oauth_credentials()
-                cc_creds = read_claude_code_credentials()
-                if (pilotage_creds and pilotage_creds.get("accessToken")) or \
-                   (cc_creds and cc_creds.get("accessToken")):
-                    has_creds = True
-            except Exception as exc:
-                logger.debug("Anthropic external creds check failed: %s", exc)
         if not has_creds:
             continue
 
@@ -2743,43 +2593,6 @@ def list_authenticated_providers(
                 model_ids = _ids if _ids else (curated.get(pilotage_slug, []) or curated.get(pid, []))
             except Exception:
                 model_ids = curated.get(pilotage_slug, []) or curated.get(pid, [])
-        elif pilotage_slug == "nous":
-            # Nous serves a large live /v1/models catalog (vendor-prefixed
-            # models from many providers, returned alphabetically). The
-            # `pilotage model` picker deliberately shows ONLY the curated agentic
-            # list — augmented with the Portal's free/paid recommendations so
-            # newly-launched models surface without a CLI release — in curated
-            # order. Mirror that exactly (see _model_flow_nous in main.py) so
-            # the GUI picker matches the CLI. Was: falling through to
-            # cached_provider_model_ids, which dumped the full alphabetical
-            # catalog; then: curated-only, which dropped the 4 Portal
-            # recommendations (e.g. stepfun/step-3.7-flash:free).
-            model_ids = curated.get("nous", [])
-            try:
-                from pilotage_cli.models import (
-                    get_pricing_for_provider as _nous_pricing,
-                    check_nous_free_tier as _nous_free,
-                    union_with_portal_free_recommendations as _union_free,
-                    union_with_portal_paid_recommendations as _union_paid,
-                )
-                from pilotage_cli.auth import get_provider_auth_state as _nous_state
-
-                _pricing = _nous_pricing("nous") or {}
-                _portal = ""
-                try:
-                    _st = _nous_state("nous") or {}
-                    _portal = _st.get("portal_base_url", "") or ""
-                except Exception:
-                    _portal = ""
-                if _nous_free(force_fresh=force_fresh_nous_tier):
-                    model_ids, _ = _union_free(model_ids, _pricing, _portal)
-                else:
-                    model_ids, _ = _union_paid(model_ids, _pricing, _portal)
-            except Exception:
-                # Portal recommendation fetch failed — fall back to the
-                # curated list alone (still correct, just may lag newly
-                # launched models, exactly like an offline CLI run).
-                pass
         else:
             # Unified pathway — see Section 1 rationale. Fall back to the
             # curated dict (with models.dev merge for preferred providers)
@@ -3515,26 +3328,6 @@ def list_authenticated_providers(
     return results
 
 
-def _prepend_moa_picker_provider(providers: List[dict], current_provider: str = "") -> List[dict]:
-    """Add the virtual MoA provider row used by interactive model pickers.
-
-    ``list_authenticated_providers()`` only returns real/auth-backed providers.
-    The CLI model inventory adds MoA separately so named presets appear next to
-    normal providers; gateway pickers call ``list_picker_providers()`` directly,
-    so they need the same virtual row here. Reuse the inventory's single row
-    builder so the row shape stays defined in one place.
-    """
-    try:
-        from pilotage_cli.inventory import _moa_provider_row
-
-        moa_row = _moa_provider_row(current_provider)
-        if moa_row is None:
-            return providers
-        return [moa_row] + [p for p in providers if str(p.get("slug", "")).lower() != "moa"]
-    except Exception:
-        return providers
-
-
 def list_picker_providers(
     current_provider: str = "",
     current_base_url: str = "",
@@ -3542,7 +3335,6 @@ def list_picker_providers(
     custom_providers: list | None = None,
     max_models: int | None = None,
     current_model: str = "",
-    include_moa: bool = False,
     excluded_providers: list | None = None,
 ) -> List[dict]:
     """Interactive-picker variant of :func:`list_authenticated_providers`.
@@ -3551,11 +3343,6 @@ def list_picker_providers(
     inline keyboards) only surfaces models that are actually callable in the
     current install:
 
-    - OpenRouter's model list is replaced with the output of
-      :func:`pilotage_cli.models.fetch_openrouter_models`, which filters the
-      curated ``OPENROUTER_MODELS`` snapshot against the live OpenRouter
-      catalog.  IDs the live catalog no longer carries drop out, so the
-      picker never offers a model the user can't call.
     - Provider rows whose model list ends up empty are dropped, except
       custom endpoints (``is_user_defined=True`` with an ``api_url``) where
       the user may supply their own model set through config.
@@ -3564,8 +3351,6 @@ def list_picker_providers(
     The typed ``/model <name>`` path is unaffected -- only the interactive
     picker payload is narrowed.
     """
-    from pilotage_cli.models import fetch_openrouter_models
-
     providers = list_authenticated_providers(
         current_provider=current_provider,
         current_base_url=current_base_url,
@@ -3576,22 +3361,8 @@ def list_picker_providers(
         for_picker=True,
         excluded_providers=excluded_providers,
     )
-    if include_moa:
-        providers = _prepend_moa_picker_provider(providers, current_provider=current_provider)
-
     filtered: List[dict] = []
     for p in providers:
-        slug = str(p.get("slug", "")).lower()
-        if slug == "openrouter":
-            try:
-                live = fetch_openrouter_models()
-                live_ids = [mid for mid, _ in live]
-            except Exception:
-                live_ids = list(p.get("models", []))
-            p = dict(p)
-            p["models"] = live_ids[:max_models] if max_models is not None else live_ids
-            p["total_models"] = len(live_ids)
-
         has_models = bool(p.get("models"))
         is_custom_endpoint = bool(p.get("is_user_defined")) and bool(p.get("api_url"))
         if not has_models and not is_custom_endpoint:

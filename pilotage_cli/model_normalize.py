@@ -44,171 +44,42 @@ from typing import Optional
 #          -> aggregator slug: "anthropic/claude-sonnet-4.6"
 
 _VENDOR_PREFIXES: dict[str, str] = {
-    "claude": "anthropic",
     "gpt": "openai",
     "o1": "openai",
     "o3": "openai",
     "o4": "openai",
-    "gemini": "google",
-    "gemma": "google",
-    "deepseek": "deepseek",
-    "glm": "z-ai",
-    "kimi": "moonshotai",
-    "minimax": "minimax",
-    "grok": "x-ai",
-    "qwen": "qwen",
-    "mimo": "xiaomi",
-    "trinity": "arcee-ai",
-    "nemotron": "nvidia",
-    "llama": "meta-llama",
-    "step": "stepfun",
-    "trinity": "arcee-ai",
 }
 
 # Providers whose APIs consume vendor/model slugs.
-_AGGREGATOR_PROVIDERS: frozenset[str] = frozenset({
-    "openrouter",
-    "nous",
-    "ai-gateway",
-    "kilocode",
-})
+_AGGREGATOR_PROVIDERS: frozenset[str] = frozenset()
 
-# Providers that want bare names with dots replaced by hyphens.
-_DOT_TO_HYPHEN_PROVIDERS: frozenset[str] = frozenset({
-    "anthropic",
-})
+# Providers that want bare names with dots converted to hyphens.
+_DOT_TO_HYPHEN_PROVIDERS: frozenset[str] = frozenset()
 
 # Providers that want bare names with dots preserved.
 _STRIP_VENDOR_ONLY_PROVIDERS: frozenset[str] = frozenset({
-    "copilot",
-    "copilot-acp",
     "openai-codex",
 })
 
 # Providers whose native naming is authoritative -- pass through unchanged.
-_AUTHORITATIVE_NATIVE_PROVIDERS: frozenset[str] = frozenset({
-    "huggingface",
-})
+_AUTHORITATIVE_NATIVE_PROVIDERS: frozenset[str] = frozenset()
 
 # Direct providers that accept bare native names but should repair a matching
 # provider/ prefix when users copy the aggregator form into config.yaml.
 _MATCHING_PREFIX_STRIP_PROVIDERS: frozenset[str] = frozenset({
-    "zai",
-    "kimi-coding",
-    "kimi-coding-cn",
-    "minimax",
-    "minimax-oauth",
-    "minimax-cn",
-    "alibaba",
-    "qwen-oauth",
-    "xiaomi",
-    "arcee",
-    "ollama-cloud",
     "custom",
-    "gemini",
-    "xai",
 })
 
 # Providers whose API serves ``vendor/model`` ids but whose endpoint can also
 # front arbitrary self-hosted models, so a bare name cannot be prefixed
 # blindly. A bare id is repaired only when the curated catalogue for that
 # provider holds exactly one entry ending in ``/<name>`` — a lookup, not a
-# guess. NVIDIA NIM is the case in hand: build.nvidia.com serves
-# ``nvidia/nemotron-…`` (and third-party ``z-ai/glm-…``), while the same
-# provider id also points at local NIM containers with their own naming.
-# Without this repair a bare ``nemotron-3-ultra-550b-a55b`` reaches the API
-# and returns a bare ``404 page not found`` that never names the model.
-_CATALOGUE_PREFIX_REPAIR_PROVIDERS: frozenset[str] = frozenset({
-    "nvidia",
-})
+# guess.
+_CATALOGUE_PREFIX_REPAIR_PROVIDERS: frozenset[str] = frozenset()
 
-# Providers whose APIs require lowercase model IDs.  Xiaomi's
-# ``api.xiaomimimo.com`` rejects mixed-case names like ``MiMo-V2.5-Pro``
-# that users might copy from marketing docs — it only accepts
-# ``mimo-v2.5-pro``.  After stripping a matching provider prefix, these
-# providers also get ``.lower()`` applied.
-_LOWERCASE_MODEL_PROVIDERS: frozenset[str] = frozenset({
-    "xiaomi",
-})
-
-# ---------------------------------------------------------------------------
-# DeepSeek special handling
-# ---------------------------------------------------------------------------
-# DeepSeek's direct API only accepts first-class V-series IDs after the
-# 2026-07-24 cut-off.  Legacy aliases and fuzzy names are remapped here so
-# saved configs / picker leftovers cannot keep sending retired IDs.
-
-_DEEPSEEK_REASONER_KEYWORDS: frozenset[str] = frozenset({
-    "reasoner",
-    "r1",
-    "think",
-    "reasoning",
-    "cot",
-})
-
-# Retired on 2026-07-24 15:59 UTC. Official docs: both aliases mapped to
-# deepseek-v4-flash (chat = non-thinking, reasoner = thinking). Thinking
-# mode itself is controlled by extra_body.thinking on the DeepSeek profile.
-_DEEPSEEK_RETIRED_ALIASES: frozenset[str] = frozenset({
-    "deepseek-chat",
-    "deepseek-reasoner",
-})
-
-_DEEPSEEK_CANONICAL_MODELS: frozenset[str] = frozenset({
-    "deepseek-v4-pro",     # V4 Pro — first-class model ID
-    "deepseek-v4-flash",   # V4 Flash — first-class model ID
-})
-
-# First-class V-series IDs (``deepseek-v4-pro``, ``deepseek-v4-flash``,
-# future ``deepseek-v5-*``, dated variants like ``deepseek-v4-flash-20260423``).
-# Verified empirically 2026-04-24: DeepSeek's Chat Completions API returns
-# ``provider: DeepSeek`` / ``model: deepseek-v4-flash-20260423`` when called
-# with ``model=deepseek/deepseek-v4-flash``, so these names are not aliases
-# of ``deepseek-chat`` and must not be folded into it.
-_DEEPSEEK_V_SERIES_RE = re.compile(r"^deepseek-v\d+([-.].+)?$")
-
-
-def _normalize_for_deepseek(model_name: str) -> str:
-    """Map a model input to a DeepSeek-accepted identifier.
-
-    Rules:
-    - Retired aliases ``deepseek-chat`` / ``deepseek-reasoner`` (cut off
-      2026-07-24) -> ``deepseek-v4-flash``.
-    - Already a known canonical (``deepseek-v4-pro``/``deepseek-v4-flash``)
-      -> pass through.
-    - Matches the V-series pattern ``deepseek-v<digit>...`` -> pass through
-      (covers future ``deepseek-v5-*`` and dated variants without a release).
-    - Contains a reasoner keyword (r1, think, reasoning, cot, reasoner)
-      -> ``deepseek-v4-flash``.
-    - Everything else -> ``deepseek-v4-flash``.
-
-    Args:
-        model_name: The bare model name (vendor prefix already stripped).
-
-    Returns:
-        A DeepSeek-accepted model identifier.
-    """
-    bare = _strip_vendor_prefix(model_name).lower()
-
-    # Retired aliases must rewrite — DeepSeek returns HTTP 400 after the
-    # 2026-07-24 cut-off if these IDs are sent on the wire.
-    if bare in _DEEPSEEK_RETIRED_ALIASES:
-        return "deepseek-v4-flash"
-
-    if bare in _DEEPSEEK_CANONICAL_MODELS:
-        return bare
-
-    # V-series first-class IDs (v4-pro, v4-flash, future v5-*, dated variants)
-    if _DEEPSEEK_V_SERIES_RE.match(bare):
-        return bare
-
-    # Check for reasoner-like keywords anywhere in the name
-    for keyword in _DEEPSEEK_REASONER_KEYWORDS:
-        if keyword in bare:
-            return "deepseek-v4-flash"
-
-    return "deepseek-v4-flash"
-
+# Providers whose APIs require lowercase model IDs.  After stripping a
+# matching provider prefix, these providers also get ``.lower()`` applied.
+_LOWERCASE_MODEL_PROVIDERS: frozenset[str] = frozenset()
 
 # ---------------------------------------------------------------------------
 # Helper utilities
@@ -519,24 +390,6 @@ def normalize_model_for_provider(model_input: str, target_provider: str) -> str:
             return bare
         return _dots_to_hyphens(bare)
 
-    # --- Copilot / Copilot ACP: delegate to the Copilot-specific
-    #     normalizer.  It knows about the alias table (vendor-prefix
-    #     stripping for Anthropic/OpenAI, dash-to-dot repair for Claude)
-    #     and live-catalog lookups.  Without this, vendor-prefixed or
-    #     dash-notation Claude IDs survive to the Copilot API and hit
-    # HTTP 400 "model_not_supported". See.
-    if provider in {"copilot", "copilot-acp"}:
-        try:
-            from pilotage_cli.models import normalize_copilot_model_id
-
-            normalized = normalize_copilot_model_id(name)
-            if normalized:
-                return normalized
-        except Exception:
-            # Fall through to the generic strip-vendor behaviour below
-            # if the Copilot-specific path is unavailable for any reason.
-            pass
-
     # --- Copilot / Copilot ACP / openai-codex fallback:
     #     strip matching provider prefix, keep dots ---
     if provider in _STRIP_VENDOR_ONLY_PROVIDERS:
@@ -545,13 +398,6 @@ def normalize_model_for_provider(model_input: str, target_provider: str) -> str:
             # openai-codex maps openai/gpt-5.4 -> gpt-5.4
             return name.split("/", 1)[1]
         return stripped
-
-    # --- DeepSeek: map to one of two canonical names ---
-    if provider == "deepseek":
-        bare = _strip_matching_provider_prefix(name, provider)
-        if "/" in bare:
-            return bare
-        return _normalize_for_deepseek(bare)
 
     # --- Direct providers: repair matching provider prefixes only ---
     if provider in _MATCHING_PREFIX_STRIP_PROVIDERS:

@@ -44,21 +44,6 @@ class PilotageOverlay:
 
 
 PILOTAGE_OVERLAYS: Dict[str, PilotageOverlay] = {
-    "moa": PilotageOverlay(
-        transport="openai_chat",
-        auth_type="virtual",
-        base_url_override="moa://local",
-    ),
-    "openrouter": PilotageOverlay(
-        transport="openai_chat",
-        is_aggregator=True,
-        base_url_env_var="OPENROUTER_BASE_URL",
-    ),
-    "nous": PilotageOverlay(
-        transport="openai_chat",
-        auth_type="oauth_device_code",
-        base_url_override="https://inference-api.nousresearch.com/v1",
-    ),
     "openai-codex": PilotageOverlay(
         transport="codex_responses",
         auth_type="oauth_external",
@@ -68,182 +53,6 @@ PILOTAGE_OVERLAYS: Dict[str, PilotageOverlay] = {
         transport="codex_responses",
         base_url_override="https://api.openai.com/v1",
         base_url_env_var="OPENAI_BASE_URL",
-    ),
-    "xai-oauth": PilotageOverlay(
-        transport="codex_responses",
-        auth_type="oauth_external",
-        base_url_override="https://api.x.ai/v1",
-        base_url_env_var="XAI_BASE_URL",
-    ),
-    "qwen-oauth": PilotageOverlay(
-        transport="openai_chat",
-        auth_type="oauth_external",
-        base_url_override="https://portal.qwen.ai/v1",
-        base_url_env_var="PILOTAGE_QWEN_BASE_URL",
-    ),
-    "lmstudio": PilotageOverlay(
-        transport="openai_chat",
-        auth_type="api_key",
-        extra_env_vars=("LM_API_KEY",),
-        base_url_override="http://127.0.0.1:1234/v1",
-        base_url_env_var="LM_BASE_URL",
-    ),
-    "copilot-acp": PilotageOverlay(
-        transport="codex_responses",
-        auth_type="external_process",
-        base_url_override="acp://copilot",
-        base_url_env_var="COPILOT_ACP_BASE_URL",
-    ),
-    "github-copilot": PilotageOverlay(
-        transport="openai_chat",
-        extra_env_vars=("COPILOT_GITHUB_TOKEN", "GH_TOKEN"),
-    ),
-    "anthropic": PilotageOverlay(
-        transport="anthropic_messages",
-        extra_env_vars=("ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
-    ),
-    "zai": PilotageOverlay(
-        transport="openai_chat",
-        extra_env_vars=("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"),
-        base_url_env_var="GLM_BASE_URL",
-    ),
-    "kimi-for-coding": PilotageOverlay(
-        transport="openai_chat",
-        base_url_env_var="KIMI_BASE_URL",
-    ),
-    "stepfun": PilotageOverlay(
-        transport="openai_chat",
-        extra_env_vars=("STEPFUN_API_KEY",),
-        base_url_override="https://api.stepfun.ai/step_plan/v1",
-        base_url_env_var="STEPFUN_BASE_URL",
-    ),
-    "minimax": PilotageOverlay(
-        transport="anthropic_messages",
-        base_url_env_var="MINIMAX_BASE_URL",
-    ),
-    "minimax-oauth": PilotageOverlay(
-        transport="anthropic_messages",
-        auth_type="oauth_external",
-        base_url_override="https://api.minimax.io/anthropic",
-    ),
-    "minimax-cn": PilotageOverlay(
-        transport="anthropic_messages",
-        base_url_env_var="MINIMAX_CN_BASE_URL",
-    ),
-    "deepseek": PilotageOverlay(
-        transport="openai_chat",
-        base_url_env_var="DEEPSEEK_BASE_URL",
-    ),
-    "alibaba": PilotageOverlay(
-        transport="openai_chat",
-        base_url_env_var="DASHSCOPE_BASE_URL",
-    ),
-    "alibaba-coding-plan": PilotageOverlay(
-        transport="openai_chat",
-        base_url_env_var="ALIBABA_CODING_PLAN_BASE_URL",
-    ),
-    "vercel": PilotageOverlay(
-        transport="openai_chat",
-        is_aggregator=True,
-    ),
-    "opencode": PilotageOverlay(
-        transport="openai_chat",
-        is_aggregator=True,
-        base_url_env_var="OPENCODE_ZEN_BASE_URL",
-    ),
-    "opencode-go": PilotageOverlay(
-        transport="openai_chat",
-        is_aggregator=True,
-        base_url_env_var="OPENCODE_GO_BASE_URL",
-    ),
-    "kilo": PilotageOverlay(
-        transport="openai_chat",
-        is_aggregator=True,
-        base_url_env_var="KILOCODE_BASE_URL",
-    ),
-    "huggingface": PilotageOverlay(
-        transport="openai_chat",
-        is_aggregator=True,
-        base_url_env_var="HF_BASE_URL",
-    ),
-    "novita": PilotageOverlay(
-        transport="openai_chat",
-        is_aggregator=True,
-        base_url_env_var="NOVITA_BASE_URL",
-    ),
-    "xai": PilotageOverlay(
-        transport="codex_responses",
-        base_url_override="https://api.x.ai/v1",
-        base_url_env_var="XAI_BASE_URL",
-    ),
-    "nvidia": PilotageOverlay(
-        transport="openai_chat",
-        base_url_override="https://integrate.api.nvidia.com/v1",
-        base_url_env_var="NVIDIA_BASE_URL",
-    ),
-    "xiaomi": PilotageOverlay(
-        transport="openai_chat",
-        base_url_env_var="XIAOMI_BASE_URL",
-    ),
-    "tencent-tokenhub": PilotageOverlay(
-        transport="openai_chat",
-        base_url_env_var="TOKENHUB_BASE_URL",
-    ),
-    "arcee": PilotageOverlay(
-        transport="openai_chat",
-        base_url_override="https://api.arcee.ai/api/v1",
-        base_url_env_var="ARCEE_BASE_URL",
-    ),
-    "gmi": PilotageOverlay(
-        transport="openai_chat",
-        extra_env_vars=("GMI_API_KEY",),
-        base_url_override="https://api.gmi-serving.com/v1",
-        base_url_env_var="GMI_BASE_URL",
-    ),
-    "fireworks": PilotageOverlay(
-        transport="openai_chat",
-        extra_env_vars=("FIREWORKS_API_KEY",),
-        base_url_override="https://api.fireworks.ai/inference/v1",
-    ),
-    "actual": PilotageOverlay(
-        transport="codex_responses",
-        extra_env_vars=("ACTUAL_API_KEY", "ACTUAL_BASE_URL"),
-        base_url_override="https://api.actual.inc/v1",
-        base_url_env_var="ACTUAL_BASE_URL",
-    ),
-    "upstage": PilotageOverlay(
-        transport="openai_chat",
-        extra_env_vars=("UPSTAGE_API_KEY",),
-        base_url_override="https://api.upstage.ai/v1",
-        base_url_env_var="UPSTAGE_BASE_URL",
-    ),
-    "ollama-cloud": PilotageOverlay(
-        transport="openai_chat",
-        base_url_override="https://ollama.com/v1",
-        base_url_env_var="OLLAMA_BASE_URL",
-    ),
-    # Azure Foundry: supports both OpenAI-style and Anthropic-style endpoints.
-    # The transport is determined at runtime from config.yaml model.api_mode.
-    "azure-foundry": PilotageOverlay(
-        transport="openai_chat",  # default; overridden by api_mode in config
-        base_url_env_var="AZURE_FOUNDRY_BASE_URL",
-    ),
-    "bedrock": PilotageOverlay(
-        transport="bedrock_converse",
-        auth_type="aws_sdk",
-    ),
-    # Vertex authenticates via OAuth2 (service-account JSON / ADC), not a
-    # static API key or models.dev entry — resolved specially by
-    # agent/vertex_adapter.py, like bedrock's aws_sdk. Without an overlay
-    # entry get_provider("vertex") returns None, which makes
-    # _preserve_provider_with_base_url() in agent/auxiliary_client.py treat
-    # a Vertex MoA slot's resolved (base_url, api_key) pair as an unknown
-    # custom endpoint instead of "vertex" — losing the provider identity
-    # that _refresh_provider_credentials() needs to re-mint an expired
-    # OAuth2 token on a 401.
-    "vertex": PilotageOverlay(
-        transport="openai_chat",
-        auth_type="vertex",
     ),
 }
 
@@ -272,137 +81,6 @@ class ProviderDef:
 # Uses models.dev IDs where possible.
 
 ALIASES: Dict[str, str] = {
-    # openrouter
-    "openai": "openrouter",     # bare "openai" → route through aggregator
-
-    # zai
-    "glm": "zai",
-    "z-ai": "zai",
-    "z.ai": "zai",
-    "zhipu": "zai",
-
-    # xai
-    "x-ai": "xai",
-    "x.ai": "xai",
-    "grok": "xai",
-    "grok-oauth": "xai-oauth",
-    "xai-oauth": "xai-oauth",
-    "x-ai-oauth": "xai-oauth",
-    "xai-grok-oauth": "xai-oauth",
-
-    # nvidia
-    "nim": "nvidia",
-    "nvidia-nim": "nvidia",
-    "build-nvidia": "nvidia",
-    "nemotron": "nvidia",
-
-    # kimi-for-coding (models.dev ID)
-    "kimi": "kimi-for-coding",
-    "kimi-coding": "kimi-for-coding",
-    "kimi-coding-cn": "kimi-for-coding",
-    "moonshot": "kimi-for-coding",
-
-    # stepfun
-    "step": "stepfun",
-    "stepfun-coding-plan": "stepfun",
-
-    # minimax-cn
-    "minimax-china": "minimax-cn",
-    "minimax_cn": "minimax-cn",
-
-    # anthropic
-    "claude": "anthropic",
-    "claude-code": "anthropic",
-
-    # github-copilot (models.dev ID)
-    "copilot": "github-copilot",
-    "github": "github-copilot",
-    "github-copilot-acp": "copilot-acp",
-
-    # vercel (models.dev ID for AI Gateway)
-    "ai-gateway": "vercel",
-    "aigateway": "vercel",
-    "vercel-ai-gateway": "vercel",
-
-    # opencode (models.dev ID for OpenCode Zen)
-    "opencode-zen": "opencode",
-    "zen": "opencode",
-
-    # opencode-go
-    "go": "opencode-go",
-    "opencode-go-sub": "opencode-go",
-
-    # kilo (models.dev ID for KiloCode)
-    "kilocode": "kilo",
-    "kilo-code": "kilo",
-    "kilo-gateway": "kilo",
-
-    # deepseek
-    "deep-seek": "deepseek",
-
-    # alibaba
-    "dashscope": "alibaba",
-    "aliyun": "alibaba",
-    "qwen": "alibaba",
-    "alibaba-cloud": "alibaba",
-    "alibaba_coding": "alibaba-coding-plan",
-    "alibaba-coding": "alibaba-coding-plan",
-    "alibaba_coding_plan": "alibaba-coding-plan",
-
-    # huggingface
-    "hf": "huggingface",
-    "hugging-face": "huggingface",
-    "huggingface-hub": "huggingface",
-
-    # novita
-    "novita-ai": "novita",
-    "novitaai": "novita",
-
-    # xiaomi
-    "mimo": "xiaomi",
-    "xiaomi-mimo": "xiaomi",
-
-    # tencent
-    "tencent": "tencent-tokenhub",
-    "tokenhub": "tencent-tokenhub",
-    "tencent-cloud": "tencent-tokenhub",
-    "tencentmaas": "tencent-tokenhub",
-
-    # bedrock
-    "aws": "bedrock",
-    "aws-bedrock": "bedrock",
-    "amazon-bedrock": "bedrock",
-    "amazon": "bedrock",
-
-    # arcee
-    "arcee-ai": "arcee",
-    "arceeai": "arcee",
-
-    # gmi
-    "gmi-cloud": "gmi",
-    "gmicloud": "gmi",
-
-    # fireworks
-    "fireworks-ai": "fireworks",
-    "fw": "fireworks",
-
-    # upstage
-    "solar": "upstage",
-
-    # Actual Computer
-    "actual-computer": "actual",
-    "actualcomputer": "actual",
-    "aci": "actual",
-
-    # Local server aliases → virtual "local" concept (resolved via user config)
-    "lmstudio": "lmstudio",
-    "lm-studio": "lmstudio",
-    "lm_studio": "lmstudio",
-    "ollama": "custom",  # bare "ollama" = local; use "ollama-cloud" for cloud
-    "vllm": "local",
-    "llamacpp": "local",
-    "llama.cpp": "local",
-    "llama-cpp": "local",
 }
 
 
@@ -411,22 +89,7 @@ ALIASES: Dict[str, str] = {
 # not in the catalog.
 
 _LABEL_OVERRIDES: Dict[str, str] = {
-    "moa": "Mixture of Agents",
-    "nous": "Nous Portal",
     "openai-codex": "ChatGPT or Codex Subscription",
-    "copilot-acp": "GitHub Copilot ACP",
-    "stepfun": "StepFun Step Plan",
-    "xiaomi": "Xiaomi MiMo",
-    "gmi": "GMI Cloud",
-    "upstage": "Upstage Solar",
-    "actual": "Actual Computer",
-    "tencent-tokenhub": "Tencent TokenHub",
-    "lmstudio": "LM Studio",
-    "local": "Local endpoint",
-    "bedrock": "AWS Bedrock",
-    "vertex": "Google Vertex AI",
-    "ollama-cloud": "Ollama Cloud",
-    "xai-oauth": "xAI Grok OAuth (SuperGrok / Premium+)",
 }
 
 
@@ -649,49 +312,18 @@ def host_mandated_api_mode(base_url: str = "") -> Optional[str]:
     return None
 
 
-def nous_api_mode(model: str = "") -> str:
-    """Resolve the wire protocol for a Nous Portal model.
-
-    Portal serves its ``anthropic/*`` catalog on a native Anthropic Messages
-    route (``/v1/messages``) alongside the OpenAI-compatible
-    ``/v1/chat/completions`` used by every other model it proxies.  Claude
-    traffic goes to the native route so it gets Anthropic's own request shape
-    (inner-block ``cache_control`` breakpoints, thinking blocks) instead of the
-    OpenAI-wire translation.
-
-    When *model* is empty/unknown, defaults to ``chat_completions`` — the
-    historical Nous transport — so callers that don't yet know the model
-    stay on the safer OpenAI-compatible path.
-    """
-    if str(model or "").strip().lower().startswith("anthropic/"):
-        return "anthropic_messages"
-    return "chat_completions"
-
-
 def determine_api_mode(provider: str, base_url: str = "", model: str = "") -> str:
     """Determine the API mode (wire protocol) for a provider/endpoint.
 
     Resolution order:
       1. Host-mandated mode (special endpoints that only accept one protocol).
-      2. Nous Portal dual-wire (model-derived; overlay alone is openai_chat).
-      3. Known provider → transport → TRANSPORT_TO_API_MODE.
-      4. Direct provider checks (bedrock).
-      5. Default: 'chat_completions'.
-
-    *model* is optional but required for dual-wire providers (Nous) whose
-    transport depends on the catalog id, not just the provider/host.
+      2. Known provider → transport → TRANSPORT_TO_API_MODE.
+      3. Direct provider checks (bedrock).
+      4. Default: 'chat_completions'.
     """
     mandated = host_mandated_api_mode(base_url)
     if mandated is not None:
         return mandated
-
-    # Nous is dual-wire: anthropic/* → Messages, everything else →
-    # chat_completions. The Pilotage overlay still advertises openai_chat
-    # (the majority of the Portal catalog), so the transport lookup below
-    # would pin Claude on the wrong wire without this carve-out.
-    provider_norm = (provider or "").strip().lower()
-    if provider_norm in {"nous", "nous-portal", "nousresearch"}:
-        return nous_api_mode(model)
 
     pdef = get_provider(provider)
     if pdef is not None:

@@ -69,7 +69,7 @@ class TranscriptionProvider(abc.ABC):
         Lowercase, no spaces. Examples: ``openrouter``, ``sensaudio``,
         ``gemini``, ``deepgram``. Names that collide with a built-in STT
         provider (``local``, ``local_command``, ``groq``, ``openai``,
-        ``mistral``, ``xai``) are rejected at registration time.
+        ``mistral``) are rejected at registration time.
         """
 
     @property

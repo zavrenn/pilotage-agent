@@ -933,9 +933,7 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
         session_id: Session identifier.
         get_toolset_for_tool: Callable to map tool name -> toolset name.
         context_length: Model's context window size in tokens.
-        provider: Active provider id. When ``"moa"``, ``model`` is a MoA
-            preset name and the banner renders the aggregator instead of a
-            bare model slug.
+        provider: Active provider id.
         availability: Optional precomputed result of
             ``compute_toolset_availability`` (e.g. replayed from the banner
             snapshot). When provided together with ``get_toolset_for_tool``,
@@ -975,45 +973,22 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
         _bskin = None
         _hero = PILOTAGE_CADUCEUS
     left_lines = ["", _hero, ""]
-    if (provider or "").strip().lower() == "moa":
-        # MoA virtual provider: ``model`` is a preset name. Show the preset and
-        # its aggregator so the banner is meaningful instead of a bare slug.
-        preset_name = model
-        agg_label = ""
-        try:
-            from pilotage_cli.config import load_config
-            from pilotage_cli.moa_config import normalize_moa_config
-
-            _moa = normalize_moa_config(load_config().get("moa") or {})
-            _preset = _moa.get("presets", {}).get(preset_name)
-            if _preset:
-                _agg = _preset.get("aggregator") or {}
-                _am = str(_agg.get("model") or "")
-                agg_label = _am.split("/")[-1] if "/" in _am else _am
-        except Exception:
-            agg_label = ""
-        if len(preset_name) > 28:
-            preset_name = preset_name[:25] + "..."
-        agg_str = f" [dim {dim}]·[/] [dim {dim}]agg {agg_label}[/]" if agg_label else ""
-        ctx_str = f" [dim {dim}]·[/] [dim {dim}]{_format_context_length(context_length)} context[/]" if context_length else ""
-        left_lines.append(f"[{accent}]MoA: {preset_name}[/]{agg_str}{ctx_str} [dim {dim}]·[/] [dim {dim}]Nous Research[/]")
+    if not (model or "").strip() or (model or "").strip().lower() == "unknown":
+        # Unconfigured install: say so in red instead of a blank/"unknown"
+        # slug — this is the single clearest place to tell the user what
+        # is wrong and how to fix it.
+        left_lines.append(
+            f"[bold red]no model configured[/] "
+            f"[dim {dim}]— run /model or pilotage setup[/]"
+        )
     else:
-        if not (model or "").strip() or (model or "").strip().lower() == "unknown":
-            # Unconfigured install: say so in red instead of a blank/"unknown"
-            # slug — this is the single clearest place to tell the user what
-            # is wrong and how to fix it.
-            left_lines.append(
-                f"[bold red]no model configured[/] "
-                f"[dim {dim}]— run /model or pilotage setup[/]"
-            )
-        else:
-            model_short = model.split("/")[-1] if "/" in model else model
-            if model_short.endswith(".gguf"):
-                model_short = model_short[:-5]
-            if len(model_short) > 28:
-                model_short = model_short[:25] + "..."
-            ctx_str = f" [dim {dim}]·[/] [dim {dim}]{_format_context_length(context_length)} context[/]" if context_length else ""
-            left_lines.append(f"[{accent}]{model_short}[/]{ctx_str} [dim {dim}]·[/] [dim {dim}]Nous Research[/]")
+        model_short = model.split("/")[-1] if "/" in model else model
+        if model_short.endswith(".gguf"):
+            model_short = model_short[:-5]
+        if len(model_short) > 28:
+            model_short = model_short[:25] + "..."
+        ctx_str = f" [dim {dim}]·[/] [dim {dim}]{_format_context_length(context_length)} context[/]" if context_length else ""
+        left_lines.append(f"[{accent}]{model_short}[/]{ctx_str} [dim {dim}]·[/] [dim {dim}]Nous Research[/]")
 
     if os.getenv("PILOTAGE_YOLO_MODE"):
         left_lines.append(f"[bold red]⚠ YOLO mode[/] [dim {dim}]— all approval prompts bypassed[/]")

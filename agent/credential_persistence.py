@@ -19,10 +19,7 @@ from typing import Any, Dict, Mapping
 # so future external secret providers fail closed at the disk boundary.
 _PERSISTABLE_PROVIDER_SOURCES = frozenset({
     ("anthropic", "pilotage_pkce"),
-    ("minimax-oauth", "oauth"),
-    ("nous", "device_code"),
     ("openai-codex", "device_code"),
-    ("xai-oauth", "device_code"),
 })
 
 _SAFE_SECRETISH_METADATA_KEYS = frozenset({

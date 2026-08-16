@@ -1253,7 +1253,7 @@ def _canonical_model_variants(model: str) -> list[str]:
     # 5. Prepend known provider prefixes to bare variants
     known_providers = (
         'anthropic', 'openai', 'google', 'openrouter', 'groq', 'mistral',
-        'xai', 'cohere', 'perplexity', 'together', 'fireworks', 'deepseek',
+        'cohere', 'perplexity', 'together', 'fireworks', 'deepseek',
     )
     bare_variants = [v for v in variants if '/' not in v]
     for v in bare_variants:

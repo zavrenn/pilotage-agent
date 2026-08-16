@@ -176,7 +176,7 @@ def _try_instantiate(name: str, tts_config: Dict) -> Optional[StreamingTTSProvid
 # latency/quality first. Deliberately hard-coded (a UX decision, not a
 # config knob); edge is absent because it has no chunked-PCM API — the
 # dispatcher's per-sentence sync path keeps it conversational instead.
-_PROVIDER_PRIORITY: List[str] = ["elevenlabs", "gemini", "openai", "xai"]
+_PROVIDER_PRIORITY: List[str] = ["elevenlabs", "gemini", "openai"]
 
 
 def resolve_streaming_provider(
@@ -189,8 +189,8 @@ def resolve_streaming_provider(
 
     1. ``tts.streaming.provider`` (config knob) when set:
        * a provider name pins that exact streamer (or ``None`` if unusable);
-       * ``auto`` walks the priority list (``elevenlabs → gemini → openai
-         → xai``) and returns the first usable streamer — an explicit
+       * ``auto`` walks the priority list (``elevenlabs → gemini →
+         openai``) and returns the first usable streamer — an explicit
          opt-in to "give me the best chunked voice available".
     2. Otherwise the *configured* TTS provider (or ``preferred`` override).
        ``None`` means "no chunked API for this provider" — the dispatcher
@@ -395,94 +395,3 @@ class GeminiStreamer(StreamingTTSProvider):
                             logger.warning("Gemini SSE: bad base64 audio: %s", exc)
 
         yield from _capped(_sse_chunks(), "Gemini streaming TTS")
-
-
-@register("xai")
-class XAIStreamer(StreamingTTSProvider):
-    """xAI WebSocket TTS → binary PCM frames (24 kHz mono int16).
-
-    Salvaged from (@Cdddo): xAI's chunked TTS API is
-    WebSocket-only (``wss://api.x.ai/v1/tts``). Credentials route through
-    ``resolve_xai_http_credentials`` (OAuth or XAI_API_KEY), same as the
-    sync ``_generate_xai_tts`` path. The async WS loop is bridged to the
-    sync iterator contract via ``_collect_async`` — the seam unit tests
-    monkeypatch.
-    """
-
-    sample_rate = 24000
-
-    @staticmethod
-    def available() -> bool:
-        try:
-            from tools.xai_http import resolve_xai_http_credentials
-
-            creds = resolve_xai_http_credentials()
-            return bool(str(creds.get("api_key") or "").strip())
-        except Exception:
-            return False
-
-    def stream(self, text: str) -> Iterator[bytes]:
-        yield from _capped(iter(self._collect_async(text)), "xAI streaming TTS")
-
-    # -- async→sync bridge (test seam) ------------------------------------
-
-    def _collect_async(self, text: str) -> List[bytes]:
-        import asyncio
-
-        return asyncio.run(self._drain_async(text))
-
-    async def _drain_async(self, text: str) -> List[bytes]:
-        frames: List[bytes] = []
-        async for frame in self._async_frames(text):
-            frames.append(frame)
-        return frames
-
-    async def _async_frames(self, text: str):
-        import json as _json
-
-        import websockets
-
-        from tools.tts_tool import DEFAULT_XAI_VOICE_ID
-        from tools.xai_http import resolve_xai_http_credentials
-
-        creds = resolve_xai_http_credentials()
-        api_key = str(creds.get("api_key") or "").strip()
-        if not api_key:
-            raise RuntimeError("No xAI credentials for streaming TTS")
-        voice = str(self.section.get("voice_id", DEFAULT_XAI_VOICE_ID)).strip() or DEFAULT_XAI_VOICE_ID
-        ws_url = str(
-            self.section.get("streaming_url") or "wss://api.x.ai/v1/tts"
-        ).strip()
-
-        async with websockets.connect(
-            ws_url, extra_headers={"Authorization": f"Bearer {api_key}"}
-        ) as ws:
-            await ws.send(_json.dumps({
-                "text": text,
-                "voice_id": voice,
-                "response_format": "pcm",
-            }))
-            try:
-                while True:
-                    message = await ws.recv()
-                    if isinstance(message, (bytes, bytearray, memoryview)):
-                        yield bytes(message)
-                        continue
-                    try:
-                        envelope = _json.loads(message)
-                    except (ValueError, TypeError):
-                        if message == "done":
-                            return
-                        continue
-                    etype = envelope.get("type")
-                    if etype == "done":
-                        return
-                    if etype == "error":
-                        logger.warning("xAI WS error envelope: %s",
-                                       envelope.get("error") or envelope.get("message") or envelope)
-                        return
-            except Exception as exc:
-                if exc.__class__.__name__ == "ConnectionClosed":
-                    return
-                logger.warning("xAI WS receive failed: %s", exc)
-                return

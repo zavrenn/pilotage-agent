@@ -159,14 +159,8 @@ def _billing_ambiguity_context(error_msg: str) -> Dict[str, Any]:
         return {"billing_unverified": True, "possible_content_filter": True}
     return {}
 
-# xAI's explicit Grok credit-exhaustion code. Keep the HTTP 403 special case
-# provider-scoped: other providers' generic billing codes historically remain
-# auth failures when they arrive as 403.
-_XAI_SPENDING_LIMIT_ERROR_CODE = "personal-team-blocked:spending-limit"
-
 # Structured provider codes that mean the account cannot serve paid traffic
-# until credits/subscription capacity is restored. xAI returns its explicit
-# Grok spending-limit signal as HTTP 403 rather than 402.
+# until credits/subscription capacity is restored.
 _BILLING_ERROR_CODES = frozenset({
     "insufficient_quota",
     "billing_not_active",
@@ -176,7 +170,6 @@ _BILLING_ERROR_CODES = frozenset({
     "balance_depleted",
     "model_not_supported_on_free_tier",
     "member_spend_cap_exceeded",
-    _XAI_SPENDING_LIMIT_ERROR_CODE,
 })
 
 # Patterns that indicate rate limiting (transient, will resolve)
@@ -920,35 +913,6 @@ def classify_api_error(
             should_compress=False,
         )
 
-    # xAI Grok subscription entitlement errors.
-    #
-    # xAI returns "You have either run out of available resources or do not
-    # have an active Grok subscription" through two distinct code paths:
-    #
-    #   • HTTP 403 — status_code is set; _classify_by_status (step 2) routes
-    #     it to FailoverReason.auth correctly, and _is_entitlement_failure
-    #     then prevents the credential-refresh loop.
-    #
-    #   • SSE ``type=error`` frame — surfaced as _StreamErrorEvent with
-    #     status_code=None.  _classify_by_status is skipped entirely, and
-    #     "grok subscription" / "out of available resources" appear in none
-    #     of the message-pattern lists below.  Without this guard the error
-    #     falls through to FailoverReason.unknown (retryable=True), burning
-    #     max_retries before the agent stops — and _is_entitlement_failure
-    #     is never called because it only runs under FailoverReason.auth.
-    #
-    # Both X Premium+ and SuperGrok subscribers hit this path when their
-    # subscription tier does not cover the requested model or feature.
-    if (
-        "do not have an active grok subscription" in error_msg
-        or ("out of available resources" in error_msg and "grok" in error_msg)
-    ):
-        return _result(
-            FailoverReason.auth,
-            retryable=False,
-            should_fallback=True,
-        )
-
     # ── 2. HTTP status code classification ──────────────────────────
 
     if status_code is not None:
@@ -961,27 +925,6 @@ def classify_api_error(
         )
         if classified is not None:
             return classified
-
-    # Local MoA streaming compatibility errors are adapter-shape bugs, not a
-    # provider outage. Falling back to another model would silently switch the
-    # user's selected MoA route to a single-model answer follow-up).
-    if provider_lower == "moa" and (
-        "'types.SimpleNamespace' object is not iterable" in str(error)
-        or "'types.SimpleNamespace' object has no attribute 'index'" in str(error)
-    ):
-        return _result(
-            FailoverReason.format_error,
-            retryable=False,
-            should_fallback=False,
-        )
-
-    # Local MoA config drift is deterministic: a persisted session can retain
-    # a preset name that was later renamed/deleted. Retrying the same lookup
-    # cannot recover and makes a clear config error look like an API outage.
-    from agent.errors import MoAPresetNotFoundError
-
-    if isinstance(error, MoAPresetNotFoundError):
-        return _result(FailoverReason.model_not_found, retryable=False)
 
     # ── 3. Error code classification ────────────────────────────────
 
@@ -1135,11 +1078,7 @@ def _classify_by_status(
         # OpenRouter 403 "key limit exceeded" is actually billing. Other
         # providers also use 403 for account-plan or credit exhaustion.
         if (
-            (
-                provider == "xai-oauth"
-                and error_code.lower() == _XAI_SPENDING_LIMIT_ERROR_CODE
-            )
-            or "key limit exceeded" in error_msg
+            "key limit exceeded" in error_msg
             or "spending limit" in error_msg
             or any(p in error_msg for p in _BILLING_PATTERNS)
         ):

@@ -662,40 +662,6 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _maybe_auto_propose_org_edit(name: str, skill_path: Path) -> Optional[str]:
-    """Submit an org-skill edit upstream when `sync.org_auto_propose` is on.
-
-    Returns a short note for the tool result, or None when nothing happened.
-    Never raises: an offline/failed submission must not fail the edit itself —
-    the change is already saved locally and can be proposed later.
-    """
-    try:
-        from agent.skill_utils import is_org_mirror_path
-        from tools import skills_sync_client as ssc
-
-        if not is_org_mirror_path(skill_path, _skills_dir()):
-            return None
-        if not ssc.sync_org_auto_propose():
-            return (
-                f"This skill is shared by your organisation. Your edit is "
-                f"saved locally and will not be overwritten by org updates. "
-                f"Run `pilotage sync propose {name}` to share it back."
-            )
-        result = ssc.propose_skill(name)
-        if result.get("proposal_pending"):
-            return (
-                f"Auto-proposed to your organisation as proposal "
-                f"#{result.get('proposal_id')} (pending admin review)."
-            )
-        return "Auto-proposed to your organisation (merged into the shared set)."
-    except Exception as e:
-        logger.debug("auto-propose skipped for %s: %s", name, e)
-        return (
-            f"Edit saved locally. Could not submit it to your organisation "
-            f"right now — run `pilotage sync propose {name}` to retry."
-        )
-
-
 def _org_mirror_write_guard(name: str, skill_path: Path, action: str) -> Optional[Dict[str, Any]]:
     """Org-shared skills are EDITABLE IN PLACE — this only blocks deletion.
 
@@ -1057,10 +1023,6 @@ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
         "path": str(existing["path"]),
         "_change": {"description": _desc},
     }
-    org_note = _maybe_auto_propose_org_edit(name, existing["path"])
-    if org_note:
-        result["org_sharing"] = org_note
-        result["message"] = f"{result['message']} {org_note}"
     _add_description_prompt_preview(result, content)
     return result
 
@@ -1178,10 +1140,6 @@ def _patch_skill(
         "old": old_string[:200] + ("…" if len(old_string) > 200 else ""),
         "new": new_string[:200] + ("…" if len(new_string) > 200 else ""),
     }
-    org_note = _maybe_auto_propose_org_edit(name, skill_dir)
-    if org_note:
-        result["org_sharing"] = org_note
-        result["message"] = f"{result['message']} {org_note}"
     return result
 
 
@@ -1356,10 +1314,6 @@ def _write_file(name: str, file_path: str, file_content: str) -> Dict[str, Any]:
         "message": f"File '{file_path}' written to skill '{name}'.",
         "path": str(target),
     }
-    org_note = _maybe_auto_propose_org_edit(name, existing["path"])
-    if org_note:
-        result["org_sharing"] = org_note
-        result["message"] = f"{result['message']} {org_note}"
     return result
 
 
@@ -1489,56 +1443,6 @@ def apply_skill_pending(payload: Dict[str, Any]) -> str:
         _skill_gate_bypass.reset(token)
 
 
-# Debounce state for the sync push hook. A burst of skill_manage writes
-# (e.g. create + several write_file calls) collapses into a single push after
-# a short quiet window, on a daemon timer so the agent write never blocks.
-_sync_push_timer = None
-_sync_push_lock = None
-_SYNC_PUSH_DEBOUNCE_S = 5.0
-
-
-def _maybe_debounced_sync_push(skill_name: str) -> None:
-    """Schedule a debounced best-effort sync push after a skill write.
-
-    Cheap fast-path: if the skill isn't opted into sync, do nothing (no auth,
-    no network). Otherwise (re)arm a daemon timer; the actual push runs through
-    ``skills_sync_client.maybe_push_skills`` which enforces the access gate
-    and swallows all errors. Never blocks the caller (M1-C: agent never blocks
-    on sync).
-    """
-    global _sync_push_timer, _sync_push_lock
-    try:
-        from tools.skill_usage import is_sync_enabled
-
-        if not is_sync_enabled(skill_name):
-            return
-    except Exception:
-        return
-
-    import threading
-
-    if _sync_push_lock is None:
-        _sync_push_lock = threading.Lock()
-
-    def _fire():
-        try:
-            from tools.skills_sync_client import maybe_push_skills
-
-            maybe_push_skills(message=f"sync: {skill_name}")
-        except Exception:
-            pass
-
-    with _sync_push_lock:
-        if _sync_push_timer is not None:
-            try:
-                _sync_push_timer.cancel()
-            except Exception:
-                pass
-        _sync_push_timer = threading.Timer(_SYNC_PUSH_DEBOUNCE_S, _fire)
-        _sync_push_timer.daemon = True
-        _sync_push_timer.start()
-
-
 def skill_manage(
     action: str,
     name: str,
@@ -1645,18 +1549,6 @@ def skill_manage(
                 # status`/`restore` still see it. Only a hard delete forgets.
                 if not result.get("_archived"):
                     forget(name)
-        except Exception:
-            pass
-
-        # Sync push hook (debounced, best-effort). Fires only AFTER the
-        # write gate passed (staged/unapproved writes never reach here -- the
-        # gate returns early above), so we never push un-reviewed content.
-        # Inert unless the access gate is open (the user is a Nous admin on the
-        # token), a sync base URL is configured, and the skill is opted into
-        # sync. Debounced so a burst of edits collapses to one push. Never
-        # raises -- an agent write must never block on sync (M1-C invariant).
-        try:
-            _maybe_debounced_sync_push(name)
         except Exception:
             pass
 

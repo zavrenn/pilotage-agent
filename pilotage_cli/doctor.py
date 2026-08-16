@@ -32,7 +32,6 @@ load_pilotage_dotenv(pilotage_home=_env_path.parent, project_env=PROJECT_ROOT / 
 
 from pilotage_cli.colors import Colors, color
 from pilotage_cli.models import _PILOTAGE_USER_AGENT
-from pilotage_cli.vercel_auth import describe_vercel_auth
 from pilotage_constants import OPENROUTER_MODELS_URL
 from utils import base_url_host_matches
 
@@ -44,7 +43,6 @@ _PROVIDER_ENV_HINTS = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_TOKEN",
     "OPENAI_BASE_URL",
-    "NOUS_API_KEY",
     "GLM_API_KEY",
     "ZAI_API_KEY",
     "Z_AI_API_KEY",
@@ -285,19 +283,6 @@ def _has_healthy_oauth_fallback_for_apikey_provider(provider_label: str) -> bool
     still show a failed API-key connectivity row, but it should not promote
     that direct-key problem into the final blocking summary.
     """
-    normalized = (provider_label or "").strip().lower()
-    if normalized == "minimax":
-        try:
-            from pilotage_cli.auth import get_minimax_oauth_auth_status
-            return bool((get_minimax_oauth_auth_status() or {}).get("logged_in"))
-        except Exception:
-            return False
-    if normalized == "xai":
-        try:
-            from pilotage_cli.auth import get_xai_oauth_auth_status
-            return bool((get_xai_oauth_auth_status() or {}).get("logged_in"))
-        except Exception:
-            return False
     return False
 
 
@@ -1161,7 +1146,7 @@ def run_doctor(args):
                     PROVIDER_REGISTRY,
                     resolve_provider as _resolve_auth_provider,
                 )
-                known_providers = set(PROVIDER_REGISTRY.keys()) | {"openrouter", "custom", "auto", "moa"}
+                known_providers = set(PROVIDER_REGISTRY.keys()) | {"openrouter", "custom", "auto"}
             except Exception:
                 _resolve_auth_provider = None
                 pass
@@ -1266,7 +1251,6 @@ def run_doctor(args):
                 "opencode-zen",
                 "huggingface",
                 "lmstudio",
-                "nous",
                 "nvidia",
                 # Fireworks' native model IDs are slash-form
                 # (accounts/fireworks/models/... and .../routers/...), so a "/"
@@ -1529,48 +1513,15 @@ def run_doctor(args):
         except Exception:
             pass
 
-    _section("xAI Model Retirement (May 15, 2026)")
-
-    try:
-        from pilotage_cli.config import load_config
-        from pilotage_cli.xai_retirement import (
-            MIGRATION_GUIDE_URL,
-            find_retired_xai_refs,
-            format_issue,
-        )
-
-        _xai_cfg = load_config()
-        retired_refs = find_retired_xai_refs(_xai_cfg)
-        if not retired_refs:
-            check_ok("No retired xAI models in config")
-        else:
-            for ref in retired_refs:
-                check_warn(format_issue(ref))
-            check_info(f"Migration guide: {MIGRATION_GUIDE_URL}")
-            manual_issues.append(
-                f"Update {len(retired_refs)} retired xAI model reference(s) "
-                f"in config.yaml — see {MIGRATION_GUIDE_URL}"
-            )
-    except Exception as _xai_check_err:
-        check_warn("xAI retirement check skipped", f"({_xai_check_err})")
-
     _section("Auth Providers")
 
     try:
         from pilotage_cli.auth import (
-            get_nous_auth_status_local,
             get_codex_auth_status,
-            get_minimax_oauth_auth_status,
         )
 
         # Read-only display: refresh-free snapshot — doctor must never
         # trigger an OAuth refresh as a side effect of a health check.
-        nous_status = get_nous_auth_status_local()
-        if nous_status.get("logged_in"):
-            check_ok("Nous Portal auth", "(logged in)")
-        else:
-            check_warn("Nous Portal auth", "(not logged in)")
-
         codex_status = get_codex_auth_status()
         if codex_status.get("logged_in"):
             check_ok("OpenAI Codex auth", "(logged in)")
@@ -1588,29 +1539,8 @@ def run_doctor(args):
                     "(optional — only required to import tokens "
                     "from an existing Codex CLI login)"
                 )
-
-        minimax_status = get_minimax_oauth_auth_status()
-        if minimax_status.get("logged_in"):
-            region = minimax_status.get("region", "global")
-            check_ok("MiniMax OAuth", f"(logged in, region={region})")
-        else:
-            check_warn("MiniMax OAuth", "(not logged in)")
     except Exception as e:
         check_warn("Auth provider status", f"(could not check: {e})")
-
-    # xAI OAuth — separate try/except so an import failure here cannot
-    # disrupt the already-printed Nous/Codex/Gemini/MiniMax rows above.
-    try:
-        from pilotage_cli.auth import get_xai_oauth_auth_status
-        xai_oauth_status = get_xai_oauth_auth_status() or {}
-        if xai_oauth_status.get("logged_in"):
-            check_ok("xAI OAuth", "(logged in)")
-        else:
-            check_warn("xAI OAuth", "(not logged in)")
-            if xai_oauth_status.get("error"):
-                check_info(xai_oauth_status["error"])
-    except Exception:
-        pass
 
     _section("Directory Structure")
     pilotage_home = PILOTAGE_HOME
@@ -2074,26 +2004,6 @@ def run_doctor(args):
                 issues,
             )
 
-        auth_status = describe_vercel_auth()
-        if auth_status.ok:
-            check_ok("Vercel auth", f"({auth_status.label})")
-        elif auth_status.label.startswith("partial"):
-            _fail_and_issue(
-                "Vercel auth incomplete",
-                f"({auth_status.label})",
-                "Set VERCEL_TOKEN, VERCEL_PROJECT_ID, and VERCEL_TEAM_ID together",
-                issues,
-            )
-        else:
-            _fail_and_issue(
-                "Vercel auth not configured",
-                f"({auth_status.label})",
-                "Configure Vercel Sandbox auth with VERCEL_TOKEN, VERCEL_PROJECT_ID, and VERCEL_TEAM_ID",
-                issues,
-            )
-        for line in auth_status.detail_lines:
-            check_info(f"Vercel auth {line}")
-
         persistent = os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() in {"1", "true", "yes", "on"}
         if persistent:
             check_info("Vercel persistence: snapshot filesystem only; live processes do not survive sandbox recreation")
@@ -2392,75 +2302,6 @@ def run_doctor(args):
                 ["Check network connectivity"],
             )
 
-    def _probe_anthropic() -> _ConnectivityResult:
-        from pilotage_cli.auth import get_anthropic_key
-        key = get_anthropic_key()
-        if not key:
-            return _ConnectivityResult("Anthropic API", [], [])
-        try:
-            import httpx
-            from agent.anthropic_adapter import (
-                _is_oauth_token,
-                _COMMON_BETAS,
-                _OAUTH_ONLY_BETAS,
-                _CONTEXT_1M_BETA,
-            )
-            headers = {"anthropic-version": "2023-06-01"}
-            is_oauth = _is_oauth_token(key)
-            if is_oauth:
-                headers["Authorization"] = f"Bearer {key}"
-                headers["anthropic-beta"] = ",".join(_COMMON_BETAS + _OAUTH_ONLY_BETAS)
-            else:
-                headers["x-api-key"] = key
-            r = httpx.get(
-                "https://api.anthropic.com/v1/models",
-                headers=headers, timeout=10,
-            )
-            # Reactive recovery: OAuth subscriptions without 1M context reject the
-            # request with 400 "long context beta is not yet available for this
-            # subscription". Retry once with that beta stripped so the doctor
-            # check doesn't falsely report Anthropic as unreachable.
-            if (
-                is_oauth
-                and r.status_code == 400
-                and "long context beta" in r.text.lower()
-                and "not yet available" in r.text.lower()
-            ):
-                headers["anthropic-beta"] = ",".join(
-                    [b for b in _COMMON_BETAS if b != _CONTEXT_1M_BETA]
-                    + list(_OAUTH_ONLY_BETAS)
-                )
-                r = httpx.get(
-                    "https://api.anthropic.com/v1/models",
-                    headers=headers, timeout=10,
-                )
-            if r.status_code == 200:
-                return _ConnectivityResult(
-                    "Anthropic API",
-                    [(color("✓", Colors.GREEN), "Anthropic API", "")],
-                    [],
-                )
-            if r.status_code == 401:
-                return _ConnectivityResult(
-                    "Anthropic API",
-                    [(color("✗", Colors.RED), "Anthropic API",
-                      color("(invalid API key)", Colors.DIM))],
-                    [],
-                )
-            return _ConnectivityResult(
-                "Anthropic API",
-                [(color("⚠", Colors.YELLOW), "Anthropic API",
-                  color("(couldn't verify)", Colors.DIM))],
-                [],
-            )
-        except Exception as e:
-            return _ConnectivityResult(
-                "Anthropic API",
-                [(color("⚠", Colors.YELLOW), "Anthropic API",
-                  color(f"({e})", Colors.DIM))],
-                [],
-            )
-
     def _probe_apikey_provider(pname, env_vars, default_url, base_env,
                                supports_health_check) -> _ConnectivityResult:
         key = ""
@@ -2546,140 +2387,8 @@ def run_doctor(args):
                 [],
             )
 
-    def _probe_bedrock() -> _ConnectivityResult:
-        try:
-            from agent.bedrock_adapter import (
-                has_aws_credentials,
-                resolve_aws_auth_env_var,
-                resolve_bedrock_region,
-            )
-        except ImportError:
-            return _ConnectivityResult("AWS Bedrock", [], [])
-        if not has_aws_credentials():
-            return _ConnectivityResult("AWS Bedrock", [], [])
-        auth_var = resolve_aws_auth_env_var()
-        region = resolve_bedrock_region()
-        label = "AWS Bedrock".ljust(20)
-        try:
-            import boto3
-            from botocore.config import Config as _BotoConfig
-            # Trim retries on the actual Bedrock API call so a transient
-            # failure doesn't pad the doctor run by 30+ seconds.
-            cfg = _BotoConfig(
-                connect_timeout=5,
-                read_timeout=10,
-                retries={"max_attempts": 1},
-            )
-            client = boto3.client("bedrock", region_name=region, config=cfg)
-            resp = client.list_foundation_models()
-            n = len(resp.get("modelSummaries", []))
-            return _ConnectivityResult(
-                "AWS Bedrock",
-                [(color("✓", Colors.GREEN), label,
-                  color(f"({auth_var}, {region}, {n} models)", Colors.DIM))],
-                [],
-            )
-        except ImportError:
-            return _ConnectivityResult(
-                "AWS Bedrock",
-                [(color("⚠", Colors.YELLOW), label,
-                  color(f"(boto3 not installed — {sys.executable} -m pip install boto3)",
-                        Colors.DIM))],
-                [f"Install boto3 for Bedrock: {sys.executable} -m pip install boto3"],
-            )
-        except Exception as e:
-            err_name = type(e).__name__
-            return _ConnectivityResult(
-                "AWS Bedrock",
-                [(color("⚠", Colors.YELLOW), label,
-                  color(f"({err_name}: {e})", Colors.DIM))],
-                [f"AWS Bedrock: {err_name} — check IAM permissions for "
-                 f"bedrock:ListFoundationModels"],
-            )
-
-    def _probe_azure_entra() -> _ConnectivityResult:
-        """Probe Azure Foundry Entra ID auth, parallel to ``_probe_bedrock``.
-
-        Skipped unless the active config has ``model.provider:
-        azure-foundry`` AND ``model.auth_mode: entra_id`` — we don't probe
-        the token-service / CLI chain for users on plain API-key Azure.
-
-        Bounded by a 10s timeout (via
-        :func:`agent.azure_identity_adapter.describe_active_credential`)
-        so a slow token service can't pad the doctor run.
-        """
-        label = "Azure Foundry (Entra ID)".ljust(28)
-        try:
-            from pilotage_cli.config import load_config
-            cfg = load_config()
-            model_cfg = cfg.get("model") if isinstance(cfg, dict) else {}
-            if not isinstance(model_cfg, dict):
-                return _ConnectivityResult("Azure Foundry (Entra ID)", [], [])
-            cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
-            auth_mode = str(model_cfg.get("auth_mode") or "").strip().lower()
-            if cfg_provider != "azure-foundry" or auth_mode != "entra_id":
-                return _ConnectivityResult("Azure Foundry (Entra ID)", [], [])
-        except Exception:
-            return _ConnectivityResult("Azure Foundry (Entra ID)", [], [])
-
-        try:
-            from agent.azure_identity_adapter import (
-                EntraIdentityConfig,
-                SCOPE_AI_AZURE_DEFAULT,
-                describe_active_credential,
-                has_azure_identity_installed,
-            )
-        except Exception as exc:
-            return _ConnectivityResult(
-                "Azure Foundry (Entra ID)",
-                [(color("⚠", Colors.YELLOW), label,
-                  color(f"(adapter import failed: {exc})", Colors.DIM))],
-                [f"Azure Foundry adapter import failed: {exc}"],
-            )
-
-        if not has_azure_identity_installed():
-            return _ConnectivityResult(
-                "Azure Foundry (Entra ID)",
-                [(color("⚠", Colors.YELLOW), label,
-                  color("(azure-identity not installed)", Colors.DIM))],
-                [f"Install azure-identity: {sys.executable} -m pip install azure-identity"],
-            )
-
-        entra_cfg = model_cfg.get("entra") or {}
-        if not isinstance(entra_cfg, dict):
-            entra_cfg = {}
-        scope = (
-            str(entra_cfg.get("scope") or "").strip()
-            or SCOPE_AI_AZURE_DEFAULT
-        )
-        config = EntraIdentityConfig(
-            scope=scope,
-        )
-        info = describe_active_credential(config=config, timeout_seconds=10.0)
-        if info.get("ok"):
-            env_sources = info.get("env_sources") or []
-            tag = ", ".join(env_sources) if env_sources else "default credential chain"
-            return _ConnectivityResult(
-                "Azure Foundry (Entra ID)",
-                [(color("✓", Colors.GREEN), label,
-                  color(f"({tag}, scope={scope})", Colors.DIM))],
-                [],
-            )
-        err = info.get("error") or "credential chain exhausted"
-        hint = info.get("hint") or (
-            "Run `az login`, set AZURE_TENANT_ID/AZURE_CLIENT_ID/"
-            "AZURE_CLIENT_SECRET, or attach a managed identity to this VM."
-        )
-        return _ConnectivityResult(
-            "Azure Foundry (Entra ID)",
-            [(color("⚠", Colors.YELLOW), label,
-              color(f"({err})", Colors.DIM))],
-            [f"Azure Foundry Entra: {err}. {hint}"],
-        )
-
     # Build the probe submission list in display order
     _probes.append(("OpenRouter API", _probe_openrouter))
-    _probes.append(("Anthropic API", _probe_anthropic))
 
     global _APIKEY_PROVIDERS_CACHE
     if _APIKEY_PROVIDERS_CACHE is None:
@@ -2693,8 +2402,6 @@ def run_doctor(args):
                                        b=_base_env, s=_supports:
                                 _probe_apikey_provider(p, e, u, b, s)))
 
-    _probes.append(("AWS Bedrock", _probe_bedrock))
-    _probes.append(("Azure Foundry (Entra ID)", _probe_azure_entra))
 
     # Print a single status line so users see something happening, then
     # fan out. ``\r`` clears it once the first real result line lands.

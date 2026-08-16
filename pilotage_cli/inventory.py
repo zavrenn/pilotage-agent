@@ -121,7 +121,6 @@ def build_models_payload(
     pricing: bool = False,
     capabilities: bool = False,
     featured: bool = False,
-    force_fresh_nous_tier: bool = False,
     refresh: bool = False,
     probe_custom_providers: bool = True,
     probe_current_custom_provider: bool = False,
@@ -191,7 +190,6 @@ def build_models_payload(
         current_model=ctx.current_model,
         user_providers=ctx.user_providers,
         custom_providers=ctx.custom_providers,
-        force_fresh_nous_tier=force_fresh_nous_tier,
         max_models=max_models,
         refresh=refresh,
         probe_custom_providers=probe_custom_providers,
@@ -199,10 +197,6 @@ def build_models_payload(
         for_picker=for_picker,
         excluded_providers=ctx.excluded_providers or [],
     )
-
-    moa_row = _moa_provider_row(ctx.current_provider)
-    if moa_row is not None:
-        rows = [moa_row] + [r for r in rows if str(r.get("slug", "")).lower() != "moa"]
 
     if explicit_only:
         rows = _filter_explicit_provider_rows(rows, ctx)
@@ -261,13 +255,13 @@ def build_models_payload(
                     row["total_models"] = len(filtered)
 
     if include_unconfigured:
-        rows = list(rows) + [r for r in _append_unconfigured_rows(rows, ctx) if str(r.get("slug", "")).lower() != "moa"]
+        rows = list(rows) + _append_unconfigured_rows(rows, ctx)
     if picker_hints:
         _apply_picker_hints(rows)
     if canonical_order:
         rows = _reorder_canonical(rows)
     if pricing:
-        _apply_pricing(rows, force_fresh_nous_tier=force_fresh_nous_tier)
+        _apply_pricing(rows)
     if capabilities:
         _apply_capabilities(rows)
     if featured:
@@ -343,12 +337,6 @@ def build_aux_picker_rows(
     - the active custom endpoint is probed, offline saved ones are not, so
       the picker never blocks on a dead local server
 
-    The virtual ``moa`` row is excluded: auxiliary tasks must not run the
-    MoA reference fan-out, and ``auxiliary_client`` unwraps a ``moa``
-    provider to its aggregator slot anyway (see ``_resolve_auto``), so
-    offering it here would be a choice silently rewritten behind the user's
-    back. Mirrors the same filter in ``pilotage_cli/moa_cmd.py``.
-
     Rows are the standard ``list_authenticated_providers`` shape. Pair with
     :func:`format_aux_picker_entries` to render them.
     """
@@ -364,7 +352,7 @@ def build_aux_picker_rows(
         probe_current_custom_provider=True,
         max_models=max_models,
     )["providers"]
-    return [r for r in rows if str(r.get("slug") or "").strip().lower() != "moa"]
+    return rows
 
 
 def format_aux_picker_entries(
@@ -599,62 +587,9 @@ def _filter_explicit_provider_rows(rows: list[dict], ctx: ConfigContext) -> list
         if current_slug and slug == current_slug:
             kept.append(row)
             continue
-        if slug == "moa":
-            # MoA is a virtual routing mode, not an independently configured
-            # provider. Hide it from explicit-only pickers unless it is the
-            # current provider (handled above) or the user explicitly wrote an
-            # enabled MoA preset into config.yaml. Use raw config so the
-            # DEFAULT_CONFIG preset does not make every desktop picker show MoA.
-            if _raw_config_has_enabled_moa_preset():
-                kept.append(row)
-            continue
         if is_provider_explicitly_configured(slug):
             kept.append(row)
     return kept
-
-
-def _raw_config_has_enabled_moa_preset() -> bool:
-    """Return True when the user's raw config explicitly enables MoA.
-
-    ``load_config()`` includes ``DEFAULT_CONFIG["moa"].presets.default`` for
-    everyone. Explicit-only model pickers must not treat that default as a user
-    choice, but they should keep MoA visible once the user has saved at least
-    one enabled preset (or an older flat MoA config) in their own config.yaml.
-    """
-    try:
-        from pilotage_cli.config import read_raw_config
-
-        raw = read_raw_config()
-    except Exception:
-        return False
-
-    if not isinstance(raw, dict):
-        return False
-    moa = raw.get("moa")
-    if not isinstance(moa, dict):
-        return False
-
-    presets = moa.get("presets")
-    if isinstance(presets, dict):
-        for name, preset in presets.items():
-            if not str(name or "").strip():
-                continue
-            if not isinstance(preset, dict):
-                return True
-            if preset.get("enabled", True):
-                return True
-        return False
-
-    legacy_keys = {
-        "reference_models",
-        "aggregator",
-        "reference_temperature",
-        "aggregator_temperature",
-        "max_tokens",
-        "reference_max_tokens",
-        "fanout",
-    }
-    return any(key in moa for key in legacy_keys) and bool(moa.get("enabled", True))
 
 
 def _apply_picker_hints(rows: list[dict]) -> None:
@@ -716,11 +651,7 @@ def _reorder_canonical(rows: list[dict]) -> list[dict]:
     return canon + extras
 
 
-def _apply_pricing(
-    rows: list[dict],
-    *,
-    force_fresh_nous_tier: bool = False,
-) -> None:
+def _apply_pricing(rows: list[dict]) -> None:
     """Enrich each provider row with per-model pricing + Nous tier gating.
 
     Mutates ``rows`` in-place. For every row whose provider supports live
@@ -740,14 +671,8 @@ def _apply_pricing(
     """
     from pilotage_cli.models import (
         _format_price_per_mtok,
-        check_nous_free_tier,
-        compute_sale_discount,
         get_pricing_for_provider,
-        partition_nous_models_by_tier,
     )
-
-    # Resolve Nous free-tier once (cached in models.py for the TTL window).
-    nous_free_tier: Optional[bool] = None
 
     for row in rows:
         slug = str(row.get("slug", "")).lower()
@@ -780,77 +705,7 @@ def _apply_pricing(
                 "cache": cache,
                 "free": is_free,
             }
-            # Sale chrome is Nous Portal-only. Other providers (OpenRouter,
-            # Novita, …) never get discount_percent / was_* even if a nested
-            # pricing.original somehow appeared in their catalog. Free / $0
-            # models never get sale chrome either — even if original leaked.
-            if slug == "nous" and not is_free:
-                sale = compute_sale_discount(
-                    inp_raw, out_raw, p.get("original")
-                )
-                if sale is not None:
-                    discount_percent, was_prompt_raw, was_out_raw = sale
-                    entry["discount_percent"] = discount_percent
-                    if was_prompt_raw != "":
-                        entry["was_input"] = _format_price_per_mtok(
-                            was_prompt_raw
-                        )
-                    if was_out_raw != "":
-                        entry["was_output"] = _format_price_per_mtok(
-                            was_out_raw
-                        )
             formatted[mid] = entry
 
         if formatted:
             row["pricing"] = formatted
-
-        if slug == "nous":
-            try:
-                if nous_free_tier is None:
-                    nous_free_tier = check_nous_free_tier(
-                        force_fresh=force_fresh_nous_tier
-                    )
-                row["free_tier"] = bool(nous_free_tier)
-                if nous_free_tier:
-                    _selectable, unavailable = partition_nous_models_by_tier(
-                        list(models), raw_pricing, free_tier=True
-                    )
-                    row["unavailable_models"] = unavailable
-                else:
-                    row["unavailable_models"] = []
-            except Exception:
-                # Tier detection failed — fail open (no gating) so the user
-                # is never blocked from picking a model.
-                row["free_tier"] = False
-                row["unavailable_models"] = []
-
-
-def _moa_provider_row(current_provider: str = "") -> dict | None:
-    """Build the virtual ``moa`` provider row for model pickers.
-
-    Shared by the CLI inventory (:func:`build_models_payload`) and the gateway
-    picker path (:func:`pilotage_cli.model_switch.list_picker_providers`) so the
-    row shape stays in one place. Returns ``None`` when no MoA presets exist.
-    """
-    try:
-        from pilotage_cli.config import load_config
-        from pilotage_cli.moa_config import normalize_moa_config
-
-        cfg = normalize_moa_config(load_config().get("moa") or {})
-        models = list(cfg.get("presets", {}).keys())
-        if not models:
-            return None
-        return {
-            "slug": "moa",
-            "name": "Mixture of Agents",
-            "is_current": (current_provider or "").lower() == "moa",
-            "is_user_defined": False,
-            "models": models,
-            "total_models": len(models),
-            "source": "virtual",
-            "authenticated": True,
-            "auth_type": "virtual",
-            "warning": "Aggregator acts as the selected model; references provide analysis before each call.",
-        }
-    except Exception:
-        return None

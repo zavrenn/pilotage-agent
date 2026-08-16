@@ -77,7 +77,7 @@ STATUS_DEAD = "dead"
 
 # OAuth error reasons that indicate the credential is permanently invalid
 # server-side and cannot be recovered by retry/refresh.  Sourced from
-# OpenAI Codex Responses API, Anthropic, xAI, and Google OAuth spec.
+# OpenAI Codex Responses API and Anthropic OAuth spec.
 _TERMINAL_AUTH_REASONS = frozenset({
     "token_invalidated",   # OpenAI Codex: "Your authentication token has been invalidated."
     "token_revoked",        # OAuth 2.0 RFC 7009: token explicitly revoked
@@ -270,30 +270,10 @@ class PooledCredential:
 
     @property
     def runtime_api_key(self) -> str:
-        if self.provider == "nous":
-            # Nous stores the runtime inference credential in agent_key for
-            # compatibility. It must be a NAS invoke JWT.
-            for token, expires_at in (
-                (self.agent_key, self.agent_key_expires_at),
-                (self.access_token, self.expires_at),
-            ):
-                if (
-                    isinstance(token, str)
-                    and token.strip()
-                    and auth_mod._nous_invoke_jwt_is_usable(
-                        token,
-                        scope=getattr(self, "scope", None),
-                        expires_at=expires_at,
-                    )
-                ):
-                    return token.strip()
-            return ""
         return str(self.access_token or "")
 
     @property
     def runtime_base_url(self) -> Optional[str]:
-        if self.provider == "nous":
-            return self.inference_base_url or self.base_url
         return self.base_url
 
 
@@ -331,7 +311,7 @@ def _exhausted_ttl(
 
     *failure_reason* is the classified semantics from
     ``agent/error_classifier.py``. The raw status alone can't size the
-    cooldown: an OpenRouter ``key limit exceeded`` and an xAI spending-limit
+    cooldown: an OpenRouter ``key limit exceeded`` and a spending-limit
     block both arrive as **403** but classify as ``billing``, and a 60s retry
     on a spent account just re-fails every minute. Billing keeps the full
     bench regardless of status; 402 does too, since it is billing by
@@ -598,19 +578,17 @@ def _write_through_provider_state_to_global_root(
     """Persist a rotated OAuth ``state`` into the global-root auth.json.
 
     Best-effort write-through for the multi-profile rotation hazard
-     / ): nous, openai-codex, and xai-oauth rotate the
-    refresh_token on refresh, so when a profile pool refresh rotates a grant
-    it resolved from the root fallback, the rotated chain must land back in
-    root. Otherwise root keeps a now-revoked refresh token and every other
-    profile reading the stale root grant dies with ``refresh_token_reused`` /
-    ``invalid_grant`` once its access token expires.
+    (openai-codex): the refresh_token rotates on refresh, so when a
+    profile pool refresh rotates a grant it resolved from the root
+    fallback, the rotated chain must land back in root. Otherwise root
+    keeps a now-revoked refresh token and every other profile reading the
+    stale root grant dies with ``refresh_token_reused`` / ``invalid_grant``
+    once its access token expires.
 
     Only updates ``providers.<provider_id>`` in the root store; never touches
     the profile store (the caller already saved that). Swallows all errors — a
     failed write-through degrades to the pre-existing behavior (root stale), it
-    must never break the profile's own successful save. Mirrors
-    ``pilotage_cli.auth._write_through_xai_oauth_to_global_root`` (which covers
-    the non-pool xAI refresh path) for the credential-pool refresh path.
+    must never break the profile's own successful save.
     """
     try:
         global_path = auth_mod._global_auth_file_path()
@@ -852,58 +830,6 @@ class CredentialPool:
             self._persist()
         return updated
 
-    def _sync_anthropic_entry_from_credentials_file(self, entry: PooledCredential) -> PooledCredential:
-        """Sync a claude_code pool entry from ~/.claude/.credentials.json if tokens differ.
-
-        OAuth refresh tokens are single-use. When something external (e.g.
-        Claude Code CLI, or another profile's pool) refreshes the token, it
-        writes the new pair to ~/.claude/.credentials.json. The pool entry's
-        refresh token becomes stale. This method detects that and syncs.
-        """
-        if self.provider != "anthropic" or entry.source != "claude_code":
-            return entry
-        try:
-            from agent.anthropic_adapter import read_claude_code_credentials
-            creds = read_claude_code_credentials()
-            if not creds:
-                return entry
-            file_refresh = creds.get("refreshToken", "")
-            file_access = creds.get("accessToken", "")
-            file_expires = creds.get("expiresAt", 0)
-            # Sync when either token changed.  Access tokens can be re-issued
-            # without a new refresh token (silent re-issue path), so checking
-            # only refresh_token misses that case and leaves a stale
-            # access_token in the pool → 401 on every request until the pool
-            # entry's exhausted TTL expires.
-            entry_access = entry.access_token or ""
-            entry_refresh = entry.refresh_token or ""
-            if (file_access or file_refresh) and (
-                (file_access and file_access != entry_access)
-                or (file_refresh and file_refresh != entry_refresh)
-            ):
-                logger.debug(
-                    "Pool entry %s: syncing tokens from credentials file (tokens changed)",
-                    entry.id,
-                )
-                updated = replace(
-                    entry,
-                    access_token=file_access or entry.access_token,
-                    refresh_token=file_refresh or entry.refresh_token,
-                    expires_at_ms=file_expires or entry.expires_at_ms,
-                    last_status=None,
-                    last_status_at=None,
-                    last_error_code=None,
-                    last_error_reason=None,
-                    last_error_message=None,
-                    last_error_reset_at=None,
-                )
-                self._replace_entry(entry, updated)
-                self._persist()
-                return updated
-        except Exception as exc:
-            logger.debug("Failed to sync from credentials file: %s", exc)
-        return entry
-
     def _sync_codex_entry_from_auth_store(self, entry: PooledCredential) -> PooledCredential:
         """Sync a Codex device_code pool entry from auth.json if tokens differ.
 
@@ -917,7 +843,7 @@ class CredentialPool:
         though fresh credentials are sitting on disk — and every request
         fails with "no available entries (all exhausted or empty)".
 
-        Mirrors the Nous/Anthropic resync paths above.  Only applies to
+        Mirrors the Anthropic resync path above.  Only applies to
         device_code-sourced entries; env/API-key-sourced entries have no
         auth.json shadow to sync from.
         """
@@ -992,175 +918,6 @@ class CredentialPool:
             logger.debug("Failed to sync Codex entry from auth.json: %s", exc)
         return entry
 
-    def _sync_xai_oauth_entry_from_auth_store(self, entry: PooledCredential) -> PooledCredential:
-        """Sync an xAI OAuth pool entry from auth.json if tokens differ.
-
-        xAI OAuth refresh tokens are single-use.  When another Pilotage process
-        (or another profile sharing the same auth.json) refreshes the token,
-        it writes the new pair to ``providers["xai-oauth"]["tokens"]`` under
-        ``_auth_store_lock``.  Without this resync, our in-memory pool entry
-        keeps the consumed refresh_token and the next ``_refresh_entry`` call
-        would replay it and get a ``refresh_token_reused``-style 4xx.
-
-        Only applies to entries seeded from the singleton (``device_code``);
-        manually added entries are independent credentials with their own
-        refresh-token lifecycle.
-        """
-        if self.provider != "xai-oauth" or entry.source != "device_code":
-            return entry
-        try:
-            with _auth_store_lock():
-                auth_store = _load_auth_store()
-                state = _load_provider_state(auth_store, "xai-oauth")
-            if not isinstance(state, dict):
-                return entry
-            tokens = state.get("tokens")
-            if not isinstance(tokens, dict):
-                return entry
-            store_access = tokens.get("access_token", "")
-            store_refresh = tokens.get("refresh_token", "")
-            entry_access = entry.access_token or ""
-            entry_refresh = entry.refresh_token or ""
-            if store_access and (
-                store_access != entry_access
-                or (store_refresh and store_refresh != entry_refresh)
-            ):
-                logger.debug(
-                    "Pool entry %s: syncing xAI OAuth tokens from auth.json "
-                    "(refreshed by another process)",
-                    entry.id,
-                )
-                field_updates: Dict[str, Any] = {
-                    "access_token": store_access,
-                    "refresh_token": store_refresh or entry.refresh_token,
-                    "last_status": None,
-                    "last_status_at": None,
-                    "last_error_code": None,
-                    "last_error_reason": None,
-                    "last_error_message": None,
-                    "last_error_reset_at": None,
-                }
-                if state.get("last_refresh"):
-                    field_updates["last_refresh"] = state["last_refresh"]
-                updated = replace(entry, **field_updates)
-                self._replace_entry(entry, updated)
-                self._persist()
-                return updated
-        except Exception as exc:
-            logger.debug("Failed to sync xAI OAuth entry from auth.json: %s", exc)
-        return entry
-
-    def _sync_xai_oauth_entry_from_pool_store(
-        self, entry: PooledCredential
-    ) -> PooledCredential:
-        """Adopt a token pair rotated by another pool instance.
-
-        Direct xAI integrations load a fresh ``CredentialPool`` for each
-        request. Their in-memory locks therefore cannot protect xAI's
-        single-use refresh token across concurrent requests or processes.
-        This helper is called while the shared auth-store lock is held and
-        re-reads the exact persisted row before a refresh POST is attempted.
-        """
-        if self.provider != "xai-oauth":
-            return entry
-        try:
-            persisted = next(
-                (
-                    payload
-                    for payload in read_credential_pool(self.provider)
-                    if isinstance(payload, dict) and payload.get("id") == entry.id
-                ),
-                None,
-            )
-            if not isinstance(persisted, dict):
-                return entry
-            stored = PooledCredential.from_dict(self.provider, persisted)
-            if (
-                stored.access_token != entry.access_token
-                or stored.refresh_token != entry.refresh_token
-            ):
-                logger.debug(
-                    "Pool entry %s: adopting xAI OAuth tokens rotated by another pool instance",
-                    entry.id,
-                )
-                self._replace_entry(entry, stored)
-                return stored
-        except Exception as exc:
-            logger.debug("Failed to sync xAI OAuth entry from credential pool: %s", exc)
-        return entry
-
-    def _sync_nous_entry_from_auth_store(self, entry: PooledCredential) -> PooledCredential:
-        """Sync a Nous pool entry from auth.json if tokens differ.
-
-        Nous OAuth refresh tokens are single-use.  When another process
-        (e.g. a concurrent cron) refreshes the token via
-        ``resolve_nous_runtime_credentials``, it writes fresh tokens to
-        auth.json under ``_auth_store_lock``.  The pool entry's tokens
-        become stale.  This method detects that and adopts the newer pair,
-        avoiding a "refresh token reuse" revocation on the Nous Portal.
-        """
-        if self.provider != "nous" or entry.source != "device_code":
-            return entry
-        try:
-            with _auth_store_lock():
-                auth_store = _load_auth_store()
-                state = _load_provider_state(auth_store, "nous")
-            if not state:
-                return entry
-            store_refresh = state.get("refresh_token", "")
-            store_access = state.get("access_token", "")
-            comparable_updates = {
-                "access_token": store_access,
-                "refresh_token": store_refresh,
-                "expires_at": state.get("expires_at"),
-                "agent_key": state.get("agent_key"),
-                "agent_key_expires_at": state.get("agent_key_expires_at"),
-                "inference_base_url": state.get("inference_base_url"),
-            }
-            should_sync = any(
-                value not in (None, "") and getattr(entry, key, None) != value
-                for key, value in comparable_updates.items()
-            )
-            if should_sync:
-                logger.debug(
-                    "Pool entry %s: syncing Nous state from auth.json",
-                    entry.id,
-                )
-                field_updates: Dict[str, Any] = {
-                    "last_status": None,
-                    "last_status_at": None,
-                    "last_error_code": None,
-                    "last_error_reason": None,
-                    "last_error_message": None,
-                    "last_error_reset_at": None,
-                }
-                if store_access:
-                    field_updates["access_token"] = store_access
-                if store_refresh:
-                    field_updates["refresh_token"] = store_refresh
-                if state.get("expires_at"):
-                    field_updates["expires_at"] = state["expires_at"]
-                if state.get("agent_key"):
-                    field_updates["agent_key"] = state["agent_key"]
-                if state.get("agent_key_expires_at"):
-                    field_updates["agent_key_expires_at"] = state["agent_key_expires_at"]
-                if state.get("inference_base_url"):
-                    field_updates["inference_base_url"] = state["inference_base_url"]
-                extra_updates = dict(entry.extra)
-                for extra_key in ("obtained_at", "expires_in", "agent_key_id",
-                                  "agent_key_expires_in", "agent_key_reused",
-                                  "agent_key_obtained_at"):
-                    val = state.get(extra_key)
-                    if val is not None:
-                        extra_updates[extra_key] = val
-                updated = replace(entry, extra=extra_updates, **field_updates)
-                self._replace_entry(entry, updated)
-                self._persist()
-                return updated
-        except Exception as exc:
-            logger.debug("Failed to sync Nous entry from auth.json: %s", exc)
-        return entry
-
     def _sync_device_code_entry_to_auth_store(self, entry: PooledCredential) -> None:
         """Write refreshed pool entry tokens back to auth.json providers.
 
@@ -1171,12 +928,12 @@ class CredentialPool:
         re-seeding a consumed single-use refresh token.
 
         Applies to any OAuth provider whose singleton lives in auth.json
-        (currently Nous, OpenAI Codex, and xAI Grok OAuth).
+        (currently OpenAI Codex).
 
         ``set_active=False`` on every write: a pool sync-back is a
         token-rotation side effect, not the user choosing a provider.
         Using ``_save_provider_state`` (which sets ``active_provider``)
-        here would mean every Nous/Codex/xAI refresh in a multi-provider
+        here would mean every Codex refresh in a multi-provider
         setup silently flips the ``active_provider`` flag — the next
         ``pilotage`` invocation that defaults to the active provider
         (e.g. setup wizard, ``pilotage auth status``) would land on
@@ -1186,17 +943,15 @@ class CredentialPool:
         # Only sync entries that were seeded *from* a singleton.  Manually
         # added pool entries (source="manual:*") are independent credentials
         # and must not write back to the singleton.  All singleton-seeded
-        # device-code sources (nous, openai-codex, xAI) use ``device_code``.
+        # device-code sources (openai-codex) use ``device_code``.
         if entry.source != "device_code":
             return
         try:
             with _auth_store_lock():
                 auth_store = _load_auth_store()
-                _wt_provider_id = {
-                    "nous": "nous",
-                    "openai-codex": "openai-codex",
-                    "xai-oauth": "xai-oauth",
-                }.get(self.provider)
+                _wt_provider_id = (
+                    "openai-codex" if self.provider == "openai-codex" else None
+                )
                 # Resolve state and track which store it came from — the
                 # source path tells us whether this profile genuinely owns
                 # its provider block or is reading from the global root.
@@ -1215,21 +970,9 @@ class CredentialPool:
                 # profile does not accrue a shadowing ``providers.<id>``
                 # key that blocks both the root fallback and the write-through
                 # on subsequent calls.
-                if self.provider == "nous":
-                    state, source_path = _load_provider_state_with_source(
-                        auth_store, "nous"
-                    )
-                    if state is None:
-                        return
-                elif self.provider == "openai-codex":
+                if self.provider == "openai-codex":
                     state, source_path = _load_provider_state_with_source(
                         auth_store, "openai-codex"
-                    )
-                    if not isinstance(state, dict):
-                        return
-                elif self.provider == "xai-oauth":
-                    state, source_path = _load_provider_state_with_source(
-                        auth_store, "xai-oauth"
                     )
                     if not isinstance(state, dict):
                         return
@@ -1243,36 +986,7 @@ class CredentialPool:
                     and _same_path(source_path, global_root)
                 )
 
-                if self.provider == "nous":
-                    state["access_token"] = entry.access_token
-                    if entry.refresh_token:
-                        state["refresh_token"] = entry.refresh_token
-                    if entry.expires_at:
-                        state["expires_at"] = entry.expires_at
-                    if entry.agent_key:
-                        state["agent_key"] = entry.agent_key
-                    if entry.agent_key_expires_at:
-                        state["agent_key_expires_at"] = entry.agent_key_expires_at
-                    for extra_key in ("obtained_at", "expires_in", "agent_key_id",
-                                      "agent_key_expires_in", "agent_key_reused",
-                                      "agent_key_obtained_at"):
-                        val = entry.extra.get(extra_key)
-                        if val is not None:
-                            state[extra_key] = val
-                    if entry.inference_base_url:
-                        state["inference_base_url"] = entry.inference_base_url
-
-                elif self.provider == "openai-codex":
-                    tokens = state.get("tokens")
-                    if not isinstance(tokens, dict):
-                        return
-                    tokens["access_token"] = entry.access_token
-                    if entry.refresh_token:
-                        tokens["refresh_token"] = entry.refresh_token
-                    if entry.last_refresh:
-                        state["last_refresh"] = entry.last_refresh
-
-                elif self.provider == "xai-oauth":
+                if self.provider == "openai-codex":
                     tokens = state.get("tokens")
                     if not isinstance(tokens, dict):
                         return
@@ -1310,7 +1024,7 @@ class CredentialPool:
                 self._mark_exhausted(entry, None)
             return None
 
-        # Codex and xAI OAuth refresh tokens are single-use.  The
+        # Codex OAuth refresh tokens are single-use.  The
         # sync→POST→write-back sequence below must run atomically across Pilotage
         # processes: otherwise two processes can both adopt the same on-disk
         # token, both POST it, and the loser gets ``refresh_token_reused``.
@@ -1319,28 +1033,16 @@ class CredentialPool:
         # resolve_codex_runtime_credentials()).  When a waiter finally acquires
         # the lock, the in-lock re-sync below picks up the rotated token the
         # winner persisted and skips the POST.
-        if self.provider in ("openai-codex", "xai-oauth"):
-            sync_entry = (
-                self._sync_codex_entry_from_auth_store
-                if self.provider == "openai-codex"
-                else self._sync_xai_oauth_entry_from_pool_store
-            )
+        if self.provider == "openai-codex":
             with _auth_store_lock(
                 timeout_seconds=self._single_use_refresh_lock_timeout()
             ):
-                synced = sync_entry(entry)
-                if self.provider == "openai-codex":
-                    if synced is not entry:
-                        entry = synced
-                        if not force and not self._entry_needs_refresh(entry):
-                            return entry
-                    return self._refresh_entry_impl(entry, force=force)
-                if (
-                    synced.access_token != entry.access_token
-                    or synced.refresh_token != entry.refresh_token
-                ):
-                    return synced
-                return self._refresh_entry_impl(synced, force=force)
+                synced = self._sync_codex_entry_from_auth_store(entry)
+                if synced is not entry:
+                    entry = synced
+                    if not force and not self._entry_needs_refresh(entry):
+                        return entry
+                return self._refresh_entry_impl(entry, force=force)
         return self._refresh_entry_impl(entry, force=force)
 
     def _single_use_refresh_lock_timeout(self) -> float:
@@ -1351,11 +1053,7 @@ class CredentialPool:
         resolves.  Reads the provider's ``PILOTAGE_*_REFRESH_TIMEOUT_SECONDS``
         override.
         """
-        env_var = (
-            "PILOTAGE_CODEX_REFRESH_TIMEOUT_SECONDS"
-            if self.provider == "openai-codex"
-            else "PILOTAGE_XAI_REFRESH_TIMEOUT_SECONDS"
-        )
+        env_var = "PILOTAGE_CODEX_REFRESH_TIMEOUT_SECONDS"
         refresh_timeout_seconds = auth_mod.env_float(env_var, 20)
         return max(
             float(auth_mod.AUTH_LOCK_TIMEOUT_SECONDS),
@@ -1366,33 +1064,7 @@ class CredentialPool:
         self, entry: PooledCredential, *, force: bool
     ) -> Optional[PooledCredential]:
         try:
-            if self.provider == "anthropic":
-                from agent.anthropic_adapter import refresh_anthropic_oauth_pure
-
-                refreshed = refresh_anthropic_oauth_pure(
-                    entry.refresh_token,
-                    use_json=entry.source.endswith("pilotage_pkce"),
-                )
-                updated = replace(
-                    entry,
-                    access_token=refreshed["access_token"],
-                    refresh_token=refreshed["refresh_token"],
-                    expires_at_ms=refreshed["expires_at_ms"],
-                )
-                # Keep ~/.claude/.credentials.json in sync so that the
-                # fallback path (resolve_anthropic_token) and other profiles
-                # see the latest tokens.
-                if entry.source == "claude_code":
-                    try:
-                        from agent.anthropic_adapter import _write_claude_code_credentials
-                        _write_claude_code_credentials(
-                            refreshed["access_token"],
-                            refreshed["refresh_token"],
-                            refreshed["expires_at_ms"],
-                        )
-                    except Exception as wexc:
-                        logger.debug("Failed to write refreshed token to credentials file: %s", wexc)
-            elif self.provider == "openai-codex":
+            if self.provider == "openai-codex":
                 # Adopt fresher tokens from auth.json before spending the
                 # refresh_token — single-use tokens consumed by another Pilotage
                 # process sharing the same auth.json singleton would otherwise
@@ -1410,155 +1082,11 @@ class CredentialPool:
                     refresh_token=refreshed["refresh_token"],
                     last_refresh=refreshed.get("last_refresh"),
                 )
-            elif self.provider == "xai-oauth":
-                # Adopt fresher tokens from auth.json before spending the
-                # refresh_token — single-use tokens consumed by another
-                # process (or another profile sharing the singleton) would
-                # otherwise trigger ``refresh_token_reused`` on the next
-                # POST.  Only meaningful for singleton-seeded entries.
-                synced = self._sync_xai_oauth_entry_from_auth_store(entry)
-                if synced is not entry:
-                    entry = synced
-                refreshed = auth_mod.refresh_xai_oauth_pure(
-                    entry.access_token,
-                    entry.refresh_token,
-                )
-                updated = replace(
-                    entry,
-                    access_token=refreshed["access_token"],
-                    refresh_token=refreshed["refresh_token"],
-                    last_refresh=refreshed.get("last_refresh"),
-                )
-            elif self.provider == "nous":
-                synced = self._sync_nous_entry_from_auth_store(entry)
-                if synced is not entry:
-                    entry = synced
-                auth_mod.resolve_nous_runtime_credentials(
-                    force_refresh=force,
-                )
-                updated = self._sync_nous_entry_from_auth_store(entry)
             else:
                 return entry
         except Exception as exc:
             logger.debug("Credential refresh failed for %s/%s: %s", self.provider, entry.id, exc)
-            # For anthropic claude_code entries: the refresh token may have been
-            # consumed by another process. Check if ~/.claude/.credentials.json
-            # has a newer token pair and retry once.
-            if self.provider == "anthropic" and entry.source == "claude_code":
-                synced = self._sync_anthropic_entry_from_credentials_file(entry)
-                if synced.refresh_token != entry.refresh_token:
-                    logger.debug("Retrying refresh with synced token from credentials file")
-                    try:
-                        from agent.anthropic_adapter import refresh_anthropic_oauth_pure
-                        refreshed = refresh_anthropic_oauth_pure(
-                            synced.refresh_token,
-                            use_json=synced.source.endswith("pilotage_pkce"),
-                        )
-                        updated = replace(
-                            synced,
-                            access_token=refreshed["access_token"],
-                            refresh_token=refreshed["refresh_token"],
-                            expires_at_ms=refreshed["expires_at_ms"],
-                            last_status=STATUS_OK,
-                            last_status_at=None,
-                            last_error_code=None,
-                        )
-                        self._replace_entry(synced, updated)
-                        self._persist()
-                        try:
-                            from agent.anthropic_adapter import _write_claude_code_credentials
-                            _write_claude_code_credentials(
-                                refreshed["access_token"],
-                                refreshed["refresh_token"],
-                                refreshed["expires_at_ms"],
-                            )
-                        except Exception as wexc:
-                            logger.debug("Failed to write refreshed token to credentials file (retry path): %s", wexc)
-                        return updated
-                    except Exception as retry_exc:
-                        logger.debug("Retry refresh also failed: %s", retry_exc)
-                elif not self._entry_needs_refresh(synced):
-                    # Credentials file had a valid (non-expired) token — use it directly
-                    logger.debug("Credentials file has valid token, using without refresh")
-                    return synced
-            # For xai-oauth: same race as nous — another process may have
-            # consumed the refresh token between our proactive sync and the
-            # HTTP call.  Re-check auth.json and adopt the fresh tokens if
-            # they have rotated since.  Only meaningful for singleton-seeded
-            # (device_code) entries; manual entries don't share
-            # state with the singleton.
-            if self.provider == "xai-oauth":
-                synced = self._sync_xai_oauth_entry_from_auth_store(entry)
-                if synced.refresh_token != entry.refresh_token:
-                    logger.debug(
-                        "xAI OAuth refresh failed but auth.json has newer tokens — adopting"
-                    )
-                    updated = replace(
-                        synced,
-                        last_status=STATUS_OK,
-                        last_status_at=None,
-                        last_error_code=None,
-                        last_error_reason=None,
-                        last_error_message=None,
-                        last_error_reset_at=None,
-                    )
-                    self._replace_entry(synced, updated)
-                    self._persist()
-                    return updated
-                # Terminal error: auth.json has no newer tokens — the stored
-                # refresh_token is dead.  Clear it from auth.json so the next
-                # session does not re-seed the same revoked credentials, and
-                # remove all singleton-seeded xAI entries from the in-memory
-                # pool. Mirrors the Nous quarantine path above.
-                if auth_mod._is_terminal_xai_oauth_refresh_error(exc):
-                    logger.debug(
-                        "xAI OAuth refresh token is terminally invalid; clearing local token state"
-                    )
-                    try:
-                        with _auth_store_lock():
-                            auth_store = _load_auth_store()
-                            state = _load_provider_state(auth_store, "xai-oauth") or {}
-                            if isinstance(state, dict):
-                                tokens = state.get("tokens") or {}
-                                if isinstance(tokens, dict):
-                                    store_refresh = str(tokens.get("refresh_token") or "").strip()
-                                    entry_refresh = str(entry.refresh_token or "").strip()
-                                    if not store_refresh or store_refresh == entry_refresh:
-                                        tokens.pop("access_token", None)
-                                        tokens.pop("refresh_token", None)
-                                        state["tokens"] = tokens
-                                        state["last_auth_error"] = {
-                                            "provider": "xai-oauth",
-                                            "code": getattr(exc, "code", "unknown"),
-                                            "message": str(exc),
-                                            "reason": "credential_pool_refresh_failure",
-                                            "relogin_required": True,
-                                            "at": datetime.now(timezone.utc).isoformat(),
-                                        }
-                                        _save_provider_state(auth_store, "xai-oauth", state)
-                                        _save_auth_store(auth_store)
-                    except Exception as clear_exc:
-                        logger.debug(
-                            "Failed to clear terminal xAI OAuth state: %s", clear_exc
-                        )
-                    # Read-modify-write of self._entries: must be atomic.
-                    # This runs on the DEFERRED refresh path (outside the
-                    # pool lock), so take it here. self._lock is an RLock,
-                    # so the still-locked callers re-enter safely.
-                    with self._lock:
-                        removed_ids = [
-                            item.id for item in self._entries
-                            if item.source == "device_code"
-                        ]
-                        self._entries = [
-                            item for item in self._entries
-                            if item.source != "device_code"
-                        ]
-                        if self._current_id == entry.id:
-                            self._current_id = None
-                        self._persist(removed_ids=removed_ids)
-                    return None
-            # For openai-codex: same race as xAI/nous — another Pilotage process
+            # For openai-codex: another Pilotage process
             # may have consumed the refresh token between our proactive sync
             # and the HTTP call.  Re-check auth.json and adopt the fresh tokens
             # if they have rotated since.
@@ -1584,7 +1112,7 @@ class CredentialPool:
                 # refresh_token is dead.  Clear it from auth.json so the next
                 # session does not re-seed the same revoked credentials, and
                 # remove all singleton-seeded (device_code) entries from the
-                # in-memory pool.  Mirrors the xAI and Nous quarantine paths.
+                # in-memory pool.
                 if auth_mod._is_terminal_codex_oauth_refresh_error(exc):
                     logger.debug(
                         "Codex OAuth refresh token is terminally invalid; clearing local token state"
@@ -1628,75 +1156,6 @@ class CredentialPool:
                         self._entries = [
                             item for item in self._entries
                             if item.source != "device_code"
-                        ]
-                        if self._current_id == entry.id:
-                            self._current_id = None
-                        self._persist(removed_ids=removed_ids)
-                    return None
-            # For nous: another process may have consumed the refresh token
-            # between our proactive sync and the HTTP call.  Re-sync from
-            # auth.json and adopt the fresh tokens if available.
-            if self.provider == "nous":
-                synced = self._sync_nous_entry_from_auth_store(entry)
-                if synced.refresh_token != entry.refresh_token:
-                    logger.debug("Nous refresh failed but auth.json has newer tokens — adopting")
-                    updated = replace(
-                        synced,
-                        last_status=STATUS_OK,
-                        last_status_at=None,
-                        last_error_code=None,
-                        last_error_reason=None,
-                        last_error_message=None,
-                        last_error_reset_at=None,
-                    )
-                    self._replace_entry(synced, updated)
-                    self._persist()
-                    self._sync_device_code_entry_to_auth_store(updated)
-                    return updated
-                if auth_mod._is_terminal_nous_refresh_error(exc):
-                    logger.debug("Nous refresh token is terminally invalid; clearing local token state")
-                    try:
-                        with _auth_store_lock():
-                            auth_store = _load_auth_store()
-                            state = _load_provider_state(auth_store, "nous") or {
-                                "client_id": entry.client_id,
-                                "portal_base_url": entry.portal_base_url,
-                                "inference_base_url": entry.inference_base_url,
-                                "token_type": entry.token_type,
-                                "scope": entry.scope,
-                                "tls": entry.tls,
-                            }
-                            store_refresh = str(state.get("refresh_token") or "").strip()
-                            entry_refresh = str(entry.refresh_token or "").strip()
-                            if not store_refresh or store_refresh == entry_refresh:
-                                auth_mod._quarantine_nous_oauth_state(
-                                    state,
-                                    exc,
-                                    reason="credential_pool_refresh_failure",
-                                )
-                                auth_mod._quarantine_nous_pool_entries(
-                                    auth_store,
-                                    exc,
-                                    reason="credential_pool_refresh_failure",
-                                )
-                                _save_provider_state(auth_store, "nous", state)
-                                _save_auth_store(auth_store)
-                    except Exception as clear_exc:
-                        logger.debug("Failed to clear terminal Nous OAuth state: %s", clear_exc)
-
-                    singleton_sources = {
-                        auth_mod.NOUS_DEVICE_CODE_SOURCE,
-                        f"manual:{auth_mod.NOUS_DEVICE_CODE_SOURCE}",
-                    }
-                    # Atomic read-modify-write; see the note above.
-                    with self._lock:
-                        removed_ids = [
-                            item.id for item in self._entries
-                            if item.source in singleton_sources
-                        ]
-                        self._entries = [
-                            item for item in self._entries
-                            if item.source not in singleton_sources
                         ]
                         if self._current_id == entry.id:
                             self._current_id = None
@@ -1771,16 +1230,6 @@ class CredentialPool:
                 entry.access_token,
                 CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
             )
-        if self.provider == "xai-oauth":
-            return auth_mod._xai_access_token_is_expiring(
-                entry.access_token,
-                auth_mod._xai_proactive_refresh_skew_seconds(entry.access_token),
-            )
-        if self.provider == "nous":
-            # Nous refresh can require network access and should happen when
-            # runtime credentials are actually resolved, not merely when the pool
-            # is enumerated for listing, migration, or selection.
-            return False
         return False
 
     def select(self) -> Optional[PooledCredential]:
@@ -1828,7 +1277,7 @@ class CredentialPool:
         reset to STATUS_OK and persisted.  When *refresh* is True, entries
         that need a token refresh are refreshed (skipped on failure).
 
-        Single-use-token refreshes (openai-codex, xai-oauth) are returned as
+        Single-use-token refreshes (openai-codex) are returned as
         *pending_refresh* tuples so the caller can execute them outside the
         lock, avoiding stalling all pool consumers during cross-process flock
         acquisition + OAuth network I/O.
@@ -1838,7 +1287,7 @@ class CredentialPool:
         entries_to_prune: List[str] = []
         available: List[PooledCredential] = []
         # Entries that need an OAuth refresh via a single-use token provider
-        # (openai-codex, xai-oauth).  These require a cross-process file lock
+        # (openai-codex).  These require a cross-process file lock
         # that can block for 20+ seconds.  We collect them under self._lock
         # and refresh outside the lock to avoid stalling all pool consumers.
         pending_refresh: List[tuple] = []  # (entry, sync_entry_fn)
@@ -1863,17 +1312,6 @@ class CredentialPool:
                 if synced is not entry:
                     entry = synced
                     cleared_any = True
-            # For nous entries, sync from auth.json before status checks.
-            # Another process may have successfully refreshed via
-            # resolve_nous_runtime_credentials(), making this entry's
-            # exhausted status stale.
-            if (self.provider == "nous"
-                    and entry.source == "device_code"
-                    and entry.last_status in {STATUS_EXHAUSTED, STATUS_DEAD}):
-                synced = self._sync_nous_entry_from_auth_store(entry)
-                if synced is not entry:
-                    entry = synced
-                    cleared_any = True
             # For openai-codex entries, same pattern: the user may have
             # re-authed via `pilotage model` / `pilotage auth` after a 429/401,
             # leaving fresh tokens on disk while the pool entry is still
@@ -1883,17 +1321,6 @@ class CredentialPool:
                     and entry.source == "device_code"
                     and entry.last_status in {STATUS_EXHAUSTED, STATUS_DEAD}):
                 synced = self._sync_codex_entry_from_auth_store(entry)
-                if synced is not entry:
-                    entry = synced
-                    cleared_any = True
-            # For xai-oauth singleton-seeded entries, identical pattern:
-            # an entry frozen as exhausted may simply be holding stale
-            # tokens that another process (or a fresh `pilotage model` ->
-            # xAI Grok OAuth login) has since rotated in auth.json.
-            if (self.provider == "xai-oauth"
-                    and entry.source == "device_code"
-                    and entry.last_status in {STATUS_EXHAUSTED, STATUS_DEAD}):
-                synced = self._sync_xai_oauth_entry_from_auth_store(entry)
                 if synced is not entry:
                     entry = synced
                     cleared_any = True
@@ -1956,15 +1383,12 @@ class CredentialPool:
                     entry = cleared
                     cleared_any = True
             if refresh and self._entry_needs_refresh(entry):
-                if self.provider in ("openai-codex", "xai-oauth"):
+                if self.provider == "openai-codex":
                     # Defer single-use-token refresh to avoid holding the
                     # threading lock during cross-process flock + network I/O.
-                    sync_fn = (
-                        self._sync_codex_entry_from_auth_store
-                        if self.provider == "openai-codex"
-                        else self._sync_xai_oauth_entry_from_pool_store
+                    pending_refresh.append(
+                        (entry, self._sync_codex_entry_from_auth_store)
                     )
-                    pending_refresh.append((entry, sync_fn))
                     continue
                 refreshed = self._refresh_entry(entry, force=False)
                 if refreshed is None:
@@ -2511,295 +1935,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
         def _is_suppressed(_p, _s):  # type: ignore[misc]
             return False
 
-    if provider == "anthropic":
-        # Only auto-discover external credentials (Claude Code, Pilotage PKCE)
-        # when the user has explicitly configured anthropic as their provider.
-        # Without this gate, auxiliary client fallback chains silently read
-        # ~/.claude/.credentials.json without user consent. See.
-        try:
-            from pilotage_cli.auth import is_provider_explicitly_configured
-            if not is_provider_explicitly_configured("anthropic"):
-                return changed, active_sources
-        except ImportError:
-            pass
-
-        # API-key vs OAuth is a user-visible choice at `pilotage setup` ("Claude
-        # Pro/Max subscription" vs "Anthropic API key").  The signal that the
-        # user picked the API-key path is: ANTHROPIC_API_KEY set in the env,
-        # AND no OAuth env vars set — `save_anthropic_api_key()` writes the
-        # API key and zeros ANTHROPIC_TOKEN; `save_anthropic_oauth_token()`
-        # does the inverse.  When that signal is present we MUST NOT seed
-        # autodiscovered OAuth tokens (~/.claude/.credentials.json from the
-        # Claude Code CLI, pilotage_pkce creds from a previous OAuth login)
-        # into the anthropic pool — otherwise rotation on a 401/429 silently
-        # flips the session onto an OAuth credential, which forces the Claude
-        # Code identity injection, `mcp_` tool-name rewrite, and claude-cli
-        # User-Agent header (`agent/anthropic_adapter.py:2128`).  Users who
-        # explicitly opted into the API-key path are explicitly opting OUT of
-        # that masquerade.  Prefer ~/.pilotage/.env over os.environ for the
-        # same reason `_seed_from_env` does — that's the authoritative file
-        # that `pilotage setup` writes.
-        _env_file = load_env()
-
-        def _env_val(key: str) -> str:
-            return (_env_file.get(key) or _get_secret(key, "") or "").strip()
-
-        anthropic_api_key = _env_val("ANTHROPIC_API_KEY")
-        anthropic_oauth_env = (
-            _env_val("ANTHROPIC_TOKEN") or _env_val("CLAUDE_CODE_OAUTH_TOKEN")
-        )
-        api_key_path_explicit = bool(anthropic_api_key and not anthropic_oauth_env)
-
-        if api_key_path_explicit:
-            # Prune any stale autodiscovered OAuth entries that may have been
-            # seeded into the on-disk pool during a previous OAuth session.
-            # Without this, switching OAuth -> API key at setup leaves the
-            # OAuth entries dormant in auth.json forever and rotation on a
-            # transient 401 could revive them.
-            retained = [
-                entry for entry in entries
-                if entry.source not in {"pilotage_pkce", "claude_code"}
-            ]
-            if len(retained) != len(entries):
-                entries[:] = retained
-                changed = True
-            return changed, active_sources
-
-        from agent.anthropic_adapter import read_claude_code_credentials, read_pilotage_oauth_credentials
-
-        for source_name, creds in (
-            ("pilotage_pkce", read_pilotage_oauth_credentials()),
-            ("claude_code", read_claude_code_credentials()),
-        ):
-            if creds and creds.get("accessToken"):
-                if _is_suppressed(provider, source_name):
-                    continue
-                active_sources.add(source_name)
-                changed |= _upsert_entry(
-                    entries,
-                    provider,
-                    source_name,
-                    {
-                        "source": source_name,
-                        "auth_type": AUTH_TYPE_OAUTH,
-                        "access_token": creds.get("accessToken", ""),
-                        "refresh_token": creds.get("refreshToken"),
-                        "expires_at_ms": creds.get("expiresAt"),
-                        "label": label_from_token(creds.get("accessToken", ""), source_name),
-                    },
-                )
-
-    elif provider == "nous":
-        state = _load_provider_state(auth_store, "nous")
-        has_runtime_material = bool(
-            isinstance(state, dict)
-            and (
-                str(state.get("access_token") or "").strip()
-                or str(state.get("agent_key") or "").strip()
-            )
-        )
-        if state and not has_runtime_material:
-            retained = [
-                entry for entry in entries
-                if entry.source not in {"device_code", "manual:device_code"}
-            ]
-            if len(retained) != len(entries):
-                entries[:] = retained
-                changed = True
-        if state and has_runtime_material and not _is_suppressed(provider, "device_code"):
-            active_sources.add("device_code")
-            # Prefer a user-supplied label embedded in the singleton state
-            # (set by persist_nous_credentials(label=...) when the user ran
-            # `pilotage auth add nous --label <name>`).  Fall back to the
-            # auto-derived token fingerprint for logins that didn't supply one.
-            custom_label = str(state.get("label") or "").strip()
-            seeded_label = custom_label or label_from_token(
-                state.get("access_token", ""), "device_code"
-            )
-            changed |= _upsert_entry(
-                entries,
-                provider,
-                "device_code",
-                {
-                    "source": "device_code",
-                    "auth_type": AUTH_TYPE_OAUTH,
-                    "access_token": state.get("access_token", ""),
-                    "refresh_token": state.get("refresh_token"),
-                    "expires_at": state.get("expires_at"),
-                    "token_type": state.get("token_type"),
-                    "scope": state.get("scope"),
-                    "client_id": state.get("client_id"),
-                    "portal_base_url": state.get("portal_base_url"),
-                    "inference_base_url": state.get("inference_base_url"),
-                    "agent_key": state.get("agent_key"),
-                    "agent_key_expires_at": state.get("agent_key_expires_at"),
-                    # Carry the refresh timestamps into the pool so
-                    # freshness-sensitive consumers (self-heal hooks, pool
-                    # pruning by age) can distinguish just-refreshed credentials
-                    # from stale ones.  Without these, fresh device_code
-                    # entries get obtained_at=None and look older than they
-                    # are.
-                    "obtained_at": state.get("obtained_at"),
-                    "expires_in": state.get("expires_in"),
-                    "agent_key_id": state.get("agent_key_id"),
-                    "agent_key_expires_in": state.get("agent_key_expires_in"),
-                    "agent_key_reused": state.get("agent_key_reused"),
-                    "agent_key_obtained_at": state.get("agent_key_obtained_at"),
-                    "tls": state.get("tls") if isinstance(state.get("tls"), dict) else None,
-                    "label": seeded_label,
-                },
-            )
-
-    elif provider == "copilot":
-        # Copilot tokens are resolved dynamically via `gh auth token` or
-        # env vars (COPILOT_GITHUB_TOKEN / GH_TOKEN).  They don't live in
-        # the auth store or credential pool, so we resolve them here.
-        try:
-            from pilotage_cli.copilot_auth import (
-                COPILOT_ENV_VARS,
-                resolve_copilot_token,
-                get_copilot_api_token,
-            )
-            # All-sources suppression gate BEFORE any work — including the
-            # `gh auth token` subprocess spawn.  resolve_copilot_token()
-            # shells out (~30ms), and the exchange retries 3x with backoff
-            # (~35s worst case); a user who suppressed every copilot source
-            # (pilotage auth remove copilot gh_cli) must not pay either on
-            # every pool load (model picker open, /model, agent startup).
-            # Enumerating the full source space here matches what
-            # credential_sources._remove_copilot_gh suppresses, so an
-            # all-suppressed check is stable.
-            copilot_sources = ["gh_cli"] + [f"env:{v}" for v in COPILOT_ENV_VARS]
-            if all(_is_suppressed(provider, s) for s in copilot_sources):
-                return changed, active_sources
-            token, source = resolve_copilot_token()
-            if token:
-                # ``resolve_copilot_token`` returns exactly "gh auth token"
-                # for the CLI path; env-sourced tokens return the var name.
-                # Match exactly — a substring test classifies GH_TOKEN and
-                # GITHUB_TOKEN as gh_cli, silently bypassing a user's
-                # per-env-var suppression.
-                source_name = "gh_cli" if source == "gh auth token" else f"env:{source}"
-                # Per-source suppression gate (a user may suppress only the
-                # gh CLI path and keep an env var, or vice versa) BEFORE the
-                # network exchange.  The exchange retries 3x with 10s
-                # timeouts and 4.5s total backoff (~35s worst case), so a
-                # source the user already suppressed
-                # must not burn that dead time just to have the entry
-                # discarded afterwards.  Same early-gate pattern every other
-                # singleton branch uses.
-                if _is_suppressed(provider, source_name):
-                    return changed, active_sources
-                api_token, enterprise_base_url = get_copilot_api_token(token)
-                # Observability: get_copilot_api_token falls back to returning
-                # the RAW token when the exchange fails. A raw ~40-char token
-                # sent to the Copilot API is routed to the fallback
-                # "copilot-language-server" integrator, whose allowlist omits
-                # enterprise-only models (claude-opus-4.8) → HTTP 400 on every
-                # turn. exchange_copilot_token now retries + reuses a persisted
-                # JWT, so this should be rare; surface it at WARNING so a
-                # recurrence is visible in logs instead of failing silently.
-                if api_token == token and not enterprise_base_url:
-                    logger.warning(
-                        "Copilot token exchange degraded to RAW token (exchange "
-                        "unavailable); enterprise-only models may 400 with "
-                        "model_not_available_for_integrator until exchange recovers."
-                    )
-                active_sources.add(source_name)
-                pconfig = PROVIDER_REGISTRY.get(provider)
-                # Use enterprise base URL from token exchange if available,
-                # otherwise fall back to the provider's default.
-                effective_base_url = enterprise_base_url or (
-                    pconfig.inference_base_url if pconfig else ""
-                )
-                changed |= _upsert_entry(
-                    entries,
-                    provider,
-                    source_name,
-                    {
-                        "source": source_name,
-                        "auth_type": AUTH_TYPE_API_KEY,
-                        "access_token": api_token,
-                        "base_url": effective_base_url,
-                        "label": source,
-                    },
-                )
-        except Exception as exc:
-            logger.debug("Copilot token seed failed: %s", exc)
-
-    elif provider == "qwen-oauth":
-        # Qwen OAuth tokens live in ~/.qwen/oauth_creds.json, written by
-        # the Qwen CLI (`qwen auth qwen-oauth`).  They aren't in the
-        # Pilotage auth store or env vars, so resolve them here.
-        # Use refresh_if_expiring=False to avoid network calls during
-        # pool loading / provider discovery.
-        try:
-            from pilotage_cli.auth import resolve_qwen_runtime_credentials
-            creds = resolve_qwen_runtime_credentials(refresh_if_expiring=False)
-            token = creds.get("api_key", "")
-            if token:
-                source_name = creds.get("source", "qwen-cli")
-                if not _is_suppressed(provider, source_name):
-                    active_sources.add(source_name)
-                    changed |= _upsert_entry(
-                        entries,
-                        provider,
-                        source_name,
-                        {
-                            "source": source_name,
-                            "auth_type": AUTH_TYPE_OAUTH,
-                            "access_token": token,
-                            "expires_at_ms": creds.get("expires_at_ms"),
-                            "base_url": creds.get("base_url", ""),
-                            "label": creds.get("auth_file", source_name),
-                        },
-                    )
-        except Exception as exc:
-            logger.debug("Qwen OAuth token seed failed: %s", exc)
-
-    elif provider == "minimax-oauth":
-        # MiniMax OAuth tokens live in ~/.pilotage/auth.json providers.minimax-oauth.
-        # Seed the pool so `/auth list` reflects the logged-in state and the
-        # standard `pilotage auth remove minimax-oauth <N>` flow works.
-        # Use refresh_if_expiring=False equivalent: resolve_minimax_oauth_runtime_credentials
-        # always refreshes on expiry, so instead read raw state here to avoid
-        # surprise network calls during provider discovery.
-        try:
-            from pilotage_cli.auth import get_provider_auth_state
-            state = get_provider_auth_state("minimax-oauth")
-            if state and state.get("access_token"):
-                source_name = "oauth"
-                if not _is_suppressed(provider, source_name):
-                    active_sources.add(source_name)
-                    expires_at_ms = None
-                    try:
-                        from datetime import datetime as _dt
-                        raw = state.get("expires_at", "")
-                        if raw:
-                            expires_at_ms = int(_dt.fromisoformat(raw).timestamp() * 1000)
-                    except Exception:
-                        expires_at_ms = None
-                    base_url = str(state.get("inference_base_url", "") or "").rstrip("/")
-                    changed |= _upsert_entry(
-                        entries,
-                        provider,
-                        source_name,
-                        {
-                            "source": source_name,
-                            "auth_type": AUTH_TYPE_OAUTH,
-                            "access_token": state["access_token"],
-                            "refresh_token": state.get("refresh_token"),
-                            "expires_at_ms": expires_at_ms,
-                            "base_url": base_url,
-                            "label": state.get("label", "") or label_from_token(
-                                state.get("access_token", ""), source_name
-                            ),
-                        },
-                    )
-        except Exception as exc:
-            logger.debug("MiniMax OAuth token seed failed: %s", exc)
-
-    elif provider == "openai-codex":
+    if provider == "openai-codex":
         # Respect user suppression — `pilotage auth remove openai-codex` marks
         # the device_code source as suppressed so it won't be re-seeded from
         # the Pilotage auth store.  Without this gate the removal is instantly
@@ -2830,39 +1966,6 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
                     "base_url": "https://chatgpt.com/backend-api/codex",
                     "last_refresh": state.get("last_refresh"),
                     "label": custom_label or label_from_token(tokens.get("access_token", ""), "device_code"),
-                },
-            )
-
-    elif provider == "xai-oauth":
-        # When the user logs in via ``pilotage model`` -> xAI Grok OAuth,
-        # tokens are written to the auth.json singleton
-        # (``providers["xai-oauth"]``).  Surface them in the pool too so
-        # ``pilotage auth list`` reflects the logged-in state and so the pool
-        # is the single source of truth for refresh during runtime resolution.
-        state = _load_provider_state(auth_store, "xai-oauth")
-        tokens = state.get("tokens") if isinstance(state, dict) else None
-        if isinstance(tokens, dict) and tokens.get("access_token"):
-            # Device code is the only supported xAI OAuth flow; the singleton is
-            # always surfaced as ``device_code`` (consistent with nous/codex).
-            source = "device_code"
-            if _is_suppressed(provider, source):
-                return changed, active_sources
-            active_sources.add(source)
-            from pilotage_cli.auth import DEFAULT_XAI_OAUTH_BASE_URL
-
-            base_url = DEFAULT_XAI_OAUTH_BASE_URL
-            changed |= _upsert_entry(
-                entries,
-                provider,
-                source,
-                {
-                    "source": source,
-                    "auth_type": AUTH_TYPE_OAUTH,
-                    "access_token": tokens.get("access_token", ""),
-                    "refresh_token": tokens.get("refresh_token"),
-                    "base_url": base_url,
-                    "last_refresh": state.get("last_refresh"),
-                    "label": label_from_token(tokens.get("access_token", ""), source),
                 },
             )
 
@@ -2897,20 +2000,6 @@ def get_env_prefer_dotenv(key: str) -> str:
 def _seed_from_env(provider: str, entries: List[PooledCredential]) -> Tuple[bool, Set[str]]:
     changed = False
     active_sources: Set[str] = set()
-
-    # Copilot has its own dedicated seeding branch (see `_seed_credentials`
-    # for provider == "copilot") which exchanges the raw ghu_ OAuth token
-    # for the ~437-char api token via `get_copilot_api_token`. If we let
-    # the generic env-var loop below run for copilot, it re-reads
-    # COPILOT_GITHUB_TOKEN from .env and shoves the RAW 40-char token in
-    # as `access_token`, overwriting the correctly-exchanged token. That
-    # bypasses the Copilot token exchange entirely and causes 400s with
-    # "not available for integrator copilot-language-server" (the server's
-    # fallback integrator when it receives a raw OAuth token instead of
-    # an api token). Skip the generic loop here — the copilot-specific
-    # branch is authoritative.
-    if provider == "copilot":
-        return False, active_sources
 
     # The .env-preferring resolution lives at module level
     # (``get_env_prefer_dotenv``) so the pool seeder and the per-turn

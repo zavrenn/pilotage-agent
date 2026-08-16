@@ -911,7 +911,6 @@ ENV_VARS_BY_VERSION: Dict[int, List[str]] = {
     4: ["VOICE_TOOLS_OPENAI_KEY", "ELEVENLABS_API_KEY"],
     5: ["WHATSAPP_ENABLED", "WHATSAPP_MODE", "WHATSAPP_ALLOWED_USERS"],
     10: ["TAVILY_API_KEY"],
-    11: ["TERMINAL_MODAL_MODE"],
 }
 
 # Required environment variables with metadata for migration prompts.
@@ -3324,7 +3323,6 @@ def write_platform_config_field(
 
 TERMINAL_CONFIG_ENV_MAP = {
     "backend": "TERMINAL_ENV",
-    "modal_mode": "TERMINAL_MODAL_MODE",
     "degraded_mode": "TERMINAL_DEGRADED_MODE",
     "cwd": "TERMINAL_CWD",
     "timeout": "TERMINAL_TIMEOUT",

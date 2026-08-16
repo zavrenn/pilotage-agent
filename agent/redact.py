@@ -114,7 +114,6 @@ _PREFIX_PATTERNS = [
     r"hsk-[A-Za-z0-9]{10,}",            # Hindsight API key
     r"mem0_[A-Za-z0-9]{10,}",           # Mem0 Platform API key
     r"brv_[A-Za-z0-9]{10,}",            # ByteRover API key
-    r"xai-[A-Za-z0-9]{30,}",            # xAI (Grok) API key
     r"ntn_[A-Za-z0-9]{10,}",            # Notion internal integration token
     r"fw-[A-Za-z0-9]{30,}",             # Fireworks AI API key
     r"fw_[A-Za-z0-9]{30,}",             # Fireworks AI API key

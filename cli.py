@@ -53,7 +53,6 @@ os.environ["PILOTAGE_QUIET"] = "1"  # Our own modules
 from pilotage_cli.fallback_config import get_fallback_chain
 from pilotage_cli.cli_agent_setup_mixin import CLIAgentSetupMixin
 from pilotage_cli.cli_commands_mixin import CLICommandsMixin
-from pilotage_cli.cli_billing_mixin import CLIBillingMixin
 from agent.interrupt_compat import request_hard_interrupt
 
 # prompt_toolkit for fixed input area TUI
@@ -4463,26 +4462,6 @@ def save_config_value(key_path: str, value: any) -> bool:
 # ============================================================================
 
 
-def _normalize_moa_model(model: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-    """Map a ``moa:<preset>`` model string to ``(provider, preset)``.
-
-    Returns ``("moa", "<preset>")`` when *model* selects the MoA virtual
-    provider, otherwise ``(None, model)`` unchanged. This gives non-interactive
-    ``pilotage chat -Q -m moa:<preset>`` the same routing the interactive
-    ``/moa`` command and the model picker already use: ``resolve_runtime_provider``
-    handles ``requested_provider == "moa"`` and ``agent_init`` builds the
-    MoAClient off ``provider == "moa"``. Without this the raw ``moa:<preset>``
-    string is sent to the real provider and rejected with a 401/400 "model not
-    supported".
-    """
-    if isinstance(model, str):
-        stripped = model.strip()
-        if stripped.lower().startswith("moa:"):
-            preset = stripped.split(":", 1)[1].strip()
-            if preset:
-                return "moa", preset
-    return None, model
-
 def _split_model_config_default(raw_default: Any) -> tuple[str, str]:
     # Thin wrapper around the shared helper in config.py — kept for
     # backward compat with existing call sites in this module.
@@ -4507,7 +4486,7 @@ class _VoiceInputMessage:
         return self.text
 
 
-class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
+class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
     """
     Interactive CLI for the Pilotage Agent.
     
@@ -4685,12 +4664,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # clobber an explicit override with the session's stored model.
         self._explicit_model_override = bool(model)
         self.model = model or _config_model or _DEFAULT_CONFIG_MODEL
-        # A ``moa:<preset>`` model string selects the MoA virtual provider in
-        # one shot (parity with interactive ``/moa`` and the model picker). Do
-        # this before provider resolution so ``-Q -m moa:<preset>`` routes
-        # through MoA instead of hitting the real provider with an unknown
-        # model. A ``moa:`` prefix wins over an explicit ``--provider``.
-        _moa_provider_override, self.model = _normalize_moa_model(self.model)
         # Read max_tokens from config (env var override: PILOTAGE_MAX_TOKENS)
         _env_mt = os.environ.get("PILOTAGE_MAX_TOKENS")
         if _env_mt:
@@ -4726,8 +4699,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         # Provider selection is resolved lazily at use-time via _ensure_runtime_credentials().
         self.requested_provider = (
-            _moa_provider_override
-            or provider
+            provider
             or _nested_provider
             or CLI_CONFIG["model"].get("provider")
             or os.getenv("PILOTAGE_INFERENCE_PROVIDER")
@@ -6860,50 +6832,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         except Exception:
             pass
 
-        if resolved_provider == "copilot":
-            try:
-                from pilotage_cli.models import copilot_model_api_mode, normalize_copilot_model_id
-
-                canonical = normalize_copilot_model_id(current_model, api_key=self.api_key)
-                if canonical and canonical != current_model:
-                    if not self._model_is_default:
-                        self._console_print(
-                            f"[yellow]⚠️  Normalized Copilot model '{current_model}' to '{canonical}'.[/]"
-                        )
-                    self.model = canonical
-                    current_model = canonical
-                    changed = True
-
-                resolved_mode = copilot_model_api_mode(current_model, api_key=self.api_key)
-                if resolved_mode != self.api_mode:
-                    self.api_mode = resolved_mode
-                    changed = True
-            except Exception:
-                pass
-            return changed
-
-        if resolved_provider in {"opencode-zen", "opencode-go"}:
-            try:
-                from pilotage_cli.models import normalize_opencode_model_id, opencode_model_api_mode
-
-                canonical = normalize_opencode_model_id(resolved_provider, current_model)
-                if canonical and canonical != current_model:
-                    if not self._model_is_default:
-                        self._console_print(
-                            f"[yellow]⚠️  Stripped provider prefix from '{current_model}'; using '{canonical}' for {resolved_provider}.[/]"
-                        )
-                    self.model = canonical
-                    current_model = canonical
-                    changed = True
-
-                resolved_mode = opencode_model_api_mode(resolved_provider, current_model)
-                if resolved_mode != self.api_mode:
-                    self.api_mode = resolved_mode
-                    changed = True
-            except Exception:
-                pass
-            return changed
-
         if resolved_provider != "openai-codex":
             return changed
 
@@ -8797,12 +8725,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             config_path = project_config_path
         config_status = "(loaded)" if config_path.exists() else "(not found)"
         
-        # ``self.api_key`` may be a callable (Azure Foundry Entra ID bearer
-        # provider). Never invoke it; just identify the auth surface.
-        from agent.azure_identity_adapter import is_token_provider
-        if is_token_provider(self.api_key):
-            api_key_display = "Microsoft Entra ID"
-        elif isinstance(self.api_key, str) and len(self.api_key) > 12:
+        if isinstance(self.api_key, str) and len(self.api_key) > 12:
             api_key_display = f"{self.api_key[:8]}...{self.api_key[-4:]}"
         else:
             api_key_display = "Not set!"
@@ -11219,10 +11142,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._manual_compress(cmd_original)
         elif canonical == "usage":
             self._handle_usage_command(cmd_original)
-        elif canonical == "subscription":
-            self._show_subscription()
-        elif canonical == "topup":
-            self._show_billing(cmd_original)
         elif canonical == "insights":
             self._show_insights(cmd_original)
         elif canonical == "copy":
@@ -11381,42 +11300,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._handle_refine_command(cmd_original)
         elif canonical == "loop":
             self._handle_loop_command(cmd_original)
-        elif canonical == "moa":
-            # /moa is one-shot sugar only: run a single prompt through the
-            # default MoA preset, then restore the prior model. To *switch* to a
-            # MoA preset for the session, pick it from the model picker (MoA
-            # presets surface as a virtual "Mixture of Agents" provider).
-            from pilotage_cli.moa_config import (
-                moa_usage,
-                normalize_moa_config,
-            )
-
-            parts = cmd_original.split(None, 1)
-            payload = parts[1].strip() if len(parts) > 1 else ""
-            if not payload:
-                _cprint(f"  {moa_usage()}")
-                return True
-            moa_cfg = self.config.get("moa") if isinstance(self.config, dict) else {}
-            normalized = normalize_moa_config(moa_cfg)
-            preset = normalized["default_preset"]
-            self._pending_moa_restore_model = {
-                "requested_provider": getattr(self, "requested_provider", None),
-                "provider": getattr(self, "provider", None),
-                "model": getattr(self, "model", None),
-                "api_key": getattr(self, "api_key", None),
-                "base_url": getattr(self, "base_url", None),
-                "api_mode": getattr(self, "api_mode", None),
-            }
-            self.requested_provider = "moa"
-            self.provider = "moa"
-            self.model = preset
-            self.api_key = "moa-virtual-provider"
-            self.base_url = "moa://local"
-            self.api_mode = "chat_completions"
-            self.agent = None
-            self._pending_moa_disable_after_turn = True
-            self._pending_agent_seed = payload
-            _cprint(f"  MoA one-shot queued with preset {preset}; previous model will be restored after this turn.")
         elif canonical == "subgoal":
             self._handle_subgoal_command(cmd_original)
         elif canonical == "skin":
@@ -12586,28 +12469,16 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         print()
 
     def _show_usage(self):
-        """Rate limits + session token usage (when a live agent exists) + Nous credits.
-
-        The Nous credits block is agent-independent (a portal fetch), so it runs even
-        with no live agent — important for the TUI, where /usage runs in a slash-worker
-        subprocess that resumes the session WITHOUT building an agent (self.agent is None),
-        which would otherwise early-return before any credits showed.
-        """
+        """Rate limits + session token usage (when a live agent exists)."""
         if not self.agent:
-            if self._print_nous_credits_block():
-                self._print_usage_cta()
-            else:
-                print("(._.) No active agent -- send a message first.")
+            print("(._.) No active agent -- send a message first.")
             return
 
         agent = self.agent
         calls = agent.session_api_calls
 
         if calls == 0:
-            if self._print_nous_credits_block():
-                self._print_usage_cta()
-            else:
-                print("(._.) No API calls made yet in this session.")
+            print("(._.) No API calls made yet in this session.")
             return
 
         # ── Rate limits (shown first when available) ────────────────
@@ -12674,11 +12545,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             print()
             for line in account_lines:
                 print(line)
-
-        # Nous credits magnitudes + monthly-grant gauge (agent-independent — also
-        # runs at the no-agent / no-calls early-returns above). See the helper.
-        if self._print_nous_credits_block():
-            self._print_usage_cta()
 
         if self.verbose:
             logging.getLogger().setLevel(logging.DEBUG)
@@ -13256,35 +13122,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         stacked line to scrollback on tool.completed so users can see the
         full history of tool calls (not just the current one in the spinner).
         """
-        # MoA reference-model outputs: render each reference's answer as a
-        # labelled thinking-style block BEFORE the aggregator acts, so the user
-        # sees the mixture-of-agents process instead of a silent pause. These
-        # are display-only events emitted by the MoA facade (agent_init relay);
-        # they never enter message history.
-        if event_type == "moa.reference":
-            label = function_name or "reference"
-            text = preview or ""
-            idx = kwargs.get("moa_index")
-            count = kwargs.get("moa_count")
-            header = f"Reference {idx}/{count} — {label}" if idx and count else f"Reference — {label}"
-            try:
-                self._flush_reasoning_preview(force=True)
-            except Exception:
-                pass
-            _cprint(f"  {_DIM}┊ ◇ {header}{_RST}")
-            try:
-                self._emit_reasoning_preview(text)
-            except Exception:
-                # Fallback: print the raw text dimmed if the preview helper fails.
-                if text.strip():
-                    _cprint(f"  {_DIM}{text.strip()}{_RST}")
-            self._invalidate()
-            return
-        if event_type == "moa.aggregating":
-            agg = function_name or ""
-            self._spinner_text = f"◆ aggregating ({agg})" if agg else "◆ aggregating"
-            self._invalidate()
-            return
 
         # Feed the pet: tools mean "running" (not reasoning); a failed tool
         # latches the turn so it ends on a sulk.
@@ -15255,10 +15092,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 from tools.tts_streaming import SPEECH_INTERRUPTED_NOTE, take_speech_interrupted
                 if take_speech_interrupted():
                     agent_message = _prepend_note_to_message(agent_message, SPEECH_INTERRUPTED_NOTE)
-                _moa_cfg = getattr(self, "_pending_moa_config", None)
-                self._pending_moa_config = None
-                if _moa_cfg is None:
-                    _moa_cfg = None
                 # Model/skill notes and voice instructions are API-local. Keep
                 # the original staged input as the durable transcript value so a
                 # close-path marker follows the same dict into turn setup rather
@@ -15277,16 +15110,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         stream_callback=stream_callback,
                         task_id=self.session_id,
                         persist_user_message=_persist_clean_user_message,
-                        moa_config=_moa_cfg,
                     )
-                    if getattr(self, "_pending_moa_disable_after_turn", False):
-                        _restore = getattr(self, "_pending_moa_restore_model", None) or {}
-                        for _key, _value in _restore.items():
-                            if _value is not None:
-                                setattr(self, _key, _value)
-                        self.agent = None
-                        self._pending_moa_restore_model = None
-                        self._pending_moa_disable_after_turn = False
                 except Exception as exc:
                     logging.error("run_conversation raised: %s", exc, exc_info=True)
                     _summary = getattr(self.agent, '_summarize_api_error', lambda e: str(e)[:300])(exc)
@@ -15632,22 +15456,16 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
                 # Durable, provider-agnostic billing CTA below the response. The
                 # response panel carries the full guidance; this pins the single
-                # action to take (Nous → /topup, other providers → their billing
-                # page) so it stays visible instead of scrolling away as prose.
+                # action to take (the provider's billing page) so it stays
+                # visible instead of scrolling away as prose.
                 if result and result.get("failure_reason") == "billing":
                     _bb = result.get("billing_block") or {}
                     _prov_label = _bb.get("provider_label") or "your provider"
-                    if _bb.get("is_nous"):
-                        _cta_lines = [
-                            "Run [bold]/topup[/] to add credits, or "
-                            "[bold]/subscription[/] to change plan.",
-                        ]
-                    else:
-                        _url = _bb.get("billing_url")
-                        _cta_lines = [
-                            f"Add credits with {_prov_label}"
-                            + (f": [bold]{_url}[/]" if _url else ".")
-                        ]
+                    _url = _bb.get("billing_url")
+                    _cta_lines = [
+                        f"Add credits with {_prov_label}"
+                        + (f": [bold]{_url}[/]" if _url else ".")
+                    ]
                     _cta_lines.append(
                         "Or switch providers with "
                         "[bold]/model <model> --provider <provider>[/]."
@@ -16349,25 +16167,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         except Exception:
             pass
 
-        # Skill sync — best-effort periodic pull, piggy-backing on the
-        # curator tick. Inert unless the access gate is open and a sync base
-        # URL is configured; swallows all errors so it never blocks startup.
-        try:
-            from tools.skills_sync_client import maybe_pull_skills
-            maybe_pull_skills()
-        except Exception:
-            pass
-
-        # Org-shared skills — pull the organisation's approved set into the
-        # read-only mirror. Gated on real org membership: resolve_org_identity
-        # requires an org role on the token, which is only issued for
-        # multi-member organisations, so a solo account never reaches the
-        # network here. Fail-quiet, exactly like the personal pull above.
-        try:
-            from tools.skills_sync_client import maybe_pull_org_skills
-            maybe_pull_org_skills()
-        except Exception:
-            pass
         _skills_for_line = self.preloaded_skills or list(
             getattr(self, "_preload_skills_requested", []) or []
         )

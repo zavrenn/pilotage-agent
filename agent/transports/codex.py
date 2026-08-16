@@ -45,52 +45,6 @@ def _bounded_prompt_cache_key(value: Any) -> Optional[str]:
     return f"pck_{digest}"
 
 
-# Wire-name used when Pilotage keeps client-side web_search on xAI Responses.
-# A function literally named ``web_search`` collides with Grok's native
-# server-side tool (incomplete hang or HTTP 400 duplicate names); this alias
-# avoids that while still dispatching through Pilotage's configured provider
-# (Firecrawl / Tavily / …). Mapped back to ``web_search`` in normalize_response.
-_XAI_CLIENT_WEB_SEARCH_ALIAS = "pilotage_web_search"
-
-
-def _xai_prefers_native_web_search() -> bool:
-    """True when xAI Responses should use Grok's native ``web_search`` built-in.
-
-    Delegates to the web-search registry's provider resolution (which reads
-    ``web.search_backend`` / ``web.backend`` from config) and checks whether
-    the resolved provider is xAI. Falls back to the legacy ``_get_search_backend``
-    probe when the registry has no providers loaded. On any resolution failure,
-    returns True (fail-closed to native — preserves the incomplete-hang
-    fix rather than risk reintroducing it).
-    """
-    try:
-        from agent.web_search_registry import get_active_search_provider
-
-        provider = get_active_search_provider()
-        if provider is not None:
-            return getattr(provider, "name", None) == "xai"
-
-        from tools.web_tools import _get_search_backend
-
-        return (_get_search_backend() or "").strip().lower() == "xai"
-    except Exception:
-        # Fail closed to native — same behavior as pre-fix main.
-        return True
-
-
-def _rename_client_web_search_for_xai(response_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Rename client ``web_search`` → alias so xAI won't hijack it server-side."""
-    rewritten: List[Dict[str, Any]] = []
-    for tool in response_tools:
-        if isinstance(tool, dict) and tool.get("name") == "web_search":
-            aliased = dict(tool)
-            aliased["name"] = _XAI_CLIENT_WEB_SEARCH_ALIAS
-            rewritten.append(aliased)
-        else:
-            rewritten.append(tool)
-    return rewritten
-
-
 _EXTENDED_PROMPT_CACHE_MODELS = (
     "gpt-5.5-pro",
     "gpt-5.5",
@@ -299,7 +253,6 @@ class ResponsesApiTransport(ProviderTransport):
         """Classify the current Responses endpoint from transport params."""
         from agent.codex_responses_adapter import _classify_responses_issuer
         return _classify_responses_issuer(
-            is_xai_responses=params.get("is_xai_responses") is True,
             is_github_responses=params.get("is_github_responses") is True,
             is_codex_backend=params.get("is_codex_backend") is True,
             base_url=params.get("base_url"),
@@ -312,7 +265,6 @@ class ResponsesApiTransport(ProviderTransport):
         self._last_issuer_kind = issuer
         return _chat_messages_to_responses_input(
             messages,
-            is_xai_responses=kwargs.get("is_xai_responses") is True,
             is_github_responses=kwargs.get("is_github_responses") is True,
             replay_encrypted_reasoning=bool(
                 kwargs.get("replay_encrypted_reasoning", True)
@@ -360,7 +312,6 @@ class ResponsesApiTransport(ProviderTransport):
             base_url_hostname: str | None — hostname for backend detection
             is_github_responses: bool — Copilot/GitHub models backend
             is_codex_backend: bool — chatgpt.com/backend-api/codex
-            is_xai_responses: bool — xAI/Grok backend
             github_reasoning_extra: dict | None — Copilot reasoning params
         """
         from agent.codex_responses_adapter import (
@@ -381,7 +332,6 @@ class ResponsesApiTransport(ProviderTransport):
 
         is_github_responses = params.get("is_github_responses") is True
         is_codex_backend = params.get("is_codex_backend") is True
-        is_xai_responses = params.get("is_xai_responses") is True
         replay_encrypted_reasoning = bool(
             params.get("replay_encrypted_reasoning", True)
         )
@@ -430,14 +380,6 @@ class ResponsesApiTransport(ProviderTransport):
         if "gpt-5.6" in (model or "").lower():
             # Ultra is the Codex product tier; the Responses API wire value is max.
             _effort_clamp["ultra"] = "max"
-        if params.get("is_xai_responses", False):
-            from agent.model_metadata import is_grok_46_family
-
-            # Grok 4.6 accepts xhigh as a wire value. Older Grok models top out
-            # at high, while max/ultra remain Pilotage aliases for every xAI model.
-            if not is_grok_46_family(model):
-                _effort_clamp["xhigh"] = "high"
-            _effort_clamp.update({"max": "high", "ultra": "high"})
         if (params.get("provider") or "").strip().lower() == "actual":
             # Actual Computer relays to SGLang/vLLM backends that accept only
             # none/low/medium/high/max for reasoning effort — a forwarded
@@ -447,42 +389,6 @@ class ResponsesApiTransport(ProviderTransport):
         reasoning_effort = _effort_clamp.get(reasoning_effort, reasoning_effort)
 
         response_tools = _responses_tools(tools)
-
-        # xAI server-side web search vs Pilotage web providers.
-        #
-        # grok models on xAI's /v1/responses surface have a *native*,
-        # server-executed web search.  A client-side function literally named
-        # ``web_search`` collides with that engine: declared as a plain
-        # ``function`` rather than ``{"type": "web_search"}``, the search
-        # dispatches but never reconciles → incomplete turn + 3 retries.
-        # Verified live against grok-composer-2.5-fast (2026-06); see.
-        #
-        # Two modes, chosen by the user's web-search backend config:
-        #
-        # 1. **Native** (active/configured backend is ``xai``, or resolution
-        #    fails): drop the client ``web_search`` function and declare
-        #    xAI's built-in instead. 1:1 swap only when client ``web_search``
-        #    was already present — never an additive grant.
-        # 2. **Client** (Firecrawl / Tavily / Exa / … configured or resolved):
-        #    keep Pilotage dispatch so ``web.backend`` / ``web.search_backend``
-        #    is honored, but rename the wire tool to
-        #    ``pilotage_web_search`` so Grok cannot hijack the name. The alias
-        #    is mapped back to ``web_search`` in ``normalize_response``.
-        if is_xai_responses and response_tools:
-            has_client_web_search = any(
-                isinstance(t, dict) and t.get("name") == "web_search"
-                for t in response_tools
-            )
-            if has_client_web_search:
-                if _xai_prefers_native_web_search():
-                    filtered = [
-                        t for t in response_tools
-                        if not (isinstance(t, dict) and t.get("name") == "web_search")
-                    ]
-                    filtered.append({"type": "web_search"})
-                    response_tools = filtered
-                else:
-                    response_tools = _rename_client_web_search_for_xai(response_tools)
 
         # ``tools`` MUST be omitted entirely when there are no functions to
         # expose: the openai SDK's ``responses.stream()`` / ``responses.parse()``
@@ -497,7 +403,6 @@ class ResponsesApiTransport(ProviderTransport):
             "instructions": instructions,
             "input": _chat_messages_to_responses_input(
                 payload_messages,
-                is_xai_responses=is_xai_responses,
                 is_github_responses=is_github_responses,
                 replay_encrypted_reasoning=replay_encrypted_reasoning,
                 current_issuer_kind=issuer_kind,
@@ -533,9 +438,8 @@ class ResponsesApiTransport(ProviderTransport):
         cache_key = _content_cache_key(
             instructions, response_tools, _cache_scope
         ) or _cache_scope
-        # xAI Responses takes prompt_cache_key in extra_body (set further
-        # down); GitHub Models opts out of cache-key routing entirely.
-        if not is_github_responses and not is_xai_responses and cache_key:
+        # GitHub Models opts out of cache-key routing entirely.
+        if not is_github_responses and cache_key:
             kwargs["prompt_cache_key"] = cache_key
 
         cache_retention = _default_prompt_cache_retention_for_request(
@@ -545,24 +449,7 @@ class ResponsesApiTransport(ProviderTransport):
         if cache_retention:
             kwargs.setdefault("prompt_cache_retention", cache_retention)
 
-        if reasoning_enabled and is_xai_responses:
-            from agent.model_metadata import grok_supports_reasoning_effort
-
-            # Ask xAI to echo back encrypted reasoning items so we can
-            # replay them on subsequent turns for cross-turn coherence.
-            # See agent/codex_responses_adapter._chat_messages_to_responses_input
-            # for the May 2026 reversal of the earlier suppression gate.
-            kwargs["include"] = (
-                ["reasoning.encrypted_content"] if replay_encrypted_reasoning else []
-            )
-            # xAI rejects `reasoning.effort` on grok-4 / grok-4-fast / grok-3
-            # / grok-code-fast / grok-4.20-0309-* with HTTP 400 even though
-            # those models reason natively. Only send the effort dial when
-            # the target model is on the allowlist; otherwise send no
-            # `reasoning` key at all and let the model reason on its own.
-            if grok_supports_reasoning_effort(model):
-                kwargs["reasoning"] = {"effort": reasoning_effort}
-        elif reasoning_enabled:
+        if reasoning_enabled:
             if is_github_responses:
                 github_reasoning = params.get("github_reasoning_extra")
                 if github_reasoning is not None:
@@ -572,7 +459,7 @@ class ResponsesApiTransport(ProviderTransport):
                 kwargs["include"] = (
                     ["reasoning.encrypted_content"] if replay_encrypted_reasoning else []
                 )
-        elif not is_github_responses and not is_xai_responses:
+        elif not is_github_responses:
             kwargs["include"] = []
 
         request_overrides = params.get("request_overrides")
@@ -585,19 +472,6 @@ class ResponsesApiTransport(ProviderTransport):
                 kwargs["prompt_cache_key"] = bounded_cache_key
             else:
                 kwargs.pop("prompt_cache_key", None)
-
-        # Older xAI Responses models reject ``service_tier`` (HTTP 400
-        # "Argument not supported: service_tier"). Grok 4.6 accepts Priority
-        # Processing, but continue stripping stale or unsupported tier values
-        # on every other xAI path. See and.
-        if is_xai_responses:
-            from agent.model_metadata import is_grok_46_family
-
-            if not (
-                is_grok_46_family(model)
-                and kwargs.get("service_tier") == "priority"
-            ):
-                kwargs.pop("service_tier", None)
 
         # Forward per-request timeout to the SDK so OpenAI/Anthropic clients
         # honor it.  Without this, ``providers.<id>.request_timeout_seconds``
@@ -643,40 +517,6 @@ class ResponsesApiTransport(ProviderTransport):
         if max_tokens is not None and not is_codex_backend:
             kwargs["max_output_tokens"] = max_tokens
 
-        if is_xai_responses and session_id:
-            existing_extra_headers = kwargs.get("extra_headers")
-            merged_extra_headers: Dict[str, str] = {}
-            if isinstance(existing_extra_headers, dict):
-                merged_extra_headers.update(
-                    {
-                        str(key): str(value)
-                        for key, value in existing_extra_headers.items()
-                        if key and value is not None
-                    }
-                )
-            # Scoped like the body cache key below — otherwise cron's
-            # per-fire timestamp in session_id (cron_<id>_<ts>) pins every
-            # fire of the same job to a different xAI backend server.
-            merged_extra_headers["x-grok-conv-id"] = _cache_scope
-            kwargs["extra_headers"] = merged_extra_headers
-
-            # xAI Responses cache-routing — body-level field per
-            # https://docs.x.ai/developers/advanced-api-usage/prompt-caching/maximizing-cache-hits.
-            # Sent via extra_body (not the typed kwarg) so it survives openai
-            # SDK builds whose Responses.stream() signature has dropped the field.
-            # A caller's request_overrides={"prompt_cache_key": ...} lands on
-            # the top-level kwarg set above — read it back here so an explicit
-            # override actually governs the field xAI reads, instead of being
-            # silently outrun by the auto-derived cache_key.
-            existing_extra_body = kwargs.get("extra_body")
-            merged_extra_body: Dict[str, Any] = {}
-            if isinstance(existing_extra_body, dict):
-                merged_extra_body.update(existing_extra_body)
-            merged_extra_body.setdefault(
-                "prompt_cache_key", kwargs.get("prompt_cache_key", cache_key)
-            )
-            kwargs["extra_body"] = merged_extra_body
-
         extra_body = kwargs.get("extra_body")
         if isinstance(extra_body, dict) and "prompt_cache_key" in extra_body:
             bounded_cache_key = _bounded_prompt_cache_key(extra_body["prompt_cache_key"])
@@ -711,10 +551,6 @@ class ResponsesApiTransport(ProviderTransport):
                 if hasattr(tc, "response_item_id") and tc.response_item_id:
                     provider_data["response_item_id"] = tc.response_item_id
                 name = tc.function.name if hasattr(tc, "function") else getattr(tc, "name", "")
-                # Undo the xAI client-path wire alias so Pilotage dispatches
-                # the real ``web_search`` tool (Firecrawl / etc.).
-                if name == _XAI_CLIENT_WEB_SEARCH_ALIAS:
-                    name = "web_search"
                 tool_calls.append(ToolCall(
                     id=tc.id if hasattr(tc, "id") else (name or None),
                     name=name,

@@ -1226,15 +1226,6 @@ platform_toolsets:
 #     voice: "Kore"
 #     audio_tags: false
 #     persona_prompt_file: ""  # e.g. ~/.pilotage/tts/radio-host.md
-#   xai:
-#     voice_id: "eve"       # built-in or custom voice ID from xAI Console
-#     language: "en"        # BCP-47 code ("en", "pt-BR") or "auto"
-#     speed: 1.0            # 0.7-1.5 playback speed
-#     auto_speech_tags: false  # insert expressive audio tags via LLM rewrite
-#     text_normalization: false  # normalize numbers/abbreviations/symbols
-#     optimize_streaming_latency: 0  # 0-2, trades quality for lower latency
-#     sample_rate: 24000    # 22050 / 24000 / 44100 / 48000
-#     bit_rate: 128000      # MP3 bitrate (codec=mp3 only)
 
 # =============================================================================
 # Voice Transcription (Speech-to-Text)
@@ -1277,7 +1268,7 @@ stt:
     language: ""               # auto-detect; set to "en", "es", "fr", etc. to force
 
 # Text-to-speech. Only the deepinfra block is documented here — the
-# remaining providers (edge, openai, xai, minimax, mistral, gemini,
+# remaining providers (edge, openai, minimax, mistral, gemini,
 # elevenlabs, neutts, kittentts, piper) inherit sensible defaults from
 # DEFAULT_CONFIG in pilotage_cli/config.py.
 # tts:

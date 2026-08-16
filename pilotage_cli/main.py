@@ -348,7 +348,6 @@ import functools as _functools
 
 from pilotage_cli.subcommands._shared import add_accept_hooks_flag as _add_accept_hooks_flag
 from pilotage_cli.subcommands.cron import build_cron_parser
-from pilotage_cli.subcommands.sync import build_sync_parser
 from pilotage_cli.subcommands.gateway import build_gateway_parser
 from pilotage_cli.subcommands.profile import build_profile_parser
 from pilotage_cli.subcommands.model import build_model_parser
@@ -680,26 +679,12 @@ from pilotage_cli import __version__, __release_date__
 # existing test monkeypatches (pilotage_cli.main._model_flow_*) keep resolving unchanged.
 from pilotage_cli.model_setup_flows import (
     _prompt_auth_credentials_choice,
-    _model_flow_openrouter,
-    _model_flow_nous,
     _model_flow_openai_codex,
-    _model_flow_xai_oauth,
-    _model_flow_qwen_oauth,
-    _model_flow_minimax_oauth,
     _model_flow_custom,
-    _model_flow_azure_foundry,
     _model_flow_named_custom,
-    _model_flow_copilot,
-    _model_flow_copilot_acp,
     _model_flow_kimi,
     _model_flow_stepfun,
-    _model_flow_bedrock_api_key,
-    _model_flow_bedrock,
-    _model_flow_vertex,
     _model_flow_api_key_provider,
-    _model_flow_anthropic,
-    _model_flow_moa,
-    _model_flow_ai_gateway,
 )
 logger = logging.getLogger(__name__)
 
@@ -958,24 +943,6 @@ def _has_any_provider_configured() -> bool:
                 return True
     except Exception:
         pass
-
-    # Check for Claude Code OAuth credentials (~/.claude/.credentials.json)
-    # Only count these if Pilotage has been explicitly configured — Claude Code
-    # being installed doesn't mean the user wants Pilotage to use their tokens.
-    if _has_pilotage_config:
-        try:
-            from agent.anthropic_adapter import (
-                read_claude_code_credentials,
-                is_claude_code_token_valid,
-            )
-
-            creds = read_claude_code_credentials()
-            if creds and (
-                is_claude_code_token_valid(creds) or creds.get("refreshToken")
-            ):
-                return True
-        except Exception:
-            pass
 
     return False
 
@@ -1649,29 +1616,6 @@ def cmd_chat(args):
                 except Exception:
                     pass
 
-    # xAI retirement warning — one-shot, non-blocking, never fails startup
-    try:
-        from pilotage_cli.xai_retirement import (
-            MIGRATION_GUIDE_URL,
-            RETIREMENT_DATE,
-            find_retired_xai_refs,
-            format_issue,
-        )
-        from pilotage_cli.config import load_config as _load_config_for_xai_check
-
-        _retired_xai_refs = find_retired_xai_refs(_load_config_for_xai_check())
-        if _retired_xai_refs:
-            sys.stderr.write(
-                f"\033[33m⚠ xAI retires {len(_retired_xai_refs)} model(s) "
-                f"in your config on {RETIREMENT_DATE}:\033[0m\n"
-            )
-            for _ref in _retired_xai_refs:
-                sys.stderr.write(f"  \033[33m⚠\033[0m {format_issue(_ref)}\n")
-            sys.stderr.write(f"  \033[2mMigration guide: {MIGRATION_GUIDE_URL}\033[0m\n")
-            sys.stderr.write("  \033[2mRun 'pilotage doctor' for details.\033[0m\n\n")
-    except Exception:
-        pass
-
     # First-run guard: check if any provider is configured before launching
     if not _has_any_provider_configured():
         print()
@@ -1804,17 +1748,6 @@ def cmd_gateway(args):
     from pilotage_cli.gateway import gateway_command
 
     gateway_command(args)
-
-
-def cmd_proxy(args):
-    """Local OpenAI-compatible proxy to OAuth providers."""
-    # Lazy import — pulls in aiohttp, which is gated behind an extras install
-    # for users who don't run the proxy or the messaging gateway.
-    from pilotage_cli.proxy.cli import cmd_proxy as _cmd_proxy
-
-    rc = _cmd_proxy(args)
-    if isinstance(rc, int) and rc != 0:
-        raise SystemExit(rc)
 
 
 def cmd_whatsapp(args):
@@ -2471,26 +2404,8 @@ def select_provider_and_model(args=None):
         return
 
     # Step 2: Provider-specific setup + model selection
-    if selected_provider == "openrouter":
-        _model_flow_openrouter(config, current_model)
-    elif selected_provider == "moa":
-        _model_flow_moa(config, current_model)
-    elif selected_provider == "ai-gateway":
-        _model_flow_ai_gateway(config, current_model)
-    elif selected_provider == "nous":
-        _model_flow_nous(config, current_model, args=args)
-    elif selected_provider == "openai-codex":
+    if selected_provider == "openai-codex":
         _model_flow_openai_codex(config, current_model)
-    elif selected_provider == "xai-oauth":
-        _model_flow_xai_oauth(config, current_model, args=args)
-    elif selected_provider == "qwen-oauth":
-        _model_flow_qwen_oauth(config, current_model)
-    elif selected_provider == "minimax-oauth":
-        _model_flow_minimax_oauth(config, current_model, args=args)
-    elif selected_provider == "copilot-acp":
-        _model_flow_copilot_acp(config, current_model)
-    elif selected_provider == "copilot":
-        _model_flow_copilot(config, current_model)
     elif selected_provider == "custom":
         _model_flow_custom(config)
     elif (
@@ -2507,23 +2422,14 @@ def select_provider_and_model(args=None):
         _model_flow_named_custom(config, provider_info)
     elif selected_provider == "remove-custom":
         _remove_custom_provider(config)
-    elif selected_provider == "anthropic":
-        _model_flow_anthropic(config, current_model)
     elif selected_provider == "kimi-coding":
         _model_flow_kimi(config, current_model)
     elif selected_provider == "stepfun":
         _model_flow_stepfun(config, current_model)
-    elif selected_provider == "bedrock":
-        _model_flow_bedrock(config, current_model)
-    elif selected_provider == "vertex":
-        _model_flow_vertex(config, current_model)
-    elif selected_provider == "azure-foundry":
-        _model_flow_azure_foundry(config, current_model)
     elif selected_provider in {
         "openai-api",
         "gemini",
         "deepseek",
-        "xai",
         "zai",
         "kimi-coding-cn",
         "minimax",
@@ -3648,101 +3554,6 @@ def _stepfun_base_url_for_region(region: str) -> str:
 
 
 
-def _run_anthropic_oauth_flow(save_env_value):
-    """Run the Claude OAuth setup-token flow. Returns True if credentials were saved."""
-    from agent.anthropic_adapter import (
-        run_oauth_setup_token,
-        read_claude_code_credentials,
-        is_claude_code_token_valid,
-    )
-    from pilotage_cli.config import (
-        save_anthropic_oauth_token,
-        use_anthropic_claude_code_credentials,
-    )
-
-    def _activate_claude_code_credentials_if_available() -> bool:
-        try:
-            creds = read_claude_code_credentials()
-        except Exception:
-            creds = None
-        if creds and (
-            is_claude_code_token_valid(creds) or bool(creds.get("refreshToken"))
-        ):
-            use_anthropic_claude_code_credentials(save_fn=save_env_value)
-            print("  ✓ Claude Code credentials linked.")
-            from pilotage_constants import display_pilotage_home as _dhh_fn
-
-            print(
-                f"    Pilotage will use Claude's credential store directly instead of copying a setup-token into {_dhh_fn()}/.env."
-            )
-            return True
-        return False
-
-    try:
-        print()
-        print("  Running 'claude setup-token' — follow the prompts below.")
-        print("  A browser window will open for you to authorize access.")
-        print()
-        token = run_oauth_setup_token()
-        if token:
-            if _activate_claude_code_credentials_if_available():
-                return True
-            save_anthropic_oauth_token(token, save_fn=save_env_value)
-            print("  ✓ OAuth credentials saved.")
-            return True
-
-        # Subprocess completed but no token auto-detected — ask user to paste
-        print()
-        print("  If the setup-token was displayed above, paste it here:")
-        print()
-        from pilotage_cli.secret_prompt import masked_secret_prompt
-
-        try:
-            manual_token = masked_secret_prompt(
-                "  Paste setup-token (or Enter to cancel): "
-            ).strip()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            return False
-        if manual_token:
-            save_anthropic_oauth_token(manual_token, save_fn=save_env_value)
-            print("  ✓ Setup-token saved.")
-            return True
-
-        print("  ⚠ Could not detect saved credentials.")
-        return False
-
-    except FileNotFoundError:
-        # Claude CLI not installed — guide user through manual setup
-        print()
-        print("  The 'claude' CLI is required for OAuth login.")
-        print()
-        print("  To install and authenticate:")
-        print()
-        print("    1. Install Claude Code:  npm install -g @anthropic-ai/claude-code")
-        print("    2. Run:                  claude setup-token")
-        print("    3. Follow the browser prompts to authorize")
-        print("    4. Re-run:               pilotage model")
-        print()
-        print("  Or paste an existing setup-token now (sk-ant-oat-...):")
-        print()
-        from pilotage_cli.secret_prompt import masked_secret_prompt
-
-        try:
-            token = masked_secret_prompt("  Setup-token (or Enter to cancel): ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            return False
-        if token:
-            save_anthropic_oauth_token(token, save_fn=save_env_value)
-            print("  ✓ Setup-token saved.")
-            return True
-        print("  Cancelled — install Claude Code and try again.")
-        return False
-
-
-
-
 def cmd_login(args):
     """Authenticate Pilotage CLI with a provider."""
     from pilotage_cli.auth import login_command
@@ -3776,201 +3587,6 @@ def cmd_cron(args):
     from pilotage_cli.cron import cron_command
 
     cron_command(args)
-
-
-def cmd_sync(args):
-    """Skill Sync — personal sync across devices, plus sharing with your org."""
-    import json as _json
-
-    sub = getattr(args, "sync_command", None)
-
-    if sub in {None, ""}:
-        print(
-            "usage: pilotage sync "
-            "<status|pull|push|now|enable|disable|device|propose>\n"
-            "\n"
-            "Your skills, across your devices:\n"
-            "  status            Show what is synced, and from where\n"
-            "  pull              Pull your synced skills\n"
-            "  push              Push your opted-in skills\n"
-            "  now               Reconcile now: pull then push\n"
-            "  enable <skill>    Include a skill in your sync\n"
-            "  disable <skill>   Exclude a skill from your sync\n"
-            "  device [--name N] Show or set this device's label\n"
-            "\n"
-            "Shared with your team:\n"
-            "  propose <skill>   Share a skill with your organisation",
-            file=sys.stderr,
-        )
-        return 1
-
-    if sub == "device":
-        from tools import skills_sync_client as ssc
-
-        name = getattr(args, "device_name", None)
-        if name is not None:
-            try:
-                stored = ssc.set_device_name(name)
-            except ValueError as e:
-                print(f"error: {e}", file=sys.stderr)
-                return 1
-            print(f"device label set to '{stored}'.")
-            print(
-                "New commits from this device will use this label; existing "
-                "commits keep their previous one.",
-                file=sys.stderr,
-            )
-            return 0
-        # No --name: print the current (creating a default on first use).
-        print(ssc.stable_device_id())
-        return 0
-
-    if sub == "propose":
-        from tools import skills_sync_client as ssc
-
-        name = args.name
-        try:
-            result = ssc.propose_skill(name, message=args.message)
-        except ssc.SyncInertError as e:
-            print(f"cannot share this skill: {e}", file=sys.stderr)
-            return 1
-        except ssc.SyncError as e:
-            print(f"could not share '{name}': {e}", file=sys.stderr)
-            return 1
-        if result.get("proposal_pending"):
-            print(
-                f"Shared '{name}' with your organisation — an admin needs to "
-                f"approve it (proposal #{result.get('proposal_id')}). It is "
-                f"not live for the team until then."
-            )
-        else:
-            print(f"Added '{name}' to your organisation's shared skills.")
-        return 0
-
-    if sub in {"enable", "disable"}:
-        from tools.skill_usage import set_sync, is_curation_eligible
-
-        skill = args.skill
-        if not is_curation_eligible(skill):
-            print(
-                f"'{skill}' is not sync-eligible (bundled, hub-installed, "
-                f"external, or not found). Only agent-created / user-authored "
-                f"skills under ~/.pilotage/skills/ can sync.",
-                file=sys.stderr,
-            )
-            return 1
-        set_sync(skill, sub == "enable")
-        print(f"sync {'enabled' if sub == 'enable' else 'disabled'} for '{skill}'.")
-        return 0
-
-    from tools import skills_sync_client as ssc
-
-    if sub == "status":
-        status = ssc.sync_status()
-        print(_json.dumps(status, indent=2, ensure_ascii=False))
-        if status.get("org_available"):
-            n = len(status.get("org_skills") or [])
-            modified = status.get("org_skills_modified") or []
-            print(
-                f"\nOrg skills: {n} shared skill(s) from your organisation "
-                f"(your role: {status.get('org_role')}). They load alongside "
-                f"your own, labeled by origin, and you can edit them.",
-                file=sys.stderr,
-            )
-            if modified:
-                print(
-                    f"  {len(modified)} with local edits not yet shared: "
-                    f"{', '.join(modified)}\n"
-                    f"  Share them back with `pilotage sync propose <skill>`. "
-                    f"Org updates will not overwrite them.",
-                    file=sys.stderr,
-                )
-        elif status.get("logged_in"):
-            print(
-                "\nOrg skills: not applicable — this account isn't a member "
-                "of a shared organisation.",
-                file=sys.stderr,
-            )
-        if not status.get("logged_in"):
-            print("\nNot logged into Nous Portal — sync is inert.", file=sys.stderr)
-        elif not status.get("nous_admin"):
-            print(
-                "\nSync is not enabled for your account yet.",
-                file=sys.stderr,
-            )
-        elif not status.get("feature_enabled"):
-            print(
-                "\nSync feature is off for this instance (set PILOTAGE_SYNC_ENABLED=1 "
-                "or config.yaml sync.enabled: true). Sync is inert.",
-                file=sys.stderr,
-            )
-        elif not status.get("base_url"):
-            print(
-                "\nNo sync base URL configured (config.yaml sync.base_url or "
-                "PILOTAGE_SYNC_BASE_URL). Sync is inert.",
-                file=sys.stderr,
-            )
-        return 0
-
-    # pull / push / now — enforce the gate up front with a clear message.
-    try:
-        identity = ssc.resolve_identity()
-    except ssc.SyncInertError as e:
-        print(f"sync inert: {e}", file=sys.stderr)
-        return 1
-    if not identity.get("nous_admin"):
-        print(
-            "sync unavailable: not enabled for your account yet.",
-            file=sys.stderr,
-        )
-        return 1
-    if not ssc.resolve_sync_base_url():
-        print(
-            "sync inert: no sync base URL configured (config.yaml sync.base_url "
-            "or PILOTAGE_SYNC_BASE_URL).",
-            file=sys.stderr,
-        )
-        return 1
-
-    try:
-        if sub == "pull":
-            result = ssc.pull_skills(identity=identity)
-            # Refresh the org mirror too when this account belongs to an
-            # organisation (no-op otherwise), so one pull covers both.
-            org_result = ssc.maybe_pull_org_skills()
-            if org_result:
-                n = len(org_result.get("updated") or [])
-                print(
-                    f"org: refreshed {n} shared skill(s) from your "
-                    f"organisation.",
-                    file=sys.stderr,
-                )
-                clashes = org_result.get("conflicted") or []
-                if clashes:
-                    print(
-                        f"org: {len(clashes)} skill(s) have BOTH local edits "
-                        f"and org updates, so they were left as-is: "
-                        f"{', '.join(clashes)}\n"
-                        f"     Your local version is intact. Review it, then "
-                        f"either propose it or delete the local copy and pull "
-                        f"again to take the org version.",
-                        file=sys.stderr,
-                    )
-        elif sub == "push":
-            result = ssc.push_skills(identity=identity, message="pilotage sync push")
-        elif sub == "now":
-            pull_res = ssc.pull_skills(identity=identity)
-            push_res = ssc.push_skills(identity=identity, message="pilotage sync now")
-            result = {"pull": pull_res, "push": push_res}
-        else:
-            print(f"Unknown sync subcommand: {sub}", file=sys.stderr)
-            return 1
-    except ssc.SyncError as e:
-        print(f"sync failed: {e}", file=sys.stderr)
-        return 1
-
-    print(_json.dumps(result, indent=2, ensure_ascii=False))
-    return 0
 
 
 def cmd_webhook(args):
@@ -6516,8 +6132,8 @@ def _build_provider_choices() -> list[str]:
     except Exception:
         # Fallback: static list guarantees the CLI always works
         return [
-            "auto", "openrouter", "nous", "openai-codex", "xai-oauth", "copilot-acp", "copilot",
-            "anthropic", "gemini", "vertex", "xai", "bedrock", "azure-foundry",
+            "auto", "openrouter", "nous", "openai-codex", "copilot-acp", "copilot",
+            "anthropic", "gemini", "vertex", "bedrock", "azure-foundry",
             "ollama-cloud", "huggingface", "zai", "kimi-coding", "kimi-coding-cn",
             "stepfun", "minimax", "minimax-cn", "kilocode", "novita", "xiaomi", "arcee",
             "nvidia", "deepseek", "alibaba", "qwen-oauth", "opencode-zen", "opencode-go",
@@ -6538,10 +6154,10 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "approvals", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
         "config", "console", "cron", "curator", "debug", "doctor",
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
-        "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
+        "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory",
         "journey", "memory-graph", "learning",
         "model", "monitoring", "pairing", "pause", "pets", "plugins", "portal", "profile",
-        "project", "proxy",
+        "project",
         "prompt-size",
         "resume",
         "send", "sessions", "setup",
@@ -7207,21 +6823,6 @@ def main():
     # =========================================================================
     build_model_parser(subparsers, cmd_model=cmd_model)
 
-    from pilotage_cli.moa_cmd import cmd_moa
-
-    moa_parser = subparsers.add_parser(
-        "moa",
-        help="Configure Mixture of Agents provider/model slots",
-        description="Configure the provider/model set used by /moa <prompt>.",
-    )
-    moa_subparsers = moa_parser.add_subparsers(dest="moa_command")
-    moa_subparsers.add_parser("list", aliases=["ls"], help="Show current MoA model slots")
-    moa_configure = moa_subparsers.add_parser("configure", aliases=["config"], help="Interactively pick MoA models")
-    moa_configure.add_argument("name", nargs="?", help="Preset name to create or update")
-    moa_delete = moa_subparsers.add_parser("delete", aliases=["rm"], help="Delete a MoA preset")
-    moa_delete.add_argument("name", help="Preset name to delete")
-    moa_parser.set_defaults(func=cmd_moa)
-
     # =========================================================================
     # fallback command — manage the fallback provider chain
     # =========================================================================
@@ -7338,49 +6939,9 @@ def main():
     egress_parser.set_defaults(func=_dispatch_egress)
 
     # =========================================================================
-    # migrate command
+    # gateway command  (parser built in pilotage_cli/subcommands/gateway.py)
     # =========================================================================
-    from pilotage_cli.migrate import cmd_migrate, cmd_migrate_xai
-
-    migrate_parser = subparsers.add_parser(
-        "migrate",
-        help="Migrate configuration for retired models or deprecated settings",
-        description=(
-            "Diagnose and (optionally) rewrite the active config.yaml to "
-            "replace references to retired models or deprecated settings."
-        ),
-    )
-    migrate_subparsers = migrate_parser.add_subparsers(dest="migrate_type")
-
-    migrate_xai = migrate_subparsers.add_parser(
-        "xai",
-        help="Migrate xAI models scheduled for retirement on May 15, 2026",
-        description=(
-            "Scan config.yaml for references to xAI models retiring on "
-            "May 15, 2026 and, with --apply, rewrite them in-place to the "
-            "official replacements per the xAI migration guide. The original "
-            "config.yaml is backed up before any rewrite."
-        ),
-    )
-    migrate_xai.add_argument(
-        "--apply",
-        action="store_true",
-        help="Rewrite config.yaml in-place (default: dry-run, no writes)",
-    )
-    migrate_xai.add_argument(
-        "--no-backup",
-        action="store_true",
-        help="Skip the timestamped backup of config.yaml when applying",
-    )
-    migrate_xai.set_defaults(func=cmd_migrate_xai)
-    migrate_parser.set_defaults(func=cmd_migrate)
-
-    # =========================================================================
-    # gateway + proxy commands  (parsers built in pilotage_cli/subcommands/gateway.py)
-    # =========================================================================
-    build_gateway_parser(
-        subparsers, cmd_gateway=cmd_gateway, cmd_proxy=cmd_proxy
-    )
+    build_gateway_parser(subparsers, cmd_gateway=cmd_gateway)
 
     # =========================================================================
     # lsp command
@@ -7454,18 +7015,11 @@ def main():
     # cron command  (parser built in pilotage_cli/subcommands/cron.py)
     # =========================================================================
     build_cron_parser(subparsers, cmd_cron=cmd_cron)
-    build_sync_parser(subparsers, cmd_sync=cmd_sync)
 
     # =========================================================================
     # webhook command  (parser built in pilotage_cli/subcommands/webhook.py)
     # =========================================================================
     build_webhook_parser(subparsers, cmd_webhook=cmd_webhook)
-
-    # =========================================================================
-    # portal command — Nous Portal status + Tool Gateway routing
-    # =========================================================================
-    from pilotage_cli.portal_cli import add_parser as _add_portal_parser
-    _add_portal_parser(subparsers)
 
     # =========================================================================
     # kanban command — multi-profile collaboration board

@@ -555,16 +555,6 @@ class CLIAgentSetupMixin:
             # Route agent status output through prompt_toolkit so ANSI escape
             # sequences aren't garbled by patch_stdout's StdoutProxy.
             self.agent._print_fn = _cprint
-            # Hydrate credits notices at session OPEN (parity with the TUI), so a
-            # depletion / usage-band warning shows before the first message. The
-            # notice_callback is bound above → _on_notice renders the line. Idempotent
-            # + fail-open inside the helper; harmless for non-Nous providers.
-            try:
-                from agent.credits_tracker import seed_credits_at_session_start
-
-                seed_credits_at_session_start(self.agent)
-            except Exception:
-                pass
             self._active_agent_route_signature = (
                 effective_model,
                 runtime.get("provider"),

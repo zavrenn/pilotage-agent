@@ -527,7 +527,7 @@ def auto_title_session(
     via the default threading excepthook. The canonical trigger is the
     post-``pilotage update`` stale-module window, where this function's lazy
     imports read NEW source from disk while already-cached modules
-    (``agent.portal_tags`` etc.) are still the OLD version — the resulting
+    (``agent.aux_accounting`` etc.) are still the OLD version — the resulting
     ImportError repeats on every auto-title attempt until the long-running
     process restarts.
     """
@@ -583,20 +583,8 @@ def _auto_title_session(
     except Exception:
         return
 
-    # This runs on a bare daemon thread spawned AFTER the turn's ambient
-    # conversation context was reset, so publish it here from the session id
-    # we already hold — the title-generation LLM call then carries the same
-    # ``conversation=`` Portal tag as the turn it titles. Root-of-lineage for
-    # consistency with the agent loop.
     from agent.aux_accounting import set_accounting_context
-    from agent.portal_tags import set_conversation_context
 
-    conversation_id = session_id
-    try:
-        conversation_id = session_db.get_conversation_root(session_id) or session_id
-    except Exception:
-        pass
-    set_conversation_context(conversation_id)
     # Same for the accounting context, so the title call's token usage is
     # recorded against this session (task='title_generation',).
     set_accounting_context(session_db, session_id)

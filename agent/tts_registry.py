@@ -51,7 +51,6 @@ _BUILTIN_NAMES = frozenset({
     "elevenlabs",
     "openai",
     "minimax",
-    "xai",
     "mistral",
     "gemini",
     "neutts",

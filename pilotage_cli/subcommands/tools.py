@@ -81,10 +81,10 @@ def build_tools_parser(subparsers, *, cmd_tools: Callable) -> None:
             "Run the install/bootstrap hook a tool backend declares — the\n"
             "same step `pilotage tools` runs after you pick a provider that\n"
             "needs extra dependencies (browser Chromium, Camofox,\n"
-            "KittenTTS/Piper, ddgs, xAI). Stable,\n"
+            "KittenTTS/Piper, ddgs). Stable,\n"
             "non-interactive target the dashboard spawns to drive backend\n"
             "setup. Keys: agent_browser, camofox, kittentts,\n"
-            "piper, ddgs, xai_grok."
+            "piper, ddgs."
         ),
     )
     tools_postsetup_p.add_argument(

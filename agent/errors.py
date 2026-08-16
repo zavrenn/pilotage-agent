@@ -8,6 +8,3 @@ class EmptyStreamError(RuntimeError):
 
     pass
 
-
-class MoAPresetNotFoundError(ValueError):
-    """Raised when a persisted MoA preset no longer exists in config."""

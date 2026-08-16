@@ -12,8 +12,6 @@ reasoning configuration, temperature handling, and extra_body assembly.
 import json
 from typing import Any, Dict
 
-from agent.lmstudio_reasoning import resolve_lmstudio_effort
-from agent.moonshot_schema import is_moonshot_model, sanitize_moonshot_tools
 from agent.prompt_builder import DEVELOPER_ROLE_MODELS
 from agent.transports.base import ProviderTransport
 from agent.transports.types import NormalizedResponse, ToolCall, Usage
@@ -434,7 +432,6 @@ class ChatCompletionsTransport(ProviderTransport):
             # (i.e. custom / unregistered providers). Known providers all go
             # through provider_profile.
             is_openrouter: bool
-            is_nous: bool
             is_qwen_portal: bool
             is_github_models: bool
             is_nvidia_nim: bool
@@ -456,7 +453,7 @@ class ChatCompletionsTransport(ProviderTransport):
             supports_reasoning: bool
             github_reasoning_extra: dict | None
             lmstudio_reasoning_options: list[str] | None  # raw allowed_options from /api/v1/models
-            # Claude on OpenRouter/Nous max output
+            # Claude on OpenRouter max output
             anthropic_max_output: int | None
             extra_body_additions: dict | None
             supports_prompt_cache_key: bool — explicit endpoint capability for
@@ -500,11 +497,6 @@ class ChatCompletionsTransport(ProviderTransport):
 
         # Tools
         if tools:
-            # Moonshot/Kimi uses a stricter flavored JSON Schema.  Rewriting
-            # tool parameters here keeps aggregator routes (Nous, OpenRouter,
-            # etc.) compatible, in addition to direct moonshot.ai endpoints.
-            if is_moonshot_model(model):
-                tools = sanitize_moonshot_tools(tools)
             api_kwargs["tools"] = tools
 
         # max_tokens resolution — priority: ephemeral > user > provider default
@@ -552,18 +544,6 @@ class ChatCompletionsTransport(ProviderTransport):
                     if _e in {"low", "medium", "high"}:
                         _tokenhub_effort = _e
                 api_kwargs["reasoning_effort"] = _tokenhub_effort
-
-        # LM Studio: top-level reasoning_effort. Only emit when the model
-        # declares reasoning support via /api/v1/models capabilities (gated
-        # upstream by params["supports_reasoning"]). resolve_lmstudio_effort
-        # is shared with run_agent's summary path so both stay in sync.
-        if params.get("is_lmstudio", False) and params.get("supports_reasoning", False):
-            _lm_effort = resolve_lmstudio_effort(
-                reasoning_config,
-                params.get("lmstudio_reasoning_options"),
-            )
-            if _lm_effort is not None:
-                api_kwargs["reasoning_effort"] = _lm_effort
 
         # extra_body assembly
         extra_body: dict[str, Any] = {}
@@ -696,10 +676,8 @@ class ChatCompletionsTransport(ProviderTransport):
         if timeout is not None:
             api_kwargs["timeout"] = timeout
 
-        # Tools — apply Moonshot/Kimi schema sanitization regardless of path
+        # Tools
         if tools:
-            if is_moonshot_model(model):
-                tools = sanitize_moonshot_tools(tools)
             api_kwargs["tools"] = tools
 
         # max_tokens resolution — priority: ephemeral > user > profile default
@@ -770,28 +748,7 @@ class ChatCompletionsTransport(ProviderTransport):
                     api_kwargs[k] = v
 
         if extra_body:
-            # Native Gemini (generativelanguage.googleapis.com, non-/openai)
-            # speaks Google's REST schema, not OpenAI's. OpenAI-style extra_body
-            # keys (tags, reasoning, provider, plugins, …) are unknown fields
-            # there and Gemini rejects the whole request with a non-retryable
-            # HTTP 400 ("Invalid JSON payload received. Unknown name 'tags'").
-            # This happens when a profile that emits extra_body (e.g. the Nous
-            # profile's portal `tags`) is active but the resolved endpoint is a
-            # Gemini base_url — typical when only Google credentials are set and
-            # a fallback/aux call lands on Gemini. The native client only reads
-            # thinking_config from extra_body, so drop everything else here.
-            try:
-                from agent.gemini_native_adapter import is_native_gemini_base_url
-                _native_gemini = is_native_gemini_base_url(params.get("base_url"))
-            except Exception:
-                _native_gemini = False
-            if _native_gemini:
-                extra_body = {
-                    k: v for k, v in extra_body.items()
-                    if k in ("thinking_config", "thinkingConfig")
-                }
-            if extra_body:
-                api_kwargs["extra_body"] = extra_body
+            api_kwargs["extra_body"] = extra_body
 
         _add_prompt_cache_key(
             api_kwargs,

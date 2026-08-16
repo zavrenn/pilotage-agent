@@ -6,8 +6,7 @@ session handle — so their token usage was historically discarded, leaving
 dashboard analytics blind to aux model spend.
 
 Instead of threading ``session_db``/``session_id`` parameters through every
-aux call site, the agent loop publishes them here (mirroring the Nous Portal
-conversation context in ``agent.portal_tags``) and the auxiliary client
+aux call site, the agent loop publishes them here and the auxiliary client
 records usage at its single response-validation chokepoint.
 
 ContextVar semantics give us the right isolation for free:
@@ -36,11 +35,6 @@ logger = logging.getLogger(__name__)
 _accounting: ContextVar[Optional[tuple]] = ContextVar(
     "aux_accounting_context", default=None
 )
-
-# Aux tasks whose usage is already accounted by the main loop — recording
-# them here would double-count. MoA advisor/aggregator usage is folded into
-# conversation_loop's update_token_counts delta (tokens AND cost).
-_EXCLUDED_TASKS = frozenset({"moa_reference", "moa_aggregator"})
 
 
 def set_accounting_context(session_db: Any, session_id: Optional[str]):
@@ -82,7 +76,6 @@ def record_aux_usage(
     call). No-ops when:
 
     * no accounting context is published (call is outside any agent turn),
-    * the task is main-loop-accounted (MoA slots — see ``_EXCLUDED_TASKS``),
     * the response carries no usage object.
 
     The model is read from ``response.model`` (accurate even after the aux
@@ -90,7 +83,7 @@ def record_aux_usage(
     originally-resolved route and are best-effort.
     """
     try:
-        if not task or task in _EXCLUDED_TASKS:
+        if not task:
             return
         ctx = _accounting.get()
         if ctx is None:

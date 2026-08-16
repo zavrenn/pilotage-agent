@@ -1,7 +1,7 @@
 """Codex Responses API adapter.
 
 Pure format-conversion and normalization logic for the OpenAI Responses API
-(used by OpenAI Codex, xAI, GitHub Models, and other Responses-compatible endpoints).
+(used by OpenAI Codex, GitHub Models, and other Responses-compatible endpoints).
 
 Extracted from run_agent.py to isolate Responses API-specific logic from the
 core agent loop. All functions are stateless — they operate on the data passed
@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 def _classify_responses_issuer(
     *,
-    is_xai_responses: bool = False,
     is_github_responses: bool = False,
     is_codex_backend: bool = False,
     base_url: Optional[str] = None,
@@ -41,8 +40,6 @@ def _classify_responses_issuer(
     conversation switch models without poisoning history with un-decryptable
     reasoning blocks.
     """
-    if is_xai_responses:
-        return "xai_responses"
     if is_github_responses:
         return "github_responses"
     if is_codex_backend:
@@ -363,9 +360,8 @@ def _responses_tools(tools: Optional[List[Dict[str, Any]]] = None) -> Optional[L
 # Responses ``tools`` array.  These are declared by ``type`` alone (no
 # client-side name/parameters schema) and run server-side — the provider
 # owns the implementation and reports progress via the matching ``*_call``
-# output items.  Pilotage injects xAI's native ``web_search`` for the xAI
-# transport (see agent/transports/codex.py); the rest are listed so the
-# preflight validator passes them through rather than rejecting them as
+# output items.  They are listed so the preflight validator passes them
+# through rather than rejecting them as
 # "unsupported type".  Mirrors the ``*_call`` item-type set used in
 # _normalize_codex_response.
 _RESPONSES_BUILTIN_TOOL_TYPES = {
@@ -410,24 +406,12 @@ def _normalize_responses_message_status(value: Any, *, default: str = "completed
 def _chat_messages_to_responses_input(
     messages: List[Dict[str, Any]],
     *,
-    is_xai_responses: bool = False,
     is_github_responses: bool = False,
     replay_encrypted_reasoning: bool = True,
     current_issuer_kind: Optional[str] = None,
     native_compaction_eligible: bool = False,
 ) -> List[Dict[str, Any]]:
     """Convert internal chat-style messages to Responses input items.
-
-    ``is_xai_responses`` is kept for transport signature compatibility but
-    no longer suppresses encrypted reasoning replay. Earlier (,
-    May 2026) we believed xAI's OAuth/SuperGrok ``/v1/responses`` surface
-    rejected replayed ``encrypted_content`` reasoning items minted by
-    prior turns, and we stripped them.  That decision was wrong — xAI
-    explicitly relies on Pilotage threading encrypted reasoning back across
-    turns for cross-turn coherence (the whole point of their partnership
-    integration).  We now replay encrypted reasoning on every Responses
-    transport (xAI, native Codex, custom relays) and let xAI tell us
-    explicitly if a specific surface ever rejects a payload.
 
     ``replay_encrypted_reasoning`` is the per-session kill switch.  Some
     OpenAI-compatible relays accept the request but later reject the
@@ -503,9 +487,6 @@ def _chat_messages_to_responses_input(
             if role == "assistant":
                 # Replay encrypted reasoning items from previous turns
                 # so the API can maintain coherent reasoning chains.
-                # This applies to every Responses transport including
-                # xAI — see _chat_messages_to_responses_input docstring
-                # for the May 2026 reversal of the earlier xAI gate.
                 codex_reasoning = (
                     msg.get("codex_reasoning_items")
                     if replay_encrypted_reasoning
@@ -1183,26 +1164,6 @@ def _preflight_codex_api_kwargs(
     elif "stream" in api_kwargs:
         raise ValueError("Codex Responses stream flag is only allowed in fallback streaming requests.")
 
-    # Safety-net sanitization for xAI Responses: defense-in-depth
-    # for the same slash-enum strip that ``chat_completion_helpers`` and
-    # ``auxiliary_client`` apply at request-build time.  If a future code
-    # path forgets to sanitize before calling us, this catches the bypass
-    # so xAI doesn't 400 with ``Invalid arguments passed to the model``
-    # (HuggingFace IDs like ``Qwen/Qwen3.5-0.8B`` from MCP tool schemas).
-    #
-    # Gated on the model name pattern because native Codex (OpenAI) DOES
-    # accept slash-containing enum values — stripping them there would
-    # silently degrade tool-schema constraints.  xAI is the only
-    # Responses-API surface that rejects the shape.
-    model_name_for_provider_check = str(api_kwargs.get("model") or "").lower()
-    is_xai_model = model_name_for_provider_check.startswith(("grok-", "x-ai/grok-"))
-    if is_xai_model and normalized.get("tools"):
-        try:
-            from tools.schema_sanitizer import strip_slash_enum
-            normalized["tools"], _ = strip_slash_enum(normalized["tools"])
-        except Exception:
-            pass  # Best-effort — the caller-level sanitization should have handled it
-
     unexpected = sorted(key for key in api_kwargs if key not in allowed_keys)
     if unexpected:
         raise ValueError(
@@ -1586,45 +1547,6 @@ def _normalize_codex_response(
         # so the model keeps its chain-of-thought on the retry.
         final_text = ""
 
-    # ── Reasoning-channel answer salvage (xAI grok) ──────────────
-    # grok-4.x on the xAI /v1/responses surface sometimes emits its final
-    # answer inside the reasoning item instead of as a ``message`` output
-    # item, marking where the answer starts with grok's internal
-    # ``<response>`` delimiter.  Without salvage, the reasoning-only rule
-    # below classifies the turn ``incomplete`` — and because reasoning
-    # items on this surface carry no ``encrypted_content``, the interim
-    # message replays as nothing, so every continuation request is
-    # byte-identical to the one that just failed.  The turn burns its 3
-    # retries and dies with "Codex response remained incomplete after 3
-    # continuation attempts" even though the answer was produced on the
-    # first attempt.  Observed live with grok-4.20 on xai-oauth
-    # (2026-07-13).  Promote the delimited tail to assistant content and
-    # keep the untagged prefix as thinking text.
-    if (
-        issuer_kind == "xai_responses"
-        and not final_text
-        and not tool_calls
-        and reasoning_parts
-    ):
-        joined_reasoning = "\n\n".join(reasoning_parts)
-        marker = joined_reasoning.rfind("<response>")
-        if marker != -1:
-            salvaged = joined_reasoning[marker + len("<response>"):]
-            closing = salvaged.find("</response>")
-            if closing != -1:
-                salvaged = salvaged[:closing]
-            salvaged = salvaged.strip()
-            if salvaged:
-                logger.warning(
-                    "xAI response delivered its final answer inside the "
-                    "reasoning channel (<response> delimiter); promoting "
-                    "%d chars to assistant content.",
-                    len(salvaged),
-                )
-                final_text = salvaged
-                reasoning_prefix = joined_reasoning[:marker].strip()
-                reasoning_parts = [reasoning_prefix] if reasoning_prefix else []
-
     assistant_message = SimpleNamespace(
         content=final_text,
         tool_calls=tool_calls,
@@ -1649,7 +1571,7 @@ def _normalize_codex_response(
         # Response contains only reasoning (encrypted thinking state and/or
         # human-readable summary) with no visible content or tool calls.
         #
-        # For the specially-handled backends (Codex, xAI, GitHub/Copilot),
+        # For the specially-handled backends (Codex, GitHub/Copilot),
         # reasoning-only with status="completed" means "the model is still
         # thinking and needs another turn" — treat it as incomplete so the
         # Codex continuation path retries instead of falling into the
@@ -1663,7 +1585,6 @@ def _normalize_codex_response(
         #
         if response_status == "completed" and issuer_kind not in (
             "codex_backend",
-            "xai_responses",
             "github_responses",
         ):
             finish_reason = "stop"

@@ -418,24 +418,6 @@ _LOCAL_CTX_PROBE_CACHE: Dict[tuple, tuple] = {}
 # all miss. Replaced the previous 80+ entry dict.
 # For provider-specific context lengths, models.dev is the primary source.
 DEFAULT_CONTEXT_LENGTHS = {
-    # Anthropic Claude 4.6 (1M context) — bare IDs only to avoid
-    # fuzzy-match collisions (e.g. "anthropic/claude-sonnet-4" is a
-    # substring of "anthropic/claude-sonnet-4.6").
-    # OpenRouter-prefixed models resolve via OpenRouter live API or models.dev.
-    "claude-fable-5": 1000000,
-    "claude-fable": 1000000,
-    "claude-opus-5": 1000000,
-    "claude-sonnet-5": 1000000,
-    "claude-opus-4-8": 1000000,
-    "claude-opus-4.8": 1000000,
-    "claude-opus-4-7": 1000000,
-    "claude-opus-4.7": 1000000,
-    "claude-opus-4-6": 1000000,
-    "claude-sonnet-4-6": 1000000,
-    "claude-opus-4.6": 1000000,
-    "claude-sonnet-4.6": 1000000,
-    # Catch-all for older Claude models (must sort after specific entries)
-    "claude": 200000,
     # OpenAI — GPT-5 family (most have 400k; specific overrides first)
     # Source: https://developers.openai.com/api/docs/models
     # GPT-5.5 (launched Apr 23 2026) is 1.05M on the direct OpenAI API and
@@ -463,173 +445,7 @@ DEFAULT_CONTEXT_LENGTHS = {
     "gpt-5": 400000,                  # GPT-5.x base, mini, codex variants (400k)
     "gpt-4.1": 1047576,
     "gpt-4": 128000,
-    # Google
-    "gemini": 1048576,
-    # Gemma (open models served via AI Studio)
-    "gemma-4": 256000,  # Gemma 4 family
-    "gemma4": 256000,  # Ollama-style naming (e.g. gemma4:31b-cloud)
-    "gemma-4-31b": 256000,
-    "gemma-3": 131072,
-    "gemma": 8192,  # fallback for older gemma models
-    # DeepSeek — V4 family ships with a 1M context window. The legacy
-    # aliases ``deepseek-chat`` / ``deepseek-reasoner`` are server-side
-    # mapped to the non-thinking / thinking modes of ``deepseek-v4-flash``
-    # and inherit the same 1M window. The ``deepseek`` substring entry
-    # below remains as a 128K fallback for older / unknown DeepSeek model
-    # ids (e.g. via custom endpoints).
-    # https://api-docs.deepseek.com/zh-cn/quick_start/pricing
-    "deepseek-v4-pro": 1_000_000,
-    "deepseek-v4-flash": 1_000_000,
-    "deepseek-chat": 1_000_000,
-    "deepseek-reasoner": 1_000_000,
-    "deepseek": 128000,
-    # Meta
-    "llama": 131072,
-    # Qwen — specific model families before the catch-all.
-    # Official docs: https://help.aliyun.com/zh/model-studio/developer-reference/
-    "qwen3.8-max": 1_000_000,     # 1M context (OpenRouter & Nous portal, verified 2026-08-03)
-    "qwen3.6-plus": 1048576,      # 1M context (DashScope/Alibaba & OpenRouter)
-    "qwen3.7-plus": 1048576,      # 1M context (DashScope/Alibaba)
-    "qwen3-coder-plus": 1000000,  # 1M context
-    "qwen3-coder": 262144,        # 256K context
-    "qwen3-max": 262144,          # 256K context (qwen3-max-2026-01-23 snapshot, Coding Plan)
-    "qwen": 131072,
-    # MiniMax — M3 is 1M context (max output 512K); M2.x series is 204,800.
-    # Keys use substring matching (longest-first), so "minimax-m3" wins over
-    # the generic "minimax" catch-all for the M3 slug on every surface
-    # (native MiniMax-M3, OpenRouter/Nous minimax/minimax-m3).
-    # https://platform.minimax.io/docs/api-reference/text-chat-openai
-    "minimax-m3": 1000000,
-    "minimax": 204800,
-    # GLM — GLM-5.2 ships with a 1M context window (verified empirically:
-    # needle-in-a-haystack retrieval at 789K prompt tokens succeeded with
-    # zero errors on api.z.ai/api/coding/paas/v4).  Older GLM models
-    # (5, 5.1, 5-turbo) are ~202K.  Longest-key-first substring matching
-    # ensures "glm-5.2" resolves to 1M while older variants still hit the
-    # generic 202K fallback.
-    "glm-5.2": 1_048_576,
-    "glm": 202752,
-    # xAI Grok — xAI /v1/models does not return context_length metadata,
-    # so these hardcoded fallbacks prevent Pilotage from probing-down to
-    # the default 128k when the user points at https://api.x.ai/v1
-    # via a custom provider. Values sourced from models.dev (2026-04).
-    # Keys use substring matching (longest-first), so e.g. "grok-4.20"
-    # matches "grok-4.20-0309-reasoning" / "-non-reasoning" / "-multi-agent-0309".
-    # OAuth-only slug; absent from GET /v1/models. xAI publishes a 200k
-    # usable context window for Composer 2.5 on Grok Build (SuperGrok /
-    # Premium+); /v1/responses additionally enforces a ~262144 input+output
-    # budget, but the usable context (what we track here) is 200k.
-    "grok-composer": 200000,    # grok-composer-2.5-fast (Grok Build CLI)
-    "grok-build-latest": 500000,  # alias of grok-4.5 (early access)
-    "grok-build": 256000,       # grok-build-0.1
-    "grok-code-fast": 256000,   # grok-code-fast-1
-    "grok-2-vision": 8192,      # grok-2-vision, -1212, -latest
-    "grok-4-fast": 2000000,     # grok-4-fast-(non-)reasoning, also matches -reasoning
-    "grok-4.20": 2000000,       # grok-4.20-0309-(non-)reasoning, -multi-agent-0309
-    "grok-4.6": 500000,         # grok-4.6 — 500K context (OpenRouter / docs.x.ai)
-    "grok-4.5": 500000,         # grok-4.5, grok-4.5-latest — 500K context per docs.x.ai
-    "grok-4.3": 1000000,        # grok-4.3, grok-4.3-latest — 1M context per docs.x.ai
-    "grok-4": 256000,           # grok-4, grok-4-0709
-    "grok-3": 131072,           # grok-3, grok-3-mini, grok-3-fast, grok-3-mini-fast
-    "grok-2": 131072,           # grok-2, grok-2-1212, grok-2-latest
-    "grok": 131072,             # catch-all (grok-beta, unknown grok-*)
-    # Kimi — K3 ships with a 1 Mi context window (1,048,576; verified against
-    # models.dev and OpenRouter live metadata, matching the endpoint-scoped
-    # override in _endpoint_scoped_context_length). Longest-key-first substring
-    # matching ensures "kimi-k3" resolves to 1M while older/unknown Kimi models
-    # still hit the generic 256K fallback.
-    "kimi-k3": 1_048_576,
-    "kimi": 262144,
-    # Upstage Solar — api.upstage.ai/v1/models does not return context_length,
-    # so these fallbacks keep token budgeting / compression from probing down
-    # to the 128k default. Ids are matched longest-first, so dated variants
-    # (e.g. solar-pro3-250127) resolve via their family prefix.
-    # Sources: Solar Pro 3 = 128K, Solar Pro 2 = 64K, Solar Mini = 32K,
-    # Solar Open 2 = 256K.
-    "solar-open2": 262144,  # 256K
-    "solar-pro3": 131072,
-    "solar-pro2": 65536,
-    "solar-mini": 32768,
-    # Tencent — Hy3 Preview (Hunyuan) with 256K context window.
-    # OpenRouter live metadata reports 262144 (256 × 1024); align the
-    # static fallback so cache and offline both agree.
-    "hy3-preview": 262144,
-    # Tencent — Hy3 (GA successor to Hy3 Preview), same 256K window.
-    "hy3": 262144,
-    # Nemotron — NVIDIA's open-weights series (128K context across all sizes)
-    "nemotron": 131072,
-    # Arcee
-    "trinity": 262144,
-    # OpenRouter
-    "elephant": 262144,
-    # Hugging Face Inference Providers — model IDs use org/name format
-    "Qwen/Qwen3.5-397B-A17B": 131072,
-    "Qwen/Qwen3.5-35B-A3B": 131072,
-    "deepseek-ai/DeepSeek-V3.2": 65536,
-    "moonshotai/Kimi-K2.5": 262144,
-    "moonshotai/Kimi-K2.6": 262144,
-    "moonshotai/Kimi-K2-Thinking": 262144,
-    "MiniMaxAI/MiniMax-M2.5": 204800,
-    "XiaomiMiMo/MiMo-V2-Flash": 262144,
-    "mimo-v2-pro": 1048576,
-    "mimo-v2.5-pro": 1048576,
-    "mimo-v2.5": 1048576,
-    "mimo-v2-omni": 262144,
-    "mimo-v2-flash": 262144,
-    "zai-org/GLM-5": 202752,
 }
-
-# xAI Grok models that ACCEPT the `reasoning.effort` parameter on
-# api.x.ai. Verified live against /v1/responses 2026-05-10:
-#
-#   ACCEPTS effort:  grok-3-mini, grok-3-mini-fast, grok-4.20-multi-agent-0309,
-#                    grok-4.3
-#   REJECTS effort:  grok-3, grok-4, grok-4-0709, grok-4-fast-(non-)reasoning,
-#                    grok-4-1-fast-(non-)reasoning, grok-4.20-0309-(non-)reasoning,
-#                    grok-code-fast-1
-#
-# REJECTS-side models still reason natively — they just don't expose an
-# effort dial — so callers should send no `reasoning` key at all rather
-# than a default `medium` (which 400s with "Model X does not support
-# parameter reasoningEffort").
-_GROK_EFFORT_CAPABLE_PREFIXES = (
-    "grok-3-mini",
-    "grok-4.20-multi-agent",
-    "grok-4.3",
-    # grok-4.5: verified live against /v1/responses 2026-07-08 — accepts
-    # effort low/medium/high (default: high when omitted) but REJECTS
-    # "none" ("This model does not support `reasoning_effort` value `none`"),
-    # unlike grok-4.3. models.dev agrees: effort values [low, medium, high].
-    "grok-4.5",
-    # grok-4.6: drop-in successor of grok-4.5 (same effort dial).
-    "grok-4.6",
-)
-
-
-def grok_supports_reasoning_effort(model: str) -> bool:
-    """Return True when an xAI Grok model accepts ``reasoning.effort``.
-
-    Allowlist by substring (matches both bare ``grok-3-mini`` and
-    aggregator-prefixed ``x-ai/grok-3-mini``). Conservative by design:
-    if a future Grok model isn't listed, we send no effort dial rather
-    than 400.
-    """
-    name = (model or "").strip().lower()
-    if not name:
-        return False
-    # Strip common aggregator prefixes (x-ai/, openrouter/x-ai/, xai/, ...)
-    for sep in ("/",):
-        if sep in name:
-            name = name.rsplit(sep, 1)[-1]
-    return any(name.startswith(prefix) for prefix in _GROK_EFFORT_CAPABLE_PREFIXES)
-
-
-def is_grok_46_family(model: str) -> bool:
-    """Return whether *model* is a Grok 4.6 family identifier."""
-    name = (model or "").strip().lower().replace("_", "-")
-    if "/" in name:
-        name = name.rsplit("/", 1)[-1]
-    return name == "grok-4.6" or name.startswith("grok-4.6-")
 
 
 _CONTEXT_LENGTH_KEYS = (
@@ -686,45 +502,6 @@ def _is_custom_endpoint(base_url: str) -> bool:
 _URL_TO_PROVIDER: Dict[str, str] = {
     "api.openai.com": "openai",
     "chatgpt.com": "openai",
-    "api.anthropic.com": "anthropic",
-    "api.z.ai": "zai",
-    "open.bigmodel.cn": "zai",
-    "api.moonshot.ai": "kimi-coding",
-    "api.moonshot.cn": "kimi-coding-cn",
-    "api.kimi.com": "kimi-coding",
-    "api.stepfun.ai": "stepfun",
-    "api.stepfun.com": "stepfun",
-    "api.arcee.ai": "arcee",
-    "api.minimax": "minimax",
-    "dashscope.aliyuncs.com": "alibaba",
-    "dashscope-intl.aliyuncs.com": "alibaba",
-    "portal.qwen.ai": "qwen-oauth",
-    "openrouter.ai": "openrouter",
-    "generativelanguage.googleapis.com": "gemini",
-    "inference-api.nousresearch.com": "nous",
-    "api.deepseek.com": "deepseek",
-    "api.githubcopilot.com": "copilot",
-    # Enterprise Copilot endpoints look like api.enterprise.githubcopilot.com,
-    # api.business.githubcopilot.com, etc.  Match the suffix so context-window
-    # resolution works for enterprise accounts too.
-    ".githubcopilot.com": "copilot",
-    "models.github.ai": "copilot",
-    # GitHub Models free tier (Azure-hosted prototyping endpoint) — same
-    # canonical provider as the Copilot API.  Hard per-request token cap
-    # (often 8K) makes it unusable for Pilotage' system prompt, but mapping
-    # it here lets us recognize the endpoint and emit a targeted hint
-    # instead of falling through the unknown-custom-endpoint path.
-    "models.inference.ai.azure.com": "copilot",
-    "api.fireworks.ai": "fireworks",
-    "opencode.ai": "opencode-go",
-    "api.x.ai": "xai",
-    "integrate.api.nvidia.com": "nvidia",
-    "api.xiaomimimo.com": "xiaomi",
-    "xiaomimimo.com": "xiaomi",
-    "api.gmi-serving.com": "gmi",
-    "api.novita.ai": "novita",
-    "tokenhub.tencentmaas.com": "tencent-tokenhub",
-    "ollama.com": "ollama-cloud",
 }
 
 # Auto-extend with hostnames derived from provider profiles.
@@ -2064,10 +1841,6 @@ def _model_name_suggests_minimax_m3(model: str) -> bool:
 # catch-all can never be listed here.
 _PRE_CATALOG_STALE_KEYS = frozenset({
     "minimax-m3",    # 1M; older builds persisted the "minimax" catch-all (204,800)
-    "grok-4.3",      # 1M; pre-2026-05-15 builds persisted the "grok-4" catch-all (256,000)
-    "grok-4.6",      # 500K; pre-catalog builds persisted the "grok-4" catch-all (256,000)
-    "grok-4-fast",   # 2M; pre-2026-04-10 builds fell through to the 256K probe fallback
-    "grok-4.20",     # 2M; pre-2026-04-10 builds fell through to the 256K probe fallback
     "qwen3.6-plus",  # 1M; pre-2026-05-17 builds persisted the "qwen" catch-all (131,072)
 })
 
@@ -2506,84 +2279,6 @@ def _resolve_codex_oauth_context_length(
     return context_length
 
 
-def _resolve_nous_context_length(
-    model: str,
-    base_url: str = "",
-    api_key: str = "",
-) -> Tuple[Optional[int], str]:
-    """Resolve Nous Portal model context length.
-
-    Tries the live Nous inference endpoint first (authoritative), then falls
-    back to OpenRouter metadata with suffix/version matching.
-
-    Nous model IDs are bare after prefix-stripping (e.g. 'qwen3.6-plus',
-    'claude-opus-4-6') while OpenRouter uses prefixed IDs (e.g.
-    'qwen/qwen3.6-plus', 'anthropic/claude-opus-4.6').  Version
-    normalization (dot↔dash) is applied to handle name drifts.
-
-    Returns ``(context_length, source)`` where ``source`` is one of:
-      - ``"portal"``    — live /v1/models response (authoritative)
-      - ``"openrouter"`` — OpenRouter cache fallback (non-authoritative;
-        callers must NOT persist this to the on-disk cache or a single
-        portal blip will freeze the wrong value in forever)
-      - ``""``           — could not resolve
-    """
-    # Portal first — the Nous /models endpoint is authoritative for what our
-    # infrastructure enforces and may differ from OR (e.g. OR reports 1M for
-    # qwen3.6-plus; the portal correctly says 262144).  Fall back to the OR
-    # catalog only if the portal doesn't list the model.
-    if base_url:
-        portal_ctx = _resolve_endpoint_context_length(model, base_url, api_key=api_key)
-        if portal_ctx is not None:
-            return portal_ctx, "portal"
-
-    metadata = fetch_model_metadata()
-
-    def _safe_ctx(or_id: str, entry: dict) -> Optional[int]:
-        """Return context length, but reject known stale 32K underreports.
-
-        Apply the same guard used for the generic OpenRouter path (step 6 in
-        resolve_context_length) so the Nous portal path does not short-circuit it.
-        """
-        ctx = entry.get("context_length")
-        if ctx is None:
-            return None
-        if ctx <= 32768 and _model_name_suggests_stale_32k_underreport(or_id):
-            logger.info(
-                "Rejecting OpenRouter metadata context=%s for %r "
-                "(known 32K underreport, Nous path); falling through to hardcoded defaults",
-                ctx, or_id,
-            )
-            return None
-        return ctx
-
-    if model in metadata:
-        ctx = _safe_ctx(model, metadata[model])
-        if ctx is not None:
-            return ctx, "openrouter"
-
-    normalized = _normalize_model_version(model).lower()
-
-    for or_id, entry in metadata.items():
-        bare = or_id.split("/", 1)[1] if "/" in or_id else or_id
-        if bare.lower() == model.lower() or _normalize_model_version(bare).lower() == normalized:
-            ctx = _safe_ctx(or_id, entry)
-            if ctx is not None:
-                return ctx, "openrouter"
-
-    model_lower = model.lower()
-    for or_id, entry in metadata.items():
-        bare = or_id.split("/", 1)[1] if "/" in or_id else or_id
-        for candidate, query in [(bare.lower(), model_lower), (_normalize_model_version(bare).lower(), normalized)]:
-            if candidate.startswith(query) and (
-                len(candidate) == len(query) or candidate[len(query)] in "-:."
-            ):
-                ctx = _safe_ctx(or_id, entry)
-                if ctx is not None:
-                    return ctx, "openrouter"
-
-    return None, ""
-
 
 def get_model_context_length(
     model: str,
@@ -2622,42 +2317,6 @@ def get_model_context_length(
     # 0. Explicit config override — user knows best
     if config_context_length is not None and isinstance(config_context_length, int) and config_context_length > 0:
         return config_context_length
-
-    # 0a. MoA virtual provider — ``model`` is a preset name, not a real model,
-    # and ``base_url`` is the local virtual endpoint, so every probe below would
-    # miss and fall through to the 256K default. The aggregator is the acting
-    # model, so resolve the context window from the aggregator slot's real
-    # provider+model instead. References are advisory-only and never bound the
-    # acting context, so they're ignored here.
-    if (provider or "").strip().lower() == "moa":
-        try:
-            from pilotage_cli.config import (
-                get_compatible_custom_providers,
-                load_config,
-            )
-            from pilotage_cli.moa_config import resolve_moa_preset
-            from pilotage_cli.runtime_provider import resolve_runtime_provider
-
-            config = load_config()
-            effective_custom_providers = custom_providers
-            if effective_custom_providers is None:
-                effective_custom_providers = get_compatible_custom_providers(config)
-            preset = resolve_moa_preset(config.get("moa") or {}, model)
-            agg = preset.get("aggregator") or {}
-            agg_provider = str(agg.get("provider") or "").strip()
-            agg_model = str(agg.get("model") or "").strip()
-            if agg_model and agg_provider and agg_provider.lower() != "moa":
-                rt = resolve_runtime_provider(requested=agg_provider, target_model=agg_model)
-                return get_model_context_length(
-                    agg_model,
-                    base_url=rt.get("base_url", "") or "",
-                    api_key=rt.get("api_key", "") or "",
-                    provider=rt.get("provider") or agg_provider,
-                    custom_providers=effective_custom_providers,
-                )
-        except Exception:
-            logger.debug("MoA aggregator context-length resolution failed", exc_info=True)
-        # Fall through to the generic default if aggregator resolution failed.
 
     # 0b. model_overrides config — EXPLICIT per-provider+model context_window
     # override only (fill-gap _default entries are applied later, inside
@@ -2728,12 +2387,6 @@ def get_model_context_length(
     if endpoint_context is not None:
         return endpoint_context
 
-    is_bedrock_context = provider == "bedrock" or (
-        base_url
-        and base_url_hostname(base_url).startswith("bedrock-runtime.")
-        and base_url_host_matches(base_url, "amazonaws.com")
-    )
-
     # 1. Check persistent cache (model+provider)
     # LM Studio is excluded — its loaded context length is transient (the
     # user can reload the model with a different context_length at any time
@@ -2775,98 +2428,12 @@ def get_model_context_length(
                     model, base_url, f"{cached:,}",
                 )
                 _invalidate_cached_context_length(model, base_url)
-            # Nous Portal: the portal /v1/models endpoint is authoritative.
-            # Bypass the persistent cache so step 5b can always reconcile
-            # against it — this corrects pre-fix entries seeded from the
-            # OR catalog (the same OR underreport class that the Kimi/Qwen
-            # DEFAULT_CONTEXT_LENGTHS overrides exist to mitigate) without
-            # touching the on-disk file when the portal is unreachable.
-            # The in-memory 300s endpoint metadata cache makes the per-call
-            # cost amortise to ~0 within a process.
-            elif _infer_provider_from_url(base_url) == "nous":
-                logger.debug(
-                    "Bypassing persistent cache for %s@%s (Nous portal authoritative)",
-                    model, base_url,
-                )
-                # Fall through; step 5b reconciles and overwrites if portal responds.
-            # Invalidate stale Bedrock entries seeded before the Claude 4.6+
-            # long-context table was corrected to 1M. The static table is a
-            # FLOOR, not an override: probe-derived cache entries (step 1b)
-            # may legitimately exceed the table (real window read from
-            # Bedrock's length-validation error), so only under-reporting
-            # entries are dropped — never a cached value above the table.
-            elif is_bedrock_context:
-                try:
-                    from agent.bedrock_adapter import get_bedrock_context_length
-                    bedrock_ctx = get_bedrock_context_length(model)
-                    if cached < bedrock_ctx:
-                        logger.info(
-                            "Dropping stale Bedrock cache entry %s@%s -> %s; "
-                            "using static Bedrock table value %s",
-                            model,
-                            base_url,
-                            f"{cached:,}",
-                            f"{bedrock_ctx:,}",
-                        )
-                        _invalidate_cached_context_length(model, base_url)
-                        return bedrock_ctx
-                except ImportError:
-                    pass
-                return cached
             else:
                 if is_local_endpoint(base_url):
                     return _reconcile_local_cached_context_length(
                         model, base_url, cached, api_key=api_key,
                     )
                 return cached
-
-    # 1b. AWS Bedrock — use static context length table.
-    # Bedrock's ListFoundationModels API doesn't expose context window sizes,
-    # so we maintain a curated table in bedrock_adapter.py that reflects
-    # Bedrock-hosted model limits (e.g. older Claude 4 at 200K; Claude
-    # Opus/Sonnet 4.6+ at 1M).  This must run BEFORE the custom-endpoint probe at
-    # step 2 — bedrock-runtime.<region>.amazonaws.com is not in
-    # _URL_TO_PROVIDER, so it would otherwise be treated as a custom endpoint,
-    # fail the /models probe (Bedrock doesn't expose that shape), and fall
-    # back to the 128K default before reaching the original step 4b branch.
-    if is_bedrock_context:
-        try:
-            from agent.bedrock_adapter import (
-                get_bedrock_context_length,
-                resolve_bedrock_region,
-            )
-        except ImportError:
-            pass  # boto3 not installed — fall through to generic resolution
-        else:
-            # Bedrock does not expose the context window via any metadata API,
-            # so get_bedrock_context_length() probes the live endpoint (one
-            # fast, pre-inference length rejection) to read the real window.
-            # Cache the probe result per model so we pay that cost once, not
-            # every turn — keyed by base_url when present, else a synthetic
-            # bedrock:// key so display/offline paths share the entry.
-            cache_key_url = base_url or "bedrock://"
-            cached = get_cached_context_length(model, cache_key_url)
-            if cached is not None:
-                return cached
-            # Resolve region from the base_url host first, then the standard
-            # AWS region chain.  An empty region disables probing (table only).
-            region = ""
-            if base_url:
-                _m = re.search(r"bedrock-runtime\.([a-z0-9-]+)\.", base_url)
-                if _m:
-                    region = _m.group(1)
-            if not region:
-                try:
-                    region = resolve_bedrock_region()
-                except Exception:
-                    region = ""
-            ctx = get_bedrock_context_length(model, region=region, probe=bool(region))
-            if ctx and region:
-                # Only persist probe-derived values (region present); a pure
-                # table fallback shouldn't poison the cache against a later
-                # successful probe.
-                save_context_length(model, cache_key_url, ctx)
-            return ctx
 
     if provider == "novita" or (base_url and base_url_host_matches(base_url, "api.novita.ai")):
         ctx = _resolve_endpoint_context_length(model, base_url or "https://api.novita.ai/openai/v1", api_key=api_key)
@@ -2959,33 +2526,6 @@ def get_model_context_length(
             if inferred:
                 effective_provider = inferred
 
-    # 5a. Copilot live /models API — max_prompt_tokens from the user's account.
-    # This catches account-specific models (e.g. claude-opus-4.6-1m) that
-    # don't exist in models.dev. For models that ARE in models.dev, this
-    # returns the provider-enforced limit which is what users can actually use.
-    if effective_provider in {"copilot", "copilot-acp", "github-copilot"}:
-        try:
-            from pilotage_cli.models import get_copilot_model_context
-            ctx = get_copilot_model_context(model, api_key=api_key)
-            if ctx:
-                return ctx
-        except Exception:
-            pass  # Fall through to models.dev
-
-    if effective_provider == "nous":
-        ctx, source = _resolve_nous_context_length(
-            model, base_url=base_url or "", api_key=api_key or ""
-        )
-        if ctx:
-            # Persist ONLY portal-derived values.  Caching an OR-fallback
-            # value here would freeze in a wrong number on the first portal
-            # blip / auth glitch and step-1 would short-circuit it forever.
-            # OR's catalog is community-maintained and is precisely why the
-            # Kimi/Qwen DEFAULT_CONTEXT_LENGTHS overrides exist — we don't
-            # want it leaking into the persistent cache for Nous URLs.
-            if base_url and source == "portal":
-                save_context_length(model, base_url, ctx)
-            return ctx
     if effective_provider == "openai-codex":
         # Codex OAuth enforces lower context limits than the direct OpenAI
         # API for the same slug (e.g. gpt-5.5 is 1.05M on the API but 272K

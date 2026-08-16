@@ -1181,22 +1181,7 @@ def recover_with_credential_pool(
         # the refresh path keeps minting fresh tokens against the
         # same unsubscribed account and the main agent loop spins re-issuing
         # the same 403 until the user Ctrl+C's.
-        #
-        # Defense-in-depth for: xAI's backend has been seen to 403
-        # standard SuperGrok subscribers with bodies that don't match the
-        # existing entitlement keyword set in ``_is_entitlement_failure``.
-        # Any 403 against ``xai-oauth`` is treated as entitlement here so
-        # the refresh loop can't spin in those cases either.
-        #
-        # Exception: xAI's ``[WKE=unauthenticated:..]`` suffix and
-        # the ``OAuth2 access token could not be validated`` phrasing are
-        # xAI's authoritative "this is a stale token, not entitlement"
-        # signal.  When either fires we must NOT apply the catch-all
-        # override — refresh is the recoverable path for these bodies, and
-        # blanket-classifying them as entitlement was the bug that left
-        # long-running TUI sessions stuck on stale tokens until the user
-        # exited and reopened.
-        is_entitlement = agent._is_entitlement_failure(error_context, status_code)
+        is_entitlement = False
         _auth_haystack = " ".join(
             str(error_context.get(k) or "").lower()
             for k in ("message", "reason", "code", "error")
@@ -1215,13 +1200,6 @@ def recover_with_credential_pool(
             and getattr(agent, "api_mode", "") == "anthropic_messages"
         ):
             is_entitlement = True
-        if not is_entitlement and status_code == 403 and (agent.provider or "") == "xai-oauth":
-            _is_xai_auth_failure = (
-                "[wke=unauthenticated:" in _auth_haystack
-                or "oauth2 access token could not be validated" in _auth_haystack
-            )
-            if not _is_xai_auth_failure:
-                is_entitlement = True
         if is_entitlement:
             _ra().logger.info(
                 "Credential %s — entitlement-shaped 403 from %s; "
@@ -1311,16 +1289,6 @@ def try_recover_primary_transport(
     if agent._is_openrouter_url():
         return False
     provider_lower = (agent.provider or "").strip().lower()
-    # Portal OpenAI-wire traffic still rides aggregator retry infra, so one
-    # more rebuilt OpenAI client won't help. Portal Claude on the native
-    # Messages route holds a local Anthropic SDK client whose connection
-    # pool *does* need the rebuild every other anthropic_messages provider
-    # already gets — don't blanket-skip the dual-wire path.
-    if (
-        provider_lower in {"nous", "nous-portal", "nousresearch"}
-        and getattr(agent, "api_mode", None) != "anthropic_messages"
-    ):
-        return False
 
     try:
         # Retire the existing client to release stale connections.:
@@ -1350,30 +1318,11 @@ def try_recover_primary_transport(
             agent._transport_cache.clear()
         agent.api_key = rt["api_key"]
 
-        if agent.api_mode == "anthropic_messages":
-            from agent.anthropic_adapter import build_anthropic_client
-            agent._anthropic_api_key = rt["anthropic_api_key"]
-            agent._anthropic_base_url = rt["anthropic_base_url"]
-            agent._anthropic_client = build_anthropic_client(
-                rt["anthropic_api_key"], rt["anthropic_base_url"],
-                timeout=get_provider_request_timeout(agent.provider, agent.model),
-            )
-            agent._is_anthropic_oauth = rt["is_anthropic_oauth"]
-            agent.client = None
-        elif (agent.provider or "").strip().lower() == "moa":
-            # MoA is a virtual provider with empty client_kwargs — rebuilding
-            # via _create_openai_client would raise "api_key client option
-            # must be set". Recreate the facade through the shared factory so
-            # the reference_callback relay survives recovery.
-            from agent.moa_loop import build_moa_facade
-
-            agent.client = build_moa_facade(agent, agent.model)
-        else:
-            agent.client = agent._create_openai_client(
-                dict(rt["client_kwargs"]),
-                reason="primary_recovery",
-                shared=True,
-            )
+        agent.client = agent._create_openai_client(
+            dict(rt["client_kwargs"]),
+            reason="primary_recovery",
+            shared=True,
+        )
 
         wait_time = min(3 + retry_count, 8)
         agent._vprint(
@@ -1595,33 +1544,11 @@ def restore_primary_runtime(agent) -> bool:
             agent._use_native_cache_layout = False
 
         # ── Rebuild client for the primary provider ──
-        if agent.provider == "moa":
-            # MoA is a virtual chat-completions provider.  It never has real
-            # OpenAI client kwargs; restoring it after a fallback must recreate
-            # the facade, not call OpenAI() with an empty api_key.  Use the
-            # shared factory so the restored facade keeps the reference_callback
-            # relay wired at init — a bare MoAClient() would silently stop
-            # emitting moa.reference/moa.aggregating display events.
-            from agent.moa_loop import build_moa_facade
-
-            agent.client = build_moa_facade(agent, agent.model)
-            agent._anthropic_client = None
-        elif agent.api_mode == "anthropic_messages":
-            from agent.anthropic_adapter import build_anthropic_client
-            agent._anthropic_api_key = rt["anthropic_api_key"]
-            agent._anthropic_base_url = rt["anthropic_base_url"]
-            agent._anthropic_client = build_anthropic_client(
-                rt["anthropic_api_key"], rt["anthropic_base_url"],
-                timeout=get_provider_request_timeout(agent.provider, agent.model),
-            )
-            agent._is_anthropic_oauth = rt["is_anthropic_oauth"]
-            agent.client = None
-        else:
-            agent.client = agent._create_openai_client(
-                dict(rt["client_kwargs"]),
-                reason="restore_primary",
-                shared=True,
-            )
+        agent.client = agent._create_openai_client(
+            dict(rt["client_kwargs"]),
+            reason="restore_primary",
+            shared=True,
+        )
 
         # ── Restore context engine state ──
         cc = agent.context_compressor
@@ -2195,46 +2122,6 @@ def anthropic_prompt_cache_policy(
     eff_api_mode = api_mode if api_mode is not None else (agent.api_mode or "")
     eff_model = (model if model is not None else agent.model) or ""
 
-    # MoA virtual provider: the agent's model/provider are the preset name and
-    # "moa" — neither matches any caching branch, so the ACTING AGGREGATOR
-    # (often Claude on OpenRouter) silently lost prompt caching entirely
-    # (measured: 85% cache share solo vs 2% on the identical model via MoA —
-    # tens of millions of re-billed input tokens per benchmark run). Resolve
-    # the policy from the preset's real aggregator slot instead.
-    if eff_provider.strip().lower() == "moa":
-        try:
-            from pilotage_cli.config import load_config as _load_moa_cfg
-            from pilotage_cli.moa_config import resolve_moa_preset
-            from pilotage_cli.runtime_provider import resolve_runtime_provider
-
-            _preset = resolve_moa_preset(
-                _load_moa_cfg().get("moa") or {}, eff_model or None
-            )
-            _agg = _preset.get("aggregator") or {}
-            _agg_provider = str(_agg.get("provider") or "").strip()
-            _agg_model = str(_agg.get("model") or "").strip()
-            if _agg_provider and _agg_model:
-                _agg_base_url = ""
-                _agg_api_mode = ""
-                try:
-                    _rt = resolve_runtime_provider(
-                        requested=_agg_provider, target_model=_agg_model
-                    )
-                    _agg_base_url = _rt.get("base_url") or ""
-                    _agg_api_mode = _rt.get("api_mode") or ""
-                except Exception:
-                    pass
-                return anthropic_prompt_cache_policy(
-                    agent,
-                    provider=_agg_provider,
-                    base_url=_agg_base_url,
-                    api_mode=_agg_api_mode,
-                    model=_agg_model,
-                )
-        except Exception as _moa_exc:  # pragma: no cover - defensive
-            logger.debug("MoA aggregator cache-policy resolution failed: %s", _moa_exc)
-        return False, False
-
     if isinstance(eff_model, dict):
         eff_model = eff_model.get('model') or eff_model.get('default') or ''
     eff_model = eff_model if isinstance(eff_model, str) else str(eff_model or '')
@@ -2246,17 +2133,9 @@ def anthropic_prompt_cache_policy(
     # moonshotai/kimi-k2.6 falls through to (False, False), serving ~1%
     # cache hits on 64K-token prompts and re-billing the full prompt on
     # every turn.  Observed within-turn progression with cache enabled:
-    # 1% → 67% → 84% → 97%. Reuses the canonical family matcher
-    # (covers bare k1./k2./k25 release slugs the substring check missed).
-    from agent.anthropic_adapter import _model_name_is_kimi_family
-    is_kimi = (
-        _model_name_is_kimi_family(eff_model) or "moonshot" in model_lower
-    )
+    # 1% → 67% → 84% → 97%.
+    is_kimi = "kimi" in model_lower or "moonshot" in model_lower
     is_openrouter = base_url_host_matches(eff_base_url, "openrouter.ai")
-    # Nous Portal proxies to OpenRouter behind the scenes — identical
-    # OpenAI-wire envelope cache_control semantics. Treat it as an
-    # OpenRouter-equivalent endpoint for caching layout purposes.
-    is_nous_portal = base_url_host_matches(eff_base_url, "nousresearch.com")
     is_anthropic_wire = eff_api_mode == "anthropic_messages"
     is_native_anthropic = (
         is_anthropic_wire
@@ -2311,24 +2190,10 @@ def anthropic_prompt_cache_policy(
 
     if is_native_anthropic:
         return True, True
-    # Envelope layout is an OpenAI-wire construct. Portal Claude on the native
-    # Messages route must fall through to the third-party anthropic_messages
-    # branch below, which emits inner-block cache_control breakpoints; the
-    # envelope form would be dropped and serve 0% cache hits.
-    if (
-        (is_openrouter or is_nous_portal)
-        and (is_claude or is_kimi)
-        and not is_anthropic_wire
-    ):
-        return True, False
-    # Nous Portal Qwen (e.g. qwen3.6-plus) takes the same envelope-layout
-    # cache_control path as Portal Claude. Portal proxies to OpenRouter
-    # and the upstream Qwen route accepts cache_control markers; without
-    # this branch the alibaba-family check below only matches
-    # provider=opencode/alibaba and Portal traffic falls through to
-    # (False, False), serving 0% cache hits and re-billing the full
-    # prompt on every turn.
-    if is_nous_portal and "qwen" in model_lower:
+    # Envelope layout is an OpenAI-wire construct; anthropic_messages
+    # routes fall through to the branch below, which emits inner-block
+    # cache_control breakpoints.
+    if is_openrouter and (is_claude or is_kimi) and not is_anthropic_wire:
         return True, False
     if is_anthropic_wire and is_claude:
         # Third-party Anthropic-compatible gateway.
@@ -2386,56 +2251,11 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # copy locks the contract so future transport/keepalive work can't reintroduce
     # the same class of bug.
     client_kwargs = dict(client_kwargs)
-    # The MoA virtual provider has no real OpenAI wire endpoint - the facade
-    # *is* the client. Rebuilding a native OpenAI client while
-    # agent.provider == "moa" (client replacement, stream-retry pool cleanup,
-    # credential rotation, fallback+restore) drops the facade: the next primary
-    # call either raises a `_moa_prepared_request` TypeError or, when
-    # _client_kwargs carry an unrelated relay base_url, leaks the request to a
-    # foreign gateway. Rebuild the facade instead (build_moa_facade also
-    # re-wires the reference relay, see).
-    if (getattr(agent, "provider", "") or "").strip().lower() == "moa":
-        from agent.moa_loop import build_moa_facade
-        return build_moa_facade(agent, getattr(agent, "model", None) or "default")
     ssl_ca_cert = client_kwargs.pop("ssl_ca_cert", None)
     ssl_verify_cfg = client_kwargs.pop("ssl_verify", None)
     httpx_verify = resolve_httpx_verify(ca_bundle=ssl_ca_cert, ssl_verify=ssl_verify_cfg)
     _validate_proxy_env_urls()
     _validate_base_url(client_kwargs.get("base_url"))
-    if agent.provider == "copilot-acp" or str(client_kwargs.get("base_url", "")).startswith("acp://copilot"):
-        from agent.copilot_acp_client import CopilotACPClient
-
-        client = CopilotACPClient(**client_kwargs)
-        _ra().logger.info(
-            "Copilot ACP client created (%s, shared=%s) %s",
-            reason,
-            shared,
-            agent._client_log_context(),
-        )
-        return client
-    if agent.provider == "gemini":
-        from agent.gemini_native_adapter import GeminiNativeClient, is_native_gemini_base_url
-
-        base_url = str(client_kwargs.get("base_url", "") or "")
-        if is_native_gemini_base_url(base_url):
-            safe_kwargs = {
-                k: v for k, v in client_kwargs.items()
-                if k in {"api_key", "base_url", "default_headers", "timeout", "http_client"}
-            }
-            if "http_client" not in safe_kwargs:
-                keepalive_http = agent._build_keepalive_http_client(
-                    base_url, verify=httpx_verify,
-                )
-                if keepalive_http is not None:
-                    safe_kwargs["http_client"] = keepalive_http
-            client = GeminiNativeClient(**safe_kwargs)
-            _ra().logger.info(
-                "Gemini native client created (%s, shared=%s) %s",
-                reason,
-                shared,
-                agent._client_log_context(),
-            )
-            return client
     # Inject TCP keepalives so the kernel detects dead provider connections
     # instead of letting them sit silently in CLOSE-WAIT. Without
     # this, a peer that drops mid-stream leaves the socket in a state where
@@ -2468,31 +2288,6 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # restore, request-scoped); auxiliary_client builds its own clients and keeps
     # SDK retries because it is NOT wrapped by the conversation loop.
     client_kwargs.setdefault("max_retries", 0)
-    # Defense-in-depth: guarantee Copilot requests carry the integration
-    # headers regardless of which build path we came through. The primary
-    # header wiring lives in `_apply_client_headers_for_base_url`, but two
-    # rebuild paths (`primary_recovery`, `restore_primary` in this module)
-    # reconstruct the client purely from a `_primary_runtime` snapshot and do
-    # NOT re-run that wiring. If the snapshot's client_kwargs ever lacks
-    # `default_headers` (older snapshot, header-less resolver result), the
-    # client goes out WITHOUT `Copilot-Integration-Id: vscode-chat`; the
-    # Copilot server then routes it to the "copilot-language-server" integrator
-    # whose model allowlist omits enterprise-only models (claude-opus-4.8) →
-    # HTTP 400 model_not_available_for_integrator on every turn. This chokepoint
-    # is the single place every primary OpenAI client passes through, so filling
-    # missing Copilot headers here closes the whole class. We only ADD missing
-    # keys — never override headers a caller deliberately set.
-    try:
-        if base_url_host_matches(str(client_kwargs.get("base_url", "")), "githubcopilot.com"):
-            from pilotage_cli.models import copilot_default_headers
-            existing = dict(client_kwargs.get("default_headers") or {})
-            existing_lower = {k.lower() for k in existing}
-            for hk, hv in copilot_default_headers().items():
-                if hk.lower() not in existing_lower:
-                    existing[hk] = hv
-            client_kwargs["default_headers"] = existing
-    except Exception:
-        _ra().logger.debug("Copilot default-header guard skipped", exc_info=True)
     # Uses the module-level `OpenAI` name, resolved lazily on first
     # access via __getattr__ below. Tests patch via `run_agent.OpenAI`.
     client = _ra().OpenAI(**client_kwargs)
@@ -2660,100 +2455,43 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
                     new_provider, _pool_exc,
                 )
         # ── Build new client ──
-        if (new_provider or "").strip().lower() == "moa":
-            from agent.moa_loop import build_moa_facade
-
-            # The MoA virtual provider speaks only chat.completions via the
-            # MoAClient facade — the aggregator's real transport
-            # (codex_responses / anthropic_messages) is resolved and applied
-            # *inside* the reference/aggregator fan-out, never on the outer
-            # primary call. determine_api_mode("moa", ...) above may have left
-            # api_mode set to the aggregator's transport; if the conversation
-            # loop sees that, it dispatches client.responses.create (which the
-            # facade has no .responses for) and the call falls through to the
-            # moa://local placeholder → HTTP 404 → fallback to a reference
-            # model. Pin chat_completions here so the primary call always goes
-            # through MoAClient.chat.completions, matching agent_init.py.
-            agent.api_mode = "chat_completions"
-            agent.api_key = api_key or "moa-virtual-provider"
-            agent.base_url = "moa://local"
-            agent._client_kwargs = {}
-            agent.client = build_moa_facade(agent, agent.model)
-        elif api_mode == "anthropic_messages":
-            from agent.anthropic_adapter import (
-                build_anthropic_client,
-                resolve_anthropic_token,
-                _is_oauth_token,
+        effective_key = api_key or agent.api_key
+        effective_base = base_url or agent.base_url
+        agent._client_kwargs = {
+            "api_key": effective_key,
+            "base_url": effective_base,
+        }
+        try:
+            from pilotage_cli.config import (
+                apply_custom_provider_tls_to_client_kwargs,
+                get_compatible_custom_providers,
+                load_config_readonly,
             )
-            # Only fall back to ANTHROPIC_TOKEN when the provider is actually Anthropic.
-            # Other anthropic_messages providers (MiniMax, Alibaba, etc.) must use their own
-            # API key — falling back would send Anthropic credentials to third-party endpoints.
-            _is_native_anthropic = new_provider == "anthropic"
-            effective_key = (api_key or agent.api_key or resolve_anthropic_token() or "") if _is_native_anthropic else (api_key or agent.api_key or "")
 
-            # MiniMax OAuth: swap static string for a per-request callable token
-            # provider so the rebuilt client survives 15-min token expiry. See
-            # the matching block in agent_init.py for the full rationale.
-            if new_provider == "minimax-oauth" and isinstance(effective_key, str) and effective_key:
-                try:
-                    from pilotage_cli.auth import build_minimax_oauth_token_provider
-                    effective_key = build_minimax_oauth_token_provider()
-                except Exception as _mm_exc:  # noqa: BLE001
-                    import logging as _logging
-                    _logging.getLogger(__name__).warning(
-                        "MiniMax OAuth: failed to install per-request token provider "
-                        "on switch (%s); using static bearer.",
-                        _mm_exc,
-                    )
-
-            agent.api_key = effective_key
-            agent._anthropic_api_key = effective_key
-            agent._anthropic_base_url = base_url or getattr(agent, "_anthropic_base_url", None)
-            agent._anthropic_client = build_anthropic_client(
-                effective_key, agent._anthropic_base_url,
-                timeout=get_provider_request_timeout(agent.provider, agent.model),
+            # Read custom_providers from live config (not the init-time
+            # snapshot on ``agent._custom_providers``) so ssl_ca_cert /
+            # ssl_verify edits are honored when switching mid-session,
+            # matching the context-length reload below.
+            apply_custom_provider_tls_to_client_kwargs(
+                agent._client_kwargs,
+                str(effective_base or ""),
+                get_compatible_custom_providers(load_config_readonly()),
             )
-            agent._is_anthropic_oauth = _is_oauth_token(effective_key) if (_is_native_anthropic and isinstance(effective_key, str)) else False
-            agent.client = None
-            agent._client_kwargs = {}
-        else:
-            effective_key = api_key or agent.api_key
-            effective_base = base_url or agent.base_url
-            agent._client_kwargs = {
-                "api_key": effective_key,
-                "base_url": effective_base,
-            }
-            try:
-                from pilotage_cli.config import (
-                    apply_custom_provider_tls_to_client_kwargs,
-                    get_compatible_custom_providers,
-                    load_config_readonly,
-                )
-
-                # Read custom_providers from live config (not the init-time
-                # snapshot on ``agent._custom_providers``) so ssl_ca_cert /
-                # ssl_verify edits are honored when switching mid-session,
-                # matching the context-length reload below.
-                apply_custom_provider_tls_to_client_kwargs(
-                    agent._client_kwargs,
-                    str(effective_base or ""),
-                    get_compatible_custom_providers(load_config_readonly()),
-                )
-            except Exception:
-                logger.debug("custom-provider TLS resolution skipped on switch_model", exc_info=True)
-            _sm_timeout = get_provider_request_timeout(agent.provider, agent.model)
-            if _sm_timeout is not None:
-                agent._client_kwargs["timeout"] = _sm_timeout
-            # Reapply provider-specific headers (e.g. OpenRouter HTTP-Referer,
-            # X-Title) that were lost when _client_kwargs was rebuilt from
-            # scratch.  Without this, model switches clear attribution headers
-            # and OpenRouter logs show "Unknown" for subsequent requests.
-            agent._apply_client_headers_for_base_url(effective_base)
-            agent.client = agent._create_openai_client(
-                dict(agent._client_kwargs),
-                reason="switch_model",
-                shared=True,
-            )
+        except Exception:
+            logger.debug("custom-provider TLS resolution skipped on switch_model", exc_info=True)
+        _sm_timeout = get_provider_request_timeout(agent.provider, agent.model)
+        if _sm_timeout is not None:
+            agent._client_kwargs["timeout"] = _sm_timeout
+        # Reapply provider-specific headers (e.g. OpenRouter HTTP-Referer,
+        # X-Title) that were lost when _client_kwargs was rebuilt from
+        # scratch.  Without this, model switches clear attribution headers
+        # and OpenRouter logs show "Unknown" for subsequent requests.
+        agent._apply_client_headers_for_base_url(effective_base)
+        agent.client = agent._create_openai_client(
+            dict(agent._client_kwargs),
+            reason="switch_model",
+            shared=True,
+        )
 
         sync_credential_pool_entry_id(agent)
     except Exception:
@@ -2784,19 +2522,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     except Exception:
         _destination_context_intent = None
     agent._config_context_length = _destination_context_intent
-    _runtime_context_length = agent._ensure_lmstudio_runtime_loaded(
-        _destination_context_intent
-    )
-    if agent._lmstudio_load_was_unverified(_runtime_context_length):
-        logger.warning(
-            "LM Studio model activation was rejected or completed without a "
-            "verifiable active context length during model switch; continuing "
-            "with configured context"
-        )
-    _effective_context_length = agent._effective_lmstudio_context_length(
-        _destination_context_intent,
-        _runtime_context_length,
-    )
+    _effective_context_length = _destination_context_intent
 
     # ── Re-evaluate prompt caching ──
     # Refresh the custom-provider snapshot from the config just loaded above

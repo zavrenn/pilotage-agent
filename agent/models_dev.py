@@ -167,51 +167,8 @@ class ProviderInfo:
 
 # Pilotage provider names → models.dev provider IDs
 PROVIDER_TO_MODELS_DEV: Dict[str, str] = {
-    "openrouter": "openrouter",
-    "novita": "novita-ai",
-    "anthropic": "anthropic",
     "openai": "openai",
     "openai-codex": "openai",
-    "zai": "zai",
-    "kimi": "kimi-for-coding",
-    "kimi-coding": "kimi-for-coding",
-    "moonshot": "kimi-for-coding",
-    "stepfun": "stepfun",
-    "kimi-coding-cn": "kimi-for-coding",
-    "minimax": "minimax",
-    "minimax-oauth": "minimax",
-    "minimax-cn": "minimax-cn",
-    "deepseek": "deepseek",
-    "alibaba": "alibaba",
-    "qwen-oauth": "alibaba",
-    "copilot": "github-copilot",
-    "ai-gateway": "vercel",
-    "opencode-zen": "opencode",
-    "opencode-go": "opencode-go",
-    "kilocode": "kilo",
-    "fireworks": "fireworks-ai",
-    "huggingface": "huggingface",
-    "gemini": "google",
-    "google": "google",
-    "xai": "xai",
-    # xAI OAuth is an authentication/transport path for the same xAI model
-    # catalog, so model metadata should resolve through the xAI provider.
-    "xai-oauth": "xai",
-    "xiaomi": "xiaomi",
-    "nvidia": "nvidia",
-    # Meta Model API (Muse Spark family, api.meta.ai). models.dev keys these
-    # under the "meta" provider id; Pilotage' provider is "meta-ai" (and the
-    # api.meta.ai host reverse-maps to "meta-ai"), so without both aliases the
-    # context/pricing lookup misses and muse-spark-* falls back to the generic
-    # 256K default instead of its true 1M window.
-    "meta-ai": "meta",
-    "meta": "meta",
-    "groq": "groq",
-    "mistral": "mistral",
-    "togetherai": "togetherai",
-    "perplexity": "perplexity",
-    "cohere": "cohere",
-    "ollama-cloud": "ollama-cloud",
 }
 
 # Reverse mapping: models.dev id → Pilotage ids (built lazily; many-to-one,

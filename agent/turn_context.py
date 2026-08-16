@@ -447,7 +447,6 @@ def build_turn_context(
     set_session_context,
     set_current_write_origin,
     ra,
-    moa_active: bool = False,
 ) -> TurnContext:
     """Run the once-per-turn setup and return the loop's input context.
 
@@ -1309,13 +1308,8 @@ def build_turn_context(
     # exactly the bytes the loop sends. codex_app_server turns bypass the
     # api_messages build entirely (the codex thread gets the plain user
     # message), so stamping there would persist bytes that were never sent.
-    # MoA turns append per-call aggregated reference context to the same API
-    # copy AFTER this composition, so the stamped bytes would never match the
-    # wire either — skip the stamp rather than persist provably wrong "exact
-    # sent bytes" (MoA keeps its pre-sidecar cache behavior).
     if (
-        not moa_active
-        and getattr(agent, "api_mode", None) != "codex_app_server"
+        getattr(agent, "api_mode", None) != "codex_app_server"
         and 0 <= current_turn_user_idx < len(messages)
         and messages[current_turn_user_idx].get("role") == "user"
     ):

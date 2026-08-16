@@ -356,7 +356,7 @@ TOOL_USE_ENFORCEMENT_GUIDANCE = (
 
 # Model name substrings that trigger tool-use enforcement guidance.
 # Add new patterns here when a model family needs explicit steering.
-TOOL_USE_ENFORCEMENT_MODELS = ("gpt", "codex", "gemini", "gemma", "grok", "glm", "qwen", "deepseek")
+TOOL_USE_ENFORCEMENT_MODELS = ("gpt", "codex", "gemini", "gemma", "glm", "qwen", "deepseek")
 
 # Universal "finish the job" guidance — applied to ALL models, not gated
 # by model family.  Addresses two cross-model failure modes:
@@ -434,10 +434,8 @@ PARALLEL_TOOL_CALL_GUIDANCE = (
 # where GPT models abandon work on partial results, skip prerequisite lookups,
 # hallucinate instead of using tools, and declare "done" without verification.
 # Inspired by patterns from OpenAI's GPT-5.4 prompting guide & OpenClaw.
-# Also applied to xAI Grok — same failure modes in practice (claims completion
-# without tool calls, suggests workarounds instead of using existing tools,
-# replies with plans/suggestions instead of executing). The body is
-# family-agnostic; the OPENAI_ prefix reflects origin, not exclusivity.
+# The body is family-agnostic; the OPENAI_ prefix reflects origin,
+# not exclusivity.
 OPENAI_MODEL_EXECUTION_GUIDANCE = (
     "# Execution discipline\n"
     "<tool_persistence>\n"
@@ -867,7 +865,7 @@ WSL_ENVIRONMENT_HINT = (
 # misleading — the agent should only see the machine it can actually touch.
 _REMOTE_TERMINAL_BACKENDS = frozenset({
     "docker", "singularity", "modal", "daytona", "ssh",
-    "vercel_sandbox", "managed_modal",
+    "vercel_sandbox",
 })
 
 
@@ -879,7 +877,6 @@ _BACKEND_FALLBACK_DESCRIPTIONS: dict[str, str] = {
     "docker": "a Docker container (Linux)",
     "singularity": "a Singularity container (Linux)",
     "modal": "a Modal sandbox (Linux)",
-    "managed_modal": "a managed Modal sandbox (Linux)",
     "daytona": "a Daytona workspace (Linux)",
     "vercel_sandbox": "a Vercel sandbox (Linux)",
     "ssh": "a remote host reached over SSH (likely Linux)",
@@ -995,7 +992,6 @@ def _probe_remote_backend(env_type: str) -> str | None:
                 "container_memory": config.get("container_memory", 5120),
                 "container_disk": config.get("container_disk", 51200),
                 "container_persistent": config.get("container_persistent", True),
-                "modal_mode": config.get("modal_mode", "auto"),
                 "docker_volumes": config.get("docker_volumes", []),
                 "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
                 "docker_forward_env": config.get("docker_forward_env", []),
@@ -1827,72 +1823,6 @@ def _build_skills_system_prompt_inner(
             _SKILLS_PROMPT_CACHE.popitem(last=False)
 
     return result
-
-
-def build_nous_subscription_prompt(valid_tool_names: "set[str] | None" = None) -> str:
-    """Build a compact Nous subscription capability block for the system prompt."""
-    try:
-        from pilotage_cli.nous_subscription import get_nous_subscription_features
-        from tools.tool_backend_helpers import managed_nous_tools_enabled
-    except Exception as exc:
-        logger.debug("Failed to import Nous subscription helper: %s", exc)
-        return ""
-
-    if not managed_nous_tools_enabled():
-        return ""
-
-    valid_names = set(valid_tool_names or set())
-    relevant_tool_names = {
-        "web_search",
-        "web_extract",
-        "browser_navigate",
-        "browser_snapshot",
-        "browser_click",
-        "browser_type",
-        "browser_scroll",
-        "browser_console",
-        "browser_press",
-        "browser_get_images",
-        "browser_vision",
-        "image_generate",
-        "text_to_speech",
-        "terminal",
-        "process",
-        "execute_code",
-    }
-
-    if valid_names and not (valid_names & relevant_tool_names):
-        return ""
-
-    features = get_nous_subscription_features()
-
-    def _status_line(feature) -> str:
-        if feature.managed_by_nous:
-            return f"- {feature.label}: active via Nous subscription"
-        if feature.active:
-            current = feature.current_provider or "configured provider"
-            return f"- {feature.label}: currently using {current}"
-        if feature.included_by_default and features.nous_auth_present:
-            return f"- {feature.label}: included with Nous subscription, not currently selected"
-        if feature.key == "modal" and features.nous_auth_present:
-            return f"- {feature.label}: optional via Nous subscription"
-        return f"- {feature.label}: not currently available"
-
-    lines = [
-        "# Nous Subscription",
-        "Nous subscription includes managed web tools (Firecrawl), image generation (FAL), OpenAI TTS, OpenAI Whisper STT, and browser automation (Browser Use) by default. Modal execution is optional.",
-        "Current capability status:",
-    ]
-    lines.extend(_status_line(feature) for feature in features.items())
-    lines.extend(
-        [
-            "When a Nous-managed feature is active, do not ask the user for Firecrawl, FAL, OpenAI TTS, OpenAI Whisper, or Browser-Use API keys.",
-            "If the user is not subscribed and asks for a capability that Nous subscription would unlock or simplify, suggest Nous subscription as one option alongside direct setup or local alternatives.",
-            "Do not mention subscription unless the user asks about it or it directly solves the current missing capability.",
-            "Useful commands: pilotage setup, pilotage setup tools, pilotage setup terminal, pilotage status.",
-        ]
-    )
-    return "\n".join(lines)
 
 
 # =========================================================================

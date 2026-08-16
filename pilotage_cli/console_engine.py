@@ -917,20 +917,6 @@ class PilotageConsoleEngine:
             confirmation="Send this message?",
         )
 
-        portal_paths = [("info",), ("tools",)]
-        _register_command_family(
-            self,
-            root="portal",
-            paths=portal_paths,
-            summaries=_adder_summaries("pilotage_cli.portal_cli", "add_parser"),
-            handler_factory=lambda fixed: _adder_handler(
-                "portal",
-                fixed,
-                "pilotage_cli.portal_cli",
-                "add_parser",
-            ),
-        )
-
         _register_command_family(
             self,
             root="project",
@@ -1179,7 +1165,6 @@ class PilotageConsoleEngine:
             "login",
             "logout",
             "model",
-            "moa",
             "oneshot",
 
             "proxy",

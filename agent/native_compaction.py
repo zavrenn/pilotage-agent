@@ -110,7 +110,6 @@ def native_compaction_context_management(
     agent: Any,
     *,
     is_codex_backend: bool,
-    is_xai_responses: bool = False,
     is_github_responses: bool = False,
 ) -> Optional[List[Dict[str, Any]]]:
     """Return the ``context_management`` payload for this request, or None.
@@ -127,7 +126,7 @@ def native_compaction_context_management(
     # included — mirrors the codex_app_server_auto contract.
     if not bool(getattr(agent, "compression_enabled", True)):
         return None
-    if is_xai_responses or is_github_responses:
+    if is_github_responses:
         return None
     if not is_native_compaction_model(getattr(agent, "model", None)):
         return None

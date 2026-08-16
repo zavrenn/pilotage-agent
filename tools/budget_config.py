@@ -41,7 +41,7 @@ class BudgetConfig:
 
         The registry per-tool value is capped at ``default_result_size`` so a
         context-scaled budget (small model) actually constrains tools that
-        register a large fixed ``max_result_size_chars`` (web/terminal/x_search
+        register a large fixed ``max_result_size_chars`` (web/terminal
         all register 100K). For the default budget this is a no-op because both
         equal 100K; for a scaled-down budget it prevents a per-tool registry
         value from re-inflating the cap past the model's window.

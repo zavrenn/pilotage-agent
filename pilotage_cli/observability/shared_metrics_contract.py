@@ -289,7 +289,6 @@ _LEGACY_MODEL_FAMILIES = frozenset({
     "gemma",
     "glm",
     "gpt",
-    "grok",
     "kimi",
     "llama",
     "minimax",
@@ -828,8 +827,6 @@ def tool_category(kwargs: dict[str, Any]) -> str:
         return "scheduler"
     if toolset == "skills":
         return "skill"
-    if toolset == "x_search":
-        return "web"
     if toolset.startswith(
         ("discord", "email", "feishu", "pilotage-yuanbao", "slack", "sms")
     ):

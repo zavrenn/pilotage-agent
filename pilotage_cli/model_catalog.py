@@ -376,22 +376,6 @@ def get_curated_openrouter_models() -> list[tuple[str, str]] | None:
     return out or None
 
 
-def get_curated_nous_models() -> list[str] | None:
-    """Return Nous Portal's curated list of model ids from the manifest.
-
-    Returns ``None`` when the manifest is unavailable.
-    """
-    block = _get_provider_block("nous")
-    if not block:
-        return None
-    out: list[str] = []
-    for m in block.get("models", []):
-        mid = str(m.get("id") or "").strip()
-        if mid:
-            out.append(mid)
-    return out or None
-
-
 def _default_model_from_block(block: dict[str, Any] | None) -> str | None:
     """Return the id of the model entry labeled ``"default": true``, or None."""
     if not isinstance(block, dict):

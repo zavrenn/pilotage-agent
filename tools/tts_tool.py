@@ -9,7 +9,6 @@ Built-in TTS providers:
 - MiniMax TTS: High-quality with voice cloning, needs the selected region's key
 - Mistral (Voxtral TTS): Multilingual, native Opus, needs MISTRAL_API_KEY
 - Google Gemini TTS: Controllable, 30 prebuilt voices, needs GEMINI_API_KEY
-- xAI TTS: Grok voices, uses xAI Grok OAuth credentials or XAI_API_KEY
 - NeuTTS (local, free, no API key): On-device TTS via neutts
 - KittenTTS (local, free, no API key): On-device 25MB model
 - Piper (local, free, no API key): OHF-Voice/piper1-gpl neural VITS, 44 languages
@@ -91,14 +90,9 @@ def _resolve_provider_key(env_var: str, provider_id: str) -> str:
         return str(get_env_value(env_var) or "").strip()
     return resolve_provider_secret(env_var, provider_id, env_getter=get_env_value)
 
-from tools.managed_tool_gateway import resolve_managed_tool_gateway
 from tools.tool_backend_helpers import (
-    managed_nous_tools_enabled,
-    nous_tool_gateway_unavailable_message,
-    prefers_gateway,
     resolve_openai_audio_api_key,
 )
-from tools.xai_http import pilotage_xai_user_agent
 
 # ---------------------------------------------------------------------------
 # Lazy imports -- providers are imported only when actually used to avoid
@@ -212,11 +206,6 @@ DEFAULT_ELEVENLABS_VOICE_ID = "pNInz6obpgDQGcFmaJgB"  # Adam
 DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
 DEFAULT_ELEVENLABS_STREAMING_MODEL_ID = "eleven_flash_v2_5"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts"
-# The managed OpenAI audio gateway (Nous portal proxy) only proxies these speech
-# models. A user's tts.openai.model set for *direct* OpenAI (e.g. "tts-1-hd")
-# is rejected with a 400 "Unsupported managed OpenAI speech model", so it must be
-# coerced to a supported model when routing through the gateway.
-MANAGED_OPENAI_TTS_MODELS = frozenset({"gpt-4o-mini-tts"})
 DEFAULT_KITTENTTS_MODEL = "KittenML/kitten-tts-nano-0.8-int8"  # 25MB
 DEFAULT_KITTENTTS_VOICE = "Jasper"
 DEFAULT_PIPER_VOICE = "en_US-lessac-medium"  # balanced size/quality
@@ -228,23 +217,6 @@ DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1/t2a_v2"
 DEFAULT_MINIMAX_CN_BASE_URL = "https://api.minimaxi.com/v1/t2a_v2"
 DEFAULT_MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
 DEFAULT_MISTRAL_TTS_VOICE_ID = "c69964a6-ab8b-4f8a-9465-ec0925096ec8"  # Paul - Neutral
-DEFAULT_XAI_VOICE_ID = "eve"
-DEFAULT_XAI_LANGUAGE = "en"
-DEFAULT_XAI_SAMPLE_RATE = 24000
-DEFAULT_XAI_BIT_RATE = 128000
-DEFAULT_XAI_AUTO_SPEECH_TAGS = False
-DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
-# xAI TTS `speed` accepts 0.7..1.5; 1.0 is the API default (omitted => default).
-DEFAULT_XAI_SPEED_MIN = 0.7
-DEFAULT_XAI_SPEED_MAX = 1.5
-DEFAULT_XAI_SPEED_DEFAULT = 1.0
-# xAI TTS `optimize_streaming_latency` accepts 0, 1, or 2; 0 (best quality) is
-# the API default (omitted => default). Values >0 trade quality for time-to-first-audio.
-DEFAULT_XAI_OPTIMIZE_STREAMING_LATENCY_DEFAULT = 0
-# xAI TTS `text_normalization` is a boolean (default False). When enabled,
-# the model normalizes written-form text (numbers, abbreviations, symbols)
-# into spoken-form before generating audio.
-DEFAULT_XAI_TEXT_NORMALIZATION_DEFAULT = False
 DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 DEFAULT_GEMINI_TTS_VOICE = "Kore"
 DEFAULT_GEMINI_TTS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
@@ -267,7 +239,7 @@ DEFAULT_OUTPUT_DIR = _get_default_output_dir()
 
 # ---------------------------------------------------------------------------
 # Per-provider input-character limits (from official provider docs).
-# A single global cap was wrong: OpenAI is 4096, xAI is 15k, MiniMax is 10k,
+# A single global cap was wrong: OpenAI is 4096, MiniMax is 10k,
 # ElevenLabs is model-dependent (5k / 10k / 30k / 40k), Gemini has a 32k-token
 # context window.  Users can override any of these via
 # ``tts.<provider>.max_text_length`` in config.yaml.
@@ -275,7 +247,6 @@ DEFAULT_OUTPUT_DIR = _get_default_output_dir()
 PROVIDER_MAX_TEXT_LENGTH: Dict[str, int] = {
     "edge": 5000,         # edge-tts practical sync limit
     "openai": 4096,       # https://platform.openai.com/docs/guides/text-to-speech
-    "xai": 15000,         # https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
     "minimax": 10000,     # https://platform.minimax.io/docs/api-reference/speech-t2a-http (sync)
     "mistral": 4000,      # conservative; no published per-request cap
     "gemini": 32000,      # Gemini TTS has a 32k-token context window; char cap is conservative
@@ -773,7 +744,6 @@ BUILTIN_TTS_PROVIDERS = frozenset({
     "elevenlabs",
     "openai",
     "minimax",
-    "xai",
     "mistral",
     "gemini",
     "neutts",
@@ -1827,7 +1797,7 @@ def _generate_openai_tts(
         tts_config: TTS config dict (used for ``tts.openai`` sub-block
             and the global ``speed`` default).
         api_key: Bearer token. When None, resolved from the OpenAI auth
-            chain (config → env → managed gateway).
+            chain (config → env).
         base_url: API base URL. When None, falls back to
             ``tts.openai.base_url`` then the OpenAI default.
         model: Model id. When None, reads ``tts.openai.model``.
@@ -1845,12 +1815,10 @@ def _generate_openai_tts(
     """
     # Only resolve the OpenAI auth chain when the caller didn't pass explicit
     # credentials. OpenAI-compatible backends (DeepInfra) pass api_key /
-    # base_url / model / voice through and never hit the managed-gateway path.
+    # base_url / model / voice through.
     fallback_base: Optional[str] = None
-    is_managed = False
-    explicit_base_url = base_url is not None
     if api_key is None:
-        api_key, fallback_base, is_managed = _resolve_openai_audio_client_config()
+        api_key, fallback_base = _resolve_openai_audio_client_config()
 
     # ``tts.openai: null`` in YAML yields None — coalesce so .get() is safe.
     oai_config = (tts_config.get("openai") if isinstance(tts_config, dict) else None) or {}
@@ -1871,23 +1839,6 @@ def _generate_openai_tts(
         speed = float(oai_config.get("speed", speed_default))
     language = oai_config.get("language")
 
-    # The managed OpenAI audio gateway only proxies MANAGED_OPENAI_TTS_MODELS.
-    # A model set for direct OpenAI (e.g. "tts-1-hd") 400s there with
-    # "Unsupported managed OpenAI speech model", so coerce it — unless the user
-    # redirected base_url to their own endpoint, in which case respect it.
-    if (
-        is_managed
-        and not explicit_base_url
-        and not config_base_url
-        and model not in MANAGED_OPENAI_TTS_MODELS
-    ):
-        logger.warning(
-            "TTS: managed OpenAI audio gateway does not support model %r; "
-            "falling back to %s. Set VOICE_TOOLS_OPENAI_KEY or OPENAI_API_KEY "
-            "to use %r directly.",
-            model, DEFAULT_OPENAI_MODEL, model,
-        )
-        model = DEFAULT_OPENAI_MODEL
 
     response_format = _tts_response_format_from_path(output_path)
 
@@ -1973,240 +1924,6 @@ def _generate_deepinfra_tts(text: str, output_path: str, tts_config: Dict[str, A
         voice=di_config.get("voice", DEFAULT_DEEPINFRA_TTS_VOICE),
         speed=float(di_config.get("speed", tts_config.get("speed", 1.0))),
     )
-
-
-# ===========================================================================
-# Provider: xAI TTS
-# ===========================================================================
-_XAI_INLINE_SPEECH_TAGS = (
-    "pause",
-    "long-pause",
-    "hum-tune",
-    "laugh",
-    "chuckle",
-    "giggle",
-    "cry",
-    "tsk",
-    "tongue-click",
-    "lip-smack",
-    "breath",
-    "inhale",
-    "exhale",
-    "sigh",
-)
-_XAI_WRAPPING_SPEECH_TAGS = (
-    "soft",
-    "whisper",
-    "loud",
-    "build-intensity",
-    "decrease-intensity",
-    "higher-pitch",
-    "lower-pitch",
-    "slow",
-    "fast",
-    "sing-song",
-    "singing",
-    "laugh-speak",
-    "emphasis",
-)
-_XAI_SPEECH_TAG_RE = re.compile(
-    r"(\[(?:" + "|".join(_XAI_INLINE_SPEECH_TAGS) + r")\]|</?(?:" + "|".join(_XAI_WRAPPING_SPEECH_TAGS) + r")>)",
-    flags=re.IGNORECASE,
-)
-_XAI_FIRST_SENTENCE_RE = re.compile(r"^(.{12,120}?[.!?…])\s+(?=\S)", flags=re.DOTALL)
-
-
-def _xai_bool_config(value: Any, default: bool = False) -> bool:
-    return _config_bool(value, default=default)
-
-
-def _apply_xai_auto_speech_tags(text: str) -> str:
-    """Add xAI speech tags for more natural voice-mode replies.
-
-    First applies a conservative local transform (inserts [pause] between
-    paragraphs and after the first sentence). Then, if the result contains
-    no explicit user/model speech tags, asks the configured auxiliary model
-    to rewrite the transcript with a richer set of xAI-supported tags
-    (laughs, sighs, whispers, soft/loud, slow/fast, etc.) so the voice
-    output sounds more expressive. Falls back to the local result on any
-    auxiliary-model failure.
-    """
-    clean = text.strip()
-    if not clean:
-        return text
-
-    # Local conservative pass: pauses only.
-    local = clean
-    local = re.sub(r"\n\s*\n+", " [pause] ", local)
-    local = re.sub(r"\s*\n\s*", " ", local)
-    if not _XAI_SPEECH_TAG_RE.search(local):
-        local = _XAI_FIRST_SENTENCE_RE.sub(r"\1 [pause] ", local, count=1)
-    local = re.sub(r"\s{2,}", " ", local).strip()
-
-    # If the user/model already supplied explicit speech tags, trust them
-    # and don't re-rewrite.
-    if _XAI_SPEECH_TAG_RE.search(clean):
-        return local
-
-    # Auxiliary rewrite for richer emotion tags (mirrors the Gemini path).
-    inline = ", ".join(_XAI_INLINE_SPEECH_TAGS)
-    wrapping = ", ".join(_XAI_WRAPPING_SPEECH_TAGS)
-    system_prompt = (
-        "You rewrite transcripts for the xAI /v1/tts endpoint by inserting "
-        "expressive speech tags.\n\n"
-        "Valid inline tags (use as `[tag]`): " + inline + ".\n"
-        "Valid wrapping tags (use as `[tag]...[/tag]`): " + wrapping + ".\n\n"
-        "Rules:\n"
-        "- Preserve the spoken words, order, and meaning.\n"
-        "- Do not add new spoken sentences or remove existing spoken words.\n"
-        "- Use inline `[tag]` for short modifiers (laughs, sighs, pause, etc.).\n"
-        "- Use wrapping `[tag]...[/tag]` for sustained effects (whisper, soft, slow, fast, loud, etc.).\n"
-        "- Do not use angle-bracket tags like `<tag>...</tag>` — xAI uses BBCode-style closing tags with `[/tag]`.\n"
-        "- Do not use SSML.\n"
-        "- Do not explain or comment.\n"
-        "- Return only the tagged TTS script."
-    )
-    try:
-        from agent.auxiliary_client import call_llm
-
-        response = call_llm(
-            task="tts_audio_tags",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"TRANSCRIPT TO TAG:\n{local}"},
-            ],
-            temperature=0.7,
-        )
-        tagged = _extract_auxiliary_message_content(response).strip()
-        # Strip markdown fences if the LLM wrapped the response.
-        fence = re.fullmatch(r"```(?:[A-Za-z0-9_-]+)?\s*(.*?)\s*```", tagged, flags=re.DOTALL)
-        if fence:
-            tagged = fence.group(1).strip()
-        return tagged or local
-    except Exception as exc:
-        logger.debug("xAI TTS audio tag rewrite failed; using locally-tagged text: %s", exc)
-        return local
-
-
-def _generate_xai_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
-    """
-    Generate audio using xAI TTS.
-
-    xAI exposes a dedicated /v1/tts endpoint instead of the OpenAI audio.speech
-    API shape, so this is implemented as a separate backend.
-    """
-    import requests
-
-    from tools.xai_http import resolve_xai_http_credentials
-
-    creds = resolve_xai_http_credentials()
-    api_key = str(creds.get("api_key") or "").strip()
-    if not api_key:
-        raise ValueError("No xAI credentials found. Configure xAI OAuth in `pilotage model` or set XAI_API_KEY.")
-
-    xai_config = tts_config.get("xai") or {}
-    voice_id = str(xai_config.get("voice_id", DEFAULT_XAI_VOICE_ID)).strip() or DEFAULT_XAI_VOICE_ID
-    language = str(xai_config.get("language", DEFAULT_XAI_LANGUAGE)).strip() or DEFAULT_XAI_LANGUAGE
-    sample_rate = int(xai_config.get("sample_rate", DEFAULT_XAI_SAMPLE_RATE))
-    bit_rate = int(xai_config.get("bit_rate", DEFAULT_XAI_BIT_RATE))
-    auto_speech_tags = _xai_bool_config(
-        xai_config.get("auto_speech_tags", xai_config.get("speech_tags")),
-        DEFAULT_XAI_AUTO_SPEECH_TAGS,
-    )
-    # ``tts.xai.speed`` overrides global ``tts.speed``; the xAI TTS API
-    # accepts 0.7..1.5 (1.0 = normal). Out-of-range values are clamped so a
-    # misconfigured agent can't 400 the request — the API would reject
-    # anything outside the band.
-    speed = xai_config.get("speed", tts_config.get("speed"))
-    if speed is not None and speed != "":
-        try:
-            speed = float(speed)
-        except (TypeError, ValueError):
-            speed = None
-    if speed is not None:
-        speed = max(DEFAULT_XAI_SPEED_MIN, min(DEFAULT_XAI_SPEED_MAX, speed))
-    # ``tts.xai.optimize_streaming_latency`` is 0, 1, or 2 (xAI-specific;
-    # trades chunk-boundary quality for time-to-first-audio).
-    optimize_streaming_latency = xai_config.get(
-        "optimize_streaming_latency",
-        tts_config.get("optimize_streaming_latency"),
-    )
-    if optimize_streaming_latency is not None and optimize_streaming_latency != "":
-        try:
-            optimize_streaming_latency = int(optimize_streaming_latency)
-        except (TypeError, ValueError):
-            optimize_streaming_latency = None
-    if optimize_streaming_latency is not None:
-        optimize_streaming_latency = max(0, min(2, optimize_streaming_latency))
-    # ``tts.xai.text_normalization`` enables spoken-form normalization
-    # (numbers, abbreviations, symbols → words). Defaults to False.
-    text_normalization = _xai_bool_config(
-        xai_config.get("text_normalization"),
-        DEFAULT_XAI_TEXT_NORMALIZATION_DEFAULT,
-    )
-    if auto_speech_tags:
-        text = _apply_xai_auto_speech_tags(text)
-    if creds.get("provider") == "xai-oauth":
-        base_url = str(creds.get("base_url") or DEFAULT_XAI_BASE_URL).strip().rstrip("/")
-    else:
-        base_url = str(
-            xai_config.get("base_url")
-            or creds.get("base_url")
-            or get_env_value("XAI_BASE_URL")
-            or DEFAULT_XAI_BASE_URL
-        ).strip().rstrip("/")
-
-    # Match the documented minimal POST /v1/tts shape by default. Only send
-    # output_format when Pilotage actually needs a non-default format/override.
-    codec = "wav" if output_path.endswith(".wav") else "mp3"
-    payload: Dict[str, Any] = {
-        "text": text,
-        "voice_id": voice_id,
-        "language": language,
-    }
-    if (
-        codec != "mp3"
-        or sample_rate != DEFAULT_XAI_SAMPLE_RATE
-        or (codec == "mp3" and bit_rate != DEFAULT_XAI_BIT_RATE)
-    ):
-        output_format: Dict[str, Any] = {"codec": codec}
-        if sample_rate:
-            output_format["sample_rate"] = sample_rate
-        if codec == "mp3" and bit_rate:
-            output_format["bit_rate"] = bit_rate
-        payload["output_format"] = output_format
-    # Only attach `speed` when the caller asked for something other than the
-    # API default (1.0). Keeps the existing minimal-payload contract for
-    # users who never touch the knob.
-    if speed is not None and speed != DEFAULT_XAI_SPEED_DEFAULT:
-        payload["speed"] = speed
-    # Only attach `optimize_streaming_latency` when the caller explicitly
-    # opts in to a non-default value (anything other than 0).
-    if (
-        optimize_streaming_latency is not None
-        and optimize_streaming_latency != DEFAULT_XAI_OPTIMIZE_STREAMING_LATENCY_DEFAULT
-    ):
-        payload["optimize_streaming_latency"] = optimize_streaming_latency
-    # Only attach `text_normalization` when explicitly enabled (default is False).
-    if text_normalization:
-        payload["text_normalization"] = True
-
-    response = requests.post(
-        f"{base_url}/tts",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": pilotage_xai_user_agent(),
-        },
-        json=payload,
-        timeout=60,
-        stream=True,
-    )
-    response.raise_for_status()
-
-    _write_tts_response_to_file(response, output_path, label="xAI TTS")
-
-    return output_path
 
 
 # ===========================================================================
@@ -3309,10 +3026,6 @@ def _text_to_speech_single(
             logger.info("Generating speech with MiniMax TTS...")
             _generate_minimax_tts(text, file_str, tts_config)
 
-        elif provider == "xai":
-            logger.info("Generating speech with xAI TTS...")
-            _generate_xai_tts(text, file_str, tts_config)
-
         elif provider == "mistral":
             try:
                 _import_mistral_client()
@@ -3438,7 +3151,7 @@ def _text_to_speech_single(
                 voice_compatible = file_str.endswith(".ogg")
         elif (
             want_opus
-            and provider in {"edge", "neutts", "minimax", "xai", "kittentts", "piper"}
+            and provider in {"edge", "neutts", "minimax", "kittentts", "piper"}
             and not file_str.endswith(".ogg")
         ):
             opus_path = _convert_to_opus(file_str)
@@ -3741,13 +3454,6 @@ def check_tts_requirements() -> bool:
         except ValueError:
             return False
         return True
-    if provider == "xai":
-        try:
-            from tools.xai_http import resolve_xai_http_credentials
-
-            return bool(resolve_xai_http_credentials().get("api_key"))
-        except Exception:
-            return False
     if provider == "gemini":
         return bool(
             _resolve_provider_key("GEMINI_API_KEY", "gemini")
@@ -3777,59 +3483,37 @@ def check_tts_requirements() -> bool:
         return False
 
 
-def _resolve_openai_audio_client_config() -> tuple[str, str, bool]:
-    """Return ``(api_key, base_url, is_managed)`` for the OpenAI audio client.
-
-    ``is_managed`` is True when the config resolves to the Nous managed audio
-    gateway (a restricted proxy), so callers can coerce the request to what the
-    gateway supports. When ``tts.use_gateway`` is set the gateway is preferred
-    even if direct OpenAI credentials are present.
+def _resolve_openai_audio_client_config() -> tuple[str, str]:
+    """Return ``(api_key, base_url)`` for the OpenAI audio client.
 
     Resolution order (mirrors the STT resolver):
     1. ``tts.openai.api_key`` / ``tts.openai.base_url`` from ``config.yaml``
     2. ``VOICE_TOOLS_OPENAI_KEY`` / ``OPENAI_API_KEY`` environment variables
        (still honoring ``tts.openai.base_url`` when set)
-    3. Managed OpenAI audio tool gateway
     """
     tts_config = _load_tts_config()
     openai_cfg = (tts_config.get("openai") if isinstance(tts_config, dict) else None) or {}
     cfg_api_key = openai_cfg.get("api_key") or ""
     cfg_base_url = openai_cfg.get("base_url") or ""
-    if cfg_api_key and not prefers_gateway("tts"):
-        return cfg_api_key, (cfg_base_url or DEFAULT_OPENAI_BASE_URL), False
+    if cfg_api_key:
+        return cfg_api_key, (cfg_base_url or DEFAULT_OPENAI_BASE_URL)
 
     direct_api_key = resolve_openai_audio_api_key()
-    if direct_api_key and not prefers_gateway("tts"):
-        return direct_api_key, (cfg_base_url or DEFAULT_OPENAI_BASE_URL), False
+    if direct_api_key:
+        return direct_api_key, (cfg_base_url or DEFAULT_OPENAI_BASE_URL)
 
-    managed_gateway = resolve_managed_tool_gateway("openai-audio")
-    if managed_gateway is None:
-        message = (
-            "Neither tts.openai.api_key in config nor "
-            "VOICE_TOOLS_OPENAI_KEY/OPENAI_API_KEY is set"
-        )
-        if managed_nous_tools_enabled() or prefers_gateway("tts"):
-            message += (
-                ". "
-                + nous_tool_gateway_unavailable_message(
-                    "managed OpenAI audio for TTS",
-                )
-            )
-        raise ValueError(message)
-
-    return (
-        managed_gateway.nous_user_token,
-        urljoin(f"{managed_gateway.gateway_origin.rstrip('/')}/", "v1"),
-        True,
+    raise ValueError(
+        "Neither tts.openai.api_key in config nor "
+        "VOICE_TOOLS_OPENAI_KEY/OPENAI_API_KEY is set"
     )
 
 
 def _has_openai_audio_backend() -> bool:
-    """Return True when OpenAI audio can use config/env credentials or the managed gateway."""
+    """Return True when OpenAI audio can use config/env credentials."""
     openai_cfg = (_load_tts_config().get("openai") or {})
     if openai_cfg.get("api_key"):
         return True
-    return bool(resolve_openai_audio_api_key() or resolve_managed_tool_gateway("openai-audio"))
+    return bool(resolve_openai_audio_api_key())
 
 
 # ===========================================================================
@@ -4453,7 +4137,7 @@ TTS_SCHEMA = {
         "properties": {
             "text": {
                 "type": "string",
-                "description": "The text to convert to speech. Provider-specific per-request character caps apply automatically (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5k-40k depending on model); longer input is split into ordered chunks without silent truncation."
+                "description": "The text to convert to speech. Provider-specific per-request character caps apply automatically (OpenAI 4096, MiniMax 10000, ElevenLabs 5k-40k depending on model); longer input is split into ordered chunks without silent truncation."
             },
             "output_path": {
                 "type": "string",
@@ -4476,7 +4160,7 @@ TTS_SCHEMA = {
                 "type": "string",
                 "description": (
                     "Optional TTS provider override. Accepts built-in names "
-                    "(edge, openai, elevenlabs, minimax, xai, mistral, gemini, "
+                    "(edge, openai, elevenlabs, minimax, mistral, gemini, "
                     "neutts, kittentts, piper), user-declared command provider "
                     "names from tts.providers.<name>, or plugin-registered names. "
                     "When omitted, the configured tts.provider from config.yaml is used."

@@ -5716,8 +5716,6 @@ class TurnRunner:
                 _conversation_kwargs["persist_user_display_kind"] = (
                     ctx.persist_user_display_kind
                 )
-            if ctx.moa_config is not None:
-                _conversation_kwargs["moa_config"] = ctx.moa_config
             if _persist_user_timestamp_override is not None:
                 _conversation_kwargs["persist_user_timestamp"] = _persist_user_timestamp_override
             result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
@@ -14693,7 +14691,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         "model": "Agent is running — wait or /stop first, then switch models.",
         "codex-runtime": ("Agent is running — wait or /stop first, then "
                           "change runtime."),
-        "moa": "Agent is running — wait or /stop first, then run /moa.",
     }
 
     async def _dispatch_busy_slash_command(
@@ -16055,9 +16052,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "usage":
             return await self._handle_usage_command(event)
 
-        if canonical == "topup":
-            return await self._handle_topup_command(event)
-
         if canonical == "insights":
             return await self._handle_insights_command(event)
 
@@ -16140,42 +16134,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return await self._handle_heartbeat_command(event)
         if canonical == "refine":
             return await self._handle_refine_command(event)
-
-        if canonical == "moa":
-            # /moa is one-shot sugar only: run a single prompt through the
-            # default MoA preset, then restore the prior model. To *switch* to a
-            # MoA preset for the session, pick it from the model picker (MoA
-            # presets surface as a virtual "Mixture of Agents" provider).
-            from pilotage_cli.moa_config import (
-                moa_usage,
-                normalize_moa_config,
-            )
-            from pilotage_cli.config import load_config
-
-            moa_payload = event.get_command_args().strip()
-            if not moa_payload:
-                return moa_usage()
-            try:
-                cfg = load_config()
-                moa_cfg = normalize_moa_config(cfg.get("moa") if isinstance(cfg, dict) else {})
-            except Exception:
-                moa_cfg = normalize_moa_config({})
-            preset = moa_cfg["default_preset"]
-            try:
-                event.text = moa_payload
-                _moa_state = self._session_state(_quick_key)
-                event._moa_restore_override = _moa_state.conversation.model_override
-                _moa_state.conversation.model_override = {
-                    "provider": "moa",
-                    "model": preset,
-                    "base_url": "moa://local",
-                    "api_key": "moa-virtual-provider",
-                    "api_mode": "chat_completions",
-                }
-                self._evict_cached_agent(_quick_key)
-                event._moa_disable_after_turn = True
-            except Exception:
-                return "Failed to prepare MoA turn."
 
         if canonical == "subgoal":
             return await self._handle_subgoal_command(event)
@@ -16533,15 +16491,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.debug("goal continuation hook failed: %s", _goal_exc)
             return _agent_result
         finally:
-            # MoA one-shot restore must run on EVERY exit path, not just
-            # success. The restore data lives on the per-turn event object
-            # (_moa_restore_override), which is discarded once the event goes
-            # out of scope — so if _handle_message_with_agent raises, a restore
-            # in the try block would be skipped and the MoA override would leak
-            # permanently (every later message silently fans out through MoA).
-            # Putting it in finally guarantees the revert on success, exception,
-            # and interrupt alike.
-            self._restore_moa_one_shot(event, _quick_key)
             self._restore_pending_one_turn_model_override(_quick_key)
             # Normal completion/exception/interrupt owns and clears this exact
             # durable marker.  SIGKILL/OOM skips finally, leaving the marker for
@@ -16559,24 +16508,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # (routing key, run generation) so this unwind can only ever free
             # the lease its own turn acquired, never a newer turn's.
             self._release_turn_lease(_quick_key, _run_generation)
-
-    def _restore_moa_one_shot(self, event: "MessageEvent", quick_key: str) -> None:
-        """Revert a ``/moa <prompt>`` one-shot model override after its turn.
-
-        Called from the ``finally`` of the message-handling path so the revert
-        fires whether the turn succeeded, raised, or was interrupted. A no-op
-        unless ``event._moa_disable_after_turn`` is set. ``_moa_restore_override``
-        carries the prior per-session override (``None`` means the user had no
-        override, so the MoA override is cleared outright).
-        """
-        if not getattr(event, "_moa_disable_after_turn", False):
-            return
-        try:
-            _restore = getattr(event, "_moa_restore_override", None)
-            self._session_state(quick_key).conversation.model_override = _restore
-            self._evict_cached_agent(quick_key)
-        except Exception:
-            pass
 
     def _restore_pending_one_turn_model_override(self, session_key: str) -> None:
         """Restore a per-session model override after ``/model --once`` runs."""
@@ -18620,7 +18551,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 run_generation=run_generation,
                 event_message_id=self._reply_anchor_for_event(event),
                 channel_prompt=event.channel_prompt,
-                moa_config=getattr(event, "_moa_config", None),
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
                 persist_user_display_kind=persist_user_display_kind,
@@ -25547,7 +25477,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _interrupt_depth: int = 0,
         event_message_id: Optional[str] = None,
         channel_prompt: Optional[str] = None,
-        moa_config: Optional[dict] = None,
         persist_user_message: Optional[Any] = None,
         persist_user_timestamp: Optional[float] = None,
         persist_user_display_kind: Optional[str] = None,
@@ -25567,7 +25496,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 message, context_prompt, history, source, session_id,
                 session_key=session_key, run_generation=run_generation,
                 _interrupt_depth=_interrupt_depth, event_message_id=event_message_id,
-                channel_prompt=channel_prompt, moa_config=moa_config,
+                channel_prompt=channel_prompt,
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
                 persist_user_display_kind=persist_user_display_kind,
@@ -25580,7 +25509,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 message, context_prompt, history, source, session_id,
                 session_key=session_key, run_generation=run_generation,
                 _interrupt_depth=_interrupt_depth, event_message_id=event_message_id,
-                channel_prompt=channel_prompt, moa_config=moa_config,
+                channel_prompt=channel_prompt,
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
                 persist_user_display_kind=persist_user_display_kind,
@@ -25723,7 +25652,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _interrupt_depth: int = 0,
         event_message_id: Optional[str] = None,
         channel_prompt: Optional[str] = None,
-        moa_config: Optional[dict] = None,
         persist_user_message: Optional[Any] = None,
         persist_user_timestamp: Optional[float] = None,
         persist_user_display_kind: Optional[str] = None,
@@ -25979,7 +25907,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             run_generation=run_generation,
             _interrupt_depth=_interrupt_depth,
             event_message_id=event_message_id,
-            moa_config=moa_config,
             persist_user_message=persist_user_message,
             persist_user_timestamp=persist_user_timestamp,
             persist_user_display_kind=persist_user_display_kind,
@@ -27577,23 +27504,6 @@ def _start_gateway_housekeeping(stop_event: threading.Event, adapters=None, loop
             except Exception as e:
                 logger.debug("Curator tick error: %s", e)
 
-            # Skill Sync — best-effort periodic pull on the same cadence.
-            # Inert unless the access gate is open and a sync base URL is
-            # configured; never raises.
-            try:
-                from tools.skills_sync_client import maybe_pull_skills
-                maybe_pull_skills()
-            except Exception as e:
-                logger.debug("Sync pull tick error: %s", e)
-
-            # Org-shared skills. Gated on real org membership (the token must
-            # carry an org role), so a solo account never reaches the network.
-            try:
-                from tools.skills_sync_client import maybe_pull_org_skills
-                maybe_pull_org_skills()
-            except Exception as e:
-                logger.debug("Org sync pull tick error: %s", e)
-
         # Stale-session auto-archive — a live timer, so gateways that stay up
         # for weeks keep sweeping on schedule (the startup hook fires once).
         # maybe_auto_archive() is gated by sessions.min_interval_hours in
@@ -28170,13 +28080,6 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     except Exception as _lc_exc:
         logger.debug("Lifecycle ledger startup record failed: %s", _lc_exc)
 
-    try:
-        from pilotage_cli.nous_auth_keepalive import start_nous_auth_keepalive
-
-        start_nous_auth_keepalive()
-    except Exception as exc:
-        logger.debug("Nous auth keepalive did not start: %s", exc)
-
     _ensure_windows_gateway_venv_imports()
 
     # MCP tool discovery — run in an executor so the asyncio event loop
@@ -28325,13 +28228,6 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
 
     # Wait for shutdown
     await runner.wait_for_shutdown()
-
-    try:
-        from pilotage_cli.nous_auth_keepalive import stop_nous_auth_keepalive
-
-        stop_nous_auth_keepalive()
-    except Exception:
-        pass
 
     if runner.should_exit_with_failure:
         if runner.exit_reason:

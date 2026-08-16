@@ -115,16 +115,6 @@ _REASONING_STALE_TIMEOUT_FLOORS: tuple[tuple[str, int], ...] = (
     # at the default 180s (300s with context scaling), tripping the
     # cross-turn circuit breaker after 5 consecutive stale kills.
     ("claude-fable", 600),
-    # xAI Grok reasoning variants.  Explicit reasoning-only keys
-    # plus one for the ``non-reasoning`` variant so users picking
-    # the fast variant don't get the 300s floor.  Bare ``grok-3``,
-    # ``grok-4`` etc. don't match — only the explicit reasoning /
-    # non-reasoning pairs.
-    ("grok-4-fast-reasoning", 300),
-    ("grok-4.20-reasoning", 300),
-    ("grok-4.5", 300),
-    ("grok-4.6", 300),
-    ("grok-4-fast-non-reasoning", 180),
 )
 
 
