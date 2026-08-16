@@ -1506,38 +1506,6 @@ def _read_tui_active_session_file(path: Optional[str]) -> Optional[str]:
         return None
 
 
-"""Lockfile fields npm writes non-deterministically at install time.
-
-``ideallyInert`` is npm's runtime annotation for packages it skipped installing
-(per-platform opt-outs).  ``peer`` is dropped from the hidden ``.package-lock.json``
-on dev-dependencies that are *also* declared as peers — the canonical
-``package-lock.json`` records the dual role, but npm 9's actualized tree strips
-it.  Neither key represents a real skew between what was declared and what was
-installed, so we exclude them from the comparison in :func:`_tui_need_npm_install`
-to avoid false-positive reinstalls on every launch.
-"""
-
-
-def _workspace_root(dir: Path) -> Path:
-    """Return the npm workspace root for *dir*.
-
-    In a workspace checkout the single ``package-lock.json`` and hoisted
-    ``node_modules/`` live at the workspace root (the parent of the
-    sub-package directory).  Heuristic: if *dir* has a ``package.json``
-    but **no** ``package-lock.json``, and its **parent** has a
-    ``package-lock.json``, the parent is the workspace root.
-    Otherwise *dir* itself is the root (standalone project or
-    prebuilt-bundle layout).
-    """
-    if (
-        (dir / "package.json").is_file()
-        and not (dir / "package-lock.json").is_file()
-        and (dir.parent / "package-lock.json").is_file()
-    ):
-        return dir.parent
-    return dir
-
-
 def _pin_kanban_board_env() -> None:
     """Pin the active kanban board into ``HERMES_KANBAN_BOARD`` for the chat session.
 
@@ -3358,17 +3326,12 @@ _LAZY_COMMAND_EXPORTS = {
         "_leftover_pausable_gateway_pids",
         "_log_only_write",
         "_mark_skip_upstream_prompt",
-        "_npm_bin_exists",
-        "_npm_lockfile_changed",
-        "_npm_manifest_paths",
-        "_npm_manifests_digest",
         "_pause_windows_gateways_for_update",
         "_print_curator_first_run_notice",
         "_print_curator_recent_run_notice",
         "_print_fts_optimize_available_notice",
         "_print_stash_cleanup_guidance",
         "_print_update_completion",
-        "_record_npm_lockfile_hash",
         "_refresh_active_lazy_features",
         "_refresh_active_memory_provider_dependencies",
         "_refresh_bootstrap_cache_scripts",
@@ -3388,7 +3351,6 @@ _LAZY_COMMAND_EXPORTS = {
         "_surviving_gateway_pids_after_failed_restart",
         "_sync_fork_with_upstream",
         "_sync_with_upstream_if_needed",
-        "_update_node_dependencies",
         "_update_via_zip",
         "_upgrade_pip_before_lazy_refresh",
         "_validate_critical_files_syntax",
@@ -3398,8 +3360,6 @@ _LAZY_COMMAND_EXPORTS = {
         "_wait_for_windows_update_gateway_exit",
         "_warn_gateway_restart_phase_aborted",
         "_warn_incomplete_gateway_fleet_restart",
-        "_web_build_toolchain_ready",
-        "_web_toolchain_roots",
         "_write_lazy_refresh_incomplete_marker",
         "_write_marker_file",
         "_write_update_incomplete_marker",
@@ -4292,243 +4252,6 @@ def _sweep_stale_bytecode_if_checkout_changed() -> None:
         _record_bytecode_fingerprint()
     except Exception as exc:
         logger.debug("Stale-bytecode launch sweep failed: %s", exc)
-
-
-def _run_with_idle_timeout(
-    cmd: list[str],
-    cwd: Path,
-    *,
-    idle_timeout_seconds: int = 180,
-    indent: str = "    ",
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess:
-    """Run a subprocess that streams output, with an idle-output timeout.
-
-    Issue #33788: ``npm run build`` (Vite) was invoked with
-    ``capture_output=True`` and no timeout. On low-memory hosts (notably
-    WSL2 with the default 4 GB cap) the build can stall or sit silent for
-    minutes; users see a frozen terminal, assume the update is hung, and
-    reboot — leaving the editable install in a half-state with the
-    ``hermes`` launcher present but ``hermes_cli`` not importable.
-
-    This helper fixes both halves: stdout is streamed (so the user sees
-    progress), and if no bytes have appeared on stdout/stderr for
-    ``idle_timeout_seconds``, the process is terminated and the call
-    returns with a non-zero ``returncode``. The caller's existing
-    stale-dist fallback (#23817) takes over from there.
-
-    Returns a ``CompletedProcess`` with merged stdout (text), empty
-    stderr, and an integer returncode. Never raises on idle timeout —
-    propagation of failure is via the returncode.
-    """
-    merged_chunks: list[str] = []
-    last_output_ts = _time.monotonic()
-    lock = threading.Lock()
-
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            env=env,
-        )
-    except OSError as exc:
-        # E.g. npm not on PATH between the which() check and now.
-        return subprocess.CompletedProcess(cmd, 127, stdout="", stderr=str(exc))
-
-    def _reader() -> None:
-        nonlocal last_output_ts
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            try:
-                print(f"{indent}{line.rstrip()}", flush=True)
-            except UnicodeEncodeError:
-                # Windows cp1252 fallback — same pattern as _say().
-                enc = getattr(sys.stdout, "encoding", None) or "ascii"
-                safe = line.rstrip().encode(enc, errors="replace").decode(enc, errors="replace")
-                print(f"{indent}{safe}", flush=True)
-            with lock:
-                merged_chunks.append(line)
-                last_output_ts = _time.monotonic()
-
-    reader_thread = threading.Thread(target=_reader, daemon=True)
-    reader_thread.start()
-
-    idle_killed = False
-    while True:
-        try:
-            rc = proc.wait(timeout=5)
-            break
-        except subprocess.TimeoutExpired:
-            with lock:
-                idle = _time.monotonic() - last_output_ts
-            if idle > idle_timeout_seconds:
-                idle_killed = True
-                proc.terminate()
-                try:
-                    rc = proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    rc = proc.wait()
-                break
-
-    # Drain reader so we don't leak the stdout file descriptor.
-    reader_thread.join(timeout=2)
-
-    combined = "".join(merged_chunks)
-    if idle_killed:
-        msg = (
-            f"\n  ⚠ Build produced no output for {idle_timeout_seconds}s — terminated.\n"
-            "    Common causes: out-of-memory on a low-RAM host (WSL/container),\n"
-            "    a stuck Node process, or an antivirus scan stalling I/O.\n"
-        )
-        combined += msg
-        # Force a non-zero rc even if terminate() raced with a clean exit.
-        if rc == 0:
-            rc = 124  # GNU `timeout` convention
-    return subprocess.CompletedProcess(cmd, rc, stdout=combined, stderr="")
-
-
-def _nixos_build_env() -> dict[str, str] | None:
-    """Return extra env vars for native module builds on NixOS.
-
-    On NixOS, python3 is typically not on the system PATH (it lives in
-    the Nix store and only enters PATH inside a nix-shell or when
-    explicitly installed as a system package).  node-gyp uses Python to
-    compile native addons like ``node-pty`` and its ``find-python.js``
-    does a bare ``PATH`` lookup — which fails on NixOS.
-
-    Two-tier resolution:
-    1. Fast path — the hermes venv's python3 (present in managed installs)
-    2. Fallback — resolves the absolute python3 path via ``nix-shell``
-
-    Returns an env dict suitable for ``subprocess.run(env=...)`` or
-    ``None`` when we are not on NixOS or python3 is already on PATH.
-    """
-    import re
-
-    try:
-        os_release = Path("/etc/os-release").read_text(encoding="utf-8")
-    except OSError:
-        return None
-    if not re.search(r"^ID=nixos$", os_release, re.M):
-        return None
-
-    # python3 already on PATH — nothing to do
-    if shutil.which("python3"):
-        return None
-
-    # Tier 1: fast path — hermes venv python3, no nix-shell overhead
-    for venv_name in ("venv", ".venv"):
-        venv_python = PROJECT_ROOT / venv_name / "bin" / "python3"
-        if venv_python.exists():
-            return {**os.environ, "PYTHON": str(venv_python)}
-
-    # Tier 2: nix-shell fallback — resolves the absolute python3 path once.
-    # Slower (~2–5 s for the nix-shell eval) but always works, even without
-    # a hermes venv (pip / non-managed / bare-git installs).  The resolved
-    # path is a self-contained Nix store binary (all deps via RPATH) so it
-    # stays valid even after the nix-shell exits.
-    try:
-        result = subprocess.run(
-            ["nix-shell", "-p", "python3", "--run", "which python3"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=15,
-        )
-        if result.returncode == 0:
-            python3_path = result.stdout.strip()
-            if python3_path and Path(python3_path).exists():
-                return {**os.environ, "PYTHON": python3_path}
-    except Exception:
-        pass  # nix-shell not available — caller will get None
-
-    return None
-def _run_npm_install_deterministic(
-    npm: str,
-    cwd: Path,
-    *,
-    extra_args: tuple[str, ...] = (),
-    capture_output: bool = True,
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess:
-    """Run a deterministic npm install that does not mutate ``package-lock.json``.
-
-    Prefers ``npm ci`` (strict, lockfile-preserving) when a lockfile is present;
-    falls back to ``npm install`` only if ``npm ci`` fails (e.g. lockfile out of
-    sync on a WIP checkout).  Without this, ``npm install`` on npm ≥ 10 silently
-    rewrites committed lockfiles (stripping ``"peer": true`` etc.), which leaves
-    the working tree dirty and causes the next ``hermes update`` to stash the
-    lockfile — repeatedly.
-
-    ``--include=dev`` is forced on every invocation: the callers are frontend
-    builds (web UI / TUI / desktop workspaces), and those builds need the dev
-    toolchain (``tsc``, ``vite``, ``electron-builder`` — all
-    ``devDependencies``).  If the caller's environment has
-    ``NODE_ENV=production`` (or npm config ``omit=dev``) — which leaks in from
-    a shell profile, a container image, or the bundled TUI launcher that sets
-    ``NODE_ENV=production`` on its subprocess env — npm silently omits
-    devDependencies (exit 0, no error), so the build toolchain never installs
-    and the subsequent build dies with ``tsc: command not found`` (exit 127).
-    The flag overrides both the env var and npm config, unlike scrubbing
-    ``NODE_ENV`` from the environment which only fixes the env-leak case.
-
-    ``--no-save`` on the ``npm install`` fallback keeps it true to this
-    function's contract: never mutate ``package-lock.json``.  Without it, an
-    out-of-sync lockfile gets rewritten by the fallback, which drifts the
-    committed lockfile and makes every future ``npm ci`` fail — a
-    self-reinforcing cycle where web devDeps never install and a stale dist
-    is served on every update (PR #65595).
-    """
-    # unicode-animations' postinstall animates to /dev/tty (bypasses
-    # --silent/capture_output). It no-ops when CI is set — same as the TUI
-    # install path and nix/lib.nix npm ci hooks.
-    run_env = {**os.environ, **(env or {}), "CI": "1"}
-
-    def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-        return _run_npm_watching_for_engine_failure(
-            cmd,
-            cwd=cwd,
-            env=run_env,
-            capture_output=capture_output,
-        )
-
-    def _attempt(npm_exe: str) -> subprocess.CompletedProcess:
-        lockfile = cwd / "package-lock.json"
-        if lockfile.exists():
-            ci_result = _run([npm_exe, "ci", "--include=dev", *extra_args])
-            if ci_result.returncode == 0:
-                return ci_result
-            # Fall through to `npm install` — lockfile may be out of sync on a
-            # WIP fork/branch, or `npm ci` may not be available on very old npm.
-        return _run([npm_exe, "install", "--no-save", "--include=dev", *extra_args])
-
-    result = _attempt(npm)
-    if result.returncode == 0:
-        return result
-
-    # An npm outside the root package.json's `engines.npm` range fails every
-    # command here identically (the `npm install` fallback included), so the
-    # failure is worth exactly one repair attempt. `maybe_repair_npm_engine`
-    # returns the npm to retry with — the same one after an in-place upgrade
-    # of a Hermes-managed install, or a freshly provisioned managed npm when
-    # the failing npm belongs to the user's own toolchain.
-    from hermes_cli.npm_engine import maybe_repair_npm_engine
-
-    combined = f"{result.stdout or ''}\n{result.stderr or ''}"
-    repaired_npm = maybe_repair_npm_engine(npm, combined)
-    if not repaired_npm:
-        return result
-    # The repaired npm may be a freshly provisioned managed one whose shebang
-    # and lifecycle scripts resolve `node` from PATH — put the managed tree
-    # first so they find the managed Node, not the mismatched system one.
-    from hermes_constants import with_hermes_node_path
-
-    run_env["PATH"] = with_hermes_node_path(run_env)["PATH"]
-    return _attempt(repaired_npm)
 
 
 # Back-compat alias: some tests and any external callers may import the old
@@ -5731,63 +5454,6 @@ def _resolve_install_target_python(
 
 def _is_termux_env(env: dict[str, str] | None = None) -> bool:
     return _is_termux_startup_environment(env)
-
-
-def _is_windows_npm_path(npm_path: str) -> bool:
-    """Return True if ``npm_path`` points at a Windows npm shim.
-
-    On WSL the Windows install dir is exposed through the ``/mnt/c`` drive
-    mount and PATH interop, so ``shutil.which("npm")`` can hand back
-    ``/mnt/c/Program Files/nodejs/npm`` (or the ``npm.cmd`` / ``npm.exe``
-    shim). Those are detected here by their ``.exe``/``.cmd``/``.bat``
-    suffix, a ``/mnt/`` drive-mount prefix, or an embedded backslash (a UNC
-    path). Callers use this only on a POSIX host — on native Windows an
-    ``npm.cmd`` shim is the correct executable.
-    """
-    low = npm_path.lower()
-    return (
-        low.endswith((".exe", ".cmd", ".bat"))
-        or low.startswith("/mnt/")
-        or "\\" in npm_path
-    )
-
-
-def _resolve_node_runtime_npm() -> str | None:
-    """Resolve an npm executable that belongs to the host's Node runtime.
-
-    On WSL/Linux ``shutil.which("npm")`` may resolve a Windows npm exposed
-    through PATH interop. Running that Windows npm against the Linux checkout
-    operates over ``\\wsl.localhost\\...`` UNC paths and fails with EISDIR /
-    symlink errors in symlink-heavy trees like ``ui-tui`` (#30271). Refuse a
-    Windows npm on a POSIX host and re-scan PATH (skipping ``/mnt/*`` interop
-    entries) for a Linux-native npm. Returns the npm path, or ``None`` when
-    no suitable npm is reachable.
-    """
-    from hermes_constants import find_node_executable
-
-    npm = find_node_executable("npm")
-
-    # On native Windows the platform npm (``npm.cmd``) is exactly what we
-    # want — only reject Windows shims when we're a POSIX/WSL process.
-    if _is_windows():
-        return npm
-
-    if not npm:
-        return None
-
-    if not _is_windows_npm_path(npm):
-        return npm
-
-    # The first resolution was a Windows npm. Re-scan PATH skipping the
-    # ``/mnt/*`` Windows drive mounts WSL injects, so a Linux-native npm that
-    # came later on PATH is still found.
-    for directory in os.environ.get("PATH", "").split(os.pathsep):
-        if not directory or directory.lower().startswith("/mnt/"):
-            continue
-        candidate = shutil.which("npm", path=directory)
-        if candidate and not _is_windows_npm_path(candidate):
-            return candidate
-    return None
 
 
 class _UpdateOutputStream:

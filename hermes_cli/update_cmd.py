@@ -349,38 +349,6 @@ def _gateway_prompt(prompt_text: str, default: str = "", timeout: float = 300.0)
     print(f"  (no response after {int(timeout)}s, using default: {default!r})")
     return default
 
-def _npm_bin_exists(bin_dir: Path, name: str) -> bool:
-    """True when an npm bin shim for *name* exists (POSIX or Windows)."""
-    return any(
-        (bin_dir / candidate).exists()
-        for candidate in (name, f"{name}.cmd", f"{name}.ps1", f"{name}.exe")
-    )
-
-def _web_build_toolchain_ready(*roots: Path) -> bool:
-    """True when ``tsc`` and ``vite`` shims are reachable from any of *roots*.
-
-    Callers must pass every root the build would search; checking only one
-    reports a healthy tree as broken.
-    """
-    bin_dirs = [
-        bin_dir
-        for bin_dir in (root / "node_modules" / ".bin" for root in roots)
-        if bin_dir.is_dir()
-    ]
-    return bool(bin_dirs) and all(
-        any(_npm_bin_exists(bin_dir, tool) for bin_dir in bin_dirs)
-        for tool in ("tsc", "vite")
-    )
-
-def _web_toolchain_roots(web_dir: Path) -> tuple[Path, ...]:
-    """Roots whose ``node_modules/.bin`` can satisfy the web build.
-
-    ``npm run build`` prepends ``node_modules/.bin`` for the package and each
-    of its ancestors, so shims hoisted to the workspace root and shims nested
-    under a package that owns its lockfile (#42973) are equally valid.
-    """
-    return (web_dir, web_dir.parent)
-
 def _print_curator_first_run_notice() -> None:
     """Print a short heads-up about the skill curator after `hermes update`.
 
@@ -1004,8 +972,6 @@ def _update_via_zip(args):
         print("  Re-run `hermes update` to complete it.")
         _m().sys.exit(1)
 
-    node_failures = _update_node_dependencies()
-
     # Sync skills
     try:
         from tools.skills_sync import sync_skills
@@ -1107,15 +1073,7 @@ def _update_via_zip(args):
         )
 
     print()
-    if node_failures:
-        print(
-            "⚠ Update partially complete — Node.js dependencies for "
-            f"{', '.join(node_failures)} did not refresh."
-        )
-        print("  Code and Python deps are updated, but the dashboard/TUI may")
-        print("  be in a mixed state until the Node deps are rebuilt.")
-    else:
-        _print_update_completion("✓ Update complete!")
+    _print_update_completion("✓ Update complete!")
     try:
         _print_curator_first_run_notice()
     except Exception as e:
@@ -2111,229 +2069,6 @@ def _ensure_uv_for_termux(pip_cmd: list[str]) -> str | None:
         pass
     # After pip install, check managed path first, then PATH
     return resolve_uv() or shutil.which("uv")
-
-def _npm_manifest_paths() -> tuple[Path, ...]:
-    """Manifests whose changes must defeat the update-skip.
-
-    The lockfile alone is NOT a sufficient key: on a local checkout a dev
-    can edit package.json (root or a workspace) without running npm — the
-    lockfile is then unchanged but `hermes update` is exactly the step
-    expected to sync node_modules (via the `npm install` fallback in
-    _run_npm_install_deterministic).
-
-    The workspace list is pulled from the root package.json's `workspaces`
-    globs (npm's own source of truth) rather than hardcoded, so adding a
-    workspace can never silently escape the skip key. Every workspace
-    manifest belongs in the key — desktop included, even though the
-    install only names ui-tui and web — because the single lockfile spans
-    the whole workspace graph, so any manifest edit can put the lockfile
-    out of sync and change what the install must do. Falls back to hashing
-    just root manifests if package.json is unreadable (never skips more
-    than main would have installed).
-    """
-    root_pkg = _m().PROJECT_ROOT / "package.json"
-    paths = [_m().PROJECT_ROOT / "package-lock.json", root_pkg]
-    try:
-        workspaces = json.loads(root_pkg.read_text(encoding="utf-8")).get(
-            "workspaces", []
-        )
-        if isinstance(workspaces, dict):  # legacy {"packages": [...]} form
-            workspaces = workspaces.get("packages", [])
-        for pattern in workspaces:
-            for match in sorted(_m().PROJECT_ROOT.glob(str(pattern))):
-                manifest = match / "package.json"
-                if manifest.is_file():
-                    paths.append(manifest)
-    except (OSError, json.JSONDecodeError, TypeError):
-        pass
-    return tuple(paths)
-
-def _npm_manifests_digest() -> str | None:
-    """Combined sha256 over the lockfile + all workspace package.json files.
-
-    Returns None when the lockfile is missing (never skip then).
-    """
-    if not (_m().PROJECT_ROOT / "package-lock.json").exists():
-        return None
-    h = hashlib.sha256()
-    for p in _npm_manifest_paths():
-        h.update(str(p.relative_to(_m().PROJECT_ROOT)).encode())
-        try:
-            h.update(p.read_bytes())
-        except OSError:
-            h.update(b"<missing>")
-    return h.hexdigest()
-
-def _npm_lockfile_changed(hermes_root: Path) -> bool:
-    current = _npm_manifests_digest()
-    if current is None:
-        return True
-    # Also check that node_modules exists; a matching hash with missing
-    # node_modules means the cache was recorded by another checkout.
-    if not (_m().PROJECT_ROOT / "node_modules").is_dir():
-        return True
-    # A matching lockfile hash over a tree whose web build toolchain never
-    # landed must NOT skip the reinstall — otherwise every later `hermes
-    # update` keeps rebuilding against a half-installed tree and serving a
-    # stale dist.
-    web_dir = _m().PROJECT_ROOT / "web"
-    if (web_dir / "package.json").is_file() and not _web_build_toolchain_ready(
-        *_web_toolchain_roots(web_dir)
-    ):
-        return True
-    try:
-        # Key the cache by PROJECT_ROOT so parallel worktrees don't collide.
-        cache_key = hashlib.sha256(str(_m().PROJECT_ROOT).encode()).hexdigest()[:12]
-        cache_file = hermes_root / f".npm_lock_hash_{cache_key}"
-        if not cache_file.exists():
-            return True
-        return cache_file.read_text(encoding="utf-8").strip() != current
-    except OSError:
-        return True
-
-def _record_npm_lockfile_hash(hermes_root: Path) -> None:
-    digest = _npm_manifests_digest()
-    if digest is None:
-        return
-    try:
-        cache_key = hashlib.sha256(str(_m().PROJECT_ROOT).encode()).hexdigest()[:12]
-        cache_file = hermes_root / f".npm_lock_hash_{cache_key}"
-        cache_file.write_text(digest, encoding="utf-8")
-    except OSError:
-        logger.debug("Could not write npm lockfile hash cache")
-
-def _repair_node_deps_on_current_checkout(print_completion) -> None:
-    """Repair Node deps on the ``commit_count == 0`` path (#77211).
-
-    A current checkout does not imply healthy Node deps: a previous npm
-    install may have failed (EBADENGINE from a node/npm mismatch, network
-    timeout, interrupted install) and its error message says to "re-run
-    hermes update" — but the early return never reached the Node refresh,
-    so that repair advice could never work. ``_update_node_dependencies``
-    self-gates on the lockfile hash, which is only recorded after a
-    SUCCESSFUL npm install (and re-trips when node_modules is missing or
-    the web toolchain never landed), so this is a cheap no-op on healthy
-    installs and a real repair after a failed one.
-    """
-    node_failures = _update_node_dependencies()
-    if node_failures:
-        print(f"  ⚠ Node.js refresh failed for: {', '.join(node_failures)}")
-        print("    Fix npm and re-run `hermes update`.")
-        print_completion(
-            "⚠ Checkout is current, but Node.js dependencies could not be repaired."
-        )
-        return
-    # Pair the refresh with the web build like every other
-    # _update_node_dependencies call site; it staleness-checks internally,
-    # so this is a no-op when nothing changed.
-    print_completion("✓ Already up to date!")
-
-
-def _update_node_dependencies() -> list[str]:
-    """Refresh Node deps for the ui-tui and web workspaces.
-
-    Returns the list of labels whose npm install failed (empty on success),
-    so the caller can treat a Node refresh failure as a partial update rather
-    than silently reporting ``Update complete!`` (#30271).
-    """
-    if not (_m().PROJECT_ROOT / "package.json").exists():
-        return []
-
-    npm = _m()._resolve_node_runtime_npm()
-    if not npm:
-        # If the only npm reachable inside this WSL shell is the Windows one,
-        # flag it loudly: silently skipping leaves ui-tui deps stale while the
-        # rest of the update proceeds, and running it would corrupt the tree.
-        from hermes_constants import is_wsl
-
-        path_npm = shutil.which("npm")
-        if is_wsl() and path_npm and _m()._is_windows_npm_path(path_npm):
-            print("→ Updating Node.js dependencies...")
-            print("  ⚠ Skipped: only a Windows npm is reachable from this WSL shell.")
-            print("    Install Node.js inside the WSL distro (nvm, or your distro's")
-            print("    package manager), then re-run `hermes update`.")
-            failed = []
-            if any(
-                (_m().PROJECT_ROOT / workspace / "package.json").exists()
-                for workspace in ("ui-tui", "web")
-            ):
-                failed.append("ui-tui, web workspaces")
-            return failed
-        return []
-
-    from hermes_constants import get_default_hermes_root
-
-    # This cache describes PROJECT_ROOT/node_modules, which is shared by every
-    # Hermes profile using this checkout. Keep one per-checkout cache under the
-    # shared Hermes root rather than rerunning npm once per named profile.
-    shared_hermes_root = get_default_hermes_root()
-
-    # Best-effort: warm npx's cache for agent-browser (#43564). Runs before
-    # the lockfile-unchanged early return below since that's the common
-    # `hermes update` case. Synchronous and can block ~11s on a true cold
-    # cache (~0.4s once warm) — print first so that doesn't look like a hang.
-    print("→ Warming npx cache for agent-browser...")
-    try:
-        from tools.browser_tool import warm_agent_browser_npx_cache
-        warm_agent_browser_npx_cache()
-    except Exception:
-        pass
-
-    if not _m()._npm_lockfile_changed(shared_hermes_root):
-        logger.info("npm lockfile unchanged, skipping npm install")
-        return []
-
-    # Root package.json has no runtime dependencies of its own, so name only
-    # the workspaces the CLI/TUI/web build requires. Root devDependencies are
-    # retained explicitly below for the shared lint configuration.
-    print("→ Updating Node.js dependencies...")
-
-    def _partial_update_failure(*labels: str) -> list[str]:
-        print()
-        print("  ⚠ Node.js dependency refresh did not complete cleanly; the")
-        print("    installation may be in a mixed state (updated code, stale Node")
-        print("    deps). Fix npm and re-run `hermes update`.")
-        return list(labels)
-
-    install_args = [
-        "--no-fund", "--no-audit", "--prefer-offline", "--progress=false",
-        "--workspace", "ui-tui", "--workspace", "web",
-        # Root package.json's own devDependencies (the shared ESLint flat
-        # config every workspace's eslint.config.mjs imports) are otherwise
-        # pruned by this scoped install, same as agent-browser/@streamdown
-        # math used to be before they moved out of root entirely (#43564).
-        # Root devDependencies have nowhere else to live.
-        "--include-workspace-root",
-    ]
-
-    from hermes_constants import with_hermes_node_path
-
-    nixos_env = with_hermes_node_path(_m()._nixos_build_env())
-
-    # NOTE: capture_output=False here is deliberate (#18840) — optional
-    # postinstall scripts print download progress, and capturing it makes a
-    # long download look hung. The chatty npm-deprecation noise during
-    # `hermes update` comes from the *desktop* build, not this step; that
-    # one is captured to update.log.
-    result = _m()._run_npm_install_deterministic(
-        npm,
-        _m().PROJECT_ROOT,
-        extra_args=tuple(install_args),
-        capture_output=False,
-        env=nixos_env,
-    )
-    if result.returncode == 0:
-        _record_npm_lockfile_hash(shared_hermes_root)
-        print("  ✓ ui-tui, web workspaces installed (desktop skipped)")
-        failures: list[str] = []
-    else:
-        print("  ⚠ npm install failed")
-        stderr = (result.stderr or "").strip() if result.stderr else ""
-        if stderr:
-            print(f"    {stderr.splitlines()[-1]}")
-        failures = _partial_update_failure("ui-tui, web workspaces")
-
-    return failures
 
 def _log_only_write(text: str) -> None:
     """Write ``text`` to ``~/.hermes/logs/update.log`` only, never the terminal.
@@ -4444,7 +4179,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     print(f"⚠ Venv still unhealthy after repair: {detail_after}")
                     print("  Close all Hermes windows/gateways and re-run: hermes update")
             else:
-                _repair_node_deps_on_current_checkout(_print_update_completion)
+                _print_update_completion("✓ Already up to date!")
             if runtime_repaired is not None and not _m()._is_windows():
                 print()
                 print(
@@ -4761,8 +4496,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
             print("    Run `hermes update` again — if it persists, reinstall:")
             print("    https://hermes-agent.nousresearch.com")
 
-        node_failures = _update_node_dependencies()
-    
         print()
         print("✓ Code updated!")
 
@@ -5123,15 +4856,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             logger.debug("Cron jobs auto-restore check failed: %s", exc)
 
         print()
-        if node_failures:
-            print(
-                "⚠ Update partially complete — Node.js dependencies for "
-                f"{', '.join(node_failures)} did not refresh."
-            )
-            print("  Code and Python deps are updated, but the dashboard/TUI may")
-            print("  be in a mixed state until the Node deps are rebuilt.")
-        else:
-            _print_update_completion("✓ Update complete!")
+        _print_update_completion("✓ Update complete!")
 
         # Search-index optimization notice (v23). Existing installs keep their
         # working search index untouched on update; the compact v23 layout —
