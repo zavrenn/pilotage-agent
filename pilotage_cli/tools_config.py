@@ -88,7 +88,6 @@ from pilotage_cli.cli_output import (  # noqa: E402 — late import block
 # These map to keys in toolsets.py TOOLSETS dict.
 CONFIGURABLE_TOOLSETS = [
     ("web",             "🔍 Web Search & Scraping",    "web_search, web_extract"),
-    ("browser",         "🌐 Browser Automation",       "navigate, click, type, scroll"),
     ("terminal",        "💻 Terminal & Processes",      "terminal, process"),
     ("file",            "📁 File Operations",           "read, write, patch, search"),
     ("code_execution",  "⚡ Code Execution",            "execute_code"),
@@ -370,49 +369,6 @@ TOOL_CATEGORIES = {
         # ``_plugin_image_gen_providers()`` in ``_visible_providers``.
         "providers": [],
     },
-    "browser": {
-        "name": "Browser Automation",
-        "icon": "🌐",
-        # No cloud vendor ships bundled. Any additional provider row is
-        # injected at runtime from a user plugin's
-        # plugins.browser.<vendor>.provider via _plugin_browser_providers()
-        # in _visible_providers(). Only local, no-key rows remain here:
-        #   - "Local Browser" — non-cloud option, no CloudBrowserProvider.
-        #     Listed FIRST so it is the default-highlighted (index 0) choice.
-        #   - "Camofox" — anti-detection local Firefox; short-circuits the
-        #     cloud-provider dispatch path via _is_camofox_mode().
-        #   - "Browser Use" — the Browser Use CLI 3.0 (tools/browser_use_cli.py,
-        #     in-tree; unrelated to the deleted browser-use cloud plugin).
-        "providers": [
-            {
-                "name": "Local Browser",
-                "badge": "★ recommended · free",
-                "tag": "Headless Chromium, no API key needed",
-                "env_vars": [],
-                "browser_provider": "local",
-                "post_setup": "agent_browser",
-            },
-            {
-                "name": "Camofox",
-                "badge": "free · local",
-                "tag": "Anti-detection browser (Firefox/Camoufox)",
-                "env_vars": [
-                    {"key": "CAMOFOX_URL", "prompt": "Camofox server URL", "default": "http://localhost:9377",
-                     "url": "https://github.com/jo-inc/camofox-browser"},
-                ],
-                "browser_provider": "camofox",
-                "post_setup": "camofox",
-            },
-            {
-                "name": "Browser Use",
-                "badge": "free · local · cloud",
-                "tag": "New SOTA web harness (CLI 3.0)",
-                "env_vars": [],
-                "browser_backend": "browser-use",
-                "post_setup": "browser_use_cli",
-            },
-        ],
-    },
     "homeassistant": {
         "name": "Smart Home",
         "icon": "🏠",
@@ -534,192 +490,12 @@ def _pip_install(
 
 
 
-def _ensure_browser_use_cli(*, verbose_hints: bool = False) -> None:
-    """Install the Browser Use CLI if it isn't already runnable.
-
-    The Browser Use CLI 3.0 is the primary driver engine for EVERY browser
-    backend except Camofox (which is Firefox-based with no CDP surface, so
-    the CDP-only browser-use harness cannot drive it). Local, Browserbase,
-    and Firecrawl all execute through
-    ``browser_exec`` when the CLI is runnable — so every one of those
-    picker selections must attempt this install, not just the explicit
-    "Browser Use" row. Failure is non-fatal: ``browser_exec`` can still run
-    zero-install via ``uvx browser-use``, and the built-in browser tools
-    remain the final fallback.
-
-    MANAGED-FIRST: a browser-use on the user's PATH does NOT satisfy this
-    check — only the Pilotage-managed ``$PILOTAGE_HOME/bin`` copy does.
-    ``install_cli()`` short-circuits on the managed copy and otherwise
-    provisions it, so resolution always lands on a binary Pilotage installs
-    and updates rather than a user-level side install.
-    """
-    _print_info("    Ensuring browser-use CLI (managed install)...")
-    try:
-        from tools.browser_use_cli import install_cli
-
-        ok, message = install_cli()
-    except Exception as exc:  # pragma: no cover — defensive
-        ok, message = False, f"install failed: {exc}"
-    if ok:
-        _print_success(f"    {message}")
-    else:
-        for line in str(message).splitlines():
-            _print_warning(f"    {line[:200]}")
-        if shutil.which("uvx"):
-            _print_info("    Falling back to zero-install runs via `uvx browser-use`")
-        else:
-            _print_info("    Install manually: uv tool install browser-use  (https://docs.astral.sh/uv/)")
-    if verbose_hints:
-        _print_info("    Local Chrome needs remote debugging: chrome://inspect/#remote-debugging")
-        _print_info("    Cloud browsers: browser-use auth login  (or set BROWSER_USE_API_KEY)")
-
 
 def _run_post_setup(post_setup_key: str):
     """Run post-setup hooks for tools that need extra installation steps."""
     from pilotage_constants import find_node_executable
 
-    if post_setup_key in {"agent_browser", "browserbase"}:
-        # Every non-Camofox browser backend drives through the Browser Use
-        # CLI when it's runnable — install it here too, not only on the
-        # explicit "Browser Use" picker row.
-        _ensure_browser_use_cli()
-        # agent-browser is no longer a root package.json dependency
-        # — it resolves lazily via npx (or a global/Pilotage-managed install)
-        # instead of a local `npm install`, so there's no node_modules/
-        # population step here anymore.
-        try:
-            # Import lazily so the tools_config UI doesn't pull in the full
-            # browser_tool module at import time.
-            from tools.browser_tool import (
-                _chromium_installed,
-                _running_in_docker,
-                _find_agent_browser,
-                _resolve_npx_bin,
-                _is_npx_agent_browser_sentinel,
-                AGENT_BROWSER_NPX_SPEC,
-            )
-        except Exception as exc:  # pragma: no cover — defensive
-            _print_warning(f"    Could not check Chromium status: {exc}")
-            return
-
-        # Reuse the same resolution cascade browser tools use at runtime
-        # (PATH -> Homebrew/Pilotage-managed node -> npx) rather than a bare
-        # shutil.which — Pilotage-managed-Node-only setups resolve agent-browser
-        # / npx only through the extended fallback path, which a bare
-        # shutil.which("npx") lookup misses.
-        try:
-            browser_cmd = _find_agent_browser(validate=False)
-        except FileNotFoundError:
-            _print_warning(
-                "    npx not found - browser tools require Node.js: https://nodejs.org"
-            )
-            return
-
-        # Step 1: only the local browser provider actually needs Chromium on
-        # disk. Cloud providers (Browserbase, Browser Use, Firecrawl) host
-        # their own Chromium and don't need the local install.
-        if post_setup_key != "agent_browser":
-            return
-
-        # Step 2: ensure the Chromium / headless-shell build agent-browser
-        # drives is actually installed. Without it the CLI hangs on first
-        # use until the command timeout fires. Skip inside Docker — the
-        # image bakes Chromium in at build time, and runtime users usually
-        # can't write to PLAYWRIGHT_BROWSERS_PATH anyway.
-        if _chromium_installed():
-            _print_success("    Chromium browser already installed, nothing to do")
-            return
-
-        if _running_in_docker():
-            _print_warning(
-                "    Chromium is missing but you're running in Docker."
-            )
-            _print_info(
-                "    Pull the latest image to get the bundled Chromium:"
-            )
-            _print_info(
-                "      docker pull ghcr.io/pilotage/pilotage-agent:latest"
-            )
-            return
-
-        # browser_cmd was already resolved above (same PATH -> Homebrew ->
-        # Pilotage-managed-node -> npx cascade _find_agent_browser uses at
-        # runtime), so this can't diverge from what actually gets invoked.
-        if _is_npx_agent_browser_sentinel(browser_cmd):
-            # Re-resolve via the same PATH + extended-PATH cascade
-            # _find_agent_browser used, rather than a bare shutil.which("npx")
-            # — Pilotage-managed-Node-only setups resolve npx only through the
-            # extended fallback path, and a bare lookup here would silently
-            # diverge and hand subprocess.run a None argument.
-            npx_bin = _resolve_npx_bin()
-            if not npx_bin:
-                _print_warning(
-                    "    npx not found - install Chromium manually: npx agent-browser install --with-deps"
-                )
-                return
-            install_cmd = [npx_bin, "--ignore-scripts", "-y", AGENT_BROWSER_NPX_SPEC, "install", "--with-deps"]
-        else:
-            install_cmd = [browser_cmd, "install", "--with-deps"]
-
-        _print_info("    Installing Chromium (~170MB one-time download)...")
-        import subprocess
-        try:
-            result = subprocess.run(
-                install_cmd,
-                capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(PROJECT_ROOT), timeout=600,
-                creationflags=_post_setup_no_window_flags(),
-            )
-            if result.returncode == 0:
-                _print_success("    Chromium installed")
-                # Invalidate the cached "missing" result so subsequent
-                # check_browser_requirements() calls see the new install.
-                import tools.browser_tool as _bt
-                _bt._cached_chromium_installed = None
-            else:
-                _print_warning("    Chromium install failed:")
-                tail = (result.stderr or result.stdout or "").strip().splitlines()[-3:]
-                for line in tail:
-                    _print_info(f"      {line[:200]}")
-                _print_info("    Run manually: npx agent-browser install --with-deps")
-        except subprocess.TimeoutExpired:
-            _print_warning("    Chromium install timed out (>10min)")
-            _print_info("    Run manually: npx agent-browser install --with-deps")
-        except Exception as exc:
-            _print_warning(f"    Chromium install failed: {exc}")
-            _print_info("    Run manually: npx agent-browser install --with-deps")
-
-    elif post_setup_key == "browser_use_cli":
-        _ensure_browser_use_cli(verbose_hints=True)
-
-    elif post_setup_key == "camofox":
-        camofox_dir = PROJECT_ROOT / "node_modules" / "@askjo" / "camofox-browser"
-        _npm_bin = find_node_executable("npm")
-        if camofox_dir.exists():
-            _print_success("    Camofox already installed, nothing to do")
-        elif _npm_bin:
-            _print_info("    Installing Camofox browser server...")
-            import subprocess
-            # Absolute npm path so .cmd shim executes on Windows.
-            result = subprocess.run(
-                # --workspaces=false avoids resolving apps/desktop. See.
-                [_npm_bin, "install", "--silent", "--workspaces=false"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(PROJECT_ROOT),
-                creationflags=_post_setup_no_window_flags(),
-            )
-            if result.returncode == 0:
-                _print_success("    Camofox installed")
-            else:
-                _print_warning("    npm install failed - run manually: npm install --workspaces=false")
-        if camofox_dir.exists():
-            _print_info("    Start the Camofox server:")
-            _print_info("      npx @askjo/camofox-browser")
-            _print_info("    First run downloads the Camoufox engine (~300MB)")
-            _print_info("    Or use Docker: docker run -p 9377:9377 -e CAMOFOX_PORT=9377 jo-inc/camofox-browser")
-        elif not _npm_bin:
-            _print_warning("    Node.js not found. Install Camofox via Docker:")
-            _print_info("      docker run -p 9377:9377 -e CAMOFOX_PORT=9377 jo-inc/camofox-browser")
-
-    elif post_setup_key == "kittentts":
+    if post_setup_key == "kittentts":
         try:
             __import__("kittentts")
             _print_success("    kittentts is already installed")
@@ -810,7 +586,6 @@ def valid_post_setup_keys() -> Set[str]:
     for builder in (
         _plugin_web_search_providers,
         _plugin_image_gen_providers,
-        _plugin_browser_providers,
     ):
         try:
             for prov in builder():
@@ -1705,52 +1480,6 @@ def web_provider_capabilities(backend: str) -> list:
 # for those three in the "Browser Automation" picker. Only non-provider UX
 # setup-flow rows remain hardcoded in ``TOOL_CATEGORIES["browser"]``
 # ("Local Browser", "Camofox").
-def _plugin_browser_providers() -> list[dict]:
-    """Build picker-row dicts from plugin-registered cloud browser providers.
-
-    Each returned dict mirrors the legacy ``TOOL_CATEGORIES["browser"]``
-    schema (``name`` / ``badge`` / ``tag`` / ``env_vars`` /
-    ``browser_provider`` / ``post_setup``) so the picker behaves identically
-    whether a provider was hardcoded or plugin-registered.
-
-    Populates ``browser_provider`` (the legacy config key written to
-    ``browser.cloud_provider``) and a ``browser_plugin_name`` marker so
-    setup / write paths can route through the registry when they want to.
-    """
-    try:
-        from agent.browser_registry import list_providers as _list_browser_providers
-        from pilotage_cli.plugins import _ensure_plugins_discovered
-
-        _ensure_plugins_discovered()
-        providers = _list_browser_providers()
-    except Exception:
-        return []
-
-    rows: list[dict] = []
-    for provider in providers:
-        name = getattr(provider, "name", None)
-        if not name:
-            continue
-        try:
-            schema = provider.get_setup_schema()
-        except Exception:
-            continue
-        if not isinstance(schema, dict):
-            continue
-        row = {
-            "name": schema.get("name", provider.display_name),
-            "badge": schema.get("badge", ""),
-            "tag": schema.get("tag", ""),
-            "env_vars": schema.get("env_vars", []),
-            "browser_provider": name,
-            "browser_plugin_name": name,
-        }
-        # Pass-through optional fields the schema can opt into.
-        if schema.get("post_setup"):
-            row["post_setup"] = schema["post_setup"]
-        rows.append(row)
-    return rows
-
 
 def _plugin_tts_providers() -> list[dict]:
     """Build picker-row dicts from plugin-registered TTS providers.
@@ -1825,12 +1554,6 @@ def _visible_providers(
     # provider rows for the Web Search & Extract category.
     if cat.get("name") == "Web Search & Extract":
         visible.extend(_plugin_web_search_providers())
-
-    # Inject plugin-registered cloud browser backends (Browserbase,
-    # Browser Use, Firecrawl). The hardcoded "Local Browser" / "Camofox"
-    # rows stay because they're non-provider UX setup flows.
-    if cat.get("name") == "Browser Automation":
-        visible.extend(_plugin_browser_providers())
 
     # Inject plugin-registered TTS backends. Plugin rows
     # render BELOW the 10 hardcoded built-in rows. Built-in shadowing
@@ -1920,25 +1643,9 @@ def restorable_python_tool_dependency(
 
 
 def _agent_browser_installed() -> bool:
-    """True when everything ``_run_post_setup("agent_browser")`` installs is
-    present: the agent-browser CLI *and* the Chromium build it drives (or the
-    Lightpanda engine, which needs no Chromium). Mirrors the hook so "Run
-    setup" flips to an installed state only when re-running it would be a
-    no-op."""
-    import sys
+    """Browser stack was removed."""
+    return False
 
-    from pilotage_cli.browser_probe import local_browser_runnable
-
-    # The install hook runs in a spawned ``pilotage tools post-setup`` process,
-    # but this probe runs in the long-lived web-server/CLI process, whose
-    # browser_tool module may have cached a stale "Chromium missing" result
-    # from before the install. Drop the cache (when the module is loaded) so
-    # the readiness pill flips to Ready right after a successful setup run.
-    bt = sys.modules.get("tools.browser_tool")
-    if bt is not None:
-        bt._cached_chromium_installed = None
-
-    return local_browser_runnable()
 
 
 def _camofox_installed() -> bool:
@@ -1963,13 +1670,9 @@ _POST_SETUP_READY: dict = {
 
 
 def _cloud_agent_browser_installed() -> bool:
-    """Installed-check for the ``browserbase`` hook (cloud provider rows).
+    """Browser stack was removed."""
+    return False
 
-    Cloud providers host their own Chromium, so their hook only installs the
-    agent-browser npm package — presence of the CLI is the whole contract."""
-    from pilotage_cli.browser_probe import has_agent_browser
-
-    return has_agent_browser()
 
 
 def provider_readiness_status(
@@ -2185,24 +1888,7 @@ def _is_provider_active(
         # whenever the effective mode resolves on (legacy direct-API cloud
         # config, or CLI runnable and no Camofox).
         browser_cfg = config.get("browser") if isinstance(config, dict) else None
-        try:
-            from tools.browser_use_cli import (
-                _find_cli,
-                is_legacy_browser_use_cloud_config,
-            )
-
-            if is_legacy_browser_use_cloud_config(browser_cfg or {}):
-                return True
-            try:
-                from tools.browser_camofox import is_camofox_mode
-
-                if is_camofox_mode():
-                    return False
-            except Exception:
-                pass
-            return _find_cli() is not None
-        except Exception:
-            return False
+        return False
     if provider.get("web_backend"):
         current = cfg_get(config, "web", "backend")
         return current == provider["web_backend"]
@@ -3242,12 +2928,6 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
             print()
             continue
 
-        # "Configure MCP tools" selected
-        if idx == _mcp_idx:
-            _configure_mcp_tools_interactive(config)
-            print()
-            continue
-
         # "Configure all platforms (global)" selected
         if idx == _global_idx:
             # Use the union of all platforms' current tools as the starting state
@@ -3418,137 +3098,6 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
 # ─── MCP Tools Interactive Configuration ─────────────────────────────────────
 
 
-def _configure_mcp_tools_interactive(config: dict):
-    """Probe MCP servers for available tools and let user toggle them on/off.
-
-    Connects to each configured MCP server, discovers tools, then shows
-    a per-server curses checklist.  Writes changes back as ``tools.exclude``
-    entries in config.yaml.
-    """
-    from pilotage_cli.curses_ui import curses_checklist
-
-    mcp_servers = config.get("mcp_servers") or {}
-    if not mcp_servers:
-        _print_info("No MCP servers configured.")
-        return
-
-    # Count enabled servers
-    enabled_names = [
-        k for k, v in mcp_servers.items()
-        if v.get("enabled", True) not in {False, "false", "0", "no", "off"}
-    ]
-    if not enabled_names:
-        _print_info("All MCP servers are disabled.")
-        return
-
-    print()
-    print(color("  Discovering tools from MCP servers...", Colors.YELLOW))
-    print(color(f"  Connecting to {len(enabled_names)} server(s): {', '.join(enabled_names)}", Colors.DIM))
-
-    try:
-        from tools.mcp_tool import probe_mcp_server_tools
-        server_tools = probe_mcp_server_tools()
-    except Exception as exc:
-        _print_error(f"Failed to probe MCP servers: {exc}")
-        return
-
-    if not server_tools:
-        _print_warning("Could not discover tools from any MCP server.")
-        _print_info("Check that server commands/URLs are correct and dependencies are installed.")
-        return
-
-    # Report discovery results
-    failed = [n for n in enabled_names if n not in server_tools]
-    if failed:
-        for name in failed:
-            _print_warning(f"  Could not connect to '{name}'")
-
-    total_tools = sum(len(tools) for tools in server_tools.values())
-    print(color(f"  Found {total_tools} tool(s) across {len(server_tools)} server(s)", Colors.GREEN))
-    print()
-
-    any_changes = False
-
-    for server_name, tools in server_tools.items():
-        if not tools:
-            _print_info(f"  {server_name}: no tools found")
-            continue
-
-        srv_cfg = mcp_servers.get(server_name, {})
-        tools_cfg = srv_cfg.get("tools") or {}
-        include_list = tools_cfg.get("include") or []
-        exclude_list = tools_cfg.get("exclude") or []
-
-        # Build checklist labels
-        labels = []
-        for tool_name, description in tools:
-            desc_short = description[:70] + "..." if len(description) > 70 else description
-            if desc_short:
-                labels.append(f"{tool_name}  ({desc_short})")
-            else:
-                labels.append(tool_name)
-
-        # Determine which tools are currently enabled
-        pre_selected: Set[int] = set()
-        tool_names = [t[0] for t in tools]
-        for i, tool_name in enumerate(tool_names):
-            if include_list:
-                # Include mode: only included tools are selected
-                if tool_name in include_list:
-                    pre_selected.add(i)
-            elif exclude_list:
-                # Exclude mode: everything except excluded
-                if tool_name not in exclude_list:
-                    pre_selected.add(i)
-            else:
-                # No filter: all enabled
-                pre_selected.add(i)
-
-        chosen = curses_checklist(
-            f"MCP Server: {server_name}  ({len(tools)} tools)",
-            labels,
-            pre_selected,
-            cancel_returns=pre_selected,
-        )
-
-        if chosen == pre_selected:
-            _print_info(f"  {server_name}: no changes")
-            continue
-
-        # Compute new include list (the chosen tools). We standardize on
-        # tools.include across the codebase (catalog installs, pilotage mcp
-        # configure, and this UI) so a server\'s on-disk config shape doesn\'t
-        # depend on which UI the user touched last.
-        chosen_names = [tool_names[i] for i in sorted(chosen)]
-
-        # Update config
-        srv_cfg = mcp_servers.setdefault(server_name, {})
-        tools_cfg = srv_cfg.setdefault("tools", {})
-
-        if len(chosen) == len(tools):
-            # All tools enabled — clear filters (cleanest config shape; the
-            # server\'s native tool set is the active set, and any tools the
-            # server adds later are auto-enabled).
-            tools_cfg.pop("exclude", None)
-            tools_cfg.pop("include", None)
-        else:
-            tools_cfg["include"] = chosen_names
-            # Drop any legacy exclude block — we\'re include-mode now.
-            tools_cfg.pop("exclude", None)
-
-        enabled_count = len(chosen)
-        disabled_count = len(tools) - enabled_count
-        _print_success(
-            f"  {server_name}: {enabled_count} enabled, {disabled_count} disabled"
-        )
-        any_changes = True
-
-    if any_changes:
-        save_config(config)
-        print()
-        print(color("  ✓ MCP tool configuration saved", Colors.GREEN))
-    else:
-        print(color("  No changes to MCP tools", Colors.DIM))
 
 
 # ─── Non-interactive disable/enable ──────────────────────────────────────────

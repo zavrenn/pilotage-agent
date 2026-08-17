@@ -2705,24 +2705,6 @@ def cleanup_task_resources(agent, task_id: str) -> None:
     except Exception as e:
         if agent.verbose_logging:
             logger.warning("Failed to cleanup VM for task %s: %s", task_id, e)
-    try:
-        headed = False
-        try:
-            from tools.browser_tool import _is_headed_mode
-            headed = _is_headed_mode()
-        except Exception:
-            headed = bool(os.environ.get("AGENT_BROWSER_HEADED"))
-        if headed:
-            if agent.verbose_logging:
-                logging.debug(
-                    f"Skipping per-turn cleanup_browser for headed session {task_id}; "
-                    f"idle reaper will handle it."
-                )
-        else:
-            _ra().cleanup_browser(task_id)
-    except Exception as e:
-        if agent.verbose_logging:
-            logger.warning("Failed to cleanup browser for task %s: %s", task_id, e)
 
 
 def _build_partial_stream_stub(

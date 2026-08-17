@@ -102,16 +102,8 @@ def _is_destructive_command(cmd: str) -> bool:
 
 
 def _is_mcp_tool_parallel_safe(tool_name: str) -> bool:
-    """Check if an MCP tool comes from a server with parallel tool calls enabled.
-
-    Lazy-imports from ``tools.mcp_tool`` to avoid circular dependencies.
-    Returns False if the MCP module is not available.
-    """
-    try:
-        from tools.mcp_tool import is_mcp_tool_parallel_safe
-        return is_mcp_tool_parallel_safe(tool_name)
-    except Exception:
-        return False
+    """MCP client support was removed; no MCP tool is parallel-safe."""
+    return False
 
 
 def _plan_tool_batch_segments(tool_calls, *, execution_cwd: Optional[Path] = None) -> List[tuple]:

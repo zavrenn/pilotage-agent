@@ -73,13 +73,6 @@ def _exec_version(ctx: CommandContext) -> CommandReply:
     return CommandReply(format_banner_version_label())
 
 
-def _exec_egress(ctx: CommandContext) -> CommandReply:
-    """Core /egress text — Docker egress proxy status."""
-    from pilotage_cli.proxy_cli import format_status_text
-
-    return CommandReply(format_status_text())
-
-
 def _exec_profile(ctx: CommandContext) -> CommandReply:
     """Core /profile data — active profile name + home directory.
 
@@ -233,7 +226,6 @@ def _exec_commands(ctx: CommandContext) -> CommandReply:
 
 EXECUTORS: dict[str, Callable[[CommandContext], CommandReply]] = {
     "version": _exec_version,
-    "egress": _exec_egress,
     "profile": _exec_profile,
     "bundles": _exec_bundles,
     "gateway_help": _exec_help,

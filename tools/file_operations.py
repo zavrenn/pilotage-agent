@@ -2467,27 +2467,9 @@ class ShellFileOperations(FileOperations):
         return isinstance(env, LocalEnvironment)
 
     def _lsp_handles_extension(self, ext: str) -> bool:
-        """Return True iff some registered LSP server claims this extension.
-
-        Used to decide whether to capture pre-write content for the
-        line-shift map.  Capturing is cheap (one ``cat`` on the host)
-        but pointless if no LSP would ever look at the file.
-
-        Safe to call on remote backends — the registry is purely
-        in-process metadata; we still gate the actual LSP path on
-        :meth:`_lsp_local_only`.
-        """
-        if not ext:
-            return False
-        try:
-            from agent.lsp.servers import SERVERS
-        except Exception:  # noqa: BLE001
-            return False
-        ext_lower = ext.lower()
-        for srv in SERVERS:
-            if ext_lower in srv.extensions:
-                return True
+        """LSP support was removed."""
         return False
+
 
     def _has_ancestor_tsconfig(self, path: str) -> bool:
         """True iff a tsconfig.json exists in *path*'s directory or any ancestor.
@@ -2517,127 +2499,25 @@ class ShellFileOperations(FileOperations):
             return False
 
     def _lsp_will_handle(self, path: str) -> bool:
-        """Return True iff the LSP service is active AND will lint this file.
+        """LSP support was removed."""
+        return False
 
-        Stronger than :meth:`_lsp_handles_extension` — that one only checks
-        the static server registry.  This one additionally requires the
-        LSP service to be configured/enabled and the file to pass
-        :meth:`agent.lsp.manager.LSPService.enabled_for` (which gates on
-        workspace detection, disabled-server set, and the broken-pair
-        short-circuit).
-
-        Used by :meth:`_check_lint` to decide whether to skip the per-file
-        shell linter for extensions in ``_SHELL_LINTER_LSP_REDUNDANT``.
-
-        Best-effort: any failure path returns False so the shell linter
-        runs as before — never suppress lint based on an LSP probe that
-        couldn't actually answer the question.
-        """
-        if not self._lsp_local_only():
-            return False
-        try:
-            from agent.lsp import get_service
-        except Exception:  # noqa: BLE001
-            return False
-        try:
-            svc = get_service()
-        except Exception:  # noqa: BLE001
-            return False
-        if svc is None:
-            return False
-        try:
-            return bool(svc.enabled_for(path))
-        except Exception:  # noqa: BLE001
-            return False
 
     def _snapshot_lsp_baseline(self, path: str) -> None:
-        """Capture pre-edit LSP diagnostics so the post-write delta is correct.
+        """LSP support was removed."""
+        return None
 
-        Best-effort.  Silent on every failure path — LSP is an
-        enrichment layer and must never break a write.
-
-        Skipped entirely on non-local backends (Docker, Modal, SSH,
-        etc.) — the server can't see files inside the sandbox.
-        """
-        if not self._lsp_local_only():
-            return
-        try:
-            from agent.lsp import get_service
-            svc = get_service()
-        except Exception:  # noqa: BLE001
-            return
-        if svc is None:
-            return
-        try:
-            svc.snapshot_baseline(path)
-        except Exception:  # noqa: BLE001
-            pass
 
     def _maybe_lsp_diagnostics(
         self,
         path: str,
         *,
-        pre_content: Optional[str] = None,
-        post_content: Optional[str] = None,
+        pre_content=None,
+        post_content=None,
     ) -> str:
-        """Best-effort LSP semantic diagnostics for ``path``.
+        """LSP support was removed."""
+        return ""
 
-        Returns a formatted ``<diagnostics>`` block, or empty string
-        when LSP is unavailable / disabled / produced no errors.
-
-        When both ``pre_content`` and ``post_content`` are provided,
-        a line-shift map is built and passed to the LSPService so
-        baseline diagnostics are remapped into post-edit coordinates
-        before the set-difference.  Without this, edits that delete
-        or insert lines surface every pre-existing diagnostic below
-        the edit point as "introduced by this edit".
-
-        Wraps everything in a try/except so a misbehaving LSP server
-        can't break a write.  This intentionally swallows all errors
-        — the calling tier already returned a clean syntax result, so
-        ``""`` here just means "no extra info to add".
-
-        Skipped entirely on non-local backends (Docker, Modal, SSH,
-        etc.) — same reasoning as ``_snapshot_lsp_baseline``.
-        """
-        if not self._lsp_local_only():
-            return ""
-        try:
-            from agent.lsp import get_service
-        except Exception:  # noqa: BLE001
-            return ""
-        try:
-            svc = get_service()
-        except Exception:  # noqa: BLE001
-            return ""
-        if svc is None or not svc.enabled_for(path):
-            return ""
-
-        # Build a line-shift map when we have both pre and post — it
-        # remaps baseline diagnostics into post-edit coordinates so
-        # the strict (range-aware) delta key matches correctly.
-        line_shift = None
-        if pre_content is not None and post_content is not None and pre_content != post_content:
-            try:
-                from agent.lsp.range_shift import build_line_shift
-                line_shift = build_line_shift(pre_content, post_content)
-            except Exception:  # noqa: BLE001
-                line_shift = None
-
-        try:
-            diagnostics = svc.get_diagnostics_sync(path, delta=True, line_shift=line_shift)
-        except Exception:  # noqa: BLE001
-            return ""
-        if not diagnostics:
-            return ""
-        try:
-            from agent.lsp.reporter import report_for_file, truncate
-            block = report_for_file(path, diagnostics)
-            if not block:
-                return ""
-            return truncate("LSP diagnostics introduced by this edit:\n" + block)
-        except Exception:  # noqa: BLE001
-            return ""
     
     # =========================================================================
     # SEARCH Implementation

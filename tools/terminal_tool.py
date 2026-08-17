@@ -74,13 +74,18 @@ from tools.shell_heredoc import strip_inert_heredoc_bodies
 
 
 
-# =============================================================================
-# Custom Singularity Environment with more space
-# =============================================================================
+def _get_scratch_dir() -> Path:
+    """Directory used for sandbox scratch space and disk-usage accounting."""
+    custom_scratch = os.getenv("TERMINAL_SCRATCH_DIR")
+    if custom_scratch:
+        scratch_path = Path(custom_scratch)
+        scratch_path.mkdir(parents=True, exist_ok=True)
+        return scratch_path
 
-# Singularity helpers (scratch dir, SIF cache) now live in tools/environments/singularity.py
-from tools.environments.singularity import _get_scratch_dir
-from tools.tool_backend_helpers import has_direct_modal_credentials
+    from tools.environments.base import get_sandbox_dir
+    sandbox = get_sandbox_dir() / "local"
+    sandbox.mkdir(parents=True, exist_ok=True)
+    return sandbox
 
 
 def _safe_parse_import_env(
@@ -1059,10 +1064,6 @@ def _transform_sudo_command(command: str | None) -> tuple[str | None, str | None
 # Environment classes now live in tools/environments/
 from tools.environments.base import EnvironmentConnectionError
 from tools.environments.local import LocalEnvironment as _LocalEnvironment
-from tools.environments.singularity import SingularityEnvironment as _SingularityEnvironment
-from tools.environments.ssh import SSHEnvironment as _SSHEnvironment
-from tools.environments.docker import DockerEnvironment as _DockerEnvironment
-from tools.environments.modal import ModalEnvironment as _ModalEnvironment
 import sys
 
 
@@ -1095,96 +1096,8 @@ _docker_orphan_reaper_lock = threading.Lock()
 
 
 def _maybe_reap_docker_orphans(container_config: Dict[str, Any]) -> None:
-    """Run the docker orphan reaper once per process, if enabled.
-
-    Sweeps long-Exited containers labeled ``pilotage-agent=1`` for the current
-    profile that match the leak class — containers left behind
-    by Pilotage processes that exited without firing ``atexit`` (SIGKILL,
-    OOM, terminal-window-close). The reaper is conservative by default:
-    only Exited containers older than ``2 × lifetime_seconds`` and scoped to
-    the current profile.
-
-    Gates:
-
-    * ``terminal.docker_orphan_reaper: false`` disables it entirely (the
-      operator opted out — usually because they're running multiple
-      Pilotage processes in the same profile and don't trust the
-      conservative defaults).
-    * ``_docker_orphan_reaper_ran`` flag — sweep runs once per Python
-      interpreter, not on every subagent / RL-rollout / parallel
-      ``terminal()`` call.
-    """
-    global _docker_orphan_reaper_ran
-    if not container_config.get("docker_orphan_reaper", True):
-        return
-    # Cheap double-checked-locking: read without the lock, take the lock
-    # only on first run, recheck inside.
-    if _docker_orphan_reaper_ran:
-        return
-    with _docker_orphan_reaper_lock:
-        if _docker_orphan_reaper_ran:
-            return
-        _docker_orphan_reaper_ran = True
-
-    # 2 × lifetime_seconds gives sibling Pilotage processes a generous grace
-    # window. Floor at 60s so an operator with TERMINAL_LIFETIME_SECONDS=0
-    # doesn't get an instant-reap that races their own setup.
-    # ``container_config`` only carries container_* keys, so read
-    # lifetime_seconds from the env var the rest of the module uses.
-    try:
-        lifetime = int(os.getenv("TERMINAL_LIFETIME_SECONDS", "300"))
-    except (TypeError, ValueError):
-        lifetime = 300
-    lifetime = max(60, lifetime)
-    max_age = lifetime * 2
-
-    try:
-        from tools.environments.docker import (
-            reap_orphan_containers, _get_active_profile_name,
-        )
-    except ImportError:
-        return
-    try:
-        profile = _get_active_profile_name()
-        removed = reap_orphan_containers(
-            max_age_seconds=max_age, profile_filter=profile,
-        )
-        if removed:
-            logger.info(
-                "Docker orphan reaper removed %d stale container(s) for profile %s",
-                removed, profile,
-            )
-    except Exception as e:
-        # Never fail the env-creation path because of a janitor problem.
-        logger.debug("Docker orphan reaper raised: %s", e)
-
-
-# Per-task environment overrides registry.
-# Allows environments (e.g., TerminalBench2Env) to specify a custom Docker/Modal
-# image for a specific task_id BEFORE the agent loop starts. When the terminal or
-# file tools create a new sandbox for that task_id, they check this registry first
-# and fall back to the TERMINAL_MODAL_IMAGE (etc.) env var if no override is set.
-#
-# This is never exposed to the model -- only infrastructure code calls it.
-# Thread-safe because each task_id is unique per rollout.
-_task_env_overrides: Dict[str, Dict[str, Any]] = {}
-
-# ── Per-session cwd records (cwd rearchitecture, step 1) ────────────────────
-#
-# The durable source of truth for "which directory is THIS session working
-# in". Keyed by the raw session/task key (NOT the collapsed container id):
-# the terminal env is shared across sessions, so any cwd state stored on the
-# env is a global mutable timeshared between sessions — the root cause of the
-# wrong-worktree bug class (env.cwd_owner stamping, _last_known_cwd, and the
-# ownership ladder in file_tools are all patches over that misplacement).
-#
-# Step 1 (this change): dual-write only. Every site that learns a session's
-# live cwd (post-command tracking, cwd-override registration) also records it
-# here. Readers still use the legacy env.cwd ladder. Later steps flip
-# file_tools and _resolve_command_cwd to read this store, then delete the
-# env-side tracking + ownership guards.
-_session_cwd: Dict[str, str] = {}
-_session_cwd_lock = threading.Lock()
+    """No-op: the docker backend was removed."""
+    return
 
 
 def record_session_cwd(session_key: Optional[str], cwd: Optional[str]) -> None:
@@ -1738,158 +1651,17 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
                         local_config: dict = None,
                         task_id: str = "default",
                         host_cwd: Optional[str] = None):
+    """Create an execution environment for command execution.
+
+    Pilotage runs commands on the host process only; remote/container sandbox
+    backends were removed. ``env_type`` is accepted for call-site compatibility
+    and anything other than "local" is rejected.
     """
-    Create an execution environment for sandboxed command execution.
-    
-    Args:
-        env_type: One of "local", "docker", "singularity", "modal",
-            "daytona", "vercel_sandbox", "ssh"
-        image: Docker/Singularity/Modal image name (ignored for local/ssh/vercel)
-        cwd: Working directory
-        timeout: Default command timeout
-        ssh_config: SSH connection config (for env_type="ssh")
-        container_config: Resource config for container backends (cpu, memory, disk, persistent)
-        task_id: Task identifier for environment reuse and snapshot keying
-        host_cwd: Optional host working directory to bind into Docker when explicitly enabled
-        
-    Returns:
-        Environment instance with execute() method
-    """
-    cc = container_config or {}
-    cpu = cc.get("container_cpu", 1)
-    memory = cc.get("container_memory", 5120)
-    disk = cc.get("container_disk", 51200)
-    persistent = cc.get("container_persistent", True)
-    volumes = cc.get("docker_volumes", [])
-    docker_forward_env = cc.get("docker_forward_env", [])
-    docker_env = cc.get("docker_env", {})
-    docker_extra_args = cc.get("docker_extra_args", [])
-    docker_network = cc.get("docker_network", True)
-
-    if env_type == "local":
-        return _LocalEnvironment(cwd=cwd, timeout=timeout)
-    
-    elif env_type == "docker":
-        # One-shot orphan reaper: clean up labeled containers left behind by
-        # prior Pilotage processes that hit SIGKILL / OOM / a closed terminal
-        # before the atexit cleanup hook could run.  Gated to once per
-        # process so concurrent _create_environment calls (parallel
-        # subagents, RL benchmarks) don't run the reaper N times.
-        # Disable via ``terminal.docker_orphan_reaper: false``.
-        _maybe_reap_docker_orphans(cc)
-        # Per-session container isolation: a session-keyed container must not
-        # outlive its session, so cross-process reuse/persist is disabled for
-        # it — cleanup_vm()/the idle reaper stop+rm it instead of leaving a
-        # running container behind for every chat ever opened. The shared
-        # "default" container and RL/benchmark override sandboxes keep their
-        # existing lifecycle.
-        session_scoped = (
-            _docker_session_isolation_enabled()
-            and task_id != "default"
-            and not _has_isolation_overrides(task_id)
-        )
-        docker_env_obj = _DockerEnvironment(
-            image=image, cwd=cwd, timeout=timeout,
-            cpu=cpu, memory=memory, disk=disk,
-            persistent_filesystem=persistent, task_id=task_id,
-            volumes=volumes,
-            host_cwd=host_cwd,
-            auto_mount_cwd=cc.get("docker_mount_cwd_to_workspace", False),
-            forward_env=docker_forward_env,
-            env=docker_env,
-            run_as_host_user=cc.get("docker_run_as_host_user", False),
-            network=docker_network,
-            extra_args=docker_extra_args,
-            persist_across_processes=(
-                False if session_scoped
-                else cc.get("docker_persist_across_processes", True)
-            ),
-            shm_size=cc.get("docker_shm_size", "1g"),
-        )
-        # Marker read by is_persistent_env(): a session-scoped container
-        # survives BETWEEN turns (skip per-turn teardown) but is removed at
-        # session close / idle timeout. Guarded setattr: test doubles for
-        # _DockerEnvironment may not accept attributes.
-        if session_scoped:
-            try:
-                docker_env_obj._session_scoped = True
-            except AttributeError:
-                pass
-        return docker_env_obj
-    
-    elif env_type == "singularity":
-        return _SingularityEnvironment(
-            image=image, cwd=cwd, timeout=timeout,
-            cpu=cpu, memory=memory, disk=disk,
-            persistent_filesystem=persistent, task_id=task_id,
-        )
-    
-    elif env_type == "modal":
-        sandbox_kwargs = {}
-        if cpu > 0:
-            sandbox_kwargs["cpu"] = cpu
-        if memory > 0:
-            sandbox_kwargs["memory"] = memory
-        if disk > 0:
-            try:
-                import inspect, modal
-                if "ephemeral_disk" in inspect.signature(modal.Sandbox.create).parameters:
-                    sandbox_kwargs["ephemeral_disk"] = disk
-            except Exception:
-                pass
-
-        if not has_direct_modal_credentials():
-            raise ValueError(
-                "Modal backend selected but no Modal credentials/config were found."
-            )
-
-        return _ModalEnvironment(
-            image=image, cwd=cwd, timeout=timeout,
-            modal_sandbox_kwargs=sandbox_kwargs,
-            persistent_filesystem=persistent, task_id=task_id,
-        )
-    
-    elif env_type == "daytona":
-        # Lazy import so daytona SDK is only required when backend is selected.
-        from tools.environments.daytona import DaytonaEnvironment as _DaytonaEnvironment
-        return _DaytonaEnvironment(
-            image=image, cwd=cwd, timeout=timeout,
-            cpu=int(cpu), memory=memory, disk=disk,
-            persistent_filesystem=persistent, task_id=task_id,
-        )
-
-    elif env_type == "vercel_sandbox":
-        from tools.environments.vercel_sandbox import (
-            VercelSandboxEnvironment as _VercelSandboxEnvironment,
-        )
-        return _VercelSandboxEnvironment(
-            runtime=cc.get("vercel_runtime") or None,
-            cwd=cwd,
-            timeout=timeout,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            persistent_filesystem=persistent,
-            task_id=task_id,
-        )
-
-    elif env_type == "ssh":
-        if not ssh_config or not ssh_config.get("host") or not ssh_config.get("user"):
-            raise ValueError("SSH environment requires ssh_host and ssh_user to be configured")
-        return _SSHEnvironment(
-            host=ssh_config["host"],
-            user=ssh_config["user"],
-            port=ssh_config.get("port", 22),
-            key_path=ssh_config.get("key", ""),
-            cwd=cwd,
-            timeout=timeout,
-        )
-
-    else:
+    if env_type not in ("", "local", None):
         raise ValueError(
-            f"Unknown environment type: {env_type}. Use 'local', 'docker', "
-            f"'singularity', 'modal', 'daytona', 'vercel_sandbox', or 'ssh'"
+            f"Unknown environment type: {env_type}. Only 'local' is supported."
         )
+    return _LocalEnvironment(cwd=cwd, timeout=timeout)
 
 
 def _cleanup_inactive_envs(lifetime_seconds: int = 300):
@@ -3555,66 +3327,13 @@ def _evict_environment_for_task(task_id: Optional[str]) -> None:
 def check_terminal_requirements() -> bool:
     """Check if all requirements for the terminal tool are met."""
     try:
-        config = _get_env_config()
-        env_type = config["env_type"]
-
-        if env_type == "local":
+        env_type = _get_env_config()["env_type"]
+        if env_type in ("", "local"):
             return True
-
-        elif env_type == "docker":
-            from tools.environments.docker import find_docker
-            docker = find_docker()
-            if not docker:
-                logger.error("Docker executable not found in PATH or common install locations")
-                return False
-            result = subprocess.run([docker, "version"], capture_output=True, timeout=5, stdin=subprocess.DEVNULL)
-            return result.returncode == 0
-
-        elif env_type == "singularity":
-            executable = shutil.which("apptainer") or shutil.which("singularity")
-            if executable:
-                result = subprocess.run([executable, "--version"], capture_output=True, timeout=5, stdin=subprocess.DEVNULL)
-                return result.returncode == 0
-            return False
-
-        elif env_type == "ssh":
-            if not config.get("ssh_host") or not config.get("ssh_user"):
-                logger.error(
-                    "SSH backend selected but TERMINAL_SSH_HOST and TERMINAL_SSH_USER "
-                    "are not both set. Configure both or switch TERMINAL_ENV to 'local'."
-                )
-                return False
-            return True
-
-        elif env_type == "modal":
-            if not has_direct_modal_credentials():
-                logger.error(
-                    "Modal backend selected but no Modal credentials/config were found. "
-                    "Configure Modal or choose a different TERMINAL_ENV."
-                )
-                return False
-
-            if importlib.util.find_spec("modal") is None:
-                logger.error("modal is required for direct modal terminal backend: pip install modal")
-                return False
-
-            return True
-
-        elif env_type == "vercel_sandbox":
-            return _check_vercel_sandbox_requirements(config)
-
-        elif env_type == "daytona":
-            from daytona import Daytona  # noqa: F401 — SDK presence check
-            from agent.secret_scope import get_secret
-            return get_secret("DAYTONA_API_KEY") is not None
-
-        else:
-            logger.error(
-                "Unknown TERMINAL_ENV '%s'. Use one of: local, docker, singularity, "
-                "modal, daytona, vercel_sandbox, ssh.",
-                env_type,
-            )
-            return False
+        logger.error(
+            "Unknown TERMINAL_ENV '%s'. Only 'local' is supported.", env_type,
+        )
+        return False
     except Exception as e:
         logger.error("Terminal requirements check failed: %s", e, exc_info=True)
         return False

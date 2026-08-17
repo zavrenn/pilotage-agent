@@ -143,7 +143,6 @@ from model_tools import (
 )
 from tools.terminal_tool import cleanup_vm, get_active_env
 from tools.interrupt import set_interrupt as _set_interrupt
-from tools.browser_tool import cleanup_browser
 
 
 # Agent internals extracted to agent/ package for modularity

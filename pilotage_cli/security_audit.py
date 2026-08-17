@@ -255,30 +255,6 @@ def _extract_mcp_component(server_name: str, command: str, args: list[str]) -> O
     return None
 
 
-def _discover_mcp() -> list[Component]:
-    """Pinned MCP server packages from ``config.yaml``."""
-    try:
-        from pilotage_cli.mcp_config import _get_mcp_servers
-    except Exception:
-        return []
-
-    out: list[Component] = []
-    servers = _get_mcp_servers()
-    if not isinstance(servers, dict):
-        return []
-    for name, cfg in servers.items():
-        if not isinstance(cfg, dict):
-            continue
-        command = cfg.get("command", "") or ""
-        args = cfg.get("args") or []
-        if not isinstance(args, list):
-            continue
-        comp = _extract_mcp_component(name, command, [str(a) for a in args])
-        if comp is not None:
-            out.append(comp)
-    return out
-
-
 # ─── OSV client ───────────────────────────────────────────────────────────────
 
 
@@ -425,8 +401,6 @@ def _discover_components(
         components.extend(_discover_venv())
     if not skip_plugins:
         components.extend(_discover_plugins(home))
-    if not skip_mcp:
-        components.extend(_discover_mcp())
     return components
 
 

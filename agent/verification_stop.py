@@ -197,18 +197,7 @@ def _workspace_has_runnable_recipe(root: Any) -> bool:
     """
     if not root:
         return False
-    try:
-        root_path = Path(str(root))
-        from agent.verify.environment import manifest_path
-
-        if manifest_path(root_path).is_file():
-            return True
-        from agent.verify.recipes import detect_recipe
-
-        recipe = detect_recipe(root_path)
-        return bool(recipe is not None and recipe.start)
-    except Exception:
-        return False
+    return False
 
 
 def _status_detail(status: dict[str, Any]) -> str:
@@ -261,12 +250,7 @@ def build_verify_on_stop_nudge(
         return None
 
     # Optional shipped coding guidance, only paid when this evidence gate fires.
-    try:
-        from agent.verify_hooks import coding_verify_guidance
-
-        guidance = coding_verify_guidance()
-    except Exception:
-        guidance = None
+    guidance = None
     addendum = f"\n\n{guidance}" if guidance else ""
 
     if verify_commands:

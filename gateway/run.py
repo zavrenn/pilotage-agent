@@ -13226,11 +13226,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     cleanup_all_environments()
                 except Exception as _e:
                     logger.debug("cleanup_all_environments (%s) error: %s", phase, _e)
-                try:
-                    from tools.browser_tool import cleanup_all_browsers
-                    cleanup_all_browsers()
-                except Exception as _e:
-                    logger.debug("cleanup_all_browsers (%s) error: %s", phase, _e)
                 return _marked_cron_jobs
 
             # Thread-based shutdown watchdog: asyncio timeouts cannot
@@ -14722,7 +14717,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "new": self._busy_new_command,
                 "queue": self._busy_queue_command,
                 "steer": self._busy_steer_command,
-                "egress": self._busy_egress_command,
                 "goal": self._busy_goal_command,
                 "loop": self._busy_loop_command,
             }.get(handler_key)
@@ -14805,11 +14799,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # interrupt, no queued text.
         logger.info("Ignoring /start platform ping for active session %s", quick_key)
         return ""
-
-    async def _busy_egress_command(self, event: MessageEvent, quick_key: str, source):
-        from pilotage_cli.proxy_cli import format_status_text
-
-        return format_status_text()
 
     async def _busy_stop_command(self, event: MessageEvent, quick_key: str, source):
         # /stop must hard-kill the session when an agent is running.
@@ -15871,11 +15860,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "status":
             return await self._handle_status_command(event)
 
-        if canonical == "egress":
-            from pilotage_cli.proxy_cli import format_status_text
-
-            return format_status_text()
-
         if canonical == "context":
             return await self._handle_context_command(event)
 
@@ -15899,34 +15883,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if canonical == "skills":
             return await self._handle_skills_command(event)
-
-        if canonical == "learn":
-            # Open-ended: rewrite the turn to a standards-guided prompt and fall
-            # through to normal agent processing. The live agent gathers the
-            # sources the user described (dirs via read_file, URLs via
-            # web_extract, this conversation, pasted text) and authors the skill
-            # via skill_manage. Mirrors the /blueprint fall-through so role
-            # alternation is preserved. No engine, works on any backend.
-            from agent.learn_prompt import build_learn_prompt
-
-            _learn_req = event.get_command_args().strip()
-            _ack = (
-                "Learning a skill from what you described…"
-                if _learn_req
-                else "Learning a skill from this conversation…"
-            )
-            try:
-                adapter = self._adapter_for_source(source)
-                if adapter:
-                    _ack_meta = self._thread_metadata_for_source(source)
-                    await adapter.send(str(source.chat_id), _ack, metadata=_ack_meta)
-            except Exception:
-                logger.debug("learn ack send failed", exc_info=True)
-            try:
-                event.text = build_learn_prompt(_learn_req)
-                # fall through to agent processing
-            except Exception:
-                return "Could not start /learn — please try again."
 
         if canonical == "init":
             # /init: rewrite the turn to a guidance-laden prompt and fall
@@ -15986,34 +15942,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "suggestions":
             return await self._handle_suggestions_command(event)
 
-        if canonical == "blueprint":
-            _blueprint_result = await self._handle_blueprint_command(event)
-            _blueprint_seed = getattr(_blueprint_result, "agent_seed", None)
-            if _blueprint_seed:
-                # Blueprint matched — rewrite the turn to the seed and fall
-                # through to _handle_message_with_agent so the agent asks the
-                # user for each slot value conversationally and then calls the
-                # cronjob tool (the /steer fall-through pattern). The seed
-                # enters as a normal user turn, preserving role alternation.
-                # Send the "Setting up X…" ack first so the user gets the same
-                # immediate feedback CLI users see, instead of silence until
-                # the agent's first question.
-                _ack = getattr(_blueprint_result, "text", "") or ""
-                if _ack:
-                    try:
-                        adapter = self._adapter_for_source(source)
-                        if adapter:
-                            _ack_meta = self._thread_metadata_for_source(source)
-                            await adapter.send(str(source.chat_id), _ack, metadata=_ack_meta)
-                    except Exception:
-                        logger.debug("blueprint ack send failed", exc_info=True)
-                try:
-                    event.text = _blueprint_seed
-                except Exception:
-                    return getattr(_blueprint_result, "text", "") or None
-            else:
-                return getattr(_blueprint_result, "text", "") or None
-
         if canonical == "save":
             return await self._handle_save_command(event)
 
@@ -16051,12 +15979,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if canonical == "usage":
             return await self._handle_usage_command(event)
-
-        if canonical == "insights":
-            return await self._handle_insights_command(event)
-
-        if canonical == "reload-mcp":
-            return await self._handle_reload_mcp_command(event)
 
         if canonical == "reload-skills":
             return await self._handle_reload_skills_command(event)
@@ -19635,40 +19557,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             logger.debug("suggestions command failed: %s", e)
             return f"Suggestions command failed: {e}"
 
-    async def _handle_blueprint_command(self, event: MessageEvent):
-        """Handle /blueprint in the gateway.
-
-        Delegates to the shared handler so CLI, TUI, and gateway never drift.
-        Returns a BlueprintCommandResult: ``text`` is shown to the user, and if
-        ``agent_seed`` is set the dispatch site rewrites ``event.text`` to the
-        seed and falls through to the agent (the ``/steer`` pattern) so the
-        agent gathers the slot values conversationally. Origin is built from the
-        event source so a directly created blueprint job delivers back to this chat.
-        """
-        args = (event.get_command_args() or "").strip()
-        source = event.source
-        origin = None
-        try:
-            platform = getattr(source.platform, "value", None) or str(getattr(source, "platform", "") or "")
-            chat_id = getattr(source, "chat_id", None)
-            if platform and chat_id:
-                origin = {
-                    "platform": platform,
-                    "chat_id": str(chat_id),
-                    "chat_name": getattr(source, "chat_name", None),
-                    "thread_id": getattr(source, "thread_id", None),
-                }
-        except Exception:
-            origin = None
-        try:
-            from pilotage_cli.blueprint_cmd import handle_blueprint_command
-
-            return handle_blueprint_command(args, origin=origin, surface="gateway")
-        except Exception as e:
-            logger.debug("blueprint command failed: %s", e)
-            from pilotage_cli.blueprint_cmd import BlueprintCommandResult
-
-            return BlueprintCommandResult(f"Cron blueprint command failed: {e}")
 
     # ────────────────────────────────────────────────────────────────
     # /goal — persistent cross-turn goals (Ralph-style loop)
@@ -21136,112 +21024,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
 
 
-    async def _execute_mcp_reload(self, event: MessageEvent) -> str:
-        """Actually disconnect, reconnect, and notify MCP tool changes.
-
-        Split out from ``_handle_reload_mcp_command`` so the confirmation
-        wrapper can invoke the same path whether the user confirmed via
-        button, text reply, or has the confirm gate disabled.
-        """
-        loop = asyncio.get_running_loop()
-        try:
-            from tools.mcp_tool import shutdown_mcp_servers, discover_mcp_tools, _servers, _lock
-
-            # Capture old server names before shutdown
-            with _lock:
-                old_servers = set(_servers.keys())
-
-            # Read new config before shutting down, so we know what will be added/removed
-            # Shutdown existing connections
-            await loop.run_in_executor(None, shutdown_mcp_servers)
-
-            # Reconnect by discovering tools (reads config.yaml fresh)
-            new_tools = await loop.run_in_executor(None, discover_mcp_tools)
-
-            # Compute what changed
-            with _lock:
-                connected_servers = set(_servers.keys())
-
-            added = connected_servers - old_servers
-            removed = old_servers - connected_servers
-            reconnected = connected_servers & old_servers
-
-            lines = [t("gateway.reload_mcp.header")]
-            if reconnected:
-                lines.append(t("gateway.reload_mcp.reconnected", names=", ".join(sorted(reconnected))))
-            if added:
-                lines.append(t("gateway.reload_mcp.added", names=", ".join(sorted(added))))
-            if removed:
-                lines.append(t("gateway.reload_mcp.removed", names=", ".join(sorted(removed))))
-            if not connected_servers:
-                lines.append(t("gateway.reload_mcp.none_connected"))
-            else:
-                lines.append(t("gateway.reload_mcp.tools_available", tools=len(new_tools), servers=len(connected_servers)))
-
-            # Refresh cached agents so existing sessions see new MCP tools on
-            # their next turn — without this, the user has to `/new` (which
-            # discards conversation history) to pick up tools from a server
-            # that was just added or reconnected. The user has already
-            # consented to the prompt-cache invalidation via the slash-confirm
-            # gate in _handle_reload_mcp_command before we reach this point.
-            try:
-                from tools.mcp_tool import refresh_agent_mcp_tools
-                _cache = getattr(self, "_agent_cache", None)
-                _cache_lock = getattr(self, "_agent_cache_lock", None)
-                if _cache_lock is not None and _cache:
-                    with _cache_lock:
-                        for _sess_key, _entry in list(_cache.items()):
-                            try:
-                                _agent = _entry[0] if isinstance(_entry, tuple) else _entry
-                            except Exception:
-                                continue
-                            if _agent is None:
-                                continue
-                            # Preserve each cached agent's build-time toolset
-                            # selection EXACTLY: a gateway session built with a
-                            # restricted enabled_toolsets (e.g. ["safe"]) must
-                            # NOT silently gain tools after a reload. This is the
-                            # opposite of the interactive CLI/TUI /reload-mcp,
-                            # which is a single user re-applying their own config
-                            # edit; gateway agents are per-session and may be
-                            # deliberately locked down. (Contract is asserted by
-                            # test_reload_mcp_preserves_per_agent_toolset_overrides.)
-                            refresh_agent_mcp_tools(_agent, quiet_mode=True)
-            except Exception as _exc:
-                logger.debug(
-                    "Failed to update cached agent tools after MCP reload: %s",
-                    _exc,
-                )
-
-            # Inject a message at the END of the session history so the
-            # model knows tools changed on its next turn.  Appended after
-            # all existing messages to preserve prompt-cache for the prefix.
-            change_parts = []
-            if added:
-                change_parts.append(f"Added servers: {', '.join(sorted(added))}")
-            if removed:
-                change_parts.append(f"Removed servers: {', '.join(sorted(removed))}")
-            if reconnected:
-                change_parts.append(f"Reconnected servers: {', '.join(sorted(reconnected))}")
-            tool_summary = f"{len(new_tools)} MCP tool(s) now available" if new_tools else "No MCP tools available"
-            change_detail = ". ".join(change_parts) + ". " if change_parts else ""
-            reload_msg = {
-                "role": "user",
-                "content": f"[IMPORTANT: MCP servers have been reloaded. {change_detail}{tool_summary}. The tool list for this conversation has been updated accordingly.]",
-            }
-            try:
-                session_entry = await self.async_session_store.get_or_create_session(event.source)
-                await self.async_session_store.append_to_transcript(
-                    session_entry.session_id, reload_msg
-                )
-            except Exception:
-                pass  # Best-effort; don't fail the reload over a transcript write
-
-            return "\n".join(lines)
-
-        except Exception as e:
-            logger.warning("MCP reload failed: %s", e)
-            return t("gateway.reload_mcp.failed", error=e)
 
 
 
@@ -27432,7 +27214,6 @@ def _start_gateway_housekeeping(stop_event: threading.Event, adapters=None, loop
     IMAGE_CACHE_EVERY = 60   # ticks — once per hour at default 60s interval
     CHANNEL_DIR_EVERY = 5    # ticks — every 5 minutes
     PASTE_SWEEP_EVERY = 60   # ticks — once per hour
-    CURATOR_EVERY = 60       # ticks — poll hourly (inner gate handles the real cadence)
     AUTO_ARCHIVE_EVERY = 60  # ticks — poll hourly (state_meta gate owns the real cadence)
     MEMORY_TRIM_EVERY = 1    # shared helper cooldown bounds actual allocator work
 
@@ -27488,21 +27269,6 @@ def _start_gateway_housekeeping(stop_event: threading.Event, adapters=None, loop
                     )
             except Exception as e:
                 logger.debug("Paste sweep error: %s", e)
-
-        # Curator — piggy-back on the housekeeping loop so long-running
-        # gateways get weekly skill maintenance without needing restarts.
-        # maybe_run_curator() is internally gated by config.interval_hours
-        # (7 days by default), so CURATOR_EVERY is just the poll rate — the
-        # real work only fires once per config interval.
-        if tick_count % CURATOR_EVERY == 0:
-            try:
-                from agent.curator import maybe_run_curator
-                maybe_run_curator(
-                    idle_for_seconds=float("inf"),
-                    on_summary=lambda msg: logger.info("curator: %s", msg),
-                )
-            except Exception as e:
-                logger.debug("Curator tick error: %s", e)
 
         # Stale-session auto-archive — a live timer, so gateways that stay up
         # for weeks keep sweeping on schedule (the startup hook fires once).
@@ -28082,18 +27848,6 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
 
     _ensure_windows_gateway_venv_imports()
 
-    # MCP tool discovery — run in an executor so the asyncio event loop
-    # stays responsive even when a configured MCP server is slow or
-    # unreachable.  discover_mcp_tools() uses a blocking 120s wait
-    # internally; calling it from the loop thread would freeze platform
-    # heartbeats (Discord shard, Telegram polling) until it returned.
-    # See.
-    try:
-        from tools.mcp_tool import discover_mcp_tools
-        _loop = asyncio.get_running_loop()
-        await _loop.run_in_executor(None, discover_mcp_tools)
-    except Exception as e:
-        logger.debug("MCP tool discovery failed: %s", e)
 
     # Start the gateway
     try:
@@ -28137,11 +27891,6 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 if runner.exit_reason:
                     logger.error("Gateway exiting with failure: %s", runner.exit_reason)
                 return False
-            try:
-                from tools.mcp_tool import shutdown_mcp_servers
-                shutdown_mcp_servers()
-            except Exception:
-                pass
             if runner.exit_code is not None:
                 raise SystemExit(runner.exit_code)
             return True
@@ -28257,13 +28006,6 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # Stop the planned-stop watcher (daemon=True so this is belt-and-suspenders).
     _planned_stop_watcher_stop.set()
     _planned_stop_watcher_thread.join(timeout=2)
-
-    # Close MCP server connections
-    try:
-        from tools.mcp_tool import shutdown_mcp_servers
-        shutdown_mcp_servers()
-    except Exception:
-        pass
 
     if runner.exit_code is not None:
         raise SystemExit(runner.exit_code)

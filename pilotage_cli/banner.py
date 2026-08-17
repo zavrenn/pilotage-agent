@@ -1062,24 +1062,6 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
     # startup path). When neither config.yaml nor the persisted plugin
     # key cache mentions any MCP server, skip the section outright.
     mcp_status = []
-    try:
-        from pilotage_cli.config import load_config as _load_cfg
-        _has_native_mcp = bool((_load_cfg() or {}).get("mcp_servers"))
-    except Exception:
-        _has_native_mcp = True  # can't tell — take the full path
-    _has_portable_mcp = False
-    if not _has_native_mcp:
-        try:
-            from pilotage_cli.plugins import get_portable_mcp_server_names_nowait
-            _has_portable_mcp = bool(get_portable_mcp_server_names_nowait())
-        except Exception:
-            _has_portable_mcp = True  # can't tell — take the full path
-    if _has_native_mcp or _has_portable_mcp:
-        try:
-            from tools.mcp_tool import get_mcp_status
-            mcp_status = get_mcp_status()
-        except Exception:
-            mcp_status = []
 
     if mcp_status:
         right_lines.append("")

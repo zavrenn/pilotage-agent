@@ -427,53 +427,6 @@ def _print_setup_summary(config: dict, pilotage_home):
     else:
         tool_status.append(("Web Search & Extract", False, "EXA_API_KEY, PARALLEL_API_KEY, FIRECRAWL_API_KEY/FIRECRAWL_API_URL, TAVILY_API_KEY, or SEARXNG_URL"))
 
-    # Browser tools (local Chromium, Camofox, Browserbase, Browser Use, or Firecrawl)
-    from pilotage_cli.browser_probe import has_agent_browser, local_browser_runnable
-
-    _browser_cloud = cfg_get(config, "browser", "cloud_provider", default="local") or "local"
-    _browser_labels = {
-        "local": "Local browser",
-        "browserbase": "Browserbase",
-        "browser_use": "Browser Use",
-        "camofox": "Camofox",
-    }
-    browser_provider = _browser_labels.get(_browser_cloud, _browser_cloud)
-    if _browser_cloud == "camofox":
-        _browser_ready = bool(get_env_value("CAMOFOX_URL"))
-    elif _browser_cloud == "browserbase":
-        _browser_ready = bool(
-            get_env_value("BROWSERBASE_API_KEY") and get_env_value("BROWSERBASE_PROJECT_ID")
-        ) and has_agent_browser()
-    elif _browser_cloud == "browser_use":
-        _browser_ready = bool(get_env_value("BROWSER_USE_API_KEY")) and has_agent_browser()
-    else:
-        _browser_ready = local_browser_runnable()
-    if _browser_ready:
-        label = "Browser Automation"
-        if browser_provider and browser_provider != "Local browser":
-            label = f"Browser Automation ({browser_provider})"
-        tool_status.append((label, True, None))
-    else:
-        missing_browser_hint = "npm install -g agent-browser, set CAMOFOX_URL, or configure Browser Use or Browserbase"
-        if browser_provider == "Browserbase":
-            missing_browser_hint = (
-                "npm install -g agent-browser and set "
-                "BROWSERBASE_API_KEY/BROWSERBASE_PROJECT_ID"
-            )
-        elif browser_provider == "Browser Use":
-            missing_browser_hint = (
-                "npm install -g agent-browser and set BROWSER_USE_API_KEY"
-            )
-        elif browser_provider == "Camofox":
-            missing_browser_hint = "CAMOFOX_URL"
-        elif browser_provider == "Local browser":
-            missing_browser_hint = (
-                "npm install -g agent-browser && agent-browser install --with-deps"
-            )
-        tool_status.append(
-            ("Browser Automation", False, missing_browser_hint)
-        )
-
     # Image generation — FAL, or any plugin-registered provider (OpenAI, etc.)
     if get_env_value("FAL_KEY"):
         tool_status.append(("Image Generation", True, None))

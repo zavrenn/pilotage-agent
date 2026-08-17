@@ -156,16 +156,6 @@ def _cleanup_oneshot_runtime() -> None:
     except Exception:
         pass
     try:
-        from tools.browser_tool import _emergency_cleanup_all_sessions
-        _emergency_cleanup_all_sessions()
-    except Exception:
-        pass
-    try:
-        from tools.mcp_tool import shutdown_mcp_servers
-        shutdown_mcp_servers()
-    except BaseException:
-        pass
-    try:
         from agent.auxiliary_client import shutdown_cached_clients
         shutdown_cached_clients()
     except Exception:
@@ -362,7 +352,6 @@ from pilotage_cli.subcommands.pause import build_pause_parser
 from pilotage_cli.subcommands.webhook import build_webhook_parser
 from pilotage_cli.subcommands.hooks import build_hooks_parser
 from pilotage_cli.subcommands.doctor import build_doctor_parser
-from pilotage_cli.subcommands.verify import build_verify_parser
 from pilotage_cli.subcommands.security import build_security_parser
 from pilotage_cli.subcommands.approvals import build_approvals_parser
 from pilotage_cli.subcommands.dump import build_dump_parser
@@ -371,22 +360,17 @@ from pilotage_cli.subcommands.backup import build_backup_parser
 from pilotage_cli.subcommands.import_cmd import build_import_cmd_parser
 from pilotage_cli.subcommands.import_agent import build_import_agent_parser
 from pilotage_cli.subcommands.config import build_config_parser
-from pilotage_cli.subcommands.skin import build_skin_parser
 from pilotage_cli.subcommands.console import build_console_parser
 from pilotage_cli.subcommands.version import build_version_parser
-from pilotage_cli.subcommands.update import build_update_parser
 from pilotage_cli.subcommands.uninstall import build_uninstall_parser
 from pilotage_cli.subcommands.logs import build_logs_parser
 from pilotage_cli.subcommands.prompt_size import build_prompt_size_parser
 from pilotage_cli.subcommands.memory import build_memory_parser
 from pilotage_cli.subcommands.tools import build_tools_parser
-from pilotage_cli.subcommands.insights import build_insights_parser
 from pilotage_cli.subcommands.monitoring import build_monitoring_parser
 from pilotage_cli.subcommands.skills import build_skills_parser
 from pilotage_cli.subcommands.pairing import build_pairing_parser
 from pilotage_cli.subcommands.plugins import build_plugins_parser
-from pilotage_cli.subcommands.mcp import build_mcp_parser
-from pilotage_cli.subcommands.claw import build_claw_parser
 
 
 def _require_tty(command_name: str) -> None:
@@ -435,7 +419,7 @@ def _apply_profile_override() -> None:
         ``--profile``), not to Pilotage' own profile selector.
         """
         try:
-            mcp_index = argv.index("mcp", 0, index)
+            mcp_index = argv.index(0, index)
             argv.index("add", mcp_index + 1, index)
         except ValueError:
             return False
@@ -2484,7 +2468,7 @@ _AUX_TASKS: list[tuple[str, str, str]] = [
     ("compression", "Compression", "context summarization"),
     ("web_extract", "Web extract", "web page summarization"),
     ("approval", "Approval", "smart command approval"),
-    ("mcp", "MCP", "MCP tool reasoning"),
+    ("MCP", "MCP tool reasoning"),
     ("title_generation", "Title generation", "session titles"),
     ("memory_query_rewrite", "Memory query rewrite", "memory retrieval queries"),
     ("tts_audio_tags", "TTS audio tags", "Gemini TTS tag insertion"),
@@ -2492,7 +2476,7 @@ _AUX_TASKS: list[tuple[str, str, str]] = [
     ("triage_specifier", "Triage specifier", "kanban spec fleshing"),
     ("kanban_decomposer", "Kanban decomposer", "task decomposition"),
     ("profile_describer", "Profile describer", "auto profile descriptions"),
-    ("curator", "Curator", "skill-usage review pass"),
+    ("Curator", "skill-usage review pass"),
 ]
 
 
@@ -3160,86 +3144,6 @@ _LAZY_COMMAND_EXPORTS = {
     "pilotage_cli.sessions_cmd": (
         "cmd_sessions",
     ),
-    "pilotage_cli.update_cmd": (
-        "_abort_dependency_sync_if_self_locked",
-        "_add_upstream_remote",
-        "_atomic_replace_dir",
-        "_capture_active_lazy_features",
-        "_capture_active_tool_dependencies",
-        "_capture_head_sha",
-        "_cmd_update_check",
-        "_cmd_update_impl",
-        "_cold_start_windows_gateway_after_update",
-        "_count_commits_between",
-        "_dependency_sync_would_rewrite",
-        "_detect_self_loaded_native_modules",
-        "_detect_venv_python_processes",
-        "_defer_update_for_self_lock",
-        "_discard_lockfile_churn",
-        "_discard_stashed_changes",
-        "_ensure_fhs_path_guard",
-        "_ensure_uv_for_termux",
-        "_for_each_systemd_gateway_unit",
-        "_format_concurrent_instances_message",
-        "_format_time_ago",
-        "_format_venv_python_holders_message",
-        "_gateway_prompt",
-        "_get_origin_url",
-        "_has_upstream_remote",
-        "_install_psutil_android_compat",
-        "_invalidate_update_cache",
-        "_is_android_python",
-        "_is_fork",
-        "_leftover_pausable_gateway_pids",
-        "_log_only_write",
-        "_mark_skip_upstream_prompt",
-        "_pause_windows_gateways_for_update",
-        "_print_curator_first_run_notice",
-        "_print_curator_recent_run_notice",
-        "_print_fts_optimize_available_notice",
-        "_print_stash_cleanup_guidance",
-        "_print_update_completion",
-        "_refresh_active_lazy_features",
-        "_refresh_active_memory_provider_dependencies",
-        "_refresh_bootstrap_cache_scripts",
-        "_refresh_windows_gateway_launchers",
-        "_reload_updated_runtime_modules",
-        "_resolve_pre_update_backup_mode",
-        "_resolve_stash_selector",
-        "_restart_phase_failure_is_incomplete",
-        "_restore_active_tool_dependencies",
-        "_restore_stashed_changes",
-        "_resume_windows_gateways_after_update",
-        "_run_logged_subprocess",
-        "_run_pre_update_backup",
-        "_should_skip_upstream_prompt",
-        "_stash_apply_failed_only_on_existing_untracked",
-        "_stash_local_changes_if_needed",
-        "_surviving_gateway_pids_after_failed_restart",
-        "_sync_fork_with_upstream",
-        "_sync_with_upstream_if_needed",
-        "_update_via_zip",
-        "_upgrade_pip_before_lazy_refresh",
-        "_validate_critical_files_syntax",
-        "_validate_critical_modules_import",
-        "_venv_core_imports_healthy",
-        "_venv_launcher_ancestors",
-        "_wait_for_windows_update_gateway_exit",
-        "_warn_gateway_restart_phase_aborted",
-        "_warn_incomplete_gateway_fleet_restart",
-        "_write_lazy_refresh_incomplete_marker",
-        "_write_marker_file",
-        "_write_update_incomplete_marker",
-        "_write_update_planned_stop_marker",
-        "_UPDATE_RUNTIME_RELOAD_MODULES",
-        "_UPDATE_CRITICAL_FILES",
-        "_UPDATE_CRITICAL_MODULES",
-        "OFFICIAL_REPO_URLS",
-        "OFFICIAL_REPO_URL",
-        "SKIP_UPSTREAM_PROMPT_FILE",
-        "_PRE_UPDATE_SNAPSHOT_KEEP",
-        "_PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE",
-    ),
 }
 
 _LAZY_COMMAND_ATTR_TO_MODULE = {
@@ -3549,13 +3453,6 @@ def cmd_doctor(args):
     run_doctor(args)
 
 
-def cmd_verify(args):
-    """Detect a project's run recipe and smoke-test it."""
-    from pilotage_cli.verify_cmd import run_verify_command
-
-    sys.exit(run_verify_command(args))
-
-
 def cmd_security(args):
     """Dispatch `pilotage security <subcmd>`."""
     sub = getattr(args, "security_command", None)
@@ -3598,13 +3495,6 @@ def cmd_config(args):
     from pilotage_cli.config import config_command
 
     config_command(args)
-
-
-def cmd_skin(args):
-    """Skin management (list / use / set)."""
-    from pilotage_cli.skin_cmd import skin_command
-
-    skin_command(args)
 
 
 def cmd_backup(args):
@@ -5197,81 +5087,6 @@ def _size_delta_label(saved_mb: float) -> str:
     return f"grew by {-saved_mb:.1f} MB"
 
 
-def cmd_update(args):
-    """Update Pilotage Agent to the latest version.
-
-    Thin wrapper around ``_cmd_update_impl``: installs hangup protection,
-    runs the update, then restores stdio on the way out (even on
-    ``sys.exit`` or unhandled exceptions).
-    """
-    from pilotage_cli.config import (
-        detect_install_method,
-        format_docker_update_message,
-        is_managed,
-        managed_error,
-        recommended_update_command_for_method,
-    )
-
-    if is_managed():
-        managed_error("update Pilotage Agent")
-        return
-
-    # Docker users can't ``git pull`` — the image excludes ``.git`` from
-    # the build context.  Bail with a friendly explanation pointing at
-    # ``docker pull`` BEFORE any of the apply-path / check-path branches
-    # below get a chance to error out with misleading "Not a git
-    # repository" text.  See format_docker_update_message() for the full
-    # rationale and tag-pinning / config-persistence notes.
-    install_method = detect_install_method(PROJECT_ROOT)
-    if install_method == "docker":
-        print(format_docker_update_message())
-        sys.exit(1)
-
-    if install_method in {"nix", "nixos"}:
-        print(recommended_update_command_for_method(install_method))
-        sys.exit(1)
-
-    if getattr(args, "check", False):
-        # --check honors --branch so the "any new commits?" answer matches
-        # what a subsequent `pilotage update --branch=<x>` would actually pull.
-        branch = _resolve_update_branch(args)
-        _self()._cmd_update_check(
-            branch=branch,
-            branch_explicit=bool(getattr(args, "branch", None)),
-        )
-        return
-
-    gateway_mode = getattr(args, "gateway", False)
-
-    # Protect against mid-update terminal disconnects (SIGHUP) and tolerate
-    # writes to a closed stdout.  No-op in gateway mode.  See
-    # _install_hangup_protection for rationale.
-    _update_io_state = _install_hangup_protection(gateway_mode=gateway_mode)
-    # Cross-process mutual exclusion. The dashboard's Update button spawns
-    # this same command detached, and the desktop hands off to the Tauri
-    # updater / install-mode bootstrap — all three mutate one checkout. Two of
-    # them running together rewrite source under a live interpreter and strand
-    # the tree half-updated. Share the marker the Tauri updater and Electron
-    # already use rather than inventing a second lock.
-    from pilotage_cli.update_lock import (
-        UPDATE_EXIT_CONCURRENT,
-        UpdateLock,
-        describe_holder,
-    )
-
-    _update_lock = UpdateLock()
-    if not _update_lock.acquire():
-        print(describe_holder(_update_lock.holder))
-        _finalize_update_output(_update_io_state)
-        sys.exit(UPDATE_EXIT_CONCURRENT)
-
-    try:
-        _self()._cmd_update_impl(args, gateway_mode=gateway_mode)
-    finally:
-        _update_lock.release()
-        _finalize_update_output(_update_io_state)
-
-
 def _coalesce_session_name_args(argv: list) -> list:
     """Join unquoted multi-word session names after -c/--continue and -r/--resume.
 
@@ -5300,15 +5115,11 @@ def _coalesce_session_name_args(argv: list) -> list:
         "pairing",
         "skills",
         "tools",
-        "mcp",
         "sessions",
-        "insights",
         "version",
-        "update",
         "uninstall",
         "profile",
         "honcho",
-        "claw",
         "plugins",
         "security",
         "acp",
@@ -6072,19 +5883,17 @@ def _build_provider_choices() -> list[str]:
 # to parse.
 _BUILTIN_SUBCOMMANDS = frozenset(
     {
-        "approvals", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
-        "config", "console", "cron", "curator", "debug", "doctor",
-        "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
-        "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory",
-        "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "pets", "plugins", "portal", "profile",
+        "approvals", "auth", "backup", "bundles", "checkpoints", "completion",
+        "config", "console", "cron", "debug", "doctor",
+        "dump", "fallback", "gateway", "hooks", "import", "import-agent",
+        "gui", "desktop", "kanban", "login", "logout", "logs", "memory",
+        "model", "monitoring", "pairing", "pause", "plugins", "portal", "profile",
         "project",
         "prompt-size",
         "resume",
         "send", "sessions", "setup",
-        "skin", "skills", "slack", "status", "sync", "tools", "uninstall", "update",
-        "version", "webhook", "whatsapp", "whatsapp-cloud", "chat", "secrets", "security",
-        "verify",
+        "skills", "slack", "status", "sync", "tools", "uninstall",
+        "version", "webhook", "whatsapp", "whatsapp-cloud", "chat", "security",
         # Help-ish invocations — plugin commands not being listed in
         # top-level --help is an acceptable trade-off for skipping an
         # expensive eager import of every bundled plugin module.
@@ -6216,20 +6025,6 @@ def _is_tui_chat_launch(args) -> bool:
     return bool(getattr(args, "tui", False) or os.environ.get("PILOTAGE_TUI") == "1")
 
 
-def _command_has_dedicated_mcp_startup(args) -> bool:
-    if args.command == "gateway" and getattr(args, "gateway_command", None) == "run":
-        return True
-    if args.command == "cron" and getattr(args, "cron_command", None) in {"run", "tick"}:
-        return True
-    return False
-
-
-def _should_background_mcp_startup(args) -> bool:
-    if _is_tui_chat_launch(args):
-        return False
-    return args.command in {None, "chat", "rl"}
-
-
 def _prepare_agent_startup(args) -> None:
     """Discover plugins/MCP/hooks for commands that can run an agent turn."""
     # --yolo: chokepoint guarantee that PILOTAGE_YOLO_MODE is set before ANY
@@ -6268,42 +6063,6 @@ def _prepare_agent_startup(args) -> None:
         except Exception:
             logger.warning(
                 "plugin discovery failed at CLI startup",
-                exc_info=True,
-            )
-    _run_inline_mcp_discovery = True
-    if _is_tui_chat_launch(args):
-        # The TUI launcher hands off to a dedicated startup path that already
-        # backgrounds MCP discovery with a bounded join before the first tool
-        # snapshot.
-        _run_inline_mcp_discovery = False
-    elif _command_has_dedicated_mcp_startup(args):
-        # These entrypoints already do their own MCP startup later on the real
-        # runtime path (gateway executor, ACP launcher, cron job runner).
-        _run_inline_mcp_discovery = False
-    elif _should_background_mcp_startup(args):
-        try:
-            from pilotage_cli.mcp_startup import start_background_mcp_discovery
-
-            start_background_mcp_discovery(
-                logger=logger,
-                thread_name="cli-mcp-discovery",
-            )
-        except Exception:
-            logger.debug(
-                "Background MCP tool discovery failed at CLI startup",
-                exc_info=True,
-            )
-        _run_inline_mcp_discovery = False
-    if _run_inline_mcp_discovery:
-        try:
-            # MCP tool discovery remains synchronous for entrypoints that do
-            # not own a later bounded/executor startup path.
-            from tools.mcp_tool import discover_mcp_tools
-
-            discover_mcp_tools()
-        except Exception:
-            logger.debug(
-                "MCP tool discovery failed at CLI startup",
                 exc_info=True,
             )
     try:
@@ -6563,84 +6322,6 @@ def cmd_tools(args):
         tools_command(args)
 
 
-def cmd_insights(args):
-    db = None
-    try:
-        from pilotage_state import SessionDB
-        from agent.insights import InsightsEngine
-
-        db = SessionDB()
-        engine = InsightsEngine(db)
-        report = engine.generate(days=args.days, source=args.source)
-        print(engine.format_terminal(report))
-    except Exception as e:
-        print(f"Error generating insights: {e}")
-    finally:
-        if db is not None:
-            try:
-                db.close()
-            except Exception:
-                pass
-
-
-def cmd_monitoring(args):
-    """Gateway monitoring status: health & diagnostics export posture."""
-    from pilotage_cli.config import load_config
-
-    action = getattr(args, "monitoring_action", None) or "status"
-    config = load_config()
-    mon_raw = config.get("monitoring")
-    mon: dict = mon_raw if isinstance(mon_raw, dict) else {}
-
-    if action == "status":
-        from agent.monitoring import otlp_exporter
-
-        gh_raw = mon.get("gateway_health_export")
-        gh: dict = gh_raw if isinstance(gh_raw, dict) else {}
-        export_raw = mon.get("export")
-        export_cfg: dict = export_raw if isinstance(export_raw, dict) else {}
-        otlp_raw = export_cfg.get("otlp")
-        otlp: dict = otlp_raw if isinstance(otlp_raw, dict) else {}
-
-        print("Gateway monitoring")
-        print(f"  Health export:  {'enabled' if gh.get('enabled') else 'disabled'} "
-              f"(monitoring.gateway_health_export.enabled)")
-        if gh.get("enabled"):
-            print(f"    Metrics:            {'on' if gh.get('metrics_enabled', True) else 'off'} "
-                  f"(interval {gh.get('export_interval_seconds', 60)}s)")
-            print(f"    Diagnostic events:  {'on' if gh.get('diagnostic_events_enabled', True) else 'off'}")
-            print(f"    Warning/error logs: {'on' if gh.get('warning_error_events_enabled', True) else 'off'} "
-                  f"(interval {gh.get('logs_export_interval_seconds', 5)}s)")
-            print("    Content safety:     always on "
-                  "(rendered messages are never exported; not configurable)")
-        endpoint = otlp.get("endpoint") or ""
-        if otlp.get("enabled") and endpoint:
-            print(f"  OTLP endpoint:  {endpoint}")
-        else:
-            print("  OTLP endpoint:  not configured (monitoring.export.otlp)")
-        print(f"  OTel SDK:       {'installed' if otlp_exporter.is_available() else 'not installed'} "
-              f"(optional extra: pilotage-agent[otlp])")
-        print("\n  Scope: gateway service health + redacted diagnostics only.")
-        print("  No prompts, messages, tool args/results, usage analytics, or traces.")
-        return
-
-    print(f"Unknown monitoring action: {action}", file=sys.stderr)
-    sys.exit(2)
-
-
-def cmd_skills(args):
-    # Route 'config' action to skills_config module
-    if getattr(args, "skills_action", None) == "config":
-        _require_tty("skills config")
-        from pilotage_cli.skills_config import skills_command as skills_config_command
-
-        skills_config_command(args)
-    else:
-        from pilotage_cli.skills_hub import skills_command
-
-        skills_command(args)
-
-
 def cmd_pairing(args):
     from pilotage_cli.pairing import pairing_command
 
@@ -6651,18 +6332,6 @@ def cmd_plugins(args):
     from pilotage_cli.plugins_cmd import plugins_command
 
     plugins_command(args)
-
-
-def cmd_mcp(args):
-    from pilotage_cli.mcp_config import mcp_command
-
-    mcp_command(args)
-
-
-def cmd_claw(args):
-    from pilotage_cli.claw import claw_command
-
-    claw_command(args)
 
 
 def _advertise_agent_env() -> None:
@@ -6783,82 +6452,6 @@ def main():
     # =========================================================================
     # secrets command — external secret managers (Bitwarden, 1Password)
     # =========================================================================
-    secrets_parser = subparsers.add_parser(
-        "secrets",
-        help="Manage external secret sources (Bitwarden, 1Password)",
-        description=(
-            "Pull API keys from an external secret manager at process startup "
-            "instead of storing them in ~/.pilotage/.env.  Supports Bitwarden "
-            "Secrets Manager and 1Password.  See: "
-            ""
-        ),
-    )
-    secrets_subparsers = secrets_parser.add_subparsers(dest="secrets_command")
-
-    secrets_bw = secrets_subparsers.add_parser(
-        "bitwarden",
-        aliases=["bw"],
-        help="Bitwarden Secrets Manager integration",
-    )
-
-    secrets_op = secrets_subparsers.add_parser(
-        "onepassword",
-        aliases=["op", "1password"],
-        help="1Password (op:// references) integration",
-    )
-
-    # Lazy-import secrets_cli: the module imports agent.secret_sources.bitwarden
-    # which loads cryptography._rust.pyd.  On Windows this maps the native
-    # extension into the updater process, causing the self-lock preflight to
-    # defer. secrets_cli defers its backend import to first use
-    # (module-level __getattr__ + handler-level _load_bw()), so register_cli
-    # at parse time only wires argparse structure with no crypto cost.
-    from pilotage_cli import secrets_cli as _secrets_cli
-    from pilotage_cli import onepassword_secrets_cli as _op_secrets_cli
-
-    _secrets_cli.register_cli(secrets_bw)
-    _op_secrets_cli.register_cli(secrets_op)
-
-    def _dispatch_secrets(args):  # noqa: ANN001
-        sub = getattr(args, "secrets_command", None)
-        if sub is None:
-            secrets_parser.print_help()
-            return 0
-        return args.func(args)
-
-    secrets_parser.set_defaults(func=_dispatch_secrets)
-
-    # =========================================================================
-    # egress command — iron-proxy outbound credential-injection firewall
-    # =========================================================================
-    # NOTE: this is the OUTBOUND egress firewall (ironsh/iron-proxy).
-    # `pilotage proxy` (defined elsewhere in this file) is a separate INBOUND
-    # OAuth-aggregator reverse proxy.  Different direction, different purpose.
-    egress_parser = subparsers.add_parser(
-        "egress",
-        help="Manage the iron-proxy egress credential-injection firewall",
-        description=(
-            "Manage iron-proxy, the optional TLS-intercepting egress firewall "
-            "that swaps proxy tokens for real API credentials before outbound "
-            "requests leave a sandbox.  Disabled by default.  See: "
-            ""
-        ),
-    )
-
-    from pilotage_cli import proxy_cli as _proxy_cli
-    _proxy_cli.register_cli(egress_parser)
-
-    def _dispatch_egress(args):  # noqa: ANN001
-        # The egress subparser uses dest='egress_command' to stay disjoint
-        # from the inbound OAuth ``pilotage proxy`` subparser (dest='proxy_command').
-        sub = getattr(args, "egress_command", None)
-        if sub is not None and hasattr(args, "func") and args.func is not _dispatch_egress:
-            return args.func(args)
-        egress_parser.print_help()
-        return 0
-
-    egress_parser.set_defaults(func=_dispatch_egress)
-
     # =========================================================================
     # gateway command  (parser built in pilotage_cli/subcommands/gateway.py)
     # =========================================================================
@@ -6867,13 +6460,6 @@ def main():
     # =========================================================================
     # lsp command
     # =========================================================================
-    try:
-        from agent.lsp.cli import register_subparser as _lsp_register
-        _lsp_register(subparsers)
-    except Exception as _lsp_err:  # noqa: BLE001
-        # LSP is optional infrastructure — never let a registration
-        # failure break the CLI overall.
-        logger.debug("LSP CLI registration failed: %s", _lsp_err)
 
     # =========================================================================
     # setup command  (parser built in pilotage_cli/subcommands/setup.py)
@@ -6973,7 +6559,6 @@ def main():
     # =========================================================================
     # verify command  (parser built in pilotage_cli/subcommands/verify.py)
     # =========================================================================
-    build_verify_parser(subparsers, cmd_verify=cmd_verify)
 
     # =========================================================================
     # security command — on-demand supply-chain audit
@@ -7038,7 +6623,6 @@ def main():
     # =========================================================================
     # skin command  (parser built in pilotage_cli/subcommands/skin.py)
     # =========================================================================
-    build_skin_parser(subparsers, cmd_skin=cmd_skin)
 
     # =========================================================================
     # console command  (parser built in pilotage_cli/subcommands/console.py)
@@ -7127,68 +6711,6 @@ def main():
             logging.getLogger(__name__).debug("Plugin CLI discovery failed: %s", _exc)
 
     # =========================================================================
-    # curator command — background skill maintenance
-    # =========================================================================
-    curator_parser = subparsers.add_parser(
-        "curator",
-        help="Background skill maintenance (curator) — status, run, pause, pin",
-        description=(
-            "The curator is an auxiliary-model background task that "
-            "periodically reviews agent-created skills, prunes stale ones, "
-            "consolidates overlaps, and archives obsolete skills. "
-            "Bundled and hub-installed skills are never touched. "
-            "Archives are recoverable; auto-deletion never happens."
-        ),
-    )
-    try:
-        from pilotage_cli.curator import register_cli as _register_curator_cli
-
-        _register_curator_cli(curator_parser)
-    except Exception as _exc:
-        logging.getLogger(__name__).debug("curator CLI wiring failed: %s", _exc)
-
-    # =========================================================================
-    # pets command — petdex animated mascots (CLI / TUI / desktop display)
-    # =========================================================================
-    pets_parser = subparsers.add_parser(
-        "pets",
-        help="Browse, install, and select petdex animated pets",
-        description=(
-            "Petdex (https://github.com/crafter-station/petdex) is a public "
-            "gallery of animated sprite pets for coding agents. Install one "
-            "and Pilotage shows it reacting to agent activity across the CLI, "
-            "TUI, and desktop app."
-        ),
-    )
-    try:
-        from pilotage_cli.pets import register_cli as _register_pets_cli
-
-        _register_pets_cli(pets_parser)
-    except Exception as _exc:
-        logging.getLogger(__name__).debug("pets CLI wiring failed: %s", _exc)
-
-    # =========================================================================
-    # journey command — learned skills + memories over time, in the terminal
-    # =========================================================================
-    journey_parser = subparsers.add_parser(
-        "journey",
-        aliases=["learning", "memory-graph"],
-        help="Timeline of learned skills + memories over time",
-        description=(
-            "A terminal rendition of the desktop Star Map / Memory Graph: a "
-            "timeline bar chart of learned skills and memories over time "
-            "(oldest at top, newest at bottom) plus a playable constellation "
-            "scrubber. Mirrors the TUI `/journey` overlay and the desktop panel."
-        ),
-    )
-    try:
-        from pilotage_cli.journey import register_cli as _register_journey_cli
-
-        _register_journey_cli(journey_parser)
-    except Exception as _exc:
-        logging.getLogger(__name__).debug("journey CLI wiring failed: %s", _exc)
-
-    # =========================================================================
     # memory command  (parser built in pilotage_cli/subcommands/memory.py)
     # =========================================================================
     build_memory_parser(subparsers, cmd_memory=cmd_memory)
@@ -7201,7 +6723,6 @@ def main():
     # =========================================================================
     # mcp command  (parser built in pilotage_cli/subcommands/mcp.py)
     # =========================================================================
-    build_mcp_parser(subparsers, cmd_mcp=cmd_mcp)
 
     # =========================================================================
     # sessions command
@@ -7666,13 +7187,11 @@ def main():
     # =========================================================================
     # insights command  (parser built in pilotage_cli/subcommands/insights.py)
     # =========================================================================
-    build_insights_parser(subparsers, cmd_insights=cmd_insights)
     build_monitoring_parser(subparsers, cmd_monitoring=cmd_monitoring)
 
     # =========================================================================
     # claw command  (parser built in pilotage_cli/subcommands/claw.py)
     # =========================================================================
-    build_claw_parser(subparsers, cmd_claw=cmd_claw)
 
     # =========================================================================
     # version command  (parser built in pilotage_cli/subcommands/version.py)
@@ -7682,7 +7201,6 @@ def main():
     # =========================================================================
     # update command  (parser built in pilotage_cli/subcommands/update.py)
     # =========================================================================
-    build_update_parser(subparsers, cmd_update=cmd_update)
 
     # =========================================================================
     # uninstall command  (parser built in pilotage_cli/subcommands/uninstall.py)

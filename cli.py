@@ -216,12 +216,6 @@ _COMMAND_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 # Load .env from ~/.pilotage/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
 from pilotage_constants import get_pilotage_home, display_pilotage_home
-from pilotage_cli.browser_connect import (
-    DEFAULT_BROWSER_CDP_URL,
-    is_browser_debug_ready,
-    manual_chrome_debug_command,
-    try_launch_chrome_debug,
-)
 from pilotage_cli.env_loader import load_pilotage_dotenv
 from utils import base_url_host_matches, base_url_hostname, fast_safe_load
 
@@ -899,10 +893,8 @@ def AIAgent(*args, **kwargs):
 
 
 def get_tool_definitions(*args, **kwargs):
-    from pilotage_cli.mcp_startup import wait_for_mcp_discovery
     from model_tools import get_tool_definitions as _get_tool_definitions
 
-    wait_for_mcp_discovery()
     return _get_tool_definitions(*args, **kwargs)
 
 
@@ -974,11 +966,6 @@ def set_secret_capture_callback(*args, **kwargs):
     return _set_secret_capture_callback(*args, **kwargs)
 
 
-def _cleanup_all_browsers(*args, **kwargs):
-    from tools.browser_tool import _emergency_cleanup_all_sessions
-
-    return _emergency_cleanup_all_sessions(*args, **kwargs)
-
 # Guard to prevent cleanup from running multiple times on exit
 _cleanup_done = False
 _cli_wake_owner = None
@@ -1023,18 +1010,6 @@ def _prepare_deferred_agent_startup() -> None:
     except Exception:
         logger.warning(
             "plugin discovery failed at deferred CLI startup",
-            exc_info=True,
-        )
-    try:
-        from pilotage_cli.mcp_startup import start_background_mcp_discovery
-
-        start_background_mcp_discovery(
-            logger=logger,
-            thread_name="termux-cli-mcp-discovery",
-        )
-    except Exception:
-        logger.debug(
-            "MCP tool discovery failed at deferred CLI startup",
             exc_info=True,
         )
     try:
@@ -1196,15 +1171,6 @@ def _run_cleanup(*, notify_session_finalize: bool = True):
         from tools.async_delegation import interrupt_all as _interrupt_async_delegations
         _interrupt_async_delegations(reason="CLI shutdown")
     except Exception:
-        pass
-    try:
-        _cleanup_all_browsers()
-    except Exception:
-        pass
-    try:
-        from tools.mcp_tool import shutdown_mcp_servers
-        shutdown_mcp_servers()
-    except BaseException:
         pass
     # Close cached auxiliary LLM clients (sync + async) so that
     # AsyncHttpxClientWrapper.__del__ doesn't fire on a closed event loop
@@ -6174,69 +6140,35 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
     _PET_FRAME_INTERVAL = 0.16
     _PET_CFG_INTERVAL = 2.5
 
-    def _pet_resolve_config(self) -> None:
-        """(Re)resolve the active pet from config — picks up live enable/disable/
-
-        switch made via ``/pet`` or ``pilotage pets`` without a restart, mirroring
-        the TUI's steady poll. Cheap and fail-open: any problem disables the pet.
-        """
-        try:
-            from agent.pet import constants, store
-            from agent.pet.render import PetRenderer
-            from pilotage_cli.config import load_config
-
-            cfg = load_config()
-            display = cfg.get("display", {}) if isinstance(cfg.get("display"), dict) else {}
-            pet_cfg = display.get("pet", {}) if isinstance(display.get("pet"), dict) else {}
-
-            from utils import is_truthy_value
-
-            enabled = is_truthy_value(pet_cfg.get("enabled"), default=False)
-            slug = str(pet_cfg.get("slug", "") or "")
-            scale = float(pet_cfg.get("scale", constants.DEFAULT_SCALE) or constants.DEFAULT_SCALE)
-            cols = constants.resolve_cols(scale, pet_cfg.get("unicode_cols", 0))
-
-            if not enabled:
-                with self._pet_lock:
-                    self._pet_enabled = False
-                    self._pet_renderer = None
-                    self._pet_frames_cache.clear()
-                return
-
-            pet = store.resolve_active_pet(slug)
-            if pet is None or not pet.exists:
-                with self._pet_lock:
-                    self._pet_enabled = False
-                    self._pet_renderer = None
-                    self._pet_frames_cache.clear()
-                return
-
-            with self._pet_lock:
-                # Rebuild only when the resolved pet or geometry changes.
-                if (
-                    self._pet_renderer is None
-                    or self._pet_slug != pet.slug
-                    or self._pet_cols != cols
-                    or self._pet_scale != scale
-                ):
-                    self._pet_renderer = PetRenderer(
-                        str(pet.spritesheet), mode="unicode", scale=scale, unicode_cols=cols
-                    )
-                    self._pet_slug = pet.slug
-                    self._pet_cols = cols
-                    self._pet_scale = scale
-                    self._pet_frames_cache.clear()
-                    self._pet_frame_idx = 0
-                self._pet_enabled = True
-        except Exception:
-            with self._pet_lock:
-                self._pet_enabled = False
-                self._pet_renderer = None
 
     def _pet_flash(self, state: str, secs: float = 1.6) -> None:
         """Briefly force a transient reaction (wave/jump/failed) before resting."""
         self._pet_event = state
         self._pet_event_until = time.monotonic() + secs
+
+    # ------------------------------------------------------------------
+    # Stubs for subsystems removed from the core (pet mascot, browser,
+    # MCP client, insights).  Call sites in this file stay wired so the
+    # interactive loop keeps working until it is rebuilt.
+    # ------------------------------------------------------------------
+    def _pet_resolve_config(self) -> None:
+        self._pet_enabled = False
+        self._pet_renderer = None
+
+    def _pet_react_turn_end(self) -> None:
+        return
+
+    def _derive_pet_state(self) -> str:
+        return "idle"
+
+    def _show_browser_backend_notice(self) -> None:
+        return
+
+    def _show_insights(self, cmd_original: str = "") -> None:
+        self._console_print("[yellow]Insights are not available in this build.[/yellow]")
+
+    def _reload_mcp(self) -> None:
+        self._console_print("[yellow]MCP support is not available in this build.[/yellow]")
 
     def _on_reaction(self, kind: str) -> None:
         """User affection (ily / <3 / good bot), core-detected — the pet's share
@@ -6244,51 +6176,7 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
         if kind == "vibe":
             self._pet_flash("jump")
 
-    def _pet_react_turn_end(self) -> None:
-        """Flash the end-of-turn beat: failed on error, jump on a finished plan, else wave."""
-        if not self._pet_enabled:
-            return
-        from agent.pet.state import todos_all_done
 
-        if self._pet_turn_error:
-            self._pet_flash("failed")
-            return
-        try:
-            store = getattr(self.agent, "_todo_store", None)
-            done = todos_all_done(store.read()) if store else False
-        except Exception:
-            done = False
-        self._pet_flash("jump" if done else "wave")
-
-    def _derive_pet_state(self) -> str:
-        """Map current CLI activity to a pet animation state.
-
-        A transient reaction beat (wave/jump/failed) wins while it's live;
-        otherwise the steady state comes from the shared
-        :func:`agent.pet.state.derive_pet_state` so the CLI can't drift from the
-        TUI/desktop priority order.
-        """
-        if self._pet_event and time.monotonic() < self._pet_event_until:
-            return self._pet_event
-        self._pet_event = ""
-        from agent.pet.state import derive_pet_state
-
-        # A live blocking modal (approval / clarify / sudo / secret / slash
-        # confirm) means the agent is paused on the user → the `waiting` pose,
-        # which outranks the in-flight signals in derive_pet_state.
-        awaiting_input = bool(
-            self._approval_state
-            or self._clarify_state
-            or self._sudo_state
-            or self._secret_state
-            or getattr(self, "_slash_confirm_state", None)
-        )
-
-        return derive_pet_state(
-            awaiting_input=awaiting_input,
-            busy=getattr(self, "_agent_running", False),
-            reasoning=self._pet_reasoning,
-        ).value
 
     def _pet_frames_for(self, state: str) -> list:
         """Return (and cache) the half-block grids for one state."""
@@ -7714,24 +7602,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
             # logged at DEBUG by the advisory module.
             pass
 
-    def _show_browser_backend_notice(self):
-        """One-time hint when the default Browser Use backend isn't runnable.
-
-        Browser Use mode is the default browser backend, but it silently
-        falls back to the built-in browser tools when neither the
-        browser-use CLI nor uvx can be found. Surface that downgrade once
-        per 24h so users know why browsing behaves differently and how to
-        fix it (rate limiting lives in default_downgrade_notice()).
-        """
-        try:
-            from tools.browser_use_cli import default_downgrade_notice
-
-            notice = default_downgrade_notice()
-            if notice:
-                self._console_print(f"[yellow]⚠ {notice}[/yellow]")
-        except Exception:
-            # Never let a hint block startup.
-            logger.debug("browser backend notice failed", exc_info=True)
 
     def finalize_preloaded_skills(self) -> None:
         """Join the background --skills preload and fold it into the prompt.
@@ -11159,8 +11029,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 self._reload_skills()
         elif canonical == "bundles":
             self._handle_bundles_command(cmd_original)
-        elif canonical == "browser":
-            self._handle_browser_command(cmd_original)
         elif canonical == "plugins":
             try:
                 # Discover from disk (bundled + user), matching `pilotage plugins
@@ -11479,16 +11347,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
         return True
     
 
-    @staticmethod
-    def _try_launch_chrome_debug(port: int, system: str) -> bool:
-        """Try to launch a Chromium-family browser with remote debugging enabled.
-
-        Uses a dedicated user-data-dir so the debug instance doesn't conflict
-        with an already-running browser using the default profile.
-
-        Returns True if a launch command was executed (doesn't guarantee success).
-        """
-        return try_launch_chrome_debug(port, system)
 
 
 
@@ -12546,43 +12404,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
             # Console quietness is enforced by pilotage_logging not
             # installing a console StreamHandler in non-verbose mode.
 
-    def _show_insights(self, command: str = "/insights"):
-        """Show usage insights and analytics from session history."""
-        # Parse optional --days flag
-        parts = command.split()
-        days = 30
-        source = None
-        i = 1
-        while i < len(parts):
-            if parts[i] == "--days" and i + 1 < len(parts):
-                try:
-                    days = int(parts[i + 1])
-                except ValueError:
-                    print(f"  Invalid --days value: {parts[i + 1]}")
-                    return
-                i += 2
-            elif parts[i] == "--source" and i + 1 < len(parts):
-                source = parts[i + 1]
-                i += 2
-            elif parts[i].isdigit():
-                days = int(parts[i])
-                i += 1
-            else:
-                i += 1
-
-        try:
-            from pilotage_state import SessionDB
-            from agent.insights import InsightsEngine
-
-            db = SessionDB()
-            try:
-                engine = InsightsEngine(db)
-                report = engine.generate(days=days, source=source)
-                print(engine.format_terminal(report))
-            finally:
-                db.close()
-        except Exception as e:
-            print(f"  Error generating insights: {e}")
 
     def _check_config_mcp_changes(self) -> None:
         """Detect mcp_servers changes in config.yaml and react.
@@ -12887,109 +12708,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
         with self._busy_command(self._slow_command_status(cmd_original)):
             self._reload_mcp()
 
-    def _reload_mcp(self):
-        """Reload MCP servers: disconnect all, re-read config.yaml, reconnect.
-
-        After reconnecting, refreshes the agent's tool list so the model
-        sees the updated tools on the next turn.
-        """
-        try:
-            from tools.mcp_tool import shutdown_mcp_servers, discover_mcp_tools, _servers, _lock
-
-            # Capture old server names
-            with _lock:
-                old_servers = set(_servers.keys())
-
-            if not self._command_running:
-                print("🔄 Reloading MCP servers...")
-
-            # Shutdown existing connections
-            shutdown_mcp_servers()
-
-            # Reconnect (reads config.yaml fresh)
-            new_tools = discover_mcp_tools()
-
-            # Compute what changed
-            with _lock:
-                connected_servers = set(_servers.keys())
-
-            added = connected_servers - old_servers
-            removed = old_servers - connected_servers
-            reconnected = connected_servers & old_servers
-
-            if reconnected:
-                print(f"  ♻️  Reconnected: {', '.join(sorted(reconnected))}")
-            if added:
-                print(f"  ➕ Added: {', '.join(sorted(added))}")
-            if removed:
-                print(f"  ➖ Removed: {', '.join(sorted(removed))}")
-            if not connected_servers:
-                print("  No MCP servers connected.")
-            else:
-                print(f"  🔧 {len(new_tools)} tool(s) available from {len(connected_servers)} server(s)")
-
-            # Refresh the agent's tool list so the model can call new tools.
-            # Route through the shared helper so this CLI /reload-mcp path stays
-            # in lockstep with the TUI RPC / gateway reload / late-binding paths
-            # (name-diff, thread-safe, and — critically — additive-preserving so
-            # memory-provider and context-engine tools survive the rebuild).
-            if self.agent is not None:
-                from tools.mcp_tool import refresh_agent_mcp_tools
-                # Explicit reload: pick up MCP servers the user ENABLED in config
-                # this session. self.enabled_toolsets was resolved once at
-                # startup; merge in any now-connected server names (unless the
-                # user pinned `all`/`*`, which already includes everything) so a
-                # freshly-added server isn't filtered out. Mirrors startup, where
-                # MCP server names are part of enabled_toolsets (see __init__).
-                enabled_override = None
-                et = self.enabled_toolsets
-                if et and "all" not in et and "*" not in et:
-                    merged = list(et)
-                    for _name in sorted(connected_servers):
-                        if _name not in merged:
-                            merged.append(_name)
-                    enabled_override = merged
-                refresh_agent_mcp_tools(
-                    self.agent,
-                    enabled_override=enabled_override,
-                    quiet_mode=True,
-                )
-                # Keep the CLI's own list in sync with what the agent now uses.
-                if enabled_override is not None:
-                    self.enabled_toolsets = enabled_override
-
-            # Inject a message at the END of conversation history so the
-            # model knows tools changed.  Appended after all existing
-            # messages to preserve prompt-cache for the prefix.
-            change_parts = []
-            if added:
-                change_parts.append(f"Added servers: {', '.join(sorted(added))}")
-            if removed:
-                change_parts.append(f"Removed servers: {', '.join(sorted(removed))}")
-            if reconnected:
-                change_parts.append(f"Reconnected servers: {', '.join(sorted(reconnected))}")
-            tool_summary = f"{len(new_tools)} MCP tool(s) now available" if new_tools else "No MCP tools available"
-            change_detail = ". ".join(change_parts) + ". " if change_parts else ""
-            self.conversation_history.append({
-                "role": "user",
-                "content": f"[IMPORTANT: MCP servers have been reloaded. {change_detail}{tool_summary}. The tool list for this conversation has been updated accordingly.]",
-            })
-
-            # Persist session immediately so the session log reflects the
-            # updated tools list (self.agent.tools was refreshed above).
-            if self.agent is not None:
-                try:
-                    self.agent._persist_session(
-                        self.conversation_history,
-                        self.conversation_history,
-                    )
-                except Exception:
-                    pass  # Best-effort
-
-            print(f"  ✅ Agent updated — {len(self.agent.tools if self.agent else [])} tool(s) available")
-
-        except Exception as e:
-            print(f"  ❌ MCP reload failed: {e}")
 
     def _reload_skills(self) -> None:
         """Reload skills: rescan ~/.pilotage/skills/ and queue a note for the
@@ -16137,21 +15855,6 @@ class PilotageCLI(CLIAgentSetupMixin, CLICommandsMixin):
             self._console_print(f"[dim {_tip_color}]✦ Tip: {_tip}[/]")
         except Exception:
             pass  # Tips are non-critical — never break startup
-
-        # Curator — kick off a background skill-maintenance pass on startup
-        # if the schedule says we're due.  Runs in a daemon thread so it
-        # never blocks the interactive loop.  Best-effort; any failure is
-        # swallowed to avoid breaking session startup.
-        try:
-            from agent.curator import maybe_run_curator
-            maybe_run_curator(
-                idle_for_seconds=float("inf"),  # CLI startup = fully idle
-                on_summary=lambda msg: self._console_print(
-                    f"[dim #6b7684]💾 {msg}[/]"
-                ),
-            )
-        except Exception:
-            pass
 
         _skills_for_line = self.preloaded_skills or list(
             getattr(self, "_preload_skills_requested", []) or []

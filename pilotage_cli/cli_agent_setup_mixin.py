@@ -360,13 +360,6 @@ class CLIAgentSetupMixin:
         if not self._ensure_runtime_credentials():
             return False
 
-        from pilotage_cli.mcp_startup import ensure_mcp_discovery_before_agent_build
-
-        ensure_mcp_discovery_before_agent_build(
-            logger=logger,
-            single_query=getattr(self, "_single_query_mode", False),
-        )
-
         # Initialize SQLite session store for CLI sessions (if not already done in __init__)
         if self._session_db is None:
             try:

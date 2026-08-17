@@ -1808,79 +1808,6 @@ class PluginContext:
 
     # -- capability-gated MCP access ----------------------------------------
 
-    def call_mcp(
-        self,
-        server: str,
-        tool: str,
-        arguments: Optional[Dict[str, Any]] = None,
-        timeout: float = 30,
-    ) -> Dict[str, Any]:
-        """Call a tool on a configured MCP server (, capability-gated).
-
-        Synchronous; safe to call from plugin hooks and tools. Routes through
-        the EXISTING native MCP client machinery in :mod:`tools.mcp_tool`
-        (background loop, trust-tier gates, circuit breaker, reconnect and
-        result rendering) — never a parallel client or connection.
-
-        Default-off: a plugin has NO MCP access until the operator lists the
-        servers it may reach under ``plugins.entries.<plugin_id>.mcp_allowlist``
-        in config.yaml::
-
-            plugins:
-              entries:
-                my-plugin:
-                  mcp_allowlist: ["knowledge_rag", "github"]
-
-        Calls to unlisted servers raise :class:`PermissionError`. This is a
-        per-server grant, deliberately not ambient authority over every
-        configured server.
-        # TODO: swap the per-server allowlist for the declared
-        # capability model once it lands (per-tool grants, expiry, ro/rw).
-
-        Args:
-            server: MCP server name as configured in ``mcp.servers``.
-            tool: Tool name on that server (unprefixed).
-            arguments: JSON-serializable arguments dict for the tool.
-            timeout: Seconds to wait for the call (default 30) so a hung
-                MCP server can never stall the hook/tool pipeline.
-
-        Returns:
-            Envelope dict: ``{"ok": True, "result": <parsed result>}`` on
-            success or ``{"ok": False, "error": <message>}`` when the MCP
-            call itself failed. Results larger than ~64KB are truncated
-            with a marker.
-
-        Raises:
-            PermissionError: server not in this plugin's ``mcp_allowlist``.
-        """
-        plugin_id = self.manifest.key or self.manifest.name
-        allowlist = self._mcp_allowlist(plugin_id)
-        if server not in allowlist:
-            raise PermissionError(
-                f"Plugin {self.manifest.name!r} is not allowed to call MCP "
-                f"server {server!r}. Add it to "
-                f"plugins.entries.{plugin_id}.mcp_allowlist in config.yaml "
-                f"to grant access (default is no MCP access)."
-            )
-
-        try:
-            timeout = float(timeout)
-        except (TypeError, ValueError):
-            timeout = 30.0
-        timeout = max(1.0, min(timeout, 600.0))
-
-        # Reuse the exact handler the tool registry uses for MCP tools —
-        # same trust gate, circuit breaker, reconnect and rendering paths.
-        from tools.mcp_tool import _make_tool_handler
-
-        handler = _make_tool_handler(server, tool, timeout)
-        raw = handler(dict(arguments or {}))
-
-        logger.debug(
-            "Plugin %s called MCP %s/%s (timeout=%ss, %d chars returned)",
-            self.manifest.name, server, tool, timeout, len(raw or ""),
-        )
-        return self._mcp_envelope(raw)
 
     _MCP_RESULT_CHAR_CAP = 65536
 
@@ -2413,124 +2340,9 @@ class PluginContext:
 
     # -- browser provider registration ---------------------------------------
 
-    @_serialized_replacement
-    def register_browser_provider(self, provider) -> Optional[PluginRegistration]:
-        """Register a cloud browser backend.
-
-        ``provider`` must be an instance of
-        :class:`agent.browser_provider.BrowserProvider`. The
-        ``provider.name`` attribute is what ``browser.cloud_provider`` in
-        ``config.yaml`` matches against when routing cloud-mode
-        ``browser_*`` tool calls.
-
-        Mirrors :meth:`register_web_search_provider` exactly — same
-        registration shape, same gating, same logging. The browser
-        subsystem's dispatcher (:func:`tools.browser_tool._get_cloud_provider`)
-        consults the registry built up by these calls.
-        """
-        from agent.browser_provider import BrowserProvider
-        from agent.browser_registry import (
-            register_provider as _register_browser_provider,
-            restore_registration,
-            snapshot_registration,
-        )
-
-        if not isinstance(provider, BrowserProvider):
-            logger.warning(
-                "Plugin '%s' tried to register a browser provider that does "
-                "not inherit from BrowserProvider. Ignoring.",
-                self.manifest.name,
-            )
-            return
-        registry_name = provider.name.strip()
-        scope = self._manager.scope_key
-        previous = snapshot_registration(registry_name, scope=scope)
-        _register_browser_provider(provider, scope=scope)
-        registered = snapshot_registration(registry_name, scope=scope)
-        if registered is not provider:
-            return None
-        handle = self._track_replacement(
-            "browser_provider",
-            registry_name,
-            slot=("browser_provider", scope, registry_name),
-            current=provider,
-            previous=previous,
-            restore=lambda replacement: restore_registration(
-                registry_name, provider, replacement, scope=scope
-            ),
-        )
-        logger.info(
-            "Plugin '%s' registered browser provider: %s",
-            self.manifest.name, registry_name,
-        )
-        return handle
 
     # -- secret source registration -------------------------------------------
 
-    @_serialized_replacement
-    def register_secret_source(self, source) -> Optional[PluginRegistration]:
-        """Register an external secret-manager backend.
-
-        ``source`` must be an instance of
-        :class:`agent.secret_sources.base.SecretSource`.  Registered
-        sources run during ``load_pilotage_dotenv()`` startup — after
-        ``~/.pilotage/.env`` loads, before Pilotage reads credentials — when
-        their ``secrets.<source.name>`` config section is enabled.  The
-        orchestrator (``agent.secret_sources.registry.apply_all``) owns
-        ordering, mapped-vs-bulk precedence, conflict warnings, and
-        provenance; the source only fetches.
-
-        NOTE ON TIMING: ``load_pilotage_dotenv()`` usually runs at import
-        *before* plugin discovery.  After discovery completes, the plugin
-        manager re-pulls enabled plugin secret sources (``reset_secret_source_cache``
-        + ``load_pilotage_dotenv``) so the first process sees them.
-        Child processes that load env after plugins still work without that
-        re-pull.  Failed re-pulls never block startup.
-
-        Contract requirements (rejected with a warning otherwise):
-        inherit from ``SecretSource``, ``api_version`` matching
-        ``SECRET_SOURCE_API_VERSION``, lowercase unique ``name``,
-        ``shape`` of ``"mapped"`` or ``"bulk"``, unique ``scheme`` (when
-        set), and a ``fetch()`` that never raises and never prompts.
-        See the base-module docstring for the full contract.
-        """
-        from agent.secret_sources.base import SecretSource
-        from agent.secret_sources.registry import (
-            register_source,
-            restore_registration,
-            snapshot_registration,
-        )
-
-        if not isinstance(source, SecretSource):
-            logger.warning(
-                "Plugin '%s' tried to register a secret source that does "
-                "not inherit from SecretSource. Ignoring.",
-                self.manifest.name,
-            )
-            return
-        registry_name = source.name
-        scope = self._manager.scope_key
-        previous = snapshot_registration(registry_name, scope=scope)
-        if register_source(source, scope=scope):
-            registered = snapshot_registration(registry_name, scope=scope)
-            if registered is not source:
-                return None
-            handle = self._track_replacement(
-                "secret_source",
-                registry_name,
-                slot=("secret_source", scope, registry_name),
-                current=source,
-                previous=previous,
-                restore=lambda replacement: restore_registration(
-                    registry_name, source, replacement, scope=scope
-                ),
-            )
-            logger.info(
-                "Plugin '%s' registered secret source: %s",
-                self.manifest.name, registry_name,
-            )
-            return handle
-        return None
 
     # -- TTS provider registration -------------------------------------------
 
@@ -3612,7 +3424,6 @@ class PluginManager:
                 # Plugin secret sources register during discover; the initial
                 # load_pilotage_dotenv() already ran at import time. Re-pull so the
                 # first process sees plugin backends (tracking).
-                self._refresh_secret_sources_after_discovery()
                 if force:
                     # config.yaml shell hooks live in ``_hooks`` but are
                     # config-owned, not plugin-owned — the ledger-driven
@@ -3634,60 +3445,6 @@ class PluginManager:
             # Import cycle / missing module must not abort force reload.
             logger.debug("force-reload shell-hook re-register skipped: %s", exc)
 
-    def _refresh_secret_sources_after_discovery(self) -> None:
-        """If any plugin secret source is enabled, reset cache and re-apply.
-
-        Enablement is delegated to each source's ``is_enabled(cfg)`` — the
-        same contract the orchestrator uses (``registry._ordered_enabled_sources``)
-        — so a source with custom activation logic is honored, not just
-        ``secrets.<name>.enabled``.
-
-        No-op when only bundled sources exist or none are enabled.
-        Fail-open: never raise into discover_and_load.
-        """
-        try:
-            from agent.secret_sources.registry import list_plugin_sources
-            from pilotage_cli.env_loader import load_pilotage_dotenv, reset_secret_source_cache
-        except Exception:
-            return
-        try:
-            plugin_sources = list_plugin_sources()
-        except Exception:
-            return
-        if not plugin_sources:
-            return
-        # Load the secrets config once; hand each source its own section and
-        # let its is_enabled() decide (honours custom activation extensions).
-        try:
-            from pilotage_cli.config import load_config
-
-            cfg = load_config() or {}
-            secrets = cfg.get("secrets") or {}
-        except Exception:
-            secrets = {}
-        enabled_names = []
-        for source in plugin_sources:
-            name = getattr(source, "name", "")
-            section = secrets.get(name)
-            section = section if isinstance(section, dict) else {}
-            try:
-                if source.is_enabled(section):
-                    enabled_names.append(name)
-            except Exception:
-                # A source whose is_enabled() raises is skipped, mirroring
-                # the orchestrator's defensive posture.
-                continue
-        if not enabled_names:
-            return
-        try:
-            reset_secret_source_cache()
-            load_pilotage_dotenv()
-            logger.debug(
-                "Re-applied secret sources after plugin discovery for: %s",
-                ", ".join(sorted(enabled_names)),
-            )
-        except Exception as exc:
-            logger.debug("secret source re-apply after discovery failed: %s", exc)
 
     def _discover_and_load_inner(self) -> None:
         """The actual discovery sweep — see :meth:`discover_and_load`."""

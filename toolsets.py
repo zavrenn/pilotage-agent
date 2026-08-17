@@ -39,13 +39,6 @@ _PILOTAGE_CORE_TOOLS = [
     "vision_analyze", "image_generate",
     # Skills
     "skills_list", "skill_view", "skill_manage",
-    # Browser automation
-    "browser_navigate", "browser_snapshot", "browser_click",
-    "browser_type", "browser_scroll", "browser_back",
-    "browser_press", "browser_get_images",
-    "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
-    # replaces other tools when browser.backend is "browser-use"
-    "browser_exec",
     # Text-to-speech
     "text_to_speech",
     # Planning & memory
@@ -132,18 +125,6 @@ TOOLSETS = {
     "skills": {
         "description": "Access, create, edit, and manage skill documents with specialized instructions and knowledge",
         "tools": ["skills_list", "skill_view", "skill_manage"],
-        "includes": []
-    },
-    
-    "browser": {
-        "description": "Browser automation for web interaction (navigate, click, type, scroll, iframes, hold-click) with web search for finding URLs",
-        "tools": [
-            "browser_navigate", "browser_snapshot", "browser_click",
-            "browser_type", "browser_scroll", "browser_back",
-            "browser_press", "browser_get_images",
-            "browser_vision", "browser_console", "browser_cdp",
-            "browser_dialog", "browser_exec", "web_search"
-        ],
         "includes": []
     },
     
@@ -265,18 +246,13 @@ TOOLSETS = {
     # for while pairing on code and drops the rest (messaging, tts, image_gen,
     # home-assistant, cron, computer-use).
     "coding": {
-        "description": "Coding-focused toolset: files, terminal, search, web docs, skills, todo, delegate, vision, browser",
+        "description": "Coding-focused toolset: files, terminal, search, web docs, skills, todo, delegate, vision",
         "tools": [
             "web_search", "web_extract",
             "terminal", "process",
             "read_file", "write_file", "patch", "search_files",
             "vision_analyze",
             "skills_list", "skill_view", "skill_manage",
-            "browser_navigate", "browser_snapshot", "browser_click",
-            "browser_type", "browser_scroll", "browser_back",
-            "browser_press", "browser_get_images",
-            "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
-            "browser_exec",
             "todo", "memory",
             "session_search", "clarify",
             "execute_code", "delegate_task",
@@ -311,11 +287,6 @@ TOOLSETS = {
             # Skills
             "skills_list", "skill_view", "skill_manage",
             # Browser automation
-            "browser_navigate", "browser_snapshot", "browser_click",
-            "browser_type", "browser_scroll", "browser_back",
-            "browser_press", "browser_get_images",
-            "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
-            "browser_exec",
             # Planning & memory
             "todo", "memory",
             # Session history search

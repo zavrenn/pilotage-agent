@@ -2268,38 +2268,6 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
         # module for read_raw_config/_persist_migration/etc. at call time).
         run_migrations(current_ver, results, quiet)
 
-    # ── Post-migration: disable exfiltration-shaped MCP stdio entries ──
-    # Users can hand-edit mcp_servers, and older installs may already contain a
-    # malicious entry. Preserve the stanza for auditability but mark it
-    # disabled so the next startup will not spawn it.
-    config = read_raw_config()
-    raw_mcp_servers = config.get("mcp_servers")
-    if isinstance(raw_mcp_servers, dict):
-        try:
-            from pilotage_cli.mcp_security import validate_mcp_server_entry as _validate_mcp_server_entry
-        except Exception:
-            _validate_mcp_server_entry = None
-        if _validate_mcp_server_entry:
-            mcp_touched = False
-            for server_name, entry in raw_mcp_servers.items():
-                if not isinstance(entry, dict):
-                    continue
-                issues = _validate_mcp_server_entry(server_name, entry)
-                if not issues:
-                    continue
-                entry["enabled"] = False
-                mcp_touched = True
-                results["warnings"].append(
-                    f"Disabled suspicious MCP server '{server_name}'"
-                )
-                if not quiet:
-                    for issue in issues:
-                        print(f"  ⚠ {issue}")
-                    print(f"  ⚠ Disabled MCP server '{server_name}' pending review")
-            if mcp_touched:
-                config["mcp_servers"] = raw_mcp_servers
-                _persist_migration(config)
-
     # ── Always: validate platform_toolsets after migration ──
     # A migration (or hand-edit) that leaves an invalid toolset name in
     # platform_toolsets silently disables the affected tools — resolve_toolset()

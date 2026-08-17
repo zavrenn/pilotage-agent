@@ -185,57 +185,10 @@ def hydrate_profile_secret_sources(
         return _hydrate_profile_secret_sources(Path(pilotage_home))
 
 
-def _hydrate_profile_secret_sources(home: Path) -> dict[str, str]:
-    """Locked implementation for :func:`hydrate_profile_secret_sources`."""
-    home_key = str(home.resolve())
-    if home_key in _APPLIED_HOMES:
-        return get_secret_source_values(home)
+def _hydrate_profile_secret_sources(home: Path) -> dict:
+    """External secret sources were removed; nothing to hydrate."""
+    return {}
 
-    try:
-        cfg = _load_secrets_config(home)
-    except Exception:  # noqa: BLE001 — external sources must not block routing
-        return {}
-    if not cfg:
-        return {}
-
-    try:
-        from agent.secret_scope import _is_global_env, load_env_file
-        from agent.secret_sources.registry import apply_all
-
-        local_env = {
-            name: value
-            for name, value in os.environ.items()
-            if _is_global_env(name)
-        }
-        local_env.update(load_env_file(home / ".env"))
-        # Mirror load_pilotage_dotenv()'s .op.env bootstrap: the 1Password
-        # service-account token lives in <home>/.op.env (gitignored), not
-        # .env. Without seeding it here a cold profile configured for the
-        # supported .op.env flow fails 1Password hydration (sweeper review
-        # on).env values win — never override an existing key.
-        op_env = home / ".op.env"
-        if op_env.exists():
-            for _name, _value in load_env_file(op_env).items():
-                local_env.setdefault(_name, _value)
-        local_env["PILOTAGE_HOME"] = str(home)
-        report = apply_all(cfg, home, environ=local_env)
-    except Exception:  # noqa: BLE001 — preserve fail-open startup behavior
-        return {}
-
-    if not report.sources:
-        return {}
-
-    _APPLIED_HOMES.add(home_key)
-    values: dict[str, str] = {}
-    for name, applied in report.provenance.items():
-        value = local_env.get(name)
-        if value is None:
-            continue
-        _SECRET_SOURCES[name] = applied.source
-        values[name] = value
-    if values:
-        _SECRET_SOURCE_VALUES_BY_HOME[home_key] = values
-    return dict(values)
 
 
 def reset_secret_source_cache() -> None:
@@ -253,31 +206,10 @@ def reset_secret_source_cache() -> None:
     _SECRET_SOURCE_VALUES_BY_HOME.clear()
 
 
-def format_secret_source_suffix(env_var: str) -> str:
-    """Return a human-readable suffix like ``" (from Bitwarden)"`` or ``""``.
+def format_secret_source_suffix(env_name: str) -> str:
+    """External secret sources were removed; no provenance suffix."""
+    return ""
 
-    Use this when printing a detected credential so the user can see where
-    it came from.  Empty string when the credential came from ``.env`` or
-    the shell — those are the implicit / "default" cases users already
-    understand.
-    """
-    source = get_secret_source(env_var)
-    if not source:
-        return ""
-    if source == "bitwarden":
-        return " (from Bitwarden)"
-    # Ask the registry for the source's human label (e.g. "1Password").
-    # Fall back to the raw source name for labels the registry doesn't
-    # know (stale provenance from an uninstalled plugin, tests).
-    try:
-        from agent.secret_sources.registry import get_source
-
-        registered = get_source(source)
-        if registered is not None and registered.label:
-            return f" (from {registered.label})"
-    except Exception:  # noqa: BLE001 — label lookup must never raise
-        pass
-    return f" (from {source})"
 
 
 def _format_offending_chars(value: str, limit: int = 3) -> str:
@@ -596,147 +528,16 @@ def _apply_managed_env() -> None:
     _load_dotenv_with_fallback(managed_env, override=True)
 
 
-def _apply_external_secret_sources(home_path: Path) -> None:
-    """Pull secrets from every enabled external source into env.
-
-    Runs AFTER dotenv loads so .env values are visible (sources use them
-    to locate bootstrap tokens) but BEFORE the rest of Pilotage reads
-    ``os.environ`` for credentials.  Any failure here is logged and
-    swallowed — external secret sources must never block startup.
-
-    The heavy lifting (source ordering, mapped-beats-bulk precedence,
-    first-claim-wins conflict handling, override semantics, provenance)
-    lives in ``agent.secret_sources.registry.apply_all``; this wrapper
-    owns the once-per-PILOTAGE_HOME guard, the post-apply ASCII
-    sanitization sweep, the ``_SECRET_SOURCES`` provenance map that
-    UI surfaces read, and the startup status lines.
-
-    Idempotent within a process: subsequent calls for the same
-    ``home_path`` are no-ops.  ``load_pilotage_dotenv()`` runs at import
-    time from several hot modules (cli.py, pilotage_cli/main.py,
-    run_agent.py, trajectory_compressor.py, ...), so without this guard
-    the status lines would print 3-5x per CLI startup.  Use
-    ``reset_secret_source_cache()`` if you need to force a re-pull
-    (tests, long-running processes after a config change).
-    """
-    home_key = str(Path(home_path).resolve())
-    if home_key in _APPLIED_HOMES:
-        return
-
-    try:
-        cfg = _load_secrets_config(home_path)
-    except Exception:  # noqa: BLE001 — config errors must not block startup
-        # Deliberately NOT marked applied: a malformed config.yaml would
-        # otherwise permanently disable secret loading for this process
-        # even after the user fixes the file.
-        return
-    if not cfg:
-        # No secrets section (or everything disabled at parse level).  Not
-        # marked applied either — the re-parse is a cheap fast_safe_load and
-        # leaving the home unmarked lets a process pick up a config change
-        # on its next load_pilotage_dotenv() call instead of never.
-        return
-
-    # Defer the registry import until we know a secrets source is enabled —
-    # agent.secret_sources.bitwarden eagerly loads cryptography._rust.pyd,
-    # which causes the Windows updater to self-lock before its preflight
-    # (the updater itself maps the .pyd before the dependency sync runs).
-    # A config with no enabled sources costs one dict scan; a config with
-    # enabled sources pays the crypto load exactly once, on demand.
-    # NOTE: only keys that smell like a real secret source trigger the import —
-    # a generic dict entry must not force crypto load on every pilotage launch.
-    # We whitelist by *shape* (source dict with enabled flag) rather than
-    # hardcoding names, so plugin/test sources pass through unknown keys.
-    any_enabled = any(
-        isinstance(v, dict) and v.get("enabled") is True
-        for v in cfg.values()
-    )
-    if not any_enabled:
-        return
-
-    try:
-        from agent.secret_sources.registry import apply_all
-    except ImportError:
-        return
-
-    try:
-        report = apply_all(cfg, home_path)
-    except Exception:  # noqa: BLE001 — belt-and-braces; apply_all shouldn't raise
-        return
-
-    if not report.sources:
-        # Config parsed but no source is enabled: keep retrying cheaply
-        # (no fetch happens for disabled sources) so flipping a source on
-        # mid-process takes effect on the next call.
-        return
-
-    # A real fetch attempt happened (success OR error).  Mark the home now
-    # so the 3-5 import-time load_pilotage_dotenv() calls per startup don't
-    # re-fetch / re-print — error retries within one process are opt-in via
-    # reset_secret_source_cache().  Marking AFTER the attempt (not before,
-    # see) is what lets the earlier failure paths stay retryable.
-    _APPLIED_HOMES.add(home_key)
-
-    if report.applied_any:
-        # Re-run the ASCII sanitization pass: vault values are
-        # user-supplied and might have the same copy-paste corruption as
-        # a manually edited.env.
-        _sanitize_loaded_credentials()
-        # Remember where each var came from so setup / `pilotage model`
-        # flows can label detected credentials with "(from Bitwarden)" /
-        # "(from 1Password)" — otherwise users see "credentials ✓" with
-        # no hint the value came from a vault rather than .env.
-        values: dict[str, str] = {}
-        for name, applied in report.provenance.items():
-            _SECRET_SOURCES[name] = applied.source
-            if name in os.environ:
-                values[name] = os.environ[name]
-        _SECRET_SOURCE_VALUES_BY_HOME[home_key] = values
-
-    for src in report.sources:
-        if src.applied:
-            print(
-                f"  {src.label}: applied {len(src.applied)} "
-                f"secret{'s' if len(src.applied) != 1 else ''}",
-                file=sys.stderr,
-            )
-        if src.result.error:
-            print(f"  {src.label}: {src.result.error}", file=sys.stderr)
-            hint = _remediation_hint(
-                src.name, src.result.error_kind, cfg, scope=home_key
-            )
-            if hint:
-                print(f"  {src.label}: → {hint}", file=sys.stderr)
-        for warn in src.result.warnings:
-            print(f"  {src.label}: {warn}", file=sys.stderr)
-    for conflict in report.conflicts:
-        print(f"  Secret sources: {conflict}", file=sys.stderr)
+def _apply_external_secret_sources(*args, **kwargs) -> None:
+    """External secret sources were removed; no-op."""
+    return None
 
 
-def _remediation_hint(
-    source_name: str,
-    error_kind,
-    secrets_cfg: dict,
-    *,
-    scope: str | None = None,
-) -> str:
-    """Ask the failed source for its one-line fix-it hint.
 
-    Defensive wrapper: remediation() is a pure mapping and shouldn't
-    raise, but a plugin source could — and startup must never break on
-    a status line.
-    """
-    try:
-        from agent.secret_sources.registry import get_source
+def _remediation_hint(*args, **kwargs) -> str:
+    """External secret sources were removed; no hints."""
+    return ""
 
-        source = get_source(source_name, scope=scope)
-        if source is None:
-            return ""
-        src_cfg = secrets_cfg.get(source_name)
-        src_cfg = src_cfg if isinstance(src_cfg, dict) else {}
-        return str(source.remediation(error_kind, src_cfg) or "").strip()
-    except Exception:  # noqa: BLE001 — hints must never block startup
-        return ""
 
 
 def _load_secrets_config(home_path: Path) -> dict:

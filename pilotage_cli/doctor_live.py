@@ -73,75 +73,6 @@ def _http_get(url: str, headers: Optional[dict] = None,
     return httpx.get(url, headers=headers or {}, timeout=timeout)
 
 
-def _browser_available() -> bool:
-    """Is the local browser automation backend (agent-browser) installed?"""
-    import shutil
-
-    if shutil.which("agent-browser"):
-        return True
-    try:
-        from pilotage_cli.doctor import PILOTAGE_HOME, PROJECT_ROOT
-
-        if (PROJECT_ROOT / "node_modules" / "agent-browser").exists():
-            return True
-        for candidate in (PILOTAGE_HOME / "node" / "bin",
-                          PILOTAGE_HOME / "node",
-                          PILOTAGE_HOME / "node_modules" / ".bin"):
-            if shutil.which("agent-browser", path=str(candidate)):
-                return True
-    except Exception:
-        pass
-    # agent-browser resolves lazily via npx on the default install,
-    # invisible to the PATH/node_modules probes above. Mirror the rung
-    # pilotage_cli.doctor uses so this probe can't diverge from it, including
-    # the Termux carve-out (bare npx is too fragile to advertise as ready
-    # there — see check_browser_requirements).
-    try:
-        from tools.browser_tool import (
-            _find_agent_browser,
-            _is_npx_agent_browser_sentinel,
-            _requires_real_termux_browser_install,
-        )
-        browser_cmd = _find_agent_browser(validate=False)
-    except Exception:
-        return False
-    if not _is_npx_agent_browser_sentinel(browser_cmd):
-        return False
-    return not _requires_real_termux_browser_install(browser_cmd)
-
-
-def _launch_browser_probe(timeout: float) -> tuple:
-    """Launch a browser, open about:blank, close. Returns (ok, detail).
-
-    Uses Playwright directly (what agent-browser drives underneath) so the
-    probe owns the full lifecycle and always cleans up.
-    """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return (False, "playwright not installed")
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True,
-                                    timeout=timeout * 1000)
-        try:
-            page = browser.new_page()
-            page.goto("about:blank", timeout=timeout * 1000)
-        finally:
-            browser.close()
-    return (True, "launched + about:blank + closed")
-
-
-def _probe_mcp_server(name: str, config: dict, timeout: float):
-    """initialize + tools/list against one configured MCP server.
-
-    Reuses the exact machinery behind ``pilotage mcp test``.
-    """
-    from pilotage_cli.mcp_config import _probe_single_server
-
-    return _probe_single_server(name, config, connect_timeout=timeout)
-
-
 # ---------------------------------------------------------------------------
 # Per-backend probes. Each returns a ProbeResult and never raises upward
 # beyond what run_live_checks' catch-all handles.
@@ -176,13 +107,6 @@ def _probe_fal(timeout: float) -> ProbeResult:
                      headers={"Authorization": f"Key {key}"},
                      timeout=timeout)
     return _classify_http("FAL", resp, "FAL_KEY")
-
-
-def _probe_browser(timeout: float) -> ProbeResult:
-    if not _browser_available():
-        return ProbeResult("Browser", "skip", "(not configured)")
-    ok, detail = _launch_browser_probe(timeout)
-    return ProbeResult("Browser", "pass" if ok else "fail", f"({detail})")
 
 
 def _audio_provider_probe(kind: str, provider: str,
@@ -287,28 +211,6 @@ def run_live_checks(issues: List[str]) -> List[ProbeResult]:
         "Firecrawl", lambda: _probe_firecrawl(timeout), issues))
     results.append(_run_one(
         "FAL", lambda: _probe_fal(timeout), issues))
-    results.append(_run_one(
-        "Browser", lambda: _probe_browser(timeout), issues))
-
-    servers = config.get("mcp_servers") or {}
-    if isinstance(servers, dict) and servers:
-        for name in sorted(servers):
-            entry = servers[name]
-            label = f"MCP: {name}"
-
-            def _probe(n=name, e=entry) -> ProbeResult:
-                if not isinstance(e, dict):
-                    return ProbeResult(f"MCP: {n}", "skip",
-                                       "(malformed config entry)")
-                tools = _probe_mcp_server(n, e, timeout)
-                return ProbeResult(f"MCP: {n}", "pass",
-                                   f"({len(tools)} tool(s))")
-
-            results.append(_run_one(label, _probe, issues))
-    else:
-        results.append(ProbeResult("MCP", "skip", "(no servers configured)"))
-        _report(results[-1], issues)
-
     results.append(_run_one(
         "TTS", lambda: _probe_tts(config, timeout), issues))
     results.append(_run_one(

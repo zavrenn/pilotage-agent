@@ -427,59 +427,6 @@ DEFAULT_CONFIG = {
         "extract_char_limit": 15000,  # per-page char budget for web_extract; larger pages truncate + store full text in cache/web
     },
 
-    "browser": {
-        # Browser tool implementation.
-        # ""            — DEFAULT: Browser Use mode when the browser-use CLI
-        #                 (or uvx) is available; otherwise the built-in
-        #                 browser tools. Camofox setups always keep the
-        #                 built-in tools (no CDP surface).
-        # "browser-use" — force Browser Use mode: one browser_exec tool
-        #                 driving the Browser Use CLI 3.0 over any CDP
-        #                 backend (local Chrome, cloud browsers)
-        # "off"         — force the built-in browser tools
-        #                 (browser_navigate, browser_click, …)
-        "backend": "",
-        "inactivity_timeout": 120,
-        "command_timeout": 30,  # Timeout for browser commands in seconds (screenshot, navigate, etc.)
-        "record_sessions": False,  # Auto-record browser sessions as WebM videos
-        "headed": False,  # Local mode: launch Chromium with a visible window (also skips per-turn cleanup so the window persists between turns; idle reaper still applies)
-        "allow_private_urls": False,  # Allow navigating to private/internal IPs (localhost, 192.168.x.x, etc.)
-        # Browser engine for local mode.  Passed as ``--engine <value>`` to
-        # agent-browser v0.25.3+.
-        # "auto"       — use Chrome (default, don't pass --engine at all)
-        # "lightpanda" — use Lightpanda (1.3-5.8x faster navigation, no screenshots)
-        # "chrome"     — explicitly request Chrome
-        # Also settable via AGENT_BROWSER_ENGINE env var.
-        "engine": "auto",
-        "auto_local_for_private_urls": True,  # When a cloud provider is set, auto-spawn local Chromium for LAN/localhost URLs instead of sending them to the cloud
-        "cdp_url": "",  # Optional persistent CDP endpoint for attaching to an existing Chromium/Chrome
-        "allow_unsafe_evaluate": False,  # Legacy override: when true, browser_console(expression=...) bypasses the restrict_evaluate denylist entirely
-        "restrict_evaluate": False,  # Opt-in denylist blocking sensitive JS primitives (cookies/storage/clipboard/network/form values) in browser_console(expression=...)
-        # CDP supervisor — dialog + frame detection via a persistent WebSocket.
-        # Active only when a CDP-capable backend is attached (Browserbase or
-        # local Chrome via /browser connect). See
-        # website/docs/developer-guide/browser-supervisor.md.
-        "dialog_policy": "must_respond",  # must_respond | auto_dismiss | auto_accept
-        "dialog_timeout_s": 300,  # Safety auto-dismiss after N seconds under must_respond
-        "camofox": {
-            # When true, Pilotage sends a stable profile-scoped userId to Camofox
-            # so the server maps it to a persistent Firefox profile automatically.
-            # When false (default), each session gets a random userId (ephemeral).
-            "managed_persistence": False,
-            # Optional externally managed Camofox identity. Useful when another
-            # app owns the visible browser and Pilotage should operate in it.
-            "user_id": "",
-            "session_key": "",
-            # Rehydrate tab_id from Camofox before creating a new tab.
-            "adopt_existing_tab": False,
-            # Docker Camofox opens page URLs from inside the container. Enable
-            # this to rewrite loopback page URLs (localhost/127.0.0.1/::1) to a
-            # host alias while leaving CAMOFOX_URL itself unchanged.
-            "rewrite_loopback_urls": False,
-            "loopback_host_alias": "host.docker.internal",
-        },
-    },
-
     # Filesystem checkpoints — automatic snapshots before destructive file ops.
     # When enabled, the agent takes a snapshot of the working directory once
     # per conversation turn (on first write_file/patch call).  Use /rollback
@@ -538,45 +485,6 @@ DEFAULT_CONFIG = {
     # exceed this are rejected with guidance to use offset+limit.
     # 100K chars ≈ 25–35K tokens across typical tokenisers.
     "file_read_max_chars": 100_000,
-
-    # Seconds to wait at agent-build time for in-flight MCP server discovery
-    # to finish before the agent snapshots its tool list.  MCP discovery runs
-    # in a background thread so a slow/dead server can't freeze startup; this
-    # bounds how long the first agent build blocks on it.  The wait returns
-    # the INSTANT discovery completes, so users with no MCP servers (the common
-    # case) or fast servers pay ~0s regardless of this value — the bound is
-    # only reached when a server is genuinely still connecting.  The old 0.75s
-    # default was a touch short for HTTP/OAuth servers on a cold connect; a
-    # modest bump lets more of them land in the FIRST turn's snapshot.  This is
-    # only a turn-1 latency/UX knob: a server that misses this window is still
-    # picked up automatically on the next turn by the between-turns refresh
-    # (see agent/turn_context.py), so correctness never depends on it.  Keep it
-    # small so a slow/dead server adds little to first-response latency.
-    "mcp_discovery_timeout": 1.5,
-
-    # Single-query (``pilotage -q/-z "..."``) variant of mcp_discovery_timeout.
-    # In one-shot mode there is only ONE turn, so the between-turns late-binding
-    # refresh never runs: a server that misses the small interactive bound is
-    # invisible to the LLM for the whole session.  This larger bound gives slow
-    # cold-start servers (npx, uvx, remote HTTP) a chance to land in the one
-    # tool snapshot.  ``thread.join(timeout)`` returns the instant discovery
-    # completes, so reachable servers only wait for their real handshake time
-    # while unavailable servers remain bounded.
-    "mcp_single_query_discovery_timeout": 15.0,
-
-    # MCP runtime behavior (distinct from the per-server definitions in
-    # mcp_servers: and from the auxiliary.mcp side-LLM task settings).
-    "mcp": {
-        # Auto-reload MCP connections when config.yaml's mcp_servers section
-        # changes at runtime (CLI file watcher, default on).
-        # Set to false to stop the automatic reload: every automatic reload
-        # rebuilds the agent tool surface and INVALIDATES the provider
-        # prompt cache (the next message re-sends the full input prefix),
-        # which is expensive on long-context / high-reasoning models.
-        # When disabled, the watcher still detects the change and prints
-        # guidance to apply it deliberately via /reload-mcp.
-        "auto_reload_on_config_change": True,
-    },
 
     # Tool-output truncation thresholds. When terminal output or a
     # single read_file page exceeds these limits, Pilotage truncates the
@@ -897,15 +805,6 @@ DEFAULT_CONFIG = {
         "approval": {
             "provider": "auto",
             "model": "",           # fast/cheap model recommended (e.g. gpt-4o-mini)
-            "base_url": "",
-            "api_key": "",
-            "timeout": 30,
-            "extra_body": {},
-            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
-        },
-        "mcp": {
-            "provider": "auto",
-            "model": "",
             "base_url": "",
             "api_key": "",
             "timeout": 30,
@@ -1521,14 +1420,6 @@ DEFAULT_CONFIG = {
         "base_url": "",    # direct OpenAI-compatible endpoint for subagents
         "api_key": "",     # API key for delegation.base_url (falls back to OPENAI_API_KEY)
         "api_mode": "",    # wire protocol for delegation.base_url: "chat_completions"
-                           # or "codex_responses". Empty = auto-detect from URL. Set this
-                           # explicitly for non-standard endpoints the heuristic can't detect.
-        # When delegate_task narrows child toolsets explicitly, preserve any
-        # MCP toolsets the parent already has enabled. On by default so
-        # narrowing (e.g. toolsets=["web","browser"]) expresses "I want these
-        # extras" without silently stripping MCP tools the parent already has.
-        # Set to false for strict intersection.
-        "inherit_mcp_toolsets": True,
         "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)
         # Subagent summaries return to the parent's context verbatim. A batch
@@ -1778,14 +1669,6 @@ DEFAULT_CONFIG = {
         #     - "git push --force*"
         #     - "*curl*|*sh*"
         "deny": [],
-        # When true, /reload-mcp asks the user to confirm before rebuilding
-        # the MCP tool set for the active session.  Reloading invalidates
-        # the provider prompt cache (tool schemas are baked into the system
-        # prompt), so the next message re-sends full input tokens — this can
-        # be expensive on long-context or high-reasoning models.  Users click
-        # "Always Approve" to silence the prompt permanently; that flips
-        # this key to false.
-        "mcp_reload_confirm": True,
         # When true, destructive session slash commands (/clear, /new, /reset,
         # /undo) ask the user to confirm before discarding conversation state.
         # Three-option prompt (Approve Once / Always Approve / Cancel) routed
@@ -2920,63 +2803,6 @@ OPTIONAL_ENV_VARS = {
         "tools": ["web_search"],
         "password": True,
         "category": "tool",
-    },
-    "BROWSERBASE_API_KEY": {
-        "description": "Browserbase API key for cloud browser (optional — local browser works without this)",
-        "prompt": "Browserbase API key",
-        "url": "https://browserbase.com/",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": True,
-        "category": "tool",
-    },
-    "BROWSERBASE_PROJECT_ID": {
-        "description": "Browserbase project ID (optional — only needed for cloud browser)",
-        "prompt": "Browserbase project ID",
-        "url": "https://browserbase.com/",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": False,
-        "category": "tool",
-    },
-    "BROWSER_USE_API_KEY": {
-        "description": "Browser Use API key for cloud browser (optional — local browser works without this)",
-        "prompt": "Browser Use API key",
-        "url": "https://browser-use.com/",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": True,
-        "category": "tool",
-    },
-    "FIRECRAWL_BROWSER_TTL": {
-        "description": "Firecrawl browser session TTL in seconds (optional, default 300)",
-        "prompt": "Browser session TTL (seconds)",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": False,
-        "category": "tool",
-    },
-    "AGENT_BROWSER_ENGINE": {
-        "description": "Browser engine for local mode: auto (default Chrome), lightpanda (faster, no screenshots), chrome",
-        "prompt": "Browser engine (auto/lightpanda/chrome)",
-        "url": "https://github.com/vercel-labs/agent-browser",
-        "tools": ["browser_navigate", "browser_snapshot", "browser_click", "browser_vision"],
-        "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-    "CAMOFOX_URL": {
-        "description": "Camofox browser server URL for local anti-detection browsing (e.g. http://localhost:9377)",
-        "prompt": "Camofox server URL",
-        "url": "https://github.com/jo-inc/camofox-browser",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": False,
-        "category": "tool",
-    },
-    "CAMOFOX_API_KEY": {
-        "description": "Optional bearer token sent as Authorization header to a remote/authenticated Camofox server",
-        "prompt": "Camofox API key",
-        "url": "https://github.com/jo-inc/camofox-browser",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": True,
-        "category": "tool",
-        "advanced": True,
     },
     "FAL_KEY": {
         "description": "FAL API key for image generation",
