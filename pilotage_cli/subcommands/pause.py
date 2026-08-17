@@ -1,9 +1,9 @@
 """``pilotage pause`` / ``pilotage resume`` — the global emergency stop.
 
 ``pilotage pause`` writes the ESTOP sentinel at ``$PILOTAGE_HOME/ESTOP``, which
-halts cron dispatch, kanban dispatch, and new gateway turns on their next
-check. In-flight work is never killed. ``pilotage resume`` removes the
-sentinel and normal operation resumes on the next tick — no restart needed.
+halts cron dispatch and new gateway turns on their next check. In-flight work
+is never killed. ``pilotage resume`` removes the sentinel and normal operation
+resumes on the next tick — no restart needed.
 
 Ported from: gastownhall/gastown estop.go (MIT); related prior art:
  (/panic — kill/exit semantics, different),.
@@ -27,7 +27,7 @@ def cmd_pause(args: argparse.Namespace) -> int:
     print(f"⏸️  {verb}{detail}")
     print(f"    sentinel: {path}")
     print(
-        "    Cron dispatch, kanban dispatch, and new gateway turns are on hold.\n"
+        "    Cron dispatch and new gateway turns are on hold.\n"
         "    In-flight work keeps running. Run `pilotage resume` to lift the pause."
     )
     return 0
@@ -48,11 +48,11 @@ def build_pause_parser(subparsers) -> None:
     """Attach the ``pause`` and ``resume`` subcommands to ``subparsers``."""
     pause_parser = subparsers.add_parser(
         "pause",
-        help="Emergency stop: pause cron/kanban dispatch and new gateway turns",
+        help="Emergency stop: pause cron dispatch and new gateway turns",
         description=(
             "Engage the global emergency stop. Halts NEW work only — cron "
-            "dispatch, kanban dispatch, and new gateway turns — until "
-            "`pilotage resume`. In-flight work is never killed."
+            "dispatch and new gateway turns — until `pilotage resume`. "
+            "In-flight work is never killed."
         ),
     )
     pause_parser.add_argument(

@@ -57,9 +57,9 @@ Examples:
     pilotage fallback remove        Remove a fallback provider from the chain
     pilotage config                 View configuration
     pilotage config edit            Edit config in $EDITOR
-    pilotage config set model gpt-4 Set a config value
+    pilotage config set <key> <val> Set a config value
     pilotage gateway                Run messaging gateway
-    pilotage -s pilotage-agent-dev,github-auth
+    pilotage -s skill-a,skill-b     Preload skills for the session
     pilotage -w                     Start in isolated git worktree
     pilotage gateway install        Install gateway background service
     pilotage sessions list          List past sessions
@@ -69,12 +69,10 @@ Examples:
     pilotage logs -f                Follow agent.log in real time
     pilotage logs errors            View errors.log
     pilotage logs --since 1h        Lines from the last hour
-    pilotage debug share             Upload debug report for support
-    pilotage console                Open the safe Pilotage command console
-    pilotage update                 Update to latest version
-    pilotage dashboard              Start web UI dashboard (port 9119)
-    pilotage dashboard --stop       Stop running dashboard processes
-    pilotage dashboard --status     List running dashboard processes
+    pilotage debug share            Upload debug report for support
+    pilotage cron list              List scheduled jobs
+    pilotage plugins list           List plugins
+    pilotage skills list            List skills
 
 For more help on a command:
     pilotage <command> --help
@@ -132,7 +130,7 @@ def build_top_level_parser():
         "--model",
         default=None,
         help=(
-            "Model override for this invocation (e.g. anthropic/claude-sonnet-4.6). "
+            "Model override for this invocation (e.g. gpt-5.1-codex). "
             "Applies to -z/--oneshot. Also settable via PILOTAGE_INFERENCE_MODEL env var."
         ),
     )
@@ -141,7 +139,7 @@ def build_top_level_parser():
         "--provider",
         default=None,
         help=(
-            "Provider override for this invocation (e.g. openrouter, anthropic). "
+            "Provider override for this invocation (e.g. openai, openai-codex). "
             "Applies to -z/--oneshot. The persistent provider lives in config.yaml "
             "under model.provider — use `pilotage setup` or edit the file to change it."
         ),
@@ -264,14 +262,6 @@ def build_top_level_parser():
         default=False,
         help="Troubleshooting mode: disable ALL customizations — user config, AGENTS.md/memory injection, plugins, and MCP servers (implies --ignore-user-config and --ignore-rules)",
     )
-    _inherited_flag(
-        parser,
-        "--cli",
-        action="store_true",
-        default=False,
-        help="Force the classic prompt_toolkit REPL (default)",
-    )
-
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # =========================================================================
@@ -459,12 +449,4 @@ def build_top_level_parser():
         default=None,
         help="Session source tag for filtering (default: cli). Use 'tool' for third-party integrations that should not appear in user session lists.",
     )
-    _inherited_flag(
-        chat_parser,
-        "--cli",
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help="Force the classic prompt_toolkit REPL (default)",
-    )
-
     return parser, subparsers, chat_parser

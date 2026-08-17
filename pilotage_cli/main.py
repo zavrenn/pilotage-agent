@@ -12,34 +12,19 @@ Usage:
     pilotage gateway install     # Install gateway service
     pilotage gateway uninstall   # Uninstall gateway service
     pilotage setup               # Interactive setup wizard
-    pilotage logout              # Clear stored authentication
     pilotage status              # Show status of all components
     pilotage cron                # Manage cron jobs
     pilotage cron list           # List cron jobs
     pilotage cron status         # Check if cron scheduler is running
     pilotage doctor              # Check configuration and dependencies
-    pilotage honcho setup                    # Configure Honcho AI memory integration
-    pilotage honcho status                   # Show Honcho config and connection status
-    pilotage honcho sessions                 # List directory → session name mappings
-    pilotage honcho map <name>               # Map current directory to a session name
-    pilotage honcho peer                     # Show peer names and dialectic settings
-    pilotage honcho peer --user NAME         # Set user peer name
-    pilotage honcho peer --ai NAME           # Set AI peer name
-    pilotage honcho peer --reasoning LEVEL   # Set dialectic reasoning level
-    pilotage honcho mode                     # Show current memory mode
-    pilotage honcho mode [hybrid|honcho|local]  # Set memory mode
-    pilotage honcho tokens                   # Show token budget settings
-    pilotage honcho tokens --context N       # Set session.context() token cap
-    pilotage honcho tokens --dialectic N     # Set dialectic result char cap
-    pilotage honcho identity                 # Show AI peer identity representation
-    pilotage honcho identity <file>          # Seed AI peer identity from a file (SOUL.md etc.)
-    pilotage honcho migrate                  # Step-by-step migration guide: OpenClaw native → Pilotage + Honcho
-    pilotage version             Show version
-    pilotage update              Update to latest version
-    pilotage uninstall           Uninstall Pilotage Agent
-    pilotage sessions browse     Interactive session picker with search
+    pilotage memory status       # Show memory provider config
+    pilotage skills list         # List installed skills
+    pilotage plugins list        # List plugins
+    pilotage sessions browse     # Interactive session picker with search
+    pilotage version             # Show version
+    pilotage uninstall           # Uninstall Pilotage Agent
 
-    pilotage claw migrate --dry-run  # Preview migration without changes
+Run `pilotage --help` for the full command list.
 """
 
 # IMPORTANT: pilotage_bootstrap must be the very first import — it sets up
@@ -260,9 +245,8 @@ def _set_process_title() -> None:
 
 # Cheap, dependency-free read of `display.interface` from config.yaml for the
 # earliest hot-path decisions (mouse-residue suppression, Termux fast launch)
-# that run *before* pilotage_cli.config is importable. Mirrors the explicit
-# precedence used everywhere else: `--cli` always wins, then `--tui`/env, then
-# this config value. Cached so the multiple early callers don't re-parse YAML.
+# that run *before* pilotage_cli.config is importable. Cached so the multiple
+# early callers don't re-parse YAML.
 # Mouse-tracking residue suppression — runs BEFORE every other import on the
 # TUI hot path so the terminal stops emitting SGR/X10 mouse reports while the
 # Python launcher is still doing imports (≈100–300ms in cooked + echo mode,

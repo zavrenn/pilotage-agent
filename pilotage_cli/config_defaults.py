@@ -921,11 +921,9 @@ DEFAULT_CONFIG = {
         # Set false to restore the legacy c-j submit fallback on unusual POSIX
         # PTYs whose plain Enter arrives as LF instead of CR.
         "cli_multiline_shortcuts": True,
-        # Which interface bare `pilotage` (and `pilotage chat`) launches by default:
-        #   "cli" — the classic prompt_toolkit REPL (default, preserves prior behavior)
-        #   "tui" — the modern Ink TUI (same as passing `--tui`)
-        # Explicit flags always win over this setting: `--cli` forces the classic
-        # REPL and `--tui` (or PILOTAGE_TUI=1) forces the TUI regardless of config.
+        # Which interface bare `pilotage` (and `pilotage chat`) launches.
+        # Only "cli" (the prompt_toolkit REPL) still exists; the Ink TUI and its
+        # `--tui` flag were removed. Kept as a config key for compatibility.
         "interface": "cli",
         # When true, `pilotage --tui` auto-resumes the most recent human-
         # facing session on launch instead of forging a fresh one.

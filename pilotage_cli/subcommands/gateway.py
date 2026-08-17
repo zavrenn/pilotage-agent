@@ -37,7 +37,7 @@ def build_gateway_parser(subparsers, *, cmd_gateway: Callable) -> None:
     gateway_parser = subparsers.add_parser(
         "gateway",
         help="Messaging gateway management",
-        description="Manage the messaging gateway (Telegram, Discord, WhatsApp, Weixin, and more)",
+        description="Manage the messaging gateway (Telegram, WhatsApp)",
     )
     gateway_subparsers = gateway_parser.add_subparsers(dest="gateway_command")
 
