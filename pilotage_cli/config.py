@@ -4922,10 +4922,10 @@ _SCHEMA_DEFINED_DICT_KEYS = frozenset({
     "telegram", "whatsapp", "whatsapp_cloud",
     # MCP server template / dynamic auth dicts
     "sessions", "checkpoints",
-    # Plugin settings — enable/disable lists plus index_url override
-    # (pilotage_cli/plugins_cmd.py, pilotage_cli/plugin_index.py). Absent from
-    # DEFAULT_CONFIG (written only when used), so listed here for
-    # `pilotage config set plugins.index_url ...` validation.
+    # Plugin settings — enable/disable lists and per-plugin entries
+    # (pilotage_cli/plugins_cmd.py). Absent from DEFAULT_CONFIG (written only
+    # when used), so listed here for `pilotage config set plugins.* ...`
+    # validation.
     "plugins",
 })
 

@@ -43,9 +43,9 @@ Stored under the plugin's config entry::
             hash: "<sha256 of the declared capability set at consent time>"
             granted_at: "2026-08-12T00:00:00+00:00"
 
-The hash records *what the user saw* when they consented. When an update
-declares capabilities whose set hash differs, the additions stay ungranted
-until the user re-consents (``pilotage plugins update`` surfaces the diff).
+The hash records *what the user saw* when they consented. When a plugin's
+declared capabilities change, the additions stay ungranted until the user
+re-consents (``pilotage plugins capabilities`` surfaces the diff).
 
 Ground rule: everything defaults OFF. Any failure to read consent state
 (missing config, corrupt YAML, wrong types) means **not granted**.

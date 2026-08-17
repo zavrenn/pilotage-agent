@@ -333,7 +333,7 @@ py-modules = [
 include = ["agent", "agent.*", "tools", "tools.*", "pilotage_cli", "pilotage_cli.*", "gateway", "gateway.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
 
 [tool.setuptools.package-data]
-pilotage_cli = ["observability/schemas/*.json", "data/*.json"]
+pilotage_cli = ["observability/schemas/*.json"]
 # gateway/assets/ ships status_phrases.yaml and the Telegram BotFather
 # screenshot. Without this, sealed venvs (uv2nix) silently lose both —
 # status phrases fall back to the tiny hardcoded set and the Telegram

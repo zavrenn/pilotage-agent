@@ -2600,7 +2600,7 @@ def _blank_slate_walkthrough(config: dict, pilotage_home):
     print()
     print_header("Plugins")
     if prompt_yes_no("Review and enable built-in plugins now?", default=False):
-        print_info("Manage plugins with `pilotage plugins list` / `pilotage plugins install`.")
+        print_info("Manage plugins with `pilotage plugins list` / `pilotage plugins enable`.")
     else:
         print_info("No plugins enabled. Add later with `pilotage plugins`.")
 
