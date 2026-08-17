@@ -11752,40 +11752,6 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
         self._execute_write(_do)
 
-    def retag_kanban_worker_sessions(self, workspaces_root: str) -> int:
-        """Retag legacy kanban worker rows from ``cli`` to ``kanban``.
-
-        Workers used to spawn without ``PILOTAGE_SESSION_SOURCE``, so their runs
-        landed as untitled ``cli`` rows and the sidebar rendered one per attempt
-        labeled with the worker's own prompt. New workers tag themselves; this
-        reclaims the rows already on disk so they drop out of the session lists
-        too. Identified by cwd under the board's workspaces root — a path only
-        the dispatcher ever runs a session in.
-
-        Gated per workspaces root (``state_meta``) so each board reclaims its
-        own rows exactly once. Returns the number of rows retagged.
-        """
-        prefix = str(workspaces_root).rstrip("/\\")
-        if not prefix:
-            return 0
-
-        gate = f"kanban_worker_source_retagged:{prefix}"
-        if self.get_meta(gate) == "1":
-            return 0
-
-        def _do(conn):
-            cursor = conn.execute(
-                "UPDATE sessions SET source = 'kanban' "
-                "WHERE source = 'cli' AND (cwd = ? OR cwd LIKE ? ESCAPE '\\')",
-                (prefix, _escape_like(prefix) + "/%"),
-            )
-            # Read rowcount before set_meta reuses this cursor for its INSERT,
-            # which would otherwise overwrite it with the meta write's count.
-            retagged = cursor.rowcount or 0
-            self.set_meta(gate, "1", cursor=cursor)
-            return retagged
-
-        return self._execute_write(_do)
 
     def list_meta_prefix(self, prefix: str) -> List[Tuple[str, str]]:
         """Return ``[(key, value), ...]`` for state_meta keys with ``prefix``.

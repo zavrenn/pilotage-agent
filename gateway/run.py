@@ -2438,7 +2438,6 @@ from gateway.session_state import (
     legacy_lease_token_property,
 )
 from gateway.authz_mixin import GatewayAuthorizationMixin
-from gateway.kanban_watchers import GatewayKanbanWatchersMixin
 from gateway.slash_commands import GatewaySlashCommandsMixin
 from gateway.turn_context import TurnContext
 from gateway.platforms.base import (
@@ -5985,7 +5984,7 @@ class TurnRunner:
 
 
 
-class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, GatewaySlashCommandsMixin):
+class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
     """
     Main gateway controller.
 
@@ -6323,7 +6322,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # /reasoning, /fast overrides; per-turn sidecar notes; ephemeral
         # context pin; last-delivered voice-channel context) lives on
         # SessionState.conversation — see gateway/session_state.py.
-        self._kanban_notifier_profile = self._active_profile_name()
         # Pending exec approvals live on SessionState.persistent.approvals.
 
         # Track platforms that failed to connect for background reconnection.
@@ -7837,54 +7835,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             depth += 1
         return depth
 
-    @staticmethod
-    def _is_goal_continuation_event(event_or_text: Any) -> bool:
-        """Return True for synthetic /goal continuation turns.
 
-        Goal continuations are normal queued user-role events, so pause/clear
-        must distinguish them from real user /queue messages before removing or
-        suppressing them.
-        """
-        text = getattr(event_or_text, "text", event_or_text) or ""
-        return str(text).startswith("[Continuing toward your standing goal]\nGoal:")
 
-    def _clear_goal_pending_continuations(self, session_key: str, adapter: Any) -> int:
-        """Remove queued synthetic /goal continuations for one session.
-
-        User-issued /goal pause/clear can race with a continuation already
-        queued by the judge.  Remove only synthetic goal continuations while
-        preserving normal /queue and user follow-up events.
-        """
-        removed = 0
-        pending_slot = getattr(adapter, "_pending_messages", None) if adapter is not None else None
-        if isinstance(pending_slot, dict):
-            pending_event = pending_slot.get(session_key)
-            if self._is_goal_continuation_event(pending_event):
-                pending_slot.pop(session_key, None)
-                removed += 1
-
-        _q_state = self._peek_session_state(session_key)
-        overflow = _q_state.conversation.queued_events if _q_state else []
-        if overflow:
-            kept = []
-            for queued_event in overflow:
-                if self._is_goal_continuation_event(queued_event):
-                    removed += 1
-                else:
-                    kept.append(queued_event)
-            _q_state.conversation.queued_events = kept
-        return removed
-
-    def _goal_still_active_for_session(self, session_id: str) -> bool:
-        """Best-effort fresh DB check before running a queued continuation."""
-        if not session_id:
-            return False
-        try:
-            from pilotage_cli.goals import GoalManager
-            return GoalManager(session_id=session_id).is_active()
-        except Exception as exc:
-            logger.debug("goal continuation: active-state recheck failed: %s", exc)
-            return False
 
     def _update_runtime_status(self, gateway_state: Optional[str] = None, exit_reason: Optional[str] = None) -> None:
         try:
@@ -11939,16 +11891,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # to /new (does not kill the turn; see agent.session_stall_timeout).
         self._spawn_supervised(self._session_stall_watcher, "session_stall_watcher")
 
-        # Start background kanban notifier — each gateway delivers events for
-        # subscriptions owned by the profiles whose adapters it hosts, even
-        # when another gateway owns the single dispatcher.
-        self._spawn_supervised(self._kanban_notifier_watcher, "kanban_notifier_watcher")
-
-        # Start background kanban dispatcher — spawns workers for ready
-        # tasks. Gated by `kanban.dispatch_in_gateway` (default True).
-        # When false, users run `pilotage kanban daemon` externally or
-        # simply don't use kanban; this loop becomes a no-op.
-        self._spawn_supervised(self._kanban_dispatcher_watcher, "kanban_dispatcher_watcher")
 
         # Start background reconnection watcher for platforms that failed at startup
         if self._failed_platforms:
@@ -11990,11 +11932,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # result back into its originating session as a new turn, covering the
         # idle case where the subagent finishes with no agent turn running.
         self._spawn_supervised(self._async_delegation_watcher, "async_delegation_watcher")
-
-        # Start background /loop wakeup watcher — scans persisted loops
-        # (SessionDB loop:* rows) and injects due wakeup prompts into their
-        # originating chats while the session is idle.
-        self._spawn_supervised(self._loop_wakeup_watcher, "loop_wakeup_watcher")
 
         # Start background drain-control watcher — reconciles the gateway's
         # new-turn accept-state with the external ``.drain_request.json`` marker
@@ -12812,12 +12749,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return get_active_profile_name() or "default"
         except Exception:
             return "default"
-
-    # ── Kanban board watchers ───────────────────────────────────────────
-    # The kanban notifier/dispatcher watcher loops + their helpers live in
-    # GatewayKanbanWatchersMixin (gateway/kanban_watchers.py). They use only
-    # self state, so inheriting the mixin keeps every self._kanban_* call site
-    # working unchanged while lifting ~1,000 LOC out of this file.
 
     def _ensure_reconnect_watcher_running(self) -> None:
         """Ensure the platform reconnect watcher background task is alive.
@@ -14708,8 +14639,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "new": self._busy_new_command,
                 "queue": self._busy_queue_command,
                 "steer": self._busy_steer_command,
-                "goal": self._busy_goal_command,
-                "loop": self._busy_loop_command,
             }.get(handler_key)
             if special is not None:
                 return await special(event, quick_key, source)
@@ -14727,9 +14656,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "pause": self._handle_pause_command,
                 "agents": self._handle_agents_command,
                 "background": self._handle_background_command,
-                "kanban": self._handle_kanban_command,
-                "subgoal": self._handle_subgoal_command,
-                "heartbeat": self._handle_heartbeat_command,
                 "yolo": self._handle_yolo_command,
                 "verbose": self._handle_verbose_command,
                 "footer": self._handle_footer_command,
@@ -14914,35 +14840,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self._enqueue_fifo(quick_key, queued_event, adapter)
         return "No active agent — /steer queued for the next turn."
 
-    async def _busy_goal_command(self, event: MessageEvent, quick_key: str, source):
-        # /goal is safe mid-run for status/pause/clear/wait (inspection
-        # and control-plane only — doesn't interrupt the running turn).
-        # Setting a new goal text mid-run is rejected with the same
-        # "wait or /stop" message as /model so we don't race a second
-        # continuation prompt against the current turn.
-        _goal_arg = (event.get_command_args() or "").strip().lower()
-        _goal_verb = _goal_arg.split(None, 1)[0] if _goal_arg else ""
-        # Exact-match control verbs (unchanged semantics), plus the
-        # wait/unwait barrier verbs which take a pid argument and the
-        # gate management verb (inspection/mutation of the gate list only —
-        # gates run at turn boundary, so editing them mid-run is safe).
-        _is_control = (
-            not _goal_arg
-            or _goal_arg in {"status", "pause", "resume", "clear", "stop", "done", "unwait"}
-            or _goal_verb in {"wait", "gate"}
-        )
-        if _is_control:
-            return await self._handle_goal_command(event)
-        return "Agent is running — use /goal status / pause / clear / wait mid-run, or /stop before setting a new goal."
 
-    async def _busy_loop_command(self, event: MessageEvent, quick_key: str, source):
-        # /loop mirrors /goal: control verbs are safe mid-run (state
-        # only — read at the next idle boundary); setting a new loop
-        # mid-run is rejected so we don't race the current turn.
-        _loop_arg = (event.get_command_args() or "").strip().lower()
-        if not _loop_arg or _loop_arg in {"status", "pause", "resume", "stop", "clear", "cancel", "help", "--help", "-h"}:
-            return await self._handle_loop_command(event)
-        return "Agent is running — use /loop status / pause / stop mid-run, or /stop before setting a new loop."
 
     async def _handle_message(self, event: MessageEvent) -> Optional[str]:
         """
@@ -15927,9 +15825,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "personality":
             return await self._handle_personality_command(event)
 
-        if canonical == "kanban":
-            return await self._handle_kanban_command(event)
-
         if canonical == "suggestions":
             return await self._handle_suggestions_command(event)
 
@@ -16037,19 +15932,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # at the end of this function so the rewritten text is sent
             # to the agent as a regular user turn.
 
-        if canonical == "goal":
-            return await self._handle_goal_command(event)
-
-        if canonical == "loop":
-            return await self._handle_loop_command(event)
-
-        if canonical == "heartbeat":
-            return await self._handle_heartbeat_command(event)
         if canonical == "refine":
             return await self._handle_refine_command(event)
-
-        if canonical == "subgoal":
-            return await self._handle_subgoal_command(event)
 
         if canonical == "voice":
             return await self._handle_voice_command(event)
@@ -16363,45 +16247,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "protect the transcript, this message was not processed. "
                     "Wait for the active turn to finish, then resend it."
                 )
-            # Goal continuation: after the agent returns a final response
-            # for this turn, check any standing /goal — the judge will
-            # either mark it done, pause it (budget), or enqueue a
-            # continuation prompt back through the adapter FIFO so the
-            # next turn makes more progress. Wrapped in try/except so a
-            # broken judge never breaks normal message handling.
-            try:
-                _final_text = ""
-                if isinstance(_agent_result, dict):
-                    _final_text = str(_agent_result.get("final_response") or "")
-                elif isinstance(_agent_result, str):
-                    _final_text = _agent_result
-                # Skip for empty responses (interrupted / errored) — the
-                # judge would almost always say "continue" and we'd loop
-                # on error. Let the user drive the next turn.
-                if _final_text.strip():
-                    try:
-                        session_entry = await self.async_session_store.get_or_create_session(
-                            source,
-                            touch_activity=not is_internal,
-                        )
-                    except Exception:
-                        session_entry = None
-                    if session_entry is not None:
-                        await self._post_turn_goal_continuation(
-                            session_entry=session_entry,
-                            source=source,
-                            final_response=_final_text,
-                        )
-                        # /loop tick completion: if this turn was a loop
-                        # wakeup, evaluate it (LOOP_COMPLETE marker, --until
-                        # judge, caps) and schedule the next tick.
-                        await self._post_turn_loop_completion(
-                            session_entry=session_entry,
-                            source=source,
-                            final_response=_final_text,
-                        )
-            except Exception as _goal_exc:
-                logger.debug("goal continuation hook failed: %s", _goal_exc)
             return _agent_result
         finally:
             self._restore_pending_one_turn_model_override(_quick_key)
@@ -19549,453 +19394,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return f"Suggestions command failed: {e}"
 
 
-    # ────────────────────────────────────────────────────────────────
-    # /goal — persistent cross-turn goals (Ralph-style loop)
-    # ────────────────────────────────────────────────────────────────
-    def _goal_max_turns_from_config(self) -> int:
-        """Resolve the configured /goal turn budget for gateway sessions.
-
-        GatewayRunner.config is a GatewayConfig dataclass, not the full
-        user config mapping. Top-level config blocks such as ``goals`` are
-        therefore only available through pilotage_cli.config.load_config().
-        """
-        try:
-            goals_cfg = (
-                (self.config or {}).get("goals", {})
-                if isinstance(self.config, dict)
-                else getattr(self.config, "goals", {}) or {}
-            )
-            if not goals_cfg:
-                from pilotage_cli.config import load_config
-
-                goals_cfg = (load_config() or {}).get("goals") or {}
-            return int(goals_cfg.get("max_turns", 20) or 20)
-        except Exception:
-            return 20
-
-    async def _get_goal_manager_for_event(self, event: "MessageEvent"):
-        """Return a GoalManager bound to the session for this gateway event.
-
-        Returns ``(manager, session_entry)`` or ``(None, None)`` if the
-        goals module can't be loaded.
-        """
-        try:
-            from pilotage_cli.goals import GoalManager
-        except Exception as exc:
-            logger.debug("goal manager unavailable: %s", exc)
-            return None, None
-        try:
-            # Session lookups on behalf of an internal event must not advance
-            # the user-activity clock that drives idle/daily reset policy
-            # (same class as the wake fix in _handle_message_with_agent).
-            session_entry = await self.async_session_store.get_or_create_session(
-                event.source,
-                touch_activity=not bool(getattr(event, "internal", False)),
-            )
-        except Exception as exc:
-            logger.debug("goal manager: session lookup failed: %s", exc)
-            return None, None
-        sid = getattr(session_entry, "session_id", None) or ""
-        if not sid:
-            return None, None
-        max_turns = self._goal_max_turns_from_config()
-        return GoalManager(session_id=sid, default_max_turns=max_turns), session_entry
-
-    async def _get_heartbeat_manager_for_event(self, event: "MessageEvent"):
-        """Return a HeartbeatManager bound to the session for this event.
-
-        Returns ``(manager, session_entry)`` or ``(None, None)``.
-        """
-        try:
-            from pilotage_cli.heartbeat import HeartbeatManager
-        except Exception as exc:
-            logger.debug("heartbeat manager unavailable: %s", exc)
-            return None, None
-        try:
-            # Same reset-policy contract as _get_goal_manager_for_event:
-            # internal events look up the session without touching activity.
-            session_entry = await self.async_session_store.get_or_create_session(
-                event.source,
-                touch_activity=not bool(getattr(event, "internal", False)),
-            )
-        except Exception as exc:
-            logger.debug("heartbeat manager: session lookup failed: %s", exc)
-            return None, None
-        sid = getattr(session_entry, "session_id", None) or ""
-        if not sid:
-            return None, None
-        return HeartbeatManager(session_id=sid), session_entry
-
-    def _register_heartbeat_watch(self, quick_key: str, source: Any, session_id: str) -> None:
-        """Track a session with an active heartbeat and start the poller.
-
-        The registry maps ``quick_key`` → ``(source, session_id)`` so the
-        poller can rebuild a MessageEvent and enqueue via the adapter FIFO.
-        In-memory by design: heartbeat STATE survives restarts in SessionDB,
-        but firing resumes when the user touches /heartbeat again in the new
-        gateway process (documented; durable schedules belong to cron).
-        """
-        watch = getattr(self, "_heartbeat_watch", None)
-        if watch is None:
-            watch = {}
-            self._heartbeat_watch = watch
-        watch[quick_key] = (source, session_id)
-        self._start_heartbeat_poller()
-
-    def _unregister_heartbeat_watch(self, quick_key: str) -> None:
-        watch = getattr(self, "_heartbeat_watch", None)
-        if watch:
-            watch.pop(quick_key, None)
-
-    def _start_heartbeat_poller(self) -> None:
-        """Start the single gateway-wide heartbeat poll task (idempotent)."""
-        existing = getattr(self, "_heartbeat_poll_task", None)
-        if existing is not None and not existing.done():
-            return
-
-        from pilotage_cli.heartbeat import POLL_SECONDS
-
-        async def _poll_loop():
-            while True:
-                await asyncio.sleep(POLL_SECONDS)
-                watch = getattr(self, "_heartbeat_watch", None)
-                if not watch:
-                    continue
-                for quick_key, (source, session_id) in list(watch.items()):
-                    try:
-                        # Busy sessions coalesce their tick to the next idle poll.
-                        if quick_key in self._running_agents:
-                            continue
-                        from pilotage_cli.heartbeat import HeartbeatManager
-
-                        mgr = HeartbeatManager(session_id=session_id)
-                        if not mgr.has_heartbeat():
-                            watch.pop(quick_key, None)
-                            continue
-                        prompt = mgr.due_prompt()
-                        if not prompt:
-                            continue
-                        adapter = self._adapter_for_source(source)
-                        if adapter is None:
-                            continue
-                        hb_event = MessageEvent(
-                            text=prompt,
-                            message_type=MessageType.TEXT,
-                            source=source,
-                            message_id=None,
-                            channel_prompt=None,
-                        )
-                        self._enqueue_fifo(quick_key, hb_event, adapter)
-                    except Exception as exc:
-                        logger.debug("heartbeat poll for %s failed: %s", quick_key, exc)
-
-        try:
-            task = asyncio.create_task(_poll_loop())
-            self._heartbeat_poll_task = task
-            _bg = getattr(self, "_background_tasks", None)
-            if _bg is not None:
-                _bg.add(task)
-                task.add_done_callback(_bg.discard)
-        except Exception:
-            logger.debug("Failed to start heartbeat poller", exc_info=True)
 
 
 
-    async def _send_goal_status_notice(self, source: Any, message: str) -> None:
-        """Send a /goal judge status line back to the originating chat/thread."""
-        adapter = self._adapter_for_source(source)
-        if not adapter:
-            logger.debug("goal continuation: no adapter for %s", getattr(source, "platform", None))
-            return
-
-        try:
-            metadata = self._thread_metadata_for_source(source)
-        except Exception:
-            metadata = None
-
-        result = await adapter.send(source.chat_id, message, metadata=metadata)
-        if result is not None and not getattr(result, "success", True):
-            logger.warning(
-                "goal continuation: status send failed: %s",
-                getattr(result, "error", "unknown error"),
-            )
-
-    async def _defer_goal_status_notice_after_delivery(self, source: Any, message: str) -> None:
-        """Send a /goal status line after the main response is delivered.
-
-        The gateway message handler returns the agent response to the platform
-        adapter, which sends it after this method's caller has returned.  For a
-        natural Discord/Telegram reading order, goal status belongs after that
-        send.  Platform adapters provide a one-shot post-delivery callback for
-        exactly this boundary; when unavailable, fall back to direct awaited
-        delivery rather than silently dropping the notice.
-        """
-        adapter = self._adapter_for_source(source)
-        if not adapter:
-            logger.debug("goal continuation: no adapter for %s", getattr(source, "platform", None))
-            return
-
-        async def _deliver() -> None:
-            try:
-                await self._send_goal_status_notice(source, message)
-            except Exception as exc:
-                logger.warning("goal continuation: status send failed: %s", exc, exc_info=True)
-
-        try:
-            session_key = self._session_key_for_source(source)
-        except Exception:
-            session_key = None
-
-        if session_key and hasattr(adapter, "register_post_delivery_callback"):
-            try:
-                generation = None
-                active = getattr(adapter, "_active_sessions", {}).get(session_key)
-                if active is not None:
-                    generation = getattr(active, "_pilotage_run_generation", None)
-                adapter.register_post_delivery_callback(
-                    session_key,
-                    _deliver,
-                    generation=generation,
-                )
-                return
-            except Exception as exc:
-                logger.debug("goal continuation: post-delivery callback registration failed: %s", exc)
-
-        await _deliver()
-
-    async def _post_turn_goal_continuation(
-        self,
-        *,
-        session_entry: Any,
-        source: Any,
-        final_response: str,
-    ) -> None:
-        """Run the goal judge after a gateway turn and, if still active,
-        enqueue a continuation prompt for the same session.
-
-        Called from ``_handle_message_with_agent`` at turn boundary, AFTER
-        the response has been delivered. Safe when no goal is set.
-
-        We use the adapter's pending-message / FIFO machinery so any real
-        user message that arrives simultaneously is handled by the same
-        queue and takes priority naturally.
-        """
-        try:
-            from pilotage_cli.goals import GoalManager
-        except Exception as exc:
-            logger.debug("goal continuation: goals module unavailable: %s", exc)
-            return
-
-        sid = getattr(session_entry, "session_id", None) or ""
-        if not sid:
-            return
-
-        max_turns = self._goal_max_turns_from_config()
-
-        mgr = GoalManager(session_id=sid, default_max_turns=max_turns)
-        if not mgr.is_active():
-            return
-
-        try:
-            from pilotage_cli.goals import gather_background_processes as _gather_bg
-            _bg_procs = _gather_bg()
-        except Exception:
-            _bg_procs = None
-
-        # evaluate_after_turn calls judge_goal() which makes a synchronous
-        # HTTP request to the auxiliary LLM.  Running it on the event-loop
-        # thread would block Discord heartbeats for 10-40 s and cause
-        # connection flaps, so we offload it to a thread-pool executor.
-        # _run_in_executor_with_context (not bare run_in_executor): the
-        # profile secret scope and auxiliary runtime context are contextvars,
-        # and a default-executor hop would drop them — aux-client provider
-        # resolution would then read credentials unscoped and fail under
-        # multiplexing (same pattern as compression in slash_commands.py).
-        decision = await self._run_in_executor_with_context(
-            lambda: mgr.evaluate_after_turn(
-                final_response or "",
-                user_initiated=True,
-                background_processes=_bg_procs,
-            ),
-        )
-        msg = decision.get("message") or ""
-
-        # Defer the status line until after the adapter has delivered the
-        # agent's visible final response. The judge runs after the response is
-        # produced but before BasePlatformAdapter sends it, so sending here
-        # would show "✓ Goal achieved" before the answer itself. Registering
-        # an awaited post-delivery callback preserves delivery reliability
-        # without reversing the user-visible ordering.
-        if msg and source is not None:
-            await self._defer_goal_status_notice_after_delivery(source, msg)
-
-        if not decision.get("should_continue"):
-            return
-
-        prompt = decision.get("continuation_prompt") or ""
-        if not prompt or source is None:
-            return
-
-        # Enqueue via the adapter's FIFO so a user message already in
-        # flight preempts the continuation naturally.
-        try:
-            adapter = self._adapter_for_source(source)
-            _quick_key = self._session_key_for_source(source)
-            if adapter and _quick_key:
-                cont_event = MessageEvent(
-                    text=prompt,
-                    message_type=MessageType.TEXT,
-                    source=source,
-                    message_id=None,
-                    channel_prompt=None,
-                )
-                self._enqueue_fifo(_quick_key, cont_event, adapter)
-        except Exception as exc:
-            logger.debug("goal continuation: enqueue failed: %s", exc)
 
 
 
-    async def _post_turn_loop_completion(
-        self,
-        *,
-        session_entry: Any,
-        source: Any,
-        final_response: str,
-    ) -> None:
-        """Complete a /loop wakeup tick after a gateway turn.
 
-        No-op unless the session has a loop whose tick is in flight
-        (``awaiting_response`` — set when the wakeup was injected). Applies
-        the LOOP_COMPLETE marker / --until judge / caps and schedules the
-        next tick; the idle wakeup watcher fires it when due.
-        """
-        try:
-            from pilotage_cli.loops import LoopManager
-        except Exception as exc:
-            logger.debug("loop completion: loops module unavailable: %s", exc)
-            return
 
-        sid = getattr(session_entry, "session_id", None) or ""
-        if not sid:
-            return
 
-        mgr = LoopManager(session_id=sid)
-        state = mgr.state
-        if state is None or not state.awaiting_response:
-            return
 
-        # The --until judge is a sync aux-LLM call — keep it off the event loop.
-        decision = await asyncio.get_running_loop().run_in_executor(
-            None, mgr.complete_tick, final_response or ""
-        )
-        msg = decision.get("message") or ""
-        if msg and source is not None:
-            await self._defer_goal_status_notice_after_delivery(source, msg)
 
-    async def _loop_wakeup_watcher(self, interval: float = 15.0) -> None:
-        """Fire due /loop wakeups for idle gateway sessions.
 
-        The gateway has no per-session scheduler thread, so a coarse ticker
-        scans persisted loops (SessionDB ``loop:*`` rows) and injects the
-        wakeup prompt into each due session's chat via the same synthetic-
-        message path used by watch notifications. Deferrals:
 
-        - session currently running an agent turn → skip (stays due; the
-          adapter FIFO would race the live turn otherwise)
-        - active non-parked /goal on the session → skip (goal owns the
-          idle boundary)
-        - no routing metadata on the loop → skip with a one-time warning
-          (CLI/TUI loops carry no route and are driven by their own surfaces)
-        """
-        await asyncio.sleep(5)  # let platforms finish connecting
-        warned_no_route: set = set()
-        while self._running:
-            try:
-                from pilotage_cli.loops import (
-                    LoopManager,
-                    goal_blocks_loop_tick,
-                    list_active_loops,
-                )
 
-                now = time.time()
-                for sid, state in list_active_loops():
-                    if state.awaiting_response or now < state.next_due_at:
-                        continue
-                    route = state.route or {}
-                    platform_name = route.get("platform", "")
-                    chat_id = route.get("chat_id", "")
-                    if not platform_name or not chat_id:
-                        # CLI / TUI-owned loop — their own schedulers drive it.
-                        continue
-                    adapter = None
-                    for p, a in self.adapters.items():
-                        if p.value == platform_name:
-                            adapter = a
-                            break
-                    if adapter is None:
-                        if sid not in warned_no_route:
-                            warned_no_route.add(sid)
-                            logger.debug(
-                                "loop wakeup: no adapter for platform %r (session %s)",
-                                platform_name, sid,
-                            )
-                        continue
-
-                    # Build the source + session key to check business.
-                    evt_stub = {
-                        "session_key": "",
-                        "platform": platform_name,
-                        "chat_id": chat_id,
-                        "chat_type": route.get("chat_type", ""),
-                        "thread_id": route.get("thread_id", ""),
-                        "user_id": route.get("user_id", ""),
-                        "user_name": route.get("user_name", ""),
-                    }
-                    source = self._build_process_event_source(evt_stub)
-                    if source is None:
-                        continue
-                    try:
-                        session_key = self._session_key_for_source(source)
-                    except Exception:
-                        session_key = None
-                    if session_key and session_key in self._running_agents:
-                        continue  # busy — stays due, next scan retries
-                    if goal_blocks_loop_tick(sid):
-                        continue
-
-                    mgr = LoopManager(session_id=sid)
-                    if not mgr.is_due(now):
-                        continue
-                    wakeup = mgr.fire_tick()
-                    if not wakeup:
-                        continue
-                    try:
-                        synth_event = MessageEvent(
-                            text=wakeup,
-                            message_type=MessageType.TEXT,
-                            source=source,
-                            internal=True,
-                        )
-                        logger.info(
-                            "loop wakeup #%s — injecting for %s chat=%s thread=%s",
-                            mgr.state.ticks_fired if mgr.state else "?",
-                            platform_name, source.chat_id, source.thread_id,
-                        )
-                        await adapter.handle_message(synth_event)
-                        # Slash-command loops dispatch through the command
-                        # path and never hit the post-turn completion hook —
-                        # complete the tick immediately (caps + scheduling).
-                        if wakeup.lstrip().startswith("/"):
-                            mgr.complete_tick("")
-                    except Exception as exc:
-                        logger.warning("loop wakeup injection failed for %s: %s", sid, exc)
-                        try:
-                            mgr.abandon_tick()
-                        except Exception:
-                            pass
-            except Exception as exc:
-                logger.debug("loop wakeup watcher error: %s", exc)
-            await asyncio.sleep(interval)
 
     def _should_send_voice_reply(
         self,
@@ -26740,12 +26152,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 next_message_type = None
                 if pending_event is not None:
                     next_source = getattr(pending_event, "source", None) or source
-                    if self._is_goal_continuation_event(pending_event) and not self._goal_still_active_for_session(session_id):
-                        logger.info(
-                            "Discarding stale goal continuation for session %s — goal is no longer active",
-                            session_key or "?",
-                        )
-                        return result
                     # Resolve the follow-up's session key BEFORE preparing the
                     # inbound text: _prepare_inbound_message_text buffers native
                     # image paths under the key it is given, and the recursive

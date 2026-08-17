@@ -3500,29 +3500,6 @@ def compress_context(
                         pass
                     agent._session_db_created = True
                     split_status = "rotated_committed"
-                    # Carry a persistent /goal onto the continuation session.
-                    # Compression mints a fresh child id; load_goal does a flat
-                    # per-session lookup with no parent walk, so without this an
-                    # active goal silently dies at the boundary.
-                    try:
-                        from pilotage_cli.goals import migrate_goal_to_session
-                        migrate_goal_to_session(old_session_id, agent.session_id, reason="compression")
-                    except Exception as _goal_err:
-                        logger.debug("Could not migrate goal on compression: %s", _goal_err)
-                    # Same boundary hazard for /heartbeat state — carry it too.
-                    try:
-                        from pilotage_cli.heartbeat import migrate_heartbeat_to_session
-                        migrate_heartbeat_to_session(old_session_id, agent.session_id)
-                    except Exception as _hb_err:
-                        logger.debug("Could not migrate heartbeat on compression: %s", _hb_err)
-                    # Same boundary hazard for a persistent /loop — carry it
-                    # onto the continuation session so the recurring wakeups
-                    # survive compression.
-                    try:
-                        from pilotage_cli.loops import migrate_loop_to_session
-                        migrate_loop_to_session(old_session_id, agent.session_id, reason="compression")
-                    except Exception as _loop_err:
-                        logger.debug("Could not migrate loop on compression: %s", _loop_err)
                     # Carry the title across the compression boundary unchanged.
                     #
                     # This used to renumber ("Fix X" → "Fix X #2") on every

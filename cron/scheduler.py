@@ -55,10 +55,6 @@ from pilotage_cli.config import (
 from pilotage_cli.fallback_config import get_fallback_chain
 from pilotage_time import now as _pilotage_now
 from agent.interrupt_compat import request_hard_interrupt
-from agent.delegation_context import (
-    enter_non_dispatcher_owned_context,
-    exit_non_dispatcher_owned_context,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -4556,7 +4552,6 @@ def run_job(
     # future writers.  Acquire itself can't leak (it either blocks or returns).
     _cron_session_var = _VAR_MAP["PILOTAGE_CRON_SESSION"]
     _cron_session_token = None
-    _non_dispatcher_token = None
     try:
         if not _cwd_lock_acquired:
             # Fail closed: running without the lock would let a
@@ -4591,14 +4586,6 @@ def run_job(
         # and kanban_complete defaults task_id to $PILOTAGE_KANBAN_TASK -- letting
         # an unrelated cron job close the worker's task and overwrite real
         # results.
-        #
-        # A ContextVar, NOT an os.environ clear: the env is process-global and
-        # shared with the worker's own claim heartbeat (run_agent._touch_activity
-        # -> heartbeat_current_worker_from_env, which would starve and let the
-        # dispatcher reclaim a live task), the gateway's kanban watchers, and
-        # concurrent cron jobs on the parallel pool.  contextvars.copy_context()
-        # at the run_conversation hop carries this into the agent thread.
-        _non_dispatcher_token = enter_non_dispatcher_owned_context()
         if _job_workdir:
             os.environ["TERMINAL_CWD"] = _job_workdir
             logger.info("Job '%s': using workdir %s", job_id, _job_workdir)
@@ -5401,8 +5388,6 @@ def run_job(
         clear_session_vars(_ctx_tokens)
         if _cron_session_token is not None:
             _cron_session_var.reset(_cron_session_token)
-        if _non_dispatcher_token is not None:
-            exit_non_dispatcher_owned_context(_non_dispatcher_token)
         for _var_name in _cron_delivery_vars:
             _VAR_MAP[_var_name].set("")
         if _session_db:

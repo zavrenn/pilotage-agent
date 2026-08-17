@@ -155,23 +155,6 @@ gateway:
     invalid_days:          "Valeur --days invalide : {value}"
     error:                 "Erreur lors de la génération des analyses : {error}"
 
-  kanban:
-    error_prefix:          "⚠ erreur kanban : {error}"
-    subscribed_suffix:     "(abonné — vous serez notifié lorsque {task_id} se terminera ou sera bloqué)"
-    truncated_suffix:      "… (tronqué ; utilisez `pilotage kanban …` dans votre terminal pour la sortie complète)"
-    no_output:             "(aucune sortie)"
-    wake:
-      completed:           "completed"
-      gave_up:             "gave up (retries exhausted)"
-      crashed:             "crashed (worker exited); dispatcher will retry"
-      timed_out:           "timed out; dispatcher will retry"
-      blocked:             "blocked; needs attention"
-      status_default:      "status changed"
-      status_joiner:       ", "
-      message:             "[kanban] Task {task_id} {status}.\nTitle: {title}\nAssignee: @{assignee}\nBoard: {board}\n\nCheck the result or decide the next step."
-      handoff:             "Result: {summary}"
-      guidance:            "This is an automatic task-status notification, not a request to decompose the task again. Inspect the current board before creating follow-up tasks; do not recreate tasks or graphs that already exist."
-
   personality:
     none_configured:       "Aucune personnalité configurée dans `{path}/config.yaml`"
     header:                "🎭 **Personnalités disponibles**\n"

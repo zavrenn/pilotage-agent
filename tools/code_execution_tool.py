@@ -289,11 +289,11 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
     try:
         from agent.delegation_context import (
             is_delegated_child_process_context,
-            scrub_kanban_env,
+            scrub_delegated_child_env,
         )
 
         if is_delegated_child_process_context():
-            scrubbed = scrub_kanban_env(scrubbed)
+            scrubbed = scrub_delegated_child_env(scrubbed)
     except Exception:
         pass
     return scrubbed

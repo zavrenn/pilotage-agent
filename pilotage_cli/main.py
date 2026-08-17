@@ -1454,27 +1454,6 @@ def _read_tui_active_session_file(path: Optional[str]) -> Optional[str]:
         return None
 
 
-def _pin_kanban_board_env() -> None:
-    """Pin the active kanban board into ``PILOTAGE_KANBAN_BOARD`` for the chat session.
-
-    Without this, in-process tools (``kanban_*``) and shelled-out CLI calls
-    (``pilotage kanban …``) resolve the board on different paths: the env-pin if
-    set, otherwise the global ``<root>/kanban/current`` file. A concurrent
-    ``pilotage kanban boards switch`` from another session can flip the file
-    mid-turn, so the same chat sees its tool calls hit board A while its shell
-    calls hit board B. Pinning at chat boot mirrors what the
-    dispatcher already does for spawned workers.
-    """
-    if os.environ.get("PILOTAGE_KANBAN_BOARD"):
-        return
-    try:
-        from pilotage_cli.kanban_db import get_current_board
-
-        os.environ["PILOTAGE_KANBAN_BOARD"] = get_current_board()
-    except Exception:
-        pass
-
-
 def _sync_bundled_skills_quietly() -> None:
     """Seed ``~/.pilotage/skills/`` with the bundled skill library on first launch.
 
@@ -1686,7 +1665,6 @@ def cmd_chat(args):
     if getattr(args, "source", None):
         os.environ["PILOTAGE_SESSION_SOURCE"] = args.source
 
-    _pin_kanban_board_env()
     _confirm_startup_expensive_model_override(args)
 
     # The interactive CLI/TUI chat client was removed — Pilotage runs as a
@@ -3399,20 +3377,6 @@ def cmd_webhook(args):
     from pilotage_cli.webhook import webhook_command
 
     webhook_command(args)
-
-
-def cmd_kanban(args):
-    """Multi-profile collaboration board."""
-    from pilotage_cli.kanban import kanban_command
-
-    return kanban_command(args)
-
-
-def cmd_project(args):
-    """Manage projects (named, multi-folder workspaces)."""
-    from pilotage_cli.projects_cmd import projects_command
-
-    return projects_command(args)
 
 
 def cmd_hooks(args):
@@ -5855,7 +5819,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "approvals", "auth", "backup", "bundles", "checkpoints", "completion",
         "config", "cron", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "import-agent",
-        "gui", "desktop", "kanban", "login", "logout", "logs", "memory",
+        "gui", "desktop", "login", "logout", "logs", "memory",
         "model", "monitoring", "pairing", "pause", "plugins", "portal", "profile",
         "project",
         "prompt-size",
@@ -6496,22 +6460,6 @@ def main():
     # webhook command  (parser built in pilotage_cli/subcommands/webhook.py)
     # =========================================================================
     build_webhook_parser(subparsers, cmd_webhook=cmd_webhook)
-
-    # =========================================================================
-    # kanban command — multi-profile collaboration board
-    # =========================================================================
-    from pilotage_cli.kanban import build_parser as _build_kanban_parser
-
-    kanban_parser = _build_kanban_parser(subparsers)
-    kanban_parser.set_defaults(func=cmd_kanban)
-
-    # =========================================================================
-    # project command — named, multi-folder workspaces
-    # =========================================================================
-    from pilotage_cli.projects_cmd import build_parser as _build_project_parser
-
-    project_parser = _build_project_parser(subparsers)
-    project_parser.set_defaults(func=cmd_project)
 
     # =========================================================================
     # hooks command — shell-hook inspection and management

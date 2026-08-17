@@ -840,34 +840,6 @@ DEFAULT_CONFIG = {
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
         },
-        # Triage specifier — flesh out a rough one-liner in the Kanban
-        # Triage column into a concrete spec, then promote it to ``todo``.
-        # Invoked by ``pilotage kanban specify`` (single id or --all). Set a
-        # cheap, capable model here; the main
-        # model is overkill for short spec expansion.
-        "triage_specifier": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 120,
-            "extra_body": {},
-            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
-        },
-        # Kanban decomposer — decomposes a triage task into a graph of
-        # child tasks routed to specialist profiles by description.
-        # Invoked by ``pilotage kanban decompose`` and the kanban
-        # auto-decompose dispatcher tick. Returns a JSON task graph;
-        # uses more tokens than the specifier so allow more headroom.
-        "kanban_decomposer": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 180,
-            "extra_body": {},
-            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
-        },
         # Profile describer — auto-generates a 1-2 sentence description
         # of what a profile is good at. Invoked by
         # ``pilotage profile describe <name> --auto`` and the dashboard's
@@ -1488,23 +1460,6 @@ DEFAULT_CONFIG = {
     },
 
 
-    # Loops — /loop recurring in-session wakeups (Claude Code parity).
-    # A loop re-runs a prompt (or slash command) on a cadence inside the
-    # live session. Fixed-interval mode fires on the user's clock;
-    # self-paced mode (no interval given) starts at the floor and backs
-    # off exponentially while the agent's replies stop changing.
-    "loops": {
-        # Smallest fixed interval accepted (seconds). Tighter cadences are
-        # raised to this floor — each tick is a full agent turn.
-        "min_interval_seconds": 30,
-        # Backstop tick budget: the loop auto-pauses after this many
-        # wakeups unless the user set --times. 0 = unlimited.
-        "max_ticks": 100,
-        # Self-paced cadence bounds (seconds).
-        "self_paced_floor_seconds": 60,
-        "self_paced_ceiling_seconds": 900,
-    },
-
     # Skills — external skill directories for sharing skills across tools/agents.
     # Each path is expanded (~, ${VAR}) and resolved.  Read-only — skill creation
     # always goes to ~/.pilotage/skills/.
@@ -1852,92 +1807,6 @@ DEFAULT_CONFIG = {
         "session_db_timeout_seconds": 10,
     },
 
-    # Kanban multi-agent coordination — controls the dispatcher loop that
-    # spawns workers for ready tasks. The dispatcher ticks every N seconds
-    # (default 60), reclaims stale claims, promotes dependency-satisfied
-    # todos to ready, and fires `pilotage -p <assignee> chat -q ...` for
-    # each claimable ready task. One dispatcher per profile is sufficient;
-    # running more than one on the same kanban.db will race for claims.
-    "kanban": {
-        # Auto-subscribe the originating gateway/TUI session to task
-        # completion + block events when ``kanban_create`` is called from
-        # inside a session that has a persistent delivery channel. The
-        # agent that dispatched the task will get notified automatically
-        # instead of having to poll. Disable to mirror pre-feature
-        # behaviour — e.g. for a profile that prefers explicit
-        # ``kanban_notify-subscribe`` calls per task.
-        "auto_subscribe_on_create": True,
-        # Run the dispatcher inside the gateway process. On by default —
-        # the cost is ~300µs every `dispatch_interval_seconds` when idle,
-        # and gateway is the supervisor users already have. Set to false
-        # only if you run the dispatcher as a separate systemd unit or
-        # don't want the gateway to spawn workers.
-        "dispatch_in_gateway": True,
-        # Automatically claim tasks in the first-class review column and spawn
-        # the assigned profile with the bundled sdlc-review skill. Disable for
-        # boards where every review is performed manually from the dashboard.
-        "review_dispatch": True,
-        # Seconds between dispatcher ticks (idle or not). Lower = snappier
-        # pickup of newly-ready tasks; higher = less SQL pressure.
-        "dispatch_interval_seconds": 60,
-        # Auto-block after this many consecutive non-success attempts for the
-        # same task/profile (spawn_failed, timed_out, or crashed). Reassignment
-        # resets the streak for the new profile.
-        "failure_limit": 2,
-        # Worker stdout/stderr logs rotate at spawn time. Defaults preserve
-        # the historical 2 MiB + one-backup behavior; long-running workers can
-        # raise these to keep more early failure evidence.
-        "worker_log_rotate_bytes": 2 * 1024 * 1024,
-        "worker_log_backup_count": 1,
-        # Profile assigned to the root/orchestration task after Triage
-        # decomposition. When unset, falls back to the default profile (the
-        # one `pilotage` launches with no -p flag). This does not control the
-        # decomposer prompt, model, or skills; configure that LLM path under
-        # auxiliary.kanban_decomposer.
-        "orchestrator_profile": "",
-        # Where a child task lands if the orchestrator can't match an
-        # assignee to any installed profile. When unset, falls back to the
-        # default profile. A task never ends up with assignee=None.
-        "default_assignee": "",
-        # Per-profile concurrency cap. When set to a positive int,
-        # no single profile can have more than N workers running at once,
-        # even if the global max_in_progress / max_spawn caps would allow
-        # it. Tasks blocked this way defer to the next dispatcher tick.
-        # Unset (None) means "no per-profile cap" — backward-compatible
-        # with existing installs. Useful for fan-out workflows that would
-        # otherwise saturate one profile's local model / API quota /
-        # browser pool while leaving other profiles idle.
-        "max_in_progress_per_profile": None,
-        # When true, the kanban dispatcher auto-runs the decomposer on
-        # tasks that land in Triage (every dispatcher tick). When false,
-        # decomposition is manual via `pilotage kanban decompose <id>` or
-        # the dashboard's Decompose button.
-        "auto_decompose": True,
-        # Max triage tasks to decompose per dispatcher tick. Prevents a
-        # large bulk-load of triage tasks from spending a burst of aux
-        # LLM calls in one tick. Excess tasks defer to the next tick.
-        "auto_decompose_per_tick": 3,
-        # Stale detection: running tasks that have exceeded this many
-        # seconds without a heartbeat (since ``last_heartbeat_at``) are
-        # auto-reclaimed to ``ready`` on the next dispatcher tick. The
-        # worker process (if still running host-locally) is terminated
-        # before the reclaim.  0 disables stale detection entirely.
-        "dispatch_stale_timeout_seconds": 14400,
-        # Orphaned-card reconciliation: each dispatcher tick, requeue
-        # 'running' cards whose claim bookkeeping is broken (claim_lock or
-        # claim_expires NULL with a dead/gone worker) — zombies invisible
-        # to the TTL/crash/stale recovery paths. Set false to keep orphans
-        # frozen for manual forensics.
-        "reconcile_orphans": True,
-        # Notify subscriptions survive a task reaching ``done`` (completion
-        # is reversible — controllers reopen done work for review
-        # corrections), and are normally removed on archive. On boards that
-        # never archive, the notifier GC purges subscriptions for tasks
-        # that have been ``done`` with no new activity for this many days,
-        # so stale rows don't accumulate and get scanned on every notifier
-        # tick forever. Set 0 to disable the sweep.
-        "done_sub_retention_days": 30,
-    },
 
     # execute_code settings — controls the tool used for programmatic tool calls.
     "code_execution": {

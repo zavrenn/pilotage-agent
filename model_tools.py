@@ -70,17 +70,6 @@ def _is_delegated_child_context() -> bool:
         return False
 
 
-def _is_dispatcher_owned_worker() -> bool:
-    """False when PILOTAGE_KANBAN_* is present but this execution does not own it
-    (delegate_task child, or a cron job fired in-process from a worker)."""
-    try:
-        from agent.delegation_context import is_dispatcher_owned_worker_context
-
-        return is_dispatcher_owned_worker_context()
-    except Exception:
-        return True
-
-
 # =============================================================================
 # Async Bridging  (single source of truth -- used by registry.dispatch too)
 # =============================================================================
@@ -369,10 +358,8 @@ def get_tool_definitions(
                 frozenset(disabled_toolsets) if disabled_toolsets else None,
                 registry._generation,
                 cfg_fp,
-                bool(os.environ.get("PILOTAGE_KANBAN_TASK")),
                 bool(skip_tool_search_assembly),
                 _is_delegated_child_context(),
-                _is_dispatcher_owned_worker(),
                 profile_scope,
             )
         with _tool_defs_cache_lock:
@@ -426,18 +413,6 @@ def _compute_tool_definitions(
 
     if enabled_toolsets is not None:
         effective_enabled_toolsets = list(enabled_toolsets)
-        if (
-            os.environ.get("PILOTAGE_KANBAN_TASK")
-            and not _is_delegated_child_context()
-            and _is_dispatcher_owned_worker()
-            and "kanban" not in effective_enabled_toolsets
-        ):
-            # Dispatcher-spawned workers are scoped by PILOTAGE_KANBAN_TASK and
-            # must always receive the lifecycle handoff tools. Assignee
-            # profiles may intentionally restrict their normal chat toolsets
-            # (for token/cost reasons), but that should not strip the kanban
-            # worker's completion/block/heartbeat surface.
-            effective_enabled_toolsets.append("kanban")
         for toolset_name in effective_enabled_toolsets:
             if validate_toolset(toolset_name):
                 resolved = resolve_toolset(toolset_name)

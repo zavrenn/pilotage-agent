@@ -103,9 +103,6 @@ def _pilotage_database_paths(pilotage_home: Path) -> list[tuple[str, Path]]:
         for name in _QUICK_STATE_FILES
         if name.endswith(".db")
     ]
-    # Non-default kanban boards each keep their own kanban.db.
-    for board_db in sorted((pilotage_home / "kanban" / "boards").glob("*/kanban.db")):
-        entries.append((str(board_db.relative_to(pilotage_home)), board_db))
     return entries
 
 
@@ -235,18 +232,6 @@ def _honcho_is_configured_for_doctor() -> bool:
         return False
 
 
-def _is_kanban_worker_env_gate(item: dict) -> bool:
-    """Return True when Kanban is unavailable only because this is not a worker process."""
-    if item.get("name") != "kanban":
-        return False
-    if os.environ.get("PILOTAGE_KANBAN_TASK"):
-        return False
-
-    tools = item.get("tools") or []
-    return bool(tools) and all(str(tool).startswith("kanban_") for tool in tools)
-
-
-def _doctor_tool_availability_detail(toolset: str) -> str:
     """Optional explanatory suffix for toolsets whose doctor status needs context."""
     if toolset == "kanban" and not os.environ.get("PILOTAGE_KANBAN_TASK"):
         return "(runtime-gated; loaded only for dispatcher-spawned workers)"

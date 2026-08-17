@@ -3492,22 +3492,6 @@ class AIAgent:
         self._last_activity_ts = time.time()
         self._last_activity_desc = bound_activity_description(desc)
         self._last_activity_provenance = normalize_activity_provenance(provenance)
-        if os.environ.get("PILOTAGE_KANBAN_TASK"):
-            try:
-                from tools.kanban_tools import (
-                    heartbeat_current_worker_from_env,
-                    inject_new_comments_from_env,
-                )
-                heartbeat_current_worker_from_env()
-                # Fold any new operator notes into the running turn (OUT-OF-BAND
-                # steer) so the user can talk to a live task without a restart.
-                inject_new_comments_from_env(self)
-            except Exception:
-                # Never let the bridge break the agent loop.  The function
-                # already swallows exceptions internally; this outer guard
-                # covers import-time failures (kanban_tools unavailable,
-                # etc.) on niche deployment surfaces.
-                pass
         if force_persist:
             reset_session_activity_persist_window(self)
         self._persist_session_activity_if_due()

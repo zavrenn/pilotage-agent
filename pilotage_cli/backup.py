@@ -1254,8 +1254,6 @@ _QUICK_STATE_FILES = (
     "response_store.db",                # gateway conversation history / tool payloads
     "memory_store.db",                  # holographic memory facts/entities
     "verification_evidence.db",         # agent verification audit trail
-    "kanban.db",                        # default board (back-compat <root>/kanban.db)
-    "kanban/boards",                    # non-default boards: each <slug>/kanban.db + board metadata (workspaces/ + attachments/ are skipped as regenerable)
     # Pairing stores (generic + per-platform JSONs outside state.db)
     "pairing",                          # legacy location (gateway/pairing.py)
     "platforms/pairing",                # new location (gateway/pairing.py)

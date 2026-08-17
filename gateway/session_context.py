@@ -418,7 +418,6 @@ NON_MESSAGING_SESSION_SURFACES = frozenset(
         "cli",
         "codex",
         "gateway",
-        "kanban",
         "local",
         "msgraph_webhook",
         "tool",
@@ -483,25 +482,15 @@ def async_delivery_supported() -> bool:
     is delivered: sessions explicitly bound by a stateless channel — an adapter
     that cannot route a notification back after the turn ends (the API server),
     or a one-shot runner that exits after its final response (``pilotage -z``,
-    cron — see :func:`declare_stateless_channel`) — and dispatcher-spawned
-    Kanban workers (identified by ``PILOTAGE_KANBAN_TASK``), which are one-shot
-    ``chat -q`` subprocesses. The real gateway platforms, the interactive CLI,
-    and any other path that never bound the contextvar return ``True``.
+    cron — see :func:`declare_stateless_channel`). The real gateway platforms,
+    the interactive CLI, and any other path that never bound the contextvar
+    return ``True``.
 
     Tools that promise async delivery (``terminal`` notify_on_complete /
     watch_patterns, ``delegate_task`` background=True) consult this before
     registering a watcher / dispatching a detached child, so they can refuse a
     promise the channel can't keep instead of silently no-op'ing.
     """
-    import os
-
-    # A Kanban worker is a one-shot subprocess. Its parent session and process
-    # disappear after the quiet turn returns, so a completion queued later has
-    # no durable consumer even though an ordinary CLI session can drain that
-    # queue. Force tools onto their existing synchronous/polling fallbacks.
-    if os.environ.get("PILOTAGE_KANBAN_TASK"):
-        return False
-
     value = _SESSION_ASYNC_DELIVERY.get()
     if value is _UNSET:
         return True
