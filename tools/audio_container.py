@@ -2,8 +2,8 @@
 
 ONE sniffer owns container detection for the whole codebase:
 
-- **Outbound** (``tools/tts_tool.py``): TTS backends silently ignore the
-  requested opus format (Edge emits MP3, Piper writes WAV, ...), so the
+- **Outbound** (``tools/tts_tool.py``): an OpenAI-compatible endpoint may
+  ignore the requested opus format and write MP3/WAV bytes instead, so the
   synthesized file is sniffed and repaired when the bytes don't match the
   ``.ogg`` extension.
 - **Inbound** (``gateway/platforms/base.py`` ``cache_audio_from_bytes`` /

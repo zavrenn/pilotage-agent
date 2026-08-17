@@ -111,7 +111,6 @@ class TurnContext:
     result_holder: list = field(default_factory=lambda: [None])
     tools_holder: list = field(default_factory=lambda: [None])
     stream_consumer_holder: list = field(default_factory=lambda: [None])
-    streaming_tts_consumer_holder: list = field(default_factory=lambda: [None])
 
     # --- hook / status bridge wiring (published at original binding sites) -
     _loop_for_step: Any = None

@@ -402,8 +402,8 @@ def save_config_value(key_path: str, value: any) -> bool:
     #
     # We deliberately do NOT fall back to the repo's project cli-config.yaml:
     # that file is a shipped default/template, and most config readers
-    # (load_config → get_pilotage_home()/config.yaml, including
-    # load_wake_word_config) never read it. Writing a user setting there means
+    # (load_config reads get_pilotage_home()/config.yaml) never read it.
+    # Writing a user setting there means
     # the reader never sees it. This was the "wake-word ear reverts to disabled
     # after restart" bug — the toggle's persist wrote to cli-config.yaml (which
     # exists in the checkout) while startup read PILOTAGE_HOME/config.yaml, so the

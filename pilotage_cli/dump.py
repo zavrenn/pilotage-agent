@@ -358,7 +358,6 @@ def run_dump(args):
         ("TAVILY_API_KEY", "tavily"),
         ("BROWSERBASE_API_KEY", "browserbase"),
         ("FAL_KEY", "fal"),
-        ("ELEVENLABS_API_KEY", "elevenlabs"),
         ("GITHUB_TOKEN", "github"),
     ]
 

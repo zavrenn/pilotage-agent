@@ -1171,78 +1171,16 @@ DEFAULT_CONFIG = {
         "redact_pii": False,  # When True, hash user IDs and strip phone numbers from LLM context
     },
 
-    # Text-to-speech configuration
-    # Each provider supports an optional `max_text_length:` override for the
-    # per-request input-character cap. Omit it to use the provider's documented
-    # limit (OpenAI 4096, MiniMax 10000, ElevenLabs 5k-40k model-aware,
-    # Gemini 32000, Edge 5000, Mistral 4000, NeuTTS/KittenTTS 2000).
+    # Text-to-speech configuration. OpenAI is the only built-in backend;
+    # `max_text_length` overrides the 4096-character per-request cap.
     "tts": {
-        # Set explicitly to pin a backend:
-        # "edge" (free) | "elevenlabs" (premium) | "openai" | "minimax" | "mistral" | "gemini" | "deepinfra" | "neutts" (local) | "kittentts" (local) | "piper" (local)
-        "provider": "edge",
-        "edge": {
-            "voice": "en-US-AriaNeural",
-            # Popular: AriaNeural, JennyNeural, AndrewNeural, BrianNeural, SoniaNeural
-        },
-        "elevenlabs": {
-            "voice_id": "pNInz6obpgDQGcFmaJgB",  # Adam
-            "model_id": "eleven_multilingual_v2",
-        },
+        "provider": "openai",
         "openai": {
             "model": "gpt-4o-mini-tts",
             "voice": "alloy",
             # Voices: alloy, ash, ballad, cedar, coral, echo, fable, marin,
             # nova, onyx, sage, shimmer, verse (gpt-4o-mini-tts; the tts-1
             # era stopped at alloy/echo/fable/onyx/nova/shimmer)
-        },
-        "gemini": {
-            "model": "gemini-2.5-flash-preview-tts",
-            "voice": "Kore",
-            # When true, Gemini 3.1 TTS uses a hidden auxiliary-model rewrite
-            # pass to insert freeform square-bracket audio tags into the TTS
-            # script. Visible chat replies are unchanged.
-            "audio_tags": False,
-            # Optional local Markdown/text file with Gemini TTS performance
-            # direction. It may include AUDIO PROFILE, SCENE, DIRECTOR'S NOTES,
-            # SAMPLE CONTEXT, and either a `{transcript}` placeholder or no
-            # transcript section; Pilotage appends the live transcript when absent.
-            "persona_prompt_file": "",
-        },
-        "mistral": {
-            "model": "voxtral-mini-tts-2603",
-            "voice_id": "c69964a6-ab8b-4f8a-9465-ec0925096ec8",  # Paul - Neutral
-        },
-        "minimax": {
-            "model": "speech-02-hd",
-            "voice_id": "English_expressive_narrator",
-        },
-        "kittentts": {
-            "model": "KittenML/kitten-tts-nano-0.8-int8",  # nano 25MB; micro 41MB; mini 80MB
-            "voice": "Jasper",
-        },
-        "neutts": {
-            "ref_audio": "",  # Path to reference voice audio (empty = bundled default)
-            "ref_text": "",   # Path to reference voice transcript (empty = bundled default)
-            "model": "neuphonic/neutts-air-q4-gguf",  # HuggingFace model repo
-            "device": "cpu",  # cpu, cuda, or mps
-        },
-        "piper": {
-            # Voice name (e.g. "en_US-lessac-medium") downloaded on first
-            # use, OR an absolute path to a pre-downloaded .onnx file.
-            # Full voice list: https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/VOICES.md
-            "voice": "en_US-lessac-medium",
-            # "voices_dir": "",        # Override voice cache dir; default = ~/.pilotage/cache/piper-voices/
-            # "use_cuda": False,       # Requires onnxruntime-gpu
-            # "length_scale": 1.0,     # 2.0 = twice as slow
-            # "noise_scale": 0.667,
-            # "noise_w_scale": 0.8,
-            # "volume": 1.0,
-            # "normalize_audio": True,
-        },
-        "deepinfra": {
-            "model": "",  # empty = first tts-tagged model from the live catalog
-            "voice": "default",
-            # "base_url": "",  # override DEEPINFRA_BASE_URL for TTS only
         },
     },
 
@@ -1272,61 +1210,9 @@ DEFAULT_CONFIG = {
     },
 
     "voice": {
-        "record_key": "ctrl+b",
-        "submit_mode": "direct",       # TUI: direct submits immediately; draft leaves an editable transcript
-        "max_recording_seconds": 120,
-        "auto_tts": False,
-        "beep_enabled": True,         # Play record start/stop beeps in CLI voice mode
-        "beep_volume": 0.3,           # Beep amplitude multiplier (0.0-1.0, default keeps prior hardcoded value)
-        "thinking_sound": True,       # Calm ambient bubble sound while the agent works in voice chat (volume follows beep_volume)
-        "silence_threshold": 200,     # RMS below this = silence (0-32767)
-        "silence_duration": 3.0,      # Seconds of silence before auto-stop
-        "barge_in": True,             # Interrupt the agent / stop TTS when the user starts talking
-        "barge_in_grace_seconds": 0.5,  # Trip suppression right after TTS playback starts (onset transient); the mic itself is live for the whole turn
-        "barge_in_threshold_multiplier": 3.0,  # Speech trigger = quiet-room floor x this (floor is calibrated BEFORE playback, never against speaker bleed)
-        # Saying EXACTLY one of these phrases (and nothing else) ends the
-        # voice chat instead of being sent to the agent. Case-insensitive,
-        # surrounding punctuation ignored. Set [] to disable.
-        "stop_phrases": ["stop"],
+        "auto_tts": False,   # Speak every agent reply, not just explicit TTS calls
     },
 
-    # "Hey Pilotage" hands-free wake word. Always-on, on-device hotword
-    # detection that starts a fresh voice session — the "Hey Siri" pattern.
-    # Off by default; toggle with /wake or `wake_word.enabled: true`.
-    "wake_word": {
-        "enabled": False,
-        "surface": "auto",            # eligible surface: "auto" (first claimant) | "cli" | "tui" | "gui"
-        "input_device": None,          # PortAudio input device index/name; null uses the process default
-        "capture": "auto",            # auto | local | client — where PCM is captured (client = desktop streams mic via wake.feed)
-        "provider": "openwakeword",   # "openwakeword" (free, local) | "sherpa" (free, ANY phrase, no training) | "porcupine" (premium; needs PORCUPINE_ACCESS_KEY)
-        "phrase": "hey pilotage",       # for "sherpa" this IS the detected phrase (any text works); for other engines it's a cosmetic label — detection is keyed by the model/keyword below
-        "sensitivity": 0.6,           # 0.0-1.0 detection threshold, consistent across engines (higher = stricter, fewer false triggers)
-        "confirmation_frames": 3,     # openWakeWord only: consecutive over-threshold frames required to fire (higher = fewer false triggers on ambient speech, slightly more latency; 1 = old single-frame behavior)
-        "start_new_session": True,    # start a fresh session on wake vs. continue the current one
-        "profile_routing": True,      # sherpa only: also listen for every wake-enabled profile's phrase and route the wake to the matching profile
-        "openwakeword": {
-            # "hey_pilotage" (the bundled, works-out-of-the-box default) OR a
-            # built-in openWakeWord name ("hey_jarvis", "alexa", "hey_mycroft",
-            # ...) OR a path to a custom .onnx/.tflite model for another phrase.
-            # See the wake-word docs for the custom-model training guide.
-            "model": "hey_pilotage",
-            # "" (auto — tflite on macOS ARM64, onnx elsewhere) | "onnx" | "tflite".
-            # openWakeWord's onnx backend scores near-zero on macOS ARM64
-            # (dscripka/openWakeWord), so auto avoids a listener that arms
-            # but never fires. Set explicitly only to override that choice.
-            "inference_framework": "",
-        },
-        "sherpa": {
-            # Optional path to a sherpa-onnx KWS model directory. Empty =
-            # auto-download the small English zipformer model on first use.
-            "model_dir": "",
-        },
-        "porcupine": {
-            # Built-in keyword ("jarvis", "computer", "bumblebee", ...) or a path
-            # to a custom .ppn from the Picovoice Console.
-            "keyword": "jarvis",
-        },
-    },
     
     "human_delay": {
         "mode": "off",
@@ -1713,9 +1599,8 @@ DEFAULT_CONFIG = {
         # ``pilotage_cli/security_advisories.py`` for the catalog.
         "acked_advisories": [],
         # Allow Pilotage to lazy-install opt-in backend packages from PyPI
-        # the first time the user enables a backend that needs them
-        # (e.g. installing ``elevenlabs`` when the user picks ElevenLabs as
-        # their TTS provider). Set to false to require explicit
+        # the first time the user enables a backend that needs them.
+        # Set to false to require explicit
         # ``pip install`` for everything beyond the base set — appropriate
         # for restricted networks, audited environments, or air-gapped
         # systems where any runtime install is unacceptable.
@@ -2697,25 +2582,10 @@ OPTIONAL_ENV_VARS = {
         "password": True,
         "category": "tool",
     },
-    "ELEVENLABS_API_KEY": {
-        "description": "ElevenLabs API key for premium text-to-speech voices and Scribe transcription",
-        "prompt": "ElevenLabs API key",
-        "url": "https://elevenlabs.io/",
-        "tools": ["elevenlabs_tts", "voice_transcription"],
-        "password": True,
-        "category": "tool",
-    },
     "MISTRAL_API_KEY": {
         "description": "Mistral API key for Voxtral TTS and transcription (STT)",
         "prompt": "Mistral API key",
         "url": "https://console.mistral.ai/",
-        "password": True,
-        "category": "tool",
-    },
-    "PORCUPINE_ACCESS_KEY": {
-        "description": "Picovoice access key for the Porcupine 'Hey Pilotage' wake word engine (optional; openWakeWord is the free default)",
-        "prompt": "Picovoice access key",
-        "url": "https://console.picovoice.ai/",
         "password": True,
         "category": "tool",
     },

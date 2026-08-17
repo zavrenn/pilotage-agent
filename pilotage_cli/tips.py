@@ -2,7 +2,6 @@
 
 import random
 
-
 # ---------------------------------------------------------------------------
 # Tip corpus — one-liners covering slash commands, CLI flags, config,
 # keybindings, tools, gateway, skills, profiles, and workflow tricks.
@@ -183,7 +182,6 @@ TIPS = [
     "Cron jobs run in completely fresh agent sessions — prompts must be self-contained.",
 
     # --- Voice ---
-    "Five TTS providers available: Edge TTS (free), ElevenLabs, OpenAI, NeuTTS (free local), MiniMax.",
     "/voice on enables voice mode in the CLI. Ctrl+B toggles push-to-talk recording.",
     "Streaming TTS plays sentences as they generate — you don't wait for the full response.",
     "Voice messages on Telegram, Discord, WhatsApp, and Slack are auto-transcribed.",
@@ -315,10 +313,8 @@ TIPS = [
     "The compressor does a cheap pre-pass: tool outputs over 200 chars are replaced with placeholders before the LLM runs.",
     "When compression fails, further attempts are paused for 10 minutes to avoid API hammering.",
     "Long dangerous commands (>70 chars) get a 'view' option in the approval prompt to see the full text first.",
-    "Audio level visualization shows ▁▂▃▄▅▆▇ bars during voice recording based on microphone RMS levels.",
     "Profile names cannot collide with existing PATH binaries — 'pilotage profile create ls' would be rejected.",
     "pilotage profile create backup --clone-all copies everything (config, keys, SOUL.md, memories, skills, sessions).",
-    "The voice record key is configurable via voice.record_key in config.yaml — not just Ctrl+B.",
     ".cursorrules and .cursor/rules/*.mdc files are auto-detected and loaded as project context.",
     "Context files support 10+ prompt injection patterns — invisible Unicode, 'ignore instructions', exfil attempts.",
     "GPT-5 and Codex use 'developer' role instead of 'system' in the message format.",
@@ -391,10 +387,6 @@ TIPS = [
     'auxiliary.goal_judge.model routes the /goal judge to a cheap fast model to keep loop cost near zero.',
     'Checkpoints skip directories with more than 50,000 files to avoid slow git operations on massive monorepos.',
 
-    # --- TTS ---
-    'tts.provider: piper runs 44-language local TTS on CPU — voices auto-download to ~/.pilotage/cache/piper-voices/.',
-    'tts.providers.<name>.type: command wires any CLI TTS engine with {input_path} and {output_path} placeholders.',
-
     # --- API Server & Proxy ---
     'API_SERVER_ENABLED=true runs an OpenAI-compatible endpoint alongside the gateway for Open WebUI and LibreChat.',
     'GATEWAY_PROXY_URL runs a split setup: platform I/O locally, agent work delegated to a remote API server.',
@@ -466,7 +458,6 @@ TIPS = [
     'API_SERVER_MODEL_NAME customizes the model name on /v1/models — essential for multi-profile Open WebUI setups.',
     'Dashboard plugins are served from /dashboard-plugins/<name>/ — drop files into ~/.pilotage/dashboard-plugins/.',
 ]
-
 
 def get_random_tip(exclude_recent: int = 0) -> str:
     """Return a random tip string.

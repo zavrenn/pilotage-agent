@@ -37,10 +37,9 @@ FIRECRAWL_HEALTH_URL = "https://api.firecrawl.dev/v2/team/credit-usage"
 FAL_MODELS_URL = "https://fal.ai/api/models?page=1"
 OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
 GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
-ELEVENLABS_VOICES_URL = "https://api.elevenlabs.io/v1/voices"
 
 # TTS/STT providers that never touch the network (nothing to probe).
-_LOCAL_AUDIO_PROVIDERS = {"", "local", "edge", "neutts", "kittentts", "piper"}
+_LOCAL_AUDIO_PROVIDERS = {"", "local"}
 
 
 @dataclass
@@ -122,7 +121,6 @@ def _audio_provider_probe(kind: str, provider: str,
     probes = {
         "openai": (OPENAI_MODELS_URL, "OPENAI_API_KEY", "Bearer"),
         "groq": (GROQ_MODELS_URL, "GROQ_API_KEY", "Bearer"),
-        "elevenlabs": (ELEVENLABS_VOICES_URL, "ELEVENLABS_API_KEY", "xi"),
     }
     entry = probes.get(provider)
     if entry is None:

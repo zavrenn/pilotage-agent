@@ -139,8 +139,7 @@ def _resolve_stt_language(
     """Resolve the language hint for an STT provider (class-level, all providers).
 
     Resolution order (first non-empty wins):
-      1. ``stt.<provider>.language`` (plus any *extra_keys* aliases, e.g.
-         ElevenLabs' historical ``language_code``)
+      1. ``stt.<provider>.language`` (plus any *extra_keys* aliases)
       2. ``stt.language``           — global default for every provider
       3. ``None``                   — let the provider auto-detect
 
@@ -1030,13 +1029,13 @@ def _transcribe_prepared_audio(
 
     Provider priority:
       1. User config (``stt.provider`` in config.yaml)
-      2. Auto-detect: local > Groq > OpenAI > Mistral > xAI > ElevenLabs
+      2. Auto-detect: OpenAI
 
     Args:
         file_path: Absolute path to the audio file to transcribe.
         model:     Override the model. If None, uses config or provider default.
-        source:    Optional caller-surface label (e.g. ``"gateway"``,
-                   ``"voice_mode"``) forwarded to the ``pre_transcription``
+        source:    Optional caller-surface label (e.g. ``"gateway"``)
+                   forwarded to the ``pre_transcription``
                    plugin hook for observability. Not used for dispatch.
 
     Returns:

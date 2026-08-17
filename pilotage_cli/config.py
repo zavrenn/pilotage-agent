@@ -908,7 +908,7 @@ from pilotage_cli.config_defaults import DEFAULT_CONFIG, OPTIONAL_ENV_VARS  # no
 # Migration only mentions vars new since the user's previous version.
 ENV_VARS_BY_VERSION: Dict[int, List[str]] = {
     3: ["FIRECRAWL_API_KEY", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID", "FAL_KEY"],
-    4: ["VOICE_TOOLS_OPENAI_KEY", "ELEVENLABS_API_KEY"],
+    4: ["VOICE_TOOLS_OPENAI_KEY"],
     5: ["WHATSAPP_ENABLED", "WHATSAPP_MODE", "WHATSAPP_ALLOWED_USERS"],
     10: ["TAVILY_API_KEY"],
 }
@@ -1956,20 +1956,6 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
 
     issues: List[ConfigIssue] = []
 
-    # ── voice.submit_mode: direct | draft ────────────────────────────────
-    voice_cfg = config.get("voice")
-    if isinstance(voice_cfg, dict) and "submit_mode" in voice_cfg:
-        submit_mode = voice_cfg.get("submit_mode")
-        normalized_submit_mode = (
-            submit_mode.strip().lower() if isinstance(submit_mode, str) else None
-        )
-        if normalized_submit_mode not in {"direct", "draft"}:
-            issues.append(ConfigIssue(
-                "error",
-                f"voice.submit_mode must be 'direct' or 'draft', got {submit_mode!r}",
-                "Set voice.submit_mode to direct (submit immediately) or draft (edit before sending)",
-            ))
-
     # ── custom_providers must be a list, not a dict ──────────────────────
     cp = config.get("custom_providers")
     if cp is not None:
@@ -2455,8 +2441,8 @@ def _deep_merge(base: dict, override: dict) -> dict:
     """Recursively merge *override* into *base*, preserving nested defaults.
 
     Keys in *override* take precedence. If both values are dicts the merge
-    recurses, so a user who overrides only ``tts.elevenlabs.voice_id`` will
-    keep the default ``tts.elevenlabs.model_id`` intact.
+    recurses, so a user who overrides only ``tts.openai.voice`` will keep
+    the default ``tts.openai.model`` intact.
 
     An empty section key in config.yaml (``terminal:`` with no value) parses
     as YAML ``None``; treating that as an override would replace the entire

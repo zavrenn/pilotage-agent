@@ -265,13 +265,6 @@ TOOL_CATEGORIES = {
         "icon": "🔊",
         "providers": [
             {
-                "name": "Microsoft Edge TTS",
-                "badge": "★ recommended · free",
-                "tag": "Good quality, no API key needed",
-                "env_vars": [],
-                "tts_provider": "edge",
-            },
-            {
                 "name": "OpenAI TTS",
                 "badge": "paid",
                 "tag": "High quality voices",
@@ -279,59 +272,6 @@ TOOL_CATEGORIES = {
                     {"key": "VOICE_TOOLS_OPENAI_KEY", "prompt": "OpenAI API key", "url": "https://platform.openai.com/api-keys"},
                 ],
                 "tts_provider": "openai",
-            },
-            {
-                "name": "ElevenLabs",
-                "badge": "paid",
-                "tag": "Most natural voices",
-                "env_vars": [
-                    {"key": "ELEVENLABS_API_KEY", "prompt": "ElevenLabs API key", "url": "https://elevenlabs.io/app/settings/api-keys"},
-                ],
-                "tts_provider": "elevenlabs",
-            },
-            # Mistral Voxtral TTS — `mistralai` SDK lazy-installs on first use.
-            {
-                "name": "Mistral (Voxtral TTS)",
-                "badge": "paid",
-                "tag": "Multilingual, native Opus",
-                "env_vars": [
-                    {"key": "MISTRAL_API_KEY", "prompt": "Mistral API key", "url": "https://console.mistral.ai/"},
-                ],
-                "tts_provider": "mistral",
-            },
-            {
-                "name": "Google Gemini TTS",
-                "badge": "preview",
-                "tag": "30 prebuilt voices, controllable via prompts",
-                "env_vars": [
-                    {"key": "GEMINI_API_KEY", "prompt": "Gemini API key", "url": "https://aistudio.google.com/app/apikey"},
-                ],
-                "tts_provider": "gemini",
-            },
-            {
-                "name": "KittenTTS",
-                "badge": "local · free",
-                "tag": "Lightweight local ONNX TTS (~25MB), no API key",
-                "env_vars": [],
-                "tts_provider": "kittentts",
-                "post_setup": "kittentts",
-            },
-            {
-                "name": "Piper",
-                "badge": "local · free",
-                "tag": "Local neural TTS, 44 languages (voices ~20-90MB)",
-                "env_vars": [],
-                "tts_provider": "piper",
-                "post_setup": "piper",
-            },
-            {
-                "name": "DeepInfra TTS",
-                "badge": "paid",
-                "tag": "Chatterbox, Qwen3-TTS, … — live catalog from api.deepinfra.com",
-                "env_vars": [
-                    {"key": "DEEPINFRA_API_KEY", "prompt": "DeepInfra API key", "url": "https://deepinfra.com/dash/api_keys"},
-                ],
-                "tts_provider": "deepinfra",
             },
         ],
     },
@@ -495,56 +435,7 @@ def _run_post_setup(post_setup_key: str):
     """Run post-setup hooks for tools that need extra installation steps."""
     from pilotage_constants import find_node_executable
 
-    if post_setup_key == "kittentts":
-        try:
-            __import__("kittentts")
-            _print_success("    kittentts is already installed")
-            return
-        except ImportError:
-            pass
-        _print_info("    Installing kittentts (~25-80MB model, CPU-only)...")
-        wheel_url = (
-            "https://github.com/KittenML/KittenTTS/releases/download/"
-            "0.8.1/kittentts-0.8.1-py3-none-any.whl"
-        )
-        try:
-            result = _pip_install(["-U", wheel_url, "soundfile", "--quiet"], timeout=300)
-            if result.returncode == 0:
-                _print_success("    kittentts installed")
-                _print_info("    Voices: Jasper, Bella, Luna, Bruno, Rosie, Hugo, Kiki, Leo")
-                _print_info("    Models: KittenML/kitten-tts-nano-0.8-int8 (25MB), micro (41MB), mini (80MB)")
-            else:
-                _print_warning("    kittentts install failed:")
-                _print_info(f"      {(result.stderr or '').strip()[:300]}")
-                _print_info(f"    Run manually: uv pip install -U '{wheel_url}' soundfile")
-        except subprocess.TimeoutExpired:
-            _print_warning("    kittentts install timed out (>5min)")
-            _print_info(f"    Run manually: uv pip install -U '{wheel_url}' soundfile")
-
-    elif post_setup_key == "piper":
-        try:
-            __import__("piper")
-            _print_success("    piper-tts is already installed")
-        except ImportError:
-            _print_info("    Installing piper-tts (~14MB wheel, voices downloaded on first use)...")
-            try:
-                result = _pip_install(["-U", "piper-tts", "--quiet"], timeout=300)
-                if result.returncode == 0:
-                    _print_success("    piper-tts installed")
-                else:
-                    _print_warning("    piper-tts install failed:")
-                    _print_info(f"      {(result.stderr or '').strip()[:300]}")
-                    _print_info("    Run manually: uv pip install -U piper-tts")
-                    return
-            except subprocess.TimeoutExpired:
-                _print_warning("    piper-tts install timed out (>5min)")
-                _print_info("    Run manually: uv pip install -U piper-tts")
-                return
-        _print_info("    Default voice: en_US-lessac-medium (downloaded on first TTS call)")
-        _print_info("    Full voice list: https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/VOICES.md")
-        _print_info("    Switch voices by setting tts.piper.voice in ~/.pilotage/config.yaml")
-
-    elif post_setup_key == "ddgs":
+    if post_setup_key == "ddgs":
         try:
             __import__("ddgs")
             _print_success("    ddgs is already installed")
@@ -601,7 +492,7 @@ def run_post_setup_command(args) -> int:
     """``pilotage tools post-setup <key>`` — non-interactive post-setup runner.
 
     Runs the install/bootstrap hook a provider declares (npm install for
-    browser/Camofox, pip install for kittentts/piper/ddgs, cua-driver fetch,
+    browser/Camofox, pip install for ddgs, cua-driver fetch,
     etc.). This is the stable, scriptable target the dashboard spawns so the
     GUI can drive backend setup without re-implementing the install logic.
     Returns a process exit code (0 ok, 2 unknown key).
@@ -1190,7 +1081,7 @@ def _toolset_has_keys(
         for provider in _visible_providers(cat, config, force_fresh=force_fresh):
             env_vars = provider.get("env_vars", [])
             if not env_vars:
-                return True  # No-key provider (e.g. Local Browser, Edge TTS)
+                return True  # No-key provider (e.g. Local Browser)
             if all(get_env_value(e["key"]) for e in env_vars):
                 return True
         return False
@@ -1481,61 +1372,6 @@ def web_provider_capabilities(backend: str) -> list:
 # setup-flow rows remain hardcoded in ``TOOL_CATEGORIES["browser"]``
 # ("Local Browser", "Camofox").
 
-def _plugin_tts_providers() -> list[dict]:
-    """Build picker-row dicts from plugin-registered TTS providers.
-
- — the ``register_tts_provider`` plugin hook
-    coexists alongside the 10 built-in TTS providers
-    (``edge``/``openai``/``elevenlabs``/…) and the
-    ``tts.providers.<name>: type: command`` registry from.
-    Built-in rows stay hardcoded in ``TOOL_CATEGORIES["tts"]``; this
-    function only injects PLUGIN-registered providers.
-
-    Defensive: plugins whose name collides with a built-in TTS provider
-    are filtered out — even though the registry already rejects them
-    at registration time, a future code path that registers directly
-    via :func:`agent.tts_registry.register_provider` could slip
-    through. Filtering here keeps the picker invariant.
-    """
-    try:
-        from agent.tts_registry import _BUILTIN_NAMES, list_providers
-        from pilotage_cli.plugins import _ensure_plugins_discovered
-
-        _ensure_plugins_discovered()
-        providers = list_providers()
-    except Exception:
-        return []
-
-    rows: list[dict] = []
-    for provider in providers:
-        name = getattr(provider, "name", None)
-        if not name:
-            continue
-        # Defensive: reject built-in shadowing at the picker layer too.
-        if name.lower().strip() in _BUILTIN_NAMES:
-            continue
-        try:
-            schema = provider.get_setup_schema()
-        except Exception:
-            continue
-        if not isinstance(schema, dict):
-            continue
-        row = {
-            "name": schema.get("name", provider.display_name),
-            "badge": schema.get("badge", ""),
-            "tag": schema.get("tag", ""),
-            "env_vars": schema.get("env_vars", []),
-            # Selecting this row writes ``tts.provider: <name>`` — the
-            # same write-path used by hardcoded rows. The plugin
-            # dispatcher picks it up automatically from there.
-            "tts_provider": name,
-            "tts_plugin_name": name,
-        }
-        if schema.get("post_setup"):
-            row["post_setup"] = schema["post_setup"]
-        rows.append(row)
-    return rows
-
 
 def _visible_providers(
     cat: dict,
@@ -1555,12 +1391,6 @@ def _visible_providers(
     if cat.get("name") == "Web Search & Extract":
         visible.extend(_plugin_web_search_providers())
 
-    # Inject plugin-registered TTS backends. Plugin rows
-    # render BELOW the 10 hardcoded built-in rows. Built-in shadowing
-    # is filtered out by ``_plugin_tts_providers`` defensively.
-    if cat.get("name") == "Text-to-Speech":
-        visible.extend(_plugin_tts_providers())
-
     return visible
 
 
@@ -1573,8 +1403,8 @@ _POST_SETUP_INSTALLED: dict = {
     # because the gate sees "no env vars to ask about" and skips the
     # provider-setup flow that would have run the post_setup hook).
     #
-    # Only entries here are gated; other post_setup hooks (kittentts,
-    # piper, agent_browser, etc.) keep their existing behaviour. Add an
+    # Only entries here are gated; other post_setup hooks (agent_browser,
+    # etc.) keep their existing behaviour. Add an
     # entry when (a) the post_setup is the ONLY install side-effect for
     # a no-key provider, and (b) an installed-state check is cheap and
     # doesn't trigger a heavy import.
@@ -1610,16 +1440,6 @@ def _module_installed(module_name: str) -> bool:
 # old site-packages disappears and restored afterward. Keep these install
 # arguments in sync with the corresponding ``_run_post_setup`` branches.
 _RESTORABLE_PYTHON_TOOL_DEPENDENCIES: dict[str, tuple[str, tuple[str, ...]]] = {
-    "kittentts": (
-        "kittentts",
-        (
-            "-U",
-            "https://github.com/KittenML/KittenTTS/releases/download/"
-            "0.8.1/kittentts-0.8.1-py3-none-any.whl",
-            "soundfile",
-        ),
-    ),
-    "piper": ("piper", ("-U", "piper-tts")),
     "ddgs": ("ddgs", ("-U", "ddgs")),
 }
 
@@ -1656,12 +1476,10 @@ def _camofox_installed() -> bool:
 
 # post_setup_key -> predicate(): True when the install side-effect is already
 # satisfied. Used by ``provider_readiness_status`` to decide whether a keyless
-# post_setup row (KittenTTS, Piper, Local Browser, …) is honestly "ready" or
+# keyless post_setup row (Local Browser, Camofox) is honestly "ready" or
 # still "needs_setup". Mirrors the installed-checks ``_run_post_setup`` itself
 # performs before installing.
 _POST_SETUP_READY: dict = {
-    "kittentts": lambda: _module_installed("kittentts"),
-    "piper": lambda: _module_installed("piper"),
     "ddgs": lambda: _module_installed("ddgs"),
     "agent_browser": lambda: _agent_browser_installed(),
     "browserbase": lambda: _cloud_agent_browser_installed(),
@@ -2860,9 +2678,9 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
                     print(color(f"  - {label}", Colors.RED))
 
             # Walk through ALL selected tools that have provider options or
-            # need API keys.  This ensures browser (Local vs Browserbase),
-            # TTS (Edge vs OpenAI vs ElevenLabs), etc. are shown even when
-            # a free provider exists.
+            # need API keys.  This ensures browser (Local vs Browserbase)
+            # and similar pickers are shown even when a free provider
+            # exists.
             to_configure = [
                 ts_key for ts_key in sorted(new_enabled)
                 if (TOOL_CATEGORIES.get(ts_key) or TOOLSET_ENV_REQUIREMENTS.get(ts_key))

@@ -2315,66 +2315,6 @@ class PluginContext:
     # -- secret source registration -------------------------------------------
 
 
-    # -- TTS provider registration -------------------------------------------
-
-    @_serialized_replacement
-    def register_tts_provider(self, provider) -> Optional[PluginRegistration]:
-        """Register a text-to-speech backend.
-
-        ``provider`` must be an instance of
-        :class:`agent.tts_provider.TTSProvider`. The ``provider.name``
-        attribute is what ``tts.provider`` in ``config.yaml`` matches
-        against when routing ``text_to_speech`` tool calls — **but
-        only when**:
-
-        1. ``provider.name`` is NOT a built-in TTS provider name
-           (``edge``, ``openai``, ``elevenlabs``, …). Built-ins always
-           win — the registry rejects shadowing names with a warning.
-        2. There is NO ``tts.providers.<name>: type: command`` entry
-           with the same name. Command-providers  win on
-           name collision because config is more local than plugin
-           install.
-
-        Coexists with the command-provider registry rather than
-        replacing it — see for the full design rationale.
-        """
-        from agent.tts_provider import TTSProvider
-        from agent.tts_registry import (
-            register_provider as _register_tts_provider,
-            restore_registration,
-            snapshot_registration,
-        )
-
-        if not isinstance(provider, TTSProvider):
-            logger.warning(
-                "Plugin '%s' tried to register a TTS provider that does "
-                "not inherit from TTSProvider. Ignoring.",
-                self.manifest.name,
-            )
-            return
-        registry_name = provider.name.strip().lower()
-        scope = self._manager.scope_key
-        previous = snapshot_registration(registry_name, scope=scope)
-        _register_tts_provider(provider, scope=scope)
-        registered = snapshot_registration(registry_name, scope=scope)
-        if registered is not provider:
-            return None
-        handle = self._track_replacement(
-            "tts_provider",
-            registry_name,
-            slot=("tts_provider", scope, registry_name),
-            current=provider,
-            previous=previous,
-            restore=lambda replacement: restore_registration(
-                registry_name, provider, replacement, scope=scope
-            ),
-        )
-        logger.info(
-            "Plugin '%s' registered TTS provider: %s",
-            self.manifest.name, registry_name,
-        )
-        return handle
-
     # -- transcription (STT) provider registration ---------------------------
 
     @_serialized_replacement

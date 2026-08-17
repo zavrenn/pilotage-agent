@@ -1,8 +1,7 @@
 """
 Lazy dependency installer for opt-in Pilotage Agent backends.
 
-Many Pilotage features (Mistral TTS, ElevenLabs TTS, Honcho memory,
-WhatsApp, etc.) require Python packages that not every user needs. The
+Many Pilotage features (Honcho memory, WhatsApp, etc.) require Python packages that not every user needs. The
 historical approach was to bundle them all under ``pyproject.toml`` extras
 (``pilotage-agent[all]``) and install them eagerly at setup time. That has
 two problems:
@@ -110,53 +109,11 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # Pinned to exact versions to match pyproject.toml's no-ranges policy
     # (see comment at top of [project.dependencies]). When bumping, update
     # both this map AND the corresponding extra in pyproject.toml.
-    #
-    # mistralai pin tracks the `mistral` extra in pyproject.toml. PyPI
-    # quarantined the project 2026-05-12 (malicious 2.4.6, Mini Shai-Hulud);
-    # 2.4.6 was removed and clean releases resumed (2.4.7, 2.4.8). Voxtral
-    # STT + TTS share the same SDK.
-    "tts.mistral": ("mistralai==2.4.8",),
-    "tts.edge": ("edge-tts==7.2.7",),
-    "tts.elevenlabs": ("elevenlabs==1.59.0",),
 
     # ─── Speech-to-text providers ──────────────────────────────────────────
     # SILK voice-note decoding (WeChat/QQ .silk voice messages). pilk is a
     # small silk-v3 codec binding; installed on first .silk transcription.
     "stt.silk": ("pilk==0.2.4",),
-
-    # ─── Wake word ("Hey Pilotage") engines ──────────────────────────────────
-    # Keep in sync with the `wake` extra in pyproject.toml. openWakeWord is the
-    # free, local default (ONNX runtime); Porcupine is the premium engine.
-    # openWakeWord's ONNX embedding model returns near-zero scores on macOS
-    # ARM64 (dscripka/openWakeWord), so the wake word runs on the tflite
-    # backend there. Upstream declares tflite-runtime for Linux only;
-    # ai-edge-litert is the macOS equivalent, bridged in tools/wake_word.py.
-    # It lives in its own feature because lazy-dep specs cannot carry PEP 508
-    # environment markers (_spec_is_safe rejects ";"), so the platform gate is
-    # applied by the caller instead.
-    "wake.openwakeword.tflite": (
-        "ai-edge-litert==2.1.6",
-    ),
-    "wake.openwakeword": (
-        "openwakeword==0.6.0",
-        "onnxruntime==1.27.0",
-        "sounddevice==0.5.5",
-        "numpy==2.4.3",
-    ),
-    # Open-vocabulary keyword spotting: any typed phrase, zero training.
-    # sentencepiece is required by sherpa_onnx.text2token (runtime phrase
-    # tokenization) even though sherpa-onnx doesn't declare it.
-    "wake.sherpa": (
-        "sherpa-onnx==1.13.4",
-        "sentencepiece==0.2.2",
-        "sounddevice==0.5.5",
-        "numpy==2.4.3",
-    ),
-    "wake.porcupine": (
-        "pvporcupine==4.0.3",
-        "sounddevice==0.5.5",
-        "numpy==2.4.3",
-    ),
 
     # ─── Image generation backends ─────────────────────────────────────────
     "image.fal": ("fal-client==0.13.1",),

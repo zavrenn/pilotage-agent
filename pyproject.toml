@@ -33,7 +33,7 @@ dependencies = [
   #
   # Scope rule: only packages used by EVERY pilotage session belong here.
   # Anything that's provider-specific (`mistralai`, `firecrawl-py`,
-  # `exa-py`, `fal-client`, `edge-tts`, `parallel-web`) belongs in an
+  # `exa-py`, `fal-client`, `parallel-web`) belongs in an
   # extra and gets lazy-installed via `tools/lazy_deps.py` when the
   # user picks that backend. Smaller `dependencies` = smaller blast
   # radius for the next supply-chain attack.
@@ -155,9 +155,6 @@ firecrawl = ["firecrawl-py==4.17.0"]
 parallel-web = ["parallel-web==0.4.2"]
 # Image generation backends
 fal = ["fal-client==0.13.1"]
-# Edge TTS — default TTS provider but still optional (users can pick
-# ElevenLabs / OpenAI / MiniMax instead).
-edge-tts = ["edge-tts==7.2.7"]
 modal = ["modal==1.3.4"]
 daytona = ["daytona==0.155.0"]
 vercel = ["vercel==0.7.2"]
@@ -165,30 +162,6 @@ hindsight = ["hindsight-client==0.6.1"]
 dev = ["debugpy==1.8.20", "pytest==9.1.1", "pytest-asyncio==1.3.0", "ty==0.0.21", "ruff==0.15.10", "setuptools==83.0.0"]  # starlette: CVE-2026-48710; setuptools: 83 (torch >=2.13 requires setuptools 83)
 messaging = ["python-telegram-bot[webhooks]==22.8", "aiohttp==3.14.3", "qrcode==7.4.2"]  # aiohttp 3.14.3: prior CVEs + GHSA-cq5v-8q36-5273/GHSA-mfx4-hv73-q22v/GHSA-mq44-7p77-q5h7
 cron = []  # croniter is now a core dependency; this extra kept for back-compat
-tts-premium = ["elevenlabs==1.59.0"]
-voice = [
-  "sounddevice==0.5.5",
-  "numpy==2.4.3",
-]
-# "Hey Pilotage" wake word — on-device hotword detection. All engines are
-# optional; openWakeWord (ONNX) is the free default, sherpa-onnx adds
-# open-vocabulary phrases (any typed phrase, zero training), Porcupine is
-# the premium alternative. These dependencies are lazy-installed on first
-# /wake; mirrored in tools/lazy_deps.py.
-wake = [
-  "openwakeword==0.6.0",
-  "onnxruntime==1.27.0",
-  "sherpa-onnx==1.13.4",
-  "sentencepiece==0.2.2",
-  "pvporcupine==4.0.3",
-  "sounddevice==0.5.5",
-  "numpy==2.4.3",
-  # openWakeWord's onnx embedding model scores near-zero on macOS ARM64
-  # (dscripka/openWakeWord), so the wake word runs on tflite there.
-  # Upstream declares tflite-runtime for Linux only; ai-edge-litert is the
-  # macOS equivalent, bridged in tools/wake_word.py.
-  "ai-edge-litert==2.1.6; platform_system == 'Darwin'",
-]
 honcho = ["honcho-ai==2.2.0"]
 # Cloud memory providers — opt-in, lazy-installed via tools/lazy_deps.py
 # (memory.supermemory / memory.mem0) at first use. Exact pins MUST match the
@@ -277,10 +250,9 @@ all = [
   # release breaks every fresh install.
   #
   # Removed from [all] on 2026-05-12 (covered by lazy-install):
-  #   exa, firecrawl, parallel-web, fal, edge-tts,
+  #   exa, firecrawl, parallel-web, fal,
   #   modal, daytona, vercel, messaging (telegram/whatsapp),
-  #   honcho, voice (faster-whisper),
-  #   tts-premium (elevenlabs)
+  #   honcho,
   #
   # Why: heavy extras with platform-specific build paths broke
   # `uv sync --locked` on hosts without a toolchain. Lazy-install routes
