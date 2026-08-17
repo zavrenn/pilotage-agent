@@ -235,8 +235,7 @@ def windows_detach_flags_without_breakaway() -> int:
                 …,
             )
 
-    See ``gateway_windows.py::_spawn_detached`` for the canonical
-    implementation of this pattern.  Returns 0 on non-Windows.
+    Returns 0 on non-Windows.
     """
     if not IS_WINDOWS:
         return 0

@@ -342,7 +342,6 @@ from pilotage_cli.subcommands.dump import build_dump_parser
 from pilotage_cli.subcommands.debug import build_debug_parser
 from pilotage_cli.subcommands.backup import build_backup_parser
 from pilotage_cli.subcommands.import_cmd import build_import_cmd_parser
-from pilotage_cli.subcommands.import_agent import build_import_agent_parser
 from pilotage_cli.subcommands.config import build_config_parser
 from pilotage_cli.subcommands.version import build_version_parser
 from pilotage_cli.subcommands.uninstall import build_uninstall_parser
@@ -5037,12 +5036,10 @@ def cmd_profile(args):
 
         # Header
         print(
-            f"\n {'Profile':<16} {'Model':<28} {'Gateway':<12} "
-            f"{'Alias':<12} {'Distribution'}"
+            f"\n {'Profile':<16} {'Model':<28} {'Gateway':<12} {'Alias'}"
         )
         print(
-            f" {'─' * 15}    {'─' * 27}    {'─' * 11}    "
-            f"{'─' * 11}    {'─' * 20}"
+            f" {'─' * 15}    {'─' * 27}    {'─' * 11}    {'─' * 11}"
         )
 
         for p in profiles:
@@ -5057,12 +5054,7 @@ def cmd_profile(args):
             alias = (p.alias_name or p.name) if p.alias_path else "—"
             if p.is_default:
                 alias = "—"
-            if p.distribution_name:
-                dist = f"{p.distribution_name}@{p.distribution_version or '?'}"
-                dist = dist[:30]
-            else:
-                dist = "—"
-            print(f"{marker}{name:<15} {model:<28} {gw:<12} {alias:<12} {dist}")
+            print(f"{marker}{name:<15} {model:<28} {gw:<12} {alias}")
         print()
 
     elif action == "use":
@@ -5288,7 +5280,6 @@ def cmd_profile(args):
             _read_config_model,
             _check_gateway_running,
             _count_skills,
-            _read_distribution_meta,
             _get_wrapper_dir,
             find_alias_for_profile,
         )
@@ -5300,7 +5291,6 @@ def cmd_profile(args):
         model, provider = _read_config_model(profile_dir)
         gw = _check_gateway_running(profile_dir)
         skills = _count_skills(profile_dir)
-        dist_name, dist_version, dist_source = _read_distribution_meta(profile_dir)
         alias_name = find_alias_for_profile(name)
 
         print(f"\nProfile: {name}")
@@ -5315,11 +5305,6 @@ def cmd_profile(args):
         print(
             f"SOUL.md: {'exists' if (profile_dir / 'SOUL.md').exists() else 'not configured'}"
         )
-        if dist_name:
-            print(f"Distribution: {dist_name}@{dist_version or '?'}")
-            if dist_source:
-                print(f"Installed from: {dist_source}")
-            print(f"  (run `pilotage profile info {name}` for full manifest)")
         if alias_name:
             is_windows = sys.platform == "win32"
             wrapper = _get_wrapper_dir() / (f"{alias_name}.bat" if is_windows else alias_name)
@@ -5407,215 +5392,6 @@ def cmd_profile(args):
             print(f"Error: {e}")
             sys.exit(1)
 
-    elif action == "install":
-        import tempfile
-        from pilotage_cli.profile_distribution import (
-            plan_install,
-            install_distribution,
-            DistributionError,
-        )
-
-        try:
-            # Preview: stage the distribution into a scratch dir, show the
-            # manifest, then do the real install.  The double-stage avoids
-            # any side-effects if the user declines.
-            with tempfile.TemporaryDirectory(prefix="pilotage_dist_preview_") as tmp:
-                plan = plan_install(
-                    args.source,
-                    Path(tmp),
-                    override_name=getattr(args, "install_name", None),
-                )
-                _render_distribution_plan(plan)
-
-                if not getattr(args, "yes", False):
-                    try:
-                        answer = input("\nProceed with install? [y/N] ").strip().lower()
-                    except (EOFError, KeyboardInterrupt):
-                        answer = ""
-                    if answer not in {"y", "yes"}:
-                        print("Install cancelled.")
-                        return
-
-            plan = install_distribution(
-                args.source,
-                name=getattr(args, "install_name", None),
-                force=getattr(args, "force", False),
-                create_alias=getattr(args, "alias", False),
-            )
-            print(f"\n✓ Installed '{plan.manifest.name}' v{plan.manifest.version}")
-            print(f"  Profile path: {plan.target_dir}")
-            if plan.manifest.env_requires:
-                print(
-                    f"  Next: copy .env.EXAMPLE to .env and fill in required keys:\n"
-                    f"    {plan.target_dir}/.env.EXAMPLE"
-                )
-            if plan.has_cron:
-                print(
-                    "  Cron jobs were included but are NOT scheduled automatically.\n"
-                    f"  Review them with:  pilotage -p {plan.manifest.name} cron list"
-                )
-            print(f"\n  Use with:      pilotage -p {plan.manifest.name} chat")
-        except (DistributionError, ValueError) as e:
-            print(f"Error: {e}")
-            sys.exit(1)
-
-    elif action == "update":
-        from pilotage_cli.profile_distribution import (
-            update_distribution,
-            read_manifest,
-            DistributionError,
-        )
-        from pilotage_cli.profiles import get_profile_dir, normalize_profile_name
-
-        name = args.profile_name
-        try:
-            canon = normalize_profile_name(name)
-            current = read_manifest(get_profile_dir(canon))
-            if current is None:
-                print(
-                    f"Error: Profile '{canon}' is not a distribution (no distribution.yaml). "
-                    "Only profiles installed via `pilotage profile install` can be updated."
-                )
-                sys.exit(1)
-
-            force_config = getattr(args, "force_config", False)
-            if not getattr(args, "yes", False):
-                print(f"\nUpdate '{canon}' from: {current.source or '(no source)'}")
-                print(f"  Currently at version {current.version}")
-                if force_config:
-                    print("  --force-config set: config.yaml WILL be overwritten.")
-                else:
-                    print("  config.yaml will be preserved (pass --force-config to overwrite).")
-                print("  User data (memories, sessions, auth, .env) will NOT be touched.")
-                try:
-                    answer = input("\nProceed? [y/N] ").strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    answer = ""
-                if answer not in {"y", "yes"}:
-                    print("Update cancelled.")
-                    return
-
-            plan = update_distribution(canon, force_config=force_config)
-            print(f"\n✓ Updated '{plan.manifest.name}' → v{plan.manifest.version}")
-            if plan.has_cron:
-                print(
-                    "  Cron files were refreshed.  Review with:  "
-                    f"pilotage -p {plan.manifest.name} cron list"
-                )
-        except (DistributionError, ValueError) as e:
-            print(f"Error: {e}")
-            sys.exit(1)
-
-    elif action == "info":
-        from pilotage_cli.profile_distribution import describe_distribution, DistributionError
-
-        try:
-            data = describe_distribution(args.profile_name)
-        except (DistributionError, ValueError) as e:
-            print(f"Error: {e}")
-            sys.exit(1)
-        if not data:
-            print(
-                f"Profile '{args.profile_name}' is not a distribution "
-                "(no distribution.yaml)."
-            )
-            return
-        print(f"\nDistribution: {data.get('name')}")
-        print(f"Version:      {data.get('version', '?')}")
-        if data.get("description"):
-            print(f"Description:  {data['description']}")
-        if data.get("author"):
-            print(f"Author:       {data['author']}")
-        if data.get("license"):
-            print(f"License:      {data['license']}")
-        if data.get("pilotage_requires"):
-            print(f"Requires:     Pilotage {data['pilotage_requires']}")
-        if data.get("source"):
-            print(f"Source:       {data['source']}")
-        if data.get("installed_at"):
-            print(f"Installed:    {data['installed_at']}")
-        env_reqs = data.get("env_requires") or []
-        if env_reqs:
-            print("\nEnvironment variables:")
-            for er in env_reqs:
-                tag = "required" if er.get("required", True) else "optional"
-                line = f"  {er['name']} ({tag})"
-                if er.get("description"):
-                    line += f" — {er['description']}"
-                print(line)
-                if er.get("default") is not None:
-                    print(f"      default: {er['default']}")
-        print()
-
-
-def _render_distribution_plan(plan) -> None:
-    """Print a human-readable summary of a pending distribution install."""
-    from pilotage_cli.profile_distribution import MANIFEST_FILENAME
-    mf = plan.manifest
-    print(f"\nDistribution: {mf.name} v{mf.version}")
-    if mf.description:
-        print(f"  {mf.description}")
-    if mf.author:
-        print(f"  Author:   {mf.author}")
-    if mf.pilotage_requires:
-        print(f"  Requires: Pilotage {mf.pilotage_requires}")
-    print(f"  Source:   {plan.provenance}")
-    print(f"  Target:   {plan.target_dir}")
-    if plan.existing:
-        # Distinguish "updating an existing distribution" (well-understood
-        # semantics — dist-owned overwritten, config preserved, user data
-        # untouched) from "overwriting a hand-built plain profile" (same
-        # mechanics but the user didn't sign up for this when they created
-        # the profile manually).
-        existing_is_distribution = (plan.target_dir / MANIFEST_FILENAME).is_file()
-        if existing_is_distribution:
-            print("  (profile exists — will overwrite distribution-owned files only)")
-        else:
-            print(
-                "  ⚠ Profile exists but is NOT a distribution.  Installing here will\n"
-                "    overwrite its SOUL.md, skills/, cron/, and mcp.json.\n"
-                "    Your memories, sessions, auth.json, and .env will be preserved,\n"
-                "    but any hand-edits to distribution-owned files will be lost."
-            )
-    if mf.env_requires:
-        print("\n  Env vars:")
-        for er in mf.env_requires:
-            tag = "required" if er.required else "optional"
-            # Check both the current shell environment and the target profile's
-            # .env file so we don't nag about keys the user already has set up.
-            already = os.environ.get(er.name) is not None
-            if not already and plan.target_dir.is_dir():
-                env_path = plan.target_dir / ".env"
-                if env_path.is_file():
-                    try:
-                        # .env is written as UTF-8 everywhere in the codebase,
-                        # but a Notepad-edited file can carry a BOM — read as
-                        # utf-8-sig so the first key isn't hidden behind
-                        # U+FEFF.
-                        for raw in env_path.read_text(encoding="utf-8-sig").splitlines():
-                            line = raw.strip()
-                            if not line or line.startswith("#"):
-                                continue
-                            key = line.split("=", 1)[0].strip()
-                            if key == er.name:
-                                already = True
-                                break
-                    except (OSError, UnicodeDecodeError):
-                        # UnicodeDecodeError is a ValueError, not an OSError, so
-                        # the old guard let a mis-encoded .env abort the whole
-                        # install preview. Skip the pre-check instead.
-                        pass
-            status = "✓ set" if already else ("needs setting" if er.required else "—")
-            line = f"    • {er.name} ({tag}, {status})"
-            if er.description:
-                line += f" — {er.description}"
-            print(line)
-    if plan.has_cron:
-        print(
-            "\n  ⚠ This distribution ships cron jobs.  They will NOT run "
-            "automatically — review and enable manually."
-        )
-
 
 def cmd_completion(args, parser=None):
     """Print shell completion script."""
@@ -5683,7 +5459,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "approvals", "auth", "backup", "bundles", "checkpoints", "completion",
         "config", "cron", "debug", "doctor",
-        "dump", "fallback", "gateway", "hooks", "import", "import-agent",
+        "dump", "fallback", "gateway", "hooks", "import",
         "gui", "desktop", "login", "logout", "logs", "memory",
         "model", "pairing", "pause", "plugins", "portal", "profile",
         "project",
@@ -6387,15 +6163,6 @@ def main():
     # import command  (parser built in pilotage_cli/subcommands/import_cmd.py)
     # =========================================================================
     build_import_cmd_parser(subparsers, cmd_import=cmd_import)
-
-    # =========================================================================
-    # import-agent command  (parser: pilotage_cli/subcommands/import_agent.py)
-    # =========================================================================
-    def cmd_import_agent(args):
-        from pilotage_cli.agent_import import import_agent_command
-        import_agent_command(args)
-
-    build_import_agent_parser(subparsers, cmd_import_agent=cmd_import_agent)
 
     # =========================================================================
     # config command  (parser built in pilotage_cli/subcommands/config.py)

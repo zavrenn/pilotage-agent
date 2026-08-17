@@ -625,10 +625,6 @@ class ProfileInfo:
     # falls back to ``name`` when a profile-named wrapper exists. None if no
     # wrapper points at this profile. See ``find_alias_for_profile``.
     alias_name: Optional[str] = None
-    # Distribution metadata (None if the profile wasn't installed from a distribution).
-    distribution_name: Optional[str] = None
-    distribution_version: Optional[str] = None
-    distribution_source: Optional[str] = None
     # Free-form description (1-2 sentences) of what this profile is good
     # at. Persisted in ``<profile_dir>/profile.yaml``. Empty when the
     # user has not described the profile (legacy profiles, fresh
@@ -640,31 +636,6 @@ class ProfileInfo:
     # surfaces a "review" badge in this case so the user can edit or
     # accept.
     description_auto: bool = False
-
-
-def _read_distribution_meta(profile_dir: Path) -> tuple:
-    """Return ``(name, version, source)`` from the profile's ``distribution.yaml``
-    if present; ``(None, None, None)`` otherwise.
-
-    Failures (missing file, bad YAML) are swallowed — a bad manifest should
-    never break ``pilotage profile list`` for an unrelated profile.
-    """
-    mf_path = profile_dir / "distribution.yaml"
-    if not mf_path.is_file():
-        return None, None, None
-    try:
-        import yaml
-        with open(mf_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        if not isinstance(data, dict):
-            return None, None, None
-        return (
-            data.get("name"),
-            data.get("version"),
-            data.get("source"),
-        )
-    except Exception:
-        return None, None, None
 
 
 def _read_config_model(profile_dir: Path) -> tuple:
@@ -878,7 +849,6 @@ def list_profiles() -> List[ProfileInfo]:
     default_home = _get_default_pilotage_home()
     if default_home.is_dir():
         model, provider = _read_config_model(default_home)
-        dist_name, dist_version, dist_source = _read_distribution_meta(default_home)
         meta = read_profile_meta(default_home)
         profiles.append(ProfileInfo(
             name="default",
@@ -889,9 +859,6 @@ def list_profiles() -> List[ProfileInfo]:
             provider=provider,
             has_env=(default_home / ".env").exists(),
             skill_count=_count_skills(default_home),
-            distribution_name=dist_name,
-            distribution_version=dist_version,
-            distribution_source=dist_source,
             description=meta.get("description", ""),
             description_auto=meta.get("description_auto", False),
         ))
@@ -918,7 +885,6 @@ def list_profiles() -> List[ProfileInfo]:
                 alias_path = wrapper_dir / (f"{alias_name}.bat" if is_windows else alias_name)
             else:
                 alias_path = None
-            dist_name, dist_version, dist_source = _read_distribution_meta(entry)
             meta = read_profile_meta(entry)
             profiles.append(ProfileInfo(
                 name=name,
@@ -931,9 +897,6 @@ def list_profiles() -> List[ProfileInfo]:
                 skill_count=_count_skills(entry),
                 alias_path=alias_path if (alias_path and alias_path.exists()) else None,
                 alias_name=alias_name,
-                distribution_name=dist_name,
-                distribution_version=dist_version,
-                distribution_source=dist_source,
                 description=meta.get("description", ""),
                 description_auto=meta.get("description_auto", False),
             ))
@@ -1451,19 +1414,12 @@ def delete_profile(name: str, yes: bool = False) -> Path:
     model, provider = _read_config_model(profile_dir)
     gw_running = _check_gateway_running(profile_dir)
     skill_count = _count_skills(profile_dir)
-    dist_name, dist_version, dist_source = _read_distribution_meta(profile_dir)
-
     print(f"\nProfile: {canon}")
     print(f"Path:    {profile_dir}")
     if model:
         print(f"Model:   {model}" + (f" ({provider})" if provider else ""))
     if skill_count:
         print(f"Skills:  {skill_count}")
-    if dist_name:
-        print(f"Distribution: {dist_name}@{dist_version or '?'}")
-        if dist_source:
-            print(f"Installed from: {dist_source}")
-
     items = [
         "All config, API keys, memories, sessions, skills, cron jobs",
     ]

@@ -1624,7 +1624,6 @@ def setup_gateway(config: dict):
     import platform as _platform
 
     _is_macos = _platform.system() == "Darwin"
-    _is_windows = _platform.system() == "Windows"
     supports_systemd = supports_systemd_services()
 
     print()
@@ -1642,9 +1641,6 @@ def setup_gateway(config: dict):
                     systemd_restart()
                 elif _is_macos:
                     launchd_restart()
-                elif _is_windows:
-                    from pilotage_cli import gateway_windows
-                    gateway_windows.restart()
             except UserSystemdUnavailableError as e:
                 print_error("  Restart failed — user systemd not reachable:")
                 for line in str(e).splitlines():

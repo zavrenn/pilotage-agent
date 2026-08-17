@@ -893,32 +893,10 @@ def _spawn_gateway_restart_watcher(old_pid: int, run_argv: list[str]) -> bool:
         windows_detach_popen_kwargs,
     )
 
-    # On Windows the incoming ``run_argv`` leads with the venv's console
-    # ``python.exe`` (from ``get_python_path()``).  That's the interpreter we
-    # want: the watcher respawns it under CREATE_NO_WINDOW detach flags, so
-    # the gateway owns one hidden console that all descendants inherit —
-    # nothing flashes /). The spec helper normalizes the
-    # interpreter and captures the stable cwd + env overlay (PILOTAGE_HOME,
-    # VIRTUAL_ENV, PYTHONPATH) so the respawn doesn't depend on the watcher's
-    # transient working directory.  No-op on POSIX.
-    # See gateway_windows.windowless_gateway_restart_spec.
+    # Optional cwd + env overlay for the respawn.  Unused on the supported
+    # (Linux) deployment target, where the watcher inherits both from systemd.
     respawn_cwd = ""
     respawn_env_overlay: dict[str, str] = {}
-    if sys.platform == "win32":
-        try:
-            from pilotage_cli.gateway_windows import (
-                windowless_gateway_restart_spec,
-            )
-
-            run_argv, respawn_cwd, respawn_env_overlay = (
-                windowless_gateway_restart_spec(list(run_argv))
-            )
-        except Exception:
-            # Best-effort: if the rewrite fails for any reason, fall back to
-            # the original argv.  A visible window is worse than nothing, but
-            # a failed respawn is worse still — keep the gateway coming back.
-            respawn_cwd = ""
-            respawn_env_overlay = {}
 
     # Serialized as JSON literals embedded in the watcher source so the
     # inner respawn can apply cwd= / env= without extra argv plumbing.
@@ -976,8 +954,7 @@ def _spawn_gateway_restart_watcher(old_pid: int, run_argv: list[str]) -> bool:
                 # CREATE_BREAKAWAY_FROM_JOB can be rejected with
                 # ERROR_ACCESS_DENIED when the parent's job object refuses
                 # breakaway. Retry without it — DETACHED_PROCESS et al.
-                # alone are enough in most setups. Mirrors the canonical
-                # fallback in gateway_windows._spawn_detached.
+                # alone are enough in most setups.
                 _popen_kwargs["creationflags"] = windows_detach_flags_without_breakaway()
                 subprocess.Popen(cmd, **_popen_kwargs)
         else:
@@ -2698,21 +2675,20 @@ def ensure_gateway_service(context: str = "setup") -> bool:
             elif is_macos():
                 launchd_install(force=False)
             else:
-                from pilotage_cli import gateway_windows
-
-                # Registers the Scheduled Task AND starts it.
-                gateway_windows.install(force=False)
-                print_success("  Gateway service installed and started.")
-                return True
+                print_warning(
+                    "  No supported service manager — run the gateway manually:"
+                )
+                print_info("    pilotage gateway run")
+                return False
 
         if supports_systemd:
             systemd_start()
         elif is_macos():
             launchd_start()
         else:
-            from pilotage_cli import gateway_windows
-
-            gateway_windows.start()
+            print_warning("  No supported service manager — start it manually:")
+            print_info("    pilotage gateway run")
+            return False
         print_success("  Gateway service running (cron jobs + messaging platforms).")
         return True
     except UserSystemdUnavailableError as e:
@@ -5960,10 +5936,6 @@ def _is_service_installed() -> bool:
         )
     elif is_macos():
         return get_launchd_plist_path().exists()
-    elif is_windows():
-        from pilotage_cli import gateway_windows
-
-        return gateway_windows.is_installed()
     return False
 
 
@@ -6013,13 +5985,6 @@ def _is_service_running() -> bool:
             return result.returncode == 0
         except subprocess.TimeoutExpired:
             return False
-    elif is_windows():
-        from pilotage_cli import gateway_windows
-
-        if gateway_windows.is_installed():
-            # "installed" doesn't necessarily mean "running" on Windows. The
-            # canonical check is whether a gateway process actually exists.
-            return len(find_gateway_pids()) > 0
     # Check for manual processes
     return len(find_gateway_pids()) > 0
 
@@ -6217,10 +6182,6 @@ def gateway_setup():
                         systemd_restart()
                     elif is_macos():
                         launchd_restart()
-                    elif is_windows():
-                        from pilotage_cli import gateway_windows
-
-                        gateway_windows.restart()
                     else:
                         stop_profile_gateway()
                         print_info("Start manually: pilotage gateway")
@@ -6242,10 +6203,6 @@ def gateway_setup():
                         systemd_start()
                     elif is_macos():
                         launchd_start()
-                    elif is_windows():
-                        from pilotage_cli import gateway_windows
-
-                        gateway_windows.start()
                 except UserSystemdUnavailableError as e:
                     print_error("  Start failed — user systemd not reachable:")
                     for line in str(e).splitlines():
@@ -6283,10 +6240,10 @@ def gateway_setup():
                             launchd_install(force=False)
                             did_install = True
                         else:
-                            from pilotage_cli import gateway_windows
-
-                            gateway_windows.install(force=False)
-                            did_install = True
+                            print_warning(
+                                "  No supported service manager — run "
+                                "`pilotage gateway run` manually."
+                            )
                         print()
                         if did_install and start_now:
                             try:
@@ -6294,9 +6251,6 @@ def gateway_setup():
                                     systemd_start(system=installed_scope == "system")
                                 elif is_macos():
                                     launchd_start()
-                                elif is_windows():
-                                    from pilotage_cli import gateway_windows
-                                    gateway_windows.start()
                             except UserSystemdUnavailableError as e:
                                 print_error(
                                     "  Start failed — user systemd not reachable:"
@@ -6661,14 +6615,11 @@ def _gateway_command_inner(args):
         elif is_macos():
             launchd_install(force)
         elif is_windows():
-            from pilotage_cli import gateway_windows
-
-            gateway_windows.install(
-                force=force,
-                start_now=getattr(args, 'start_now', None),
-                start_on_login=getattr(args, 'start_on_login', None),
-                elevated_handoff=getattr(args, 'elevated_handoff', False),
-            )
+            print("Gateway service install is not supported on Windows.")
+            print("Run the gateway in the foreground instead:")
+            print()
+            print("  pilotage gateway run")
+            sys.exit(1)
         elif is_wsl():
             print("WSL detected but systemd is not running.")
             print(
@@ -6735,9 +6686,8 @@ def _gateway_command_inner(args):
         elif is_macos():
             launchd_uninstall()
         elif is_windows():
-            from pilotage_cli import gateway_windows
-
-            gateway_windows.uninstall()
+            print("No gateway service is installed on Windows — nothing to remove.")
+            print("Stop manual runs with: pilotage gateway stop")
         elif is_container():
             from pilotage_cli.service_manager import detect_service_manager
             if detect_service_manager() == "s6":
@@ -6788,9 +6738,9 @@ def _gateway_command_inner(args):
         elif is_macos():
             launchd_start()
         elif is_windows():
-            from pilotage_cli import gateway_windows
-
-            gateway_windows.start()
+            print("Gateway service start is not supported on Windows.")
+            print("Run it in the foreground instead: pilotage gateway run")
+            sys.exit(1)
         elif is_wsl():
             print("WSL detected but systemd is not available.")
             print("Run the gateway in foreground mode instead:")
@@ -6868,15 +6818,6 @@ def _gateway_command_inner(args):
                     service_available = True
                 except subprocess.CalledProcessError:
                     pass
-            elif is_windows():
-                from pilotage_cli import gateway_windows
-
-                if gateway_windows.is_installed():
-                    try:
-                        gateway_windows.stop()
-                        service_available = True
-                    except (subprocess.CalledProcessError, RuntimeError):
-                        pass
             killed = kill_gateway_processes(all_profiles=True)
             total = killed + (1 if service_available else 0)
             if total:
@@ -6901,15 +6842,6 @@ def _gateway_command_inner(args):
                     service_available = True
                 except subprocess.CalledProcessError:
                     pass
-            elif is_windows():
-                from pilotage_cli import gateway_windows
-
-                if gateway_windows.is_installed():
-                    try:
-                        gateway_windows.stop()
-                        service_available = True
-                    except (subprocess.CalledProcessError, RuntimeError):
-                        pass
 
             if not service_available:
                 # No systemd/launchd/schtasks service — use profile-scoped PID file
@@ -6965,15 +6897,6 @@ def _gateway_command_inner(args):
                     service_stopped = True
                 except subprocess.CalledProcessError:
                     pass
-            elif is_windows():
-                from pilotage_cli import gateway_windows
-
-                if gateway_windows.is_installed():
-                    try:
-                        gateway_windows.stop()
-                        service_stopped = True
-                    except (subprocess.CalledProcessError, RuntimeError):
-                        pass
             killed = kill_gateway_processes(all_profiles=True)
             total = killed + (1 if service_stopped else 0)
             if total:
@@ -6989,16 +6912,6 @@ def _gateway_command_inner(args):
                 systemd_start(system=system)
             elif is_macos() and get_launchd_plist_path().exists():
                 launchd_start()
-            elif is_windows():
-                from pilotage_cli import gateway_windows
-
-                # On Windows, even without a registered Scheduled Task / Startup
-                # entry, gateway_windows.start() uses the safe detached
-                # pythonw.exe launcher.  Do not fall back to run_gateway() here:
-                # when invoked from a gateway-hosted agent/tool call, foreground
-                # run_gateway() is tied to the very gateway process we just
-                # stopped and can die before the replacement is stable.
-                gateway_windows.start()
             else:
                 run_gateway(verbose=0)
             return
@@ -7019,22 +6932,6 @@ def _gateway_command_inner(args):
                 launchd_restart()
                 service_available = True
             except subprocess.CalledProcessError:
-                pass
-        elif is_windows():
-            from pilotage_cli import gateway_windows
-
-            # Prefer the Windows-specific restart path: it supports both
-            # registered Scheduled Task / Startup installs and no-service
-            # detached restarts.  In the normal successful Telegram-triggered
-            # restart flow, this avoids the generic foreground run_gateway()
-            # path that can be reaped with the old gateway process.  If the
-            # Windows backend raises, intentionally preserve the existing
-            # generic failure fallback below.
-            service_configured = gateway_windows.is_installed()
-            try:
-                gateway_windows.restart()
-                return
-            except (subprocess.CalledProcessError, RuntimeError, OSError):
                 pass
 
         if not service_available:
@@ -7085,11 +6982,6 @@ def _gateway_command_inner(args):
         snapshot = get_gateway_runtime_snapshot(system=system)
 
         # Check for service first
-        _windows_service_installed = False
-        if is_windows():
-            from pilotage_cli import gateway_windows
-
-            _windows_service_installed = gateway_windows.is_installed()
         if supports_systemd_services() and (
             get_systemd_unit_path(system=False).exists()
             or get_systemd_unit_path(system=True).exists()
@@ -7098,11 +6990,6 @@ def _gateway_command_inner(args):
             _print_gateway_process_mismatch(snapshot)
         elif is_macos() and get_launchd_plist_path().exists():
             launchd_status(deep)
-            _print_gateway_process_mismatch(snapshot)
-        elif _windows_service_installed:
-            from pilotage_cli import gateway_windows
-
-            gateway_windows.status(deep=deep)
             _print_gateway_process_mismatch(snapshot)
         else:
             # Check for manually running processes

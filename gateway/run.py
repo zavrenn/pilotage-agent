@@ -10185,8 +10185,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
             # (no JOB_OBJECT_LIMIT_BREAKAWAY_OK) rejects that bit with
             # ERROR_ACCESS_DENIED, surfaced as OSError.  Retry once without the
             # breakaway bit, preserving argv and the scrubbed watcher_env.
-            # Mirrors the canonical fallback in
-            # pilotage_cli/gateway_windows.py::_spawn_detached.
             try:
                 subprocess.Popen(
                     watcher_argv,
@@ -26392,10 +26390,9 @@ def _run_planned_stop_watcher(
     This watcher runs on every platform (cheap, defensive) and bridges
     the gap on Windows by translating a filesystem marker into the
     same shutdown-handler invocation a real SIGTERM would have produced
-    on POSIX. The CLI's ``pilotage_cli.gateway_windows.stop()`` writes
-    the marker via ``write_planned_stop_marker(pid)`` and then waits
-    for the gateway PID to exit; this watcher is what makes that
-    exit happen cleanly.
+    on POSIX. A caller writes the marker via
+    ``write_planned_stop_marker(pid)`` and then waits for the gateway PID
+    to exit; this watcher is what makes that exit happen cleanly.
 
     On POSIX this is a no-op safety net — the signal handler always
     races us to consuming the marker file because it fires synchronously

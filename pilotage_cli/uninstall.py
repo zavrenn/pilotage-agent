@@ -192,13 +192,12 @@ def remove_node_symlinks(pilotage_home: Path) -> list:
 
 
 def uninstall_gateway_service():
-    """Stop and uninstall the gateway service (systemd, launchd, Windows
-    Scheduled Task / Startup folder) and kill any standalone gateway processes.
+    """Stop and uninstall the gateway service (systemd, launchd) and kill any
+    standalone gateway processes.
 
     Delegates to the gateway module which handles:
     - Linux: user + system systemd services (with proper DBUS env setup)
     - macOS: launchd plists
-    - Windows: Scheduled Task + Startup-folder fallback, via ``gateway_windows``
     - All platforms: standalone ``pilotage gateway run`` processes
     - Termux/Android: skips systemd (no systemd on Android), still kills standalone processes
     """
@@ -276,29 +275,6 @@ def uninstall_gateway_service():
         except Exception as e:
             log_warn(f"Could not remove launchd gateway service: {e}")
 
-    # 4. Windows: uninstall Scheduled Task + Startup-folder entry.  The
-    #    gateway_windows module already knows how to locate and remove both
-    #    code paths (schtasks /Delete + .cmd unlink) and how to stop any
-    #    running detached pythonw gateway process.  We call into it so the
-    #    uninstall logic stays in exactly one place.
-    elif system == "Windows":
-        try:
-            from pilotage_cli import gateway_windows
-            if gateway_windows.is_installed() or gateway_windows.is_task_registered() \
-                    or gateway_windows.is_startup_entry_installed():
-                try:
-                    gateway_windows.stop()
-                except Exception as e:
-                    log_warn(f"Could not stop Windows gateway cleanly: {e}")
-                try:
-                    gateway_windows.uninstall()
-                    log_success("Removed Windows gateway (Scheduled Task + Startup entry)")
-                    stopped_something = True
-                except Exception as e:
-                    log_warn(f"Could not fully uninstall Windows gateway: {e}")
-        except Exception as e:
-            log_warn(f"Could not check Windows gateway service: {e}")
-
     return stopped_something
 
 
@@ -321,10 +297,8 @@ def uninstall_gateway_service():
 #   3. Downloads PortableGit to ``%LOCALAPPDATA%\pilotage\git\`` and Node to
 #      ``%LOCALAPPDATA%\pilotage\node\`` as user-scoped, isolated copies.
 #      These are ~200MB combined and serve no purpose after uninstall.
-#   4. On the ``pilotage dashboard`` + gateway paths, drops files into
-#      ``%LOCALAPPDATA%\pilotage\gateway-service\`` and sometimes
-#      ``%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`` — the
-#      latter is handled by ``gateway_windows.uninstall()`` already.
+#   4. On the gateway paths, drops files into
+#      ``%LOCALAPPDATA%\pilotage\gateway-service\``.
 #
 # Running a PowerShell one-liner per operation is overkill and fragile on
 # locked-down machines (Constrained Language Mode, restricted ExecutionPolicy).
