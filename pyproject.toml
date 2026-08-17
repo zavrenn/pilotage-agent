@@ -345,7 +345,6 @@ py-modules = [
   "registration_lifecycle",
   "model_tools",
   "toolsets",
-  "cli",
   "pilotage_bootstrap",
   "pilotage_constants",
   "pilotage_state",

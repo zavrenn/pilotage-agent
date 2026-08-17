@@ -14406,15 +14406,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 return None
             return WhatsAppCloudAdapter(config)
         
-        elif platform == Platform.API_SERVER:
-            from gateway.platforms.api_server import APIServerAdapter, check_api_server_requirements
-            if not check_api_server_requirements():
-                logger.warning("API Server: aiohttp not installed")
-                return None
-            adapter = APIServerAdapter(config)
-            adapter.gateway_runner = self
-            return adapter
-
         elif platform == Platform.WEBHOOK:
             from gateway.platforms.webhook import WebhookAdapter, check_webhook_requirements
             if not check_webhook_requirements():
@@ -21089,7 +21080,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             persisted = False
             if choice == "always":
                 try:
-                    from cli import save_config_value
+                    from pilotage_cli.cli_runtime_config import save_config_value
                     # save_config_value swallows its own errors and reports the
                     # outcome in the return value, so the try block alone says
                     # nothing about whether the write landed.

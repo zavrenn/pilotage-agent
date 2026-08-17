@@ -4378,7 +4378,7 @@ def _load_config() -> dict:
         except Exception:
             pass
     try:
-        from cli import CLI_CONFIG
+        from pilotage_cli.cli_runtime_config import CLI_CONFIG
 
         cfg = CLI_CONFIG.get("delegation") or {}
         return cfg if isinstance(cfg, dict) else {}

@@ -44,7 +44,7 @@ def _personalities_from_cli_config() -> Dict[str, Any]:
     freshness-correct.
     """
     global _personalities_memo
-    from cli import load_cli_config
+    from pilotage_cli.cli_runtime_config import load_cli_config
     from pilotage_cli.personality import available_personalities
 
     try:
@@ -1669,7 +1669,7 @@ class SlashCommandCompleter(Completer):
         """Yield completions for /personality via pilotage_cli.personality."""
         try:
             # Single owner: built-ins + user overrides from agent.personalities.
-            from cli import load_cli_config
+            from pilotage_cli.cli_runtime_config import load_cli_config
             from pilotage_cli.personality import (
                 available_personalities,
                 describe_personality,

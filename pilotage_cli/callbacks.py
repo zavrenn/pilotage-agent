@@ -24,7 +24,7 @@ def clarify_callback(cli, question, choices, multi_select=False):
     When ``multi_select`` is True, shows checkboxes and the user can
     select multiple options with Space, confirming with Enter.
     """
-    from cli import CLI_CONFIG
+    from pilotage_cli.cli_runtime_config import CLI_CONFIG
     from tools.clarify_gateway import resolve_clarify_timeout
 
     # Canonical clarify timeout, shared with the gateway/TUI path. `<= 0`
@@ -211,7 +211,7 @@ def approval_callback(cli, command: str, description: str) -> str:
         lock = cli._approval_lock
 
     with lock:
-        from cli import CLI_CONFIG
+        from pilotage_cli.cli_runtime_config import CLI_CONFIG
         timeout = CLI_CONFIG.get("approvals", {}).get("timeout", 300)
         response_queue = queue.Queue()
         choices = ["once", "session", "always", "deny"]

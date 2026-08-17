@@ -360,7 +360,6 @@ from pilotage_cli.subcommands.backup import build_backup_parser
 from pilotage_cli.subcommands.import_cmd import build_import_cmd_parser
 from pilotage_cli.subcommands.import_agent import build_import_agent_parser
 from pilotage_cli.subcommands.config import build_config_parser
-from pilotage_cli.subcommands.console import build_console_parser
 from pilotage_cli.subcommands.version import build_version_parser
 from pilotage_cli.subcommands.uninstall import build_uninstall_parser
 from pilotage_cli.subcommands.logs import build_logs_parser
@@ -1690,37 +1689,14 @@ def cmd_chat(args):
     _pin_kanban_board_env()
     _confirm_startup_expensive_model_override(args)
 
-    # Import and run the CLI
-    from cli import main as cli_main
-
-    # Build kwargs from args
-    kwargs = {
-        "model": args.model,
-        "provider": getattr(args, "provider", None),
-        "reasoning": getattr(args, "reasoning", None),
-        "toolsets": args.toolsets,
-        "skills": getattr(args, "skills", None),
-        "verbose": getattr(args, "verbose", None),
-        "quiet": getattr(args, "quiet", False),
-        "query": args.query,
-        "image": getattr(args, "image", None),
-        "resume": getattr(args, "resume", None),
-        "worktree": getattr(args, "worktree", False),
-        "checkpoints": getattr(args, "checkpoints", False),
-        "pass_session_id": getattr(args, "pass_session_id", False),
-        "max_turns": getattr(args, "max_turns", None),
-        "ignore_rules": getattr(args, "ignore_rules", False) or getattr(args, "safe_mode", False),
-        "ignore_user_config": getattr(args, "ignore_user_config", False) or getattr(args, "safe_mode", False),
-        "compact": getattr(args, "compact", False),
-    }
-    # Filter out None values
-    kwargs = {k: v for k, v in kwargs.items() if v is not None}
-
-    try:
-        cli_main(**kwargs)
-    except ValueError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+    # The interactive CLI/TUI chat client was removed — Pilotage runs as a
+    # gateway (Telegram / WhatsApp).  The argument handling above is kept so
+    # `pilotage chat` still validates flags and reports the change clearly.
+    print(
+        "Interactive chat was removed from this build.\n"
+        "Run the agent as a gateway instead:  pilotage gateway start"
+    )
+    sys.exit(1)
 
 
 def cmd_gateway(args):
@@ -5853,13 +5829,6 @@ def cmd_logs(args):
     )
 
 
-def cmd_console(args):
-    """Open the safe Pilotage command console."""
-    from pilotage_cli.console_engine import run_console_repl
-
-    return run_console_repl()
-
-
 def _build_provider_choices() -> list[str]:
     """Build the --provider choices list from CANONICAL_PROVIDERS + 'auto'."""
     try:
@@ -5884,7 +5853,7 @@ def _build_provider_choices() -> list[str]:
 _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "approvals", "auth", "backup", "bundles", "checkpoints", "completion",
-        "config", "console", "cron", "debug", "doctor",
+        "config", "cron", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "import-agent",
         "gui", "desktop", "kanban", "login", "logout", "logs", "memory",
         "model", "monitoring", "pairing", "pause", "plugins", "portal", "profile",
@@ -6623,11 +6592,6 @@ def main():
     # =========================================================================
     # skin command  (parser built in pilotage_cli/subcommands/skin.py)
     # =========================================================================
-
-    # =========================================================================
-    # console command  (parser built in pilotage_cli/subcommands/console.py)
-    # =========================================================================
-    build_console_parser(subparsers, cmd_console=cmd_console)
 
     # =========================================================================
     # pairing command  (parser built in pilotage_cli/subcommands/pairing.py)
