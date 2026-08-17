@@ -366,7 +366,6 @@ from pilotage_cli.subcommands.logs import build_logs_parser
 from pilotage_cli.subcommands.prompt_size import build_prompt_size_parser
 from pilotage_cli.subcommands.memory import build_memory_parser
 from pilotage_cli.subcommands.tools import build_tools_parser
-from pilotage_cli.subcommands.monitoring import build_monitoring_parser
 from pilotage_cli.subcommands.skills import build_skills_parser
 from pilotage_cli.subcommands.pairing import build_pairing_parser
 from pilotage_cli.subcommands.plugins import build_plugins_parser
@@ -743,63 +742,6 @@ def _read_git_revision_fingerprint(repo_root: Path) -> str | None:
         return f"git:HEAD:{head}"
     except OSError:
         return None
-
-
-def _termux_bundled_skills_fingerprint() -> str:
-    """Cheap invalidation key for Termux bundled-skill startup sync."""
-    git_fp = _read_git_revision_fingerprint(PROJECT_ROOT)
-    if git_fp:
-        return git_fp
-    skills_dir = PROJECT_ROOT / "skills"
-    try:
-        stat = skills_dir.stat()
-        return f"skills:{__version__}:{__release_date__}:{stat.st_mtime_ns}:{stat.st_size}"
-    except OSError:
-        return f"skills:{__version__}:{__release_date__}:missing"
-
-
-def _termux_bundled_skills_stamp_path() -> Path:
-    return get_pilotage_home() / "skills" / ".termux_bundled_sync_stamp"
-
-
-def _termux_bundled_skills_sync_needed() -> bool:
-    if not _is_termux_startup_environment():
-        return True
-    if os.environ.get("PILOTAGE_TERMUX_FORCE_SKILLS_SYNC") == "1":
-        return True
-    try:
-        stamp = _termux_bundled_skills_stamp_path()
-        return stamp.read_text(encoding="utf-8").strip() != _termux_bundled_skills_fingerprint()
-    except OSError:
-        return True
-
-
-def _mark_termux_bundled_skills_synced() -> None:
-    if not _is_termux_startup_environment():
-        return
-    try:
-        stamp = _termux_bundled_skills_stamp_path()
-        stamp.parent.mkdir(parents=True, exist_ok=True)
-        stamp.write_text(_termux_bundled_skills_fingerprint() + "\n", encoding="utf-8")
-    except OSError:
-        pass
-
-
-def _sync_bundled_skills_for_startup() -> bool:
-    """Sync bundled skills, but skip unchanged Termux checkouts cheaply.
-
-    Hashing every bundled skill is safe but expensive on older Android
-    storage. The git/ref stamp keeps post-update correctness: a changed
-    checkout revision forces one real sync, then later starts skip it.
-    """
-    if _is_termux_startup_environment() and not _termux_bundled_skills_sync_needed():
-        return False
-
-    from tools.skills_sync import sync_skills
-
-    sync_skills(quiet=True)
-    _mark_termux_bundled_skills_synced()
-    return True
 
 
 def _termux_should_prefetch_update_check() -> bool:
@@ -1454,26 +1396,6 @@ def _read_tui_active_session_file(path: Optional[str]) -> Optional[str]:
         return None
 
 
-def _sync_bundled_skills_quietly() -> None:
-    """Seed ``~/.pilotage/skills/`` with the bundled skill library on first launch.
-
-    Called from any CLI entrypoint that the user might use as their first
-    interaction with Pilotage — chat, dashboard (the desktop GUI's backend),
-    and gateway. The skills_sync module is manifest-based and idempotent:
-    skipped skills cost ~milliseconds, so calling this repeatedly is fine.
-
-    Failures are swallowed because skills are an enhancement, not a hard
-    dependency. Pilotage still functions without them; the user just sees an
-    empty skills library.
-    """
-    try:
-        from tools.skills_sync import sync_skills
-
-        sync_skills(quiet=True)
-    except Exception:
-        pass
-
-
 def cmd_chat(args):
     """Run interactive chat CLI."""
     _apply_safe_mode(args)
@@ -1622,23 +1544,6 @@ def cmd_chat(args):
         except Exception:
             pass
 
-    # Sync bundled skills on every CLI launch. Runs in a background daemon
-    # thread: the sync is idempotent, hash-gated (unchanged skills are
-    # skipped), and nothing on the banner path depends on it, yet the scan
-    # alone costs ~120-170ms of rglob/hashing on the startup path. Skill
-    # loading happens at agent init (first message), by which point the
-    # sync has long finished; a same-instant race would only matter in the
-    # rare launch right after `pilotage update` changed a bundled skill.
-    def _skills_sync_bg() -> None:
-        try:
-            _sync_bundled_skills_for_startup()
-        except Exception:
-            pass
-
-    threading.Thread(
-        target=_skills_sync_bg, name="bundled-skills-sync", daemon=True
-    ).start()
-
     # --yolo: bypass all dangerous command approvals.
     # Also set in main() before _prepare_agent_startup() — that is the
     # authoritative site because it runs before tool imports freeze
@@ -1679,8 +1584,6 @@ def cmd_chat(args):
 
 def cmd_gateway(args):
     """Gateway management commands."""
-    _sync_bundled_skills_quietly()
-
     from pilotage_cli.gateway import gateway_command
 
     gateway_command(args)
@@ -2422,15 +2325,13 @@ _AUX_TASKS: list[tuple[str, str, str]] = [
     ("compression", "Compression", "context summarization"),
     ("web_extract", "Web extract", "web page summarization"),
     ("approval", "Approval", "smart command approval"),
-    ("MCP", "MCP tool reasoning"),
+    ("MCP", "MCP", "MCP tool reasoning"),
     ("title_generation", "Title generation", "session titles"),
     ("memory_query_rewrite", "Memory query rewrite", "memory retrieval queries"),
     ("tts_audio_tags", "TTS audio tags", "Gemini TTS tag insertion"),
-    ("skills_hub", "Skills hub", "skills search/install"),
     ("triage_specifier", "Triage specifier", "kanban spec fleshing"),
     ("kanban_decomposer", "Kanban decomposer", "task decomposition"),
     ("profile_describer", "Profile describer", "auto profile descriptions"),
-    ("Curator", "skill-usage review pass"),
 ]
 
 
@@ -5104,7 +5005,6 @@ def cmd_profile(args):
         list_profiles,
         create_profile,
         delete_profile,
-        seed_profile_skills,
         set_active_profile,
         get_active_profile_name,
         check_alias_collision,
@@ -5239,25 +5139,6 @@ def cmd_profile(args):
                 except Exception:
                     pass  # Honcho plugin not installed or not configured
 
-            # Seed bundled skills for fresh profiles only. Clone operations
-            # already copied the source profile's skills, including any
-            # user-installed or intentionally removed skills.
-            if not (clone_config or clone_all):
-                result = seed_profile_skills(profile_dir)
-                if result and result.get("skipped_opt_out"):
-                    print(
-                        "No bundled skills seeded (--no-skills). "
-                        "Delete .no-bundled-skills in the profile to opt back in."
-                    )
-                elif result:
-                    copied = len(result.get("copied", []))
-                    print(f"{copied} bundled skills synced.")
-                else:
-                    print(
-                        "⚠ Skills could not be seeded. Run `{} update` to retry.".format(
-                            name
-                        )
-                    )
 
             # Create wrapper alias
             if not no_alias:
@@ -5820,7 +5701,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "config", "cron", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "import-agent",
         "gui", "desktop", "login", "logout", "logs", "memory",
-        "model", "monitoring", "pairing", "pause", "plugins", "portal", "profile",
+        "model", "pairing", "pause", "plugins", "portal", "profile",
         "project",
         "prompt-size",
         "resume",
@@ -6549,7 +6430,7 @@ def main():
     # =========================================================================
     # skills command  (parser built in pilotage_cli/subcommands/skills.py)
     # =========================================================================
-    build_skills_parser(subparsers, cmd_skills=cmd_skills)
+    build_skills_parser(subparsers)
 
     # =========================================================================
     # bundles command — skill bundles (alias /<name> for multiple skills)
@@ -7095,12 +6976,6 @@ def main():
         return _self().cmd_sessions(_args, sessions_parser=sessions_parser)
 
     sessions_parser.set_defaults(func=_dispatch_sessions)
-
-    # =========================================================================
-    # insights command  (parser built in pilotage_cli/subcommands/insights.py)
-    # =========================================================================
-    build_monitoring_parser(subparsers, cmd_monitoring=cmd_monitoring)
-
     # =========================================================================
     # claw command  (parser built in pilotage_cli/subcommands/claw.py)
     # =========================================================================

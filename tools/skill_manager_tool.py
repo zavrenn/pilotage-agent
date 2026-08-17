@@ -94,59 +94,7 @@ def _reset_background_review_read_marks() -> None:
     """Test helper: clear read-before-write marks for the current context."""
     _background_review_read_paths.set(frozenset())
 
-# Import security scanner — external hub installs always get scanned;
-# agent-created skills only get scanned when skills.guard_agent_created is on.
-try:
-    from tools.skills_guard import scan_skill, should_allow_install, format_scan_report
-    _GUARD_AVAILABLE = True
-except ImportError:
-    _GUARD_AVAILABLE = False
 
-
-def _guard_agent_created_enabled() -> bool:
-    """Read skills.guard_agent_created from config (default False).
-
-    Off by default because the agent can already execute the same code
-    paths via terminal() with no gate, so the scan adds friction without
-    meaningful security.  Users who want belt-and-suspenders can turn it
-    on via `pilotage config set skills.guard_agent_created true`.
-    """
-    try:
-        from pilotage_cli.config import load_config
-        cfg = load_config()
-        return is_truthy_value(
-            cfg_get(cfg, "skills", "guard_agent_created"),
-            default=False,
-        )
-    except Exception:
-        return False
-
-
-def _security_scan_skill(skill_dir: Path) -> Optional[str]:
-    """Scan a skill directory after write. Returns error string if blocked, else None.
-
-    No-op when skills.guard_agent_created is disabled (the default).
-    """
-    if not _GUARD_AVAILABLE:
-        return None
-    if not _guard_agent_created_enabled():
-        return None
-    try:
-        result = scan_skill(skill_dir, source="agent-created")
-        allowed, reason = should_allow_install(result)
-        if allowed is False:
-            report = format_scan_report(result)
-            return f"Security scan blocked this skill ({reason}):\n{report}"
-        if allowed is None:
-            # "ask" verdict — for agent-created skills this means dangerous
-            # findings were detected.  Surface as an error so the agent can
-            # retry with the flagged content removed.
-            report = format_scan_report(result)
-            logger.warning("Agent-created skill blocked (dangerous findings): %s", reason)
-            return f"Security scan blocked this skill ({reason}):\n{report}"
-    except Exception as e:
-        logger.warning("Security scan failed for %s: %s", skill_dir, e, exc_info=True)
-    return None
 
 import yaml
 
@@ -271,33 +219,6 @@ def _validate_delete_target(skill_dir: Path) -> Optional[str]:
     )
 
 
-def _pinned_guard(name: str) -> Optional[str]:
-    """Return a refusal message if *name* is pinned, else None.
-
-    Pin protects a skill from **deletion** — both the curator's auto-archive
-    passes and the agent's ``skill_manage(action="delete")`` tool call. The
-    agent can still patch/edit pinned skills; pin only guards against
-    irrecoverable loss, not against content evolution.
-
-    Best-effort: if the sidecar is unreadable we let the delete through
-    rather than block on a broken telemetry file.
-    """
-    try:
-        from tools import skill_usage
-        rec = skill_usage.get_record(name)
-        if rec.get("pinned"):
-            return (
-                f"Skill '{name}' is pinned and cannot be deleted by "
-                f"skill_manage. Ask the user to run "
-                f"`pilotage curator unpin {name}` if they want to delete it. "
-                f"Patches and edits are allowed on pinned skills; only "
-                f"deletion is blocked."
-            )
-    except Exception:
-        logger.debug("pinned-guard lookup failed for %s", name, exc_info=True)
-    return None
-
-
 def _background_review_write_guard(
     name: str,
     skill_dir: Path,
@@ -317,27 +238,6 @@ def _background_review_write_guard(
     except Exception:
         return None
 
-    # Pin must be respected by autonomous maintenance. The curator already
-    # skips pinned skills from every auto-transition; the background review
-    # fork is the same kind of autonomous, no-user-present actor, so it must
-    # not write to a pinned skill either. This is stricter than
-    # the foreground ``_pinned_guard`` (which only blocks deletion) precisely
-    # because there is no user in the loop to consent to an edit here.
-    try:
-        from tools import skill_usage
-        if skill_usage.get_record(name).get("pinned"):
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for pinned skill "
-                    f"'{name}': pinned skills are off-limits to autonomous "
-                    "maintenance. Ask the user to run "
-                    f"`pilotage curator unpin {name}` if they want it changed."
-                ),
-            }
-    except Exception:
-        logger.debug("pinned skill guard lookup failed for %s", name, exc_info=True)
-
     try:
         from agent.skill_utils import is_external_skill_path
         if is_external_skill_path(skill_dir):
@@ -352,72 +252,6 @@ def _background_review_write_guard(
     except Exception:
         logger.debug("external skill guard lookup failed for %s", name, exc_info=True)
 
-    try:
-        from tools import skill_usage
-        if skill_usage.is_protected_builtin(name):
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for protected "
-                    f"built-in skill '{name}'."
-                ),
-            }
-        if skill_usage.is_hub_installed(name):
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for hub-installed "
-                    f"skill '{name}'."
-                ),
-            }
-        if skill_usage.is_bundled(name):
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for bundled "
-                    f"skill '{name}'."
-                ),
-            }
-        # Skills that are not curator-managed are off-limits to autonomous
-        # curation. This prevents the LLM consolidation pass from mutating
-        # skills the user owns (manually authored, URL-installed, or created by
-        # a foreground `skill_manage(create)` at the user's request), which lack
-        # the `created_by: "agent"` marker.
-        #
-        # A MISSING record and an explicit `created_by: null` must resolve
-        # IDENTICALLY. Keying on `isinstance(usage_rec, dict)`
-        # made the policy depend on the guard's own side effect: a local skill
-        # with no telemetry record passed, the successful write called
-        # bump_patch() which created a `created_by: null` record, and the very
-        # same write was refused from then on. "Allowed exactly once" is not a
-        # policy — it is a race with our own bookkeeping. Fail closed for both
-        # shapes; `pilotage curator adopt <name>` is the supported way in.
-        usage_data = skill_usage.load_usage()
-        usage_rec = usage_data.get(name)
-        if not skill_usage._is_curator_managed_record(usage_rec):
-            if isinstance(usage_rec, dict):
-                _detail = f"created_by={usage_rec.get('created_by')!r}"
-            else:
-                _detail = "no usage record"
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for skill "
-                    f"'{name}': the skill is not curator-managed ({_detail}). "
-                    "User-owned skills are off-limits to autonomous curation. "
-                    f"Run `pilotage curator adopt {name}` to opt it in."
-                ),
-            }
-    except Exception:
-        logger.warning("owned skill guard lookup failed for %s", name, exc_info=True)
-        return {
-            "success": False,
-            "error": (
-                f"Refusing background curator {action} for skill '{name}': "
-                "agent ownership could not be verified because the provenance "
-                "record is unavailable or unreadable."
-            ),
-        }
     return None
 
 
@@ -477,9 +311,8 @@ def _curator_consolidation_delete_guard(
     verified consolidations (``consolidated_this_run == 0``), leaving active
     automations pointing at names that no longer resolve. The deterministic
     inactivity prune is the only legitimate prune path, and it archives via
-    ``skill_usage.archive_skill()`` directly without ever calling
-    ``skill_manage`` — so a bare prune reaching here can only be the LLM pass
-    pruning without consolidation evidence. Refuse it; keep the skill active.
+    A delete reaching here without consolidation evidence can only be the
+    review fork pruning on a hunch. Refuse it; keep the skill active.
 
     Returns an error dict to abort the delete, or ``None`` when the delete is
     allowed to proceed (not the curator pass, or a declared consolidation).
@@ -907,12 +740,6 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
     skill_md = skill_dir / "SKILL.md"
     atomic_write_text(skill_md, content)
 
-    # Security scan — roll back on block
-    scan_error = _security_scan_skill(skill_dir)
-    if scan_error:
-        shutil.rmtree(skill_dir, ignore_errors=True)
-        return {"success": False, "error": scan_error}
-
     # Extract description from frontmatter for verbose notifications
     _desc = ""
     try:
@@ -937,36 +764,7 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
         "skill_manage(action='write_file', name='{}', file_path='references/example.md', file_content='...')".format(name)
     )
     _add_description_prompt_preview(result, content)
-    _attach_lint_findings(result, skill_md)
     return result
-
-
-def _attach_lint_findings(result: Dict[str, Any], skill_md: Path) -> None:
-    """Run the advisory SKILL.md linter and attach any findings to *result*.
-
-    The linter enforces the CONTRIBUTING "Skill authoring standards (HARDLINE)"
-    conventions that the hard validator does not (shell-utility references,
-    missing metadata, dangling reference links, POSIX gating, forbidden files).
-    Findings are ADVISORY — surfaced as guidance so the author can fix them,
-    never a hard block. The hard rejects already ran in _validate_frontmatter.
-    """
-    try:
-        from tools.skill_linter import lint_skill  # local import: optional path
-
-        findings = lint_skill(skill_md)
-    except Exception:
-        return
-    if not findings:
-        return
-    result["lint_warnings"] = [
-        {"severity": f.severity, "rule": f.rule, "message": f.message}
-        for f in findings
-    ]
-    result["lint_hint"] = (
-        "The skill was created. These are advisory authoring-convention "
-        "findings (not blockers) — fix them with skill_manage(action='patch') "
-        "to match Pilotage skill standards."
-    )
 
 
 def _edit_skill(name: str, content: str) -> Dict[str, Any]:
@@ -999,13 +797,6 @@ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
     # Back up original content for rollback
     original_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else None
     atomic_write_text(skill_md, content)
-
-    # Security scan — roll back on block
-    scan_error = _security_scan_skill(existing["path"])
-    if scan_error:
-        if original_content is not None:
-            atomic_write_text(skill_md, original_content)
-        return {"success": False, "error": scan_error}
 
     # Extract description from new content for verbose notifications
     _desc = ""
@@ -1125,12 +916,6 @@ def _patch_skill(
     original_content = content  # for rollback
     atomic_write_text(target, new_content)
 
-    # Security scan — roll back on block
-    scan_error = _security_scan_skill(skill_dir)
-    if scan_error:
-        atomic_write_text(target, original_content)
-        return {"success": False, "error": scan_error}
-
     result = {
         "success": True,
         "message": f"Patched {'SKILL.md' if not file_path else file_path} in skill '{name}' ({match_count} replacement{'s' if match_count > 1 else ''}).",
@@ -1172,10 +957,6 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
     if fail_closed:
         return fail_closed
 
-    pinned_err = _pinned_guard(name)
-    if pinned_err:
-        return {"success": False, "error": pinned_err}
-
     # Validate absorbed_into target when declared non-empty
     absorbed_target = (
         absorbed_into.strip()
@@ -1207,32 +988,6 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
     unsafe = _validate_delete_target(skill_dir)
     if unsafe:
         return {"success": False, "error": unsafe}
-
-    # During the curator consolidation pass, a verified consolidation must be
-    # RECOVERABLE: archival into ~/.pilotage/skills/.archive/ is documented as
-    # the maximum destructive action the curator may take, and
-    # `pilotage curator restore` promises the skill can be brought back. Route
-    # through the recoverable archive primitive instead of permanent rmtree so
-    # a misjudged consolidation can be undone. Foreground,
-    # user-directed deletes keep their existing hard-delete semantics.
-    try:
-        from tools.skill_provenance import is_background_review
-        curator_pass = is_background_review()
-    except Exception:
-        curator_pass = False
-
-    if curator_pass:
-        try:
-            from tools.skill_usage import archive_skill
-            ok, archive_msg = archive_skill(name)
-        except Exception as e:
-            return {"success": False, "error": f"failed to archive '{name}': {e}"}
-        if not ok:
-            return {"success": False, "error": archive_msg}
-        message = f"Skill '{name}' archived ({archive_msg})."
-        if is_consolidation:
-            message += f" Content absorbed into '{absorbed_target}'."
-        return {"success": True, "message": message, "_archived": True}
 
     shutil.rmtree(skill_dir)
 
@@ -1299,15 +1054,6 @@ def _write_file(name: str, file_path: str, file_content: str) -> Dict[str, Any]:
     # Back up for rollback
     original_content = target.read_text(encoding="utf-8") if target.exists() else None
     atomic_write_text(target, file_content)
-
-    # Security scan — roll back on block
-    scan_error = _security_scan_skill(existing["path"])
-    if scan_error:
-        if original_content is not None:
-            atomic_write_text(target, original_content)
-        else:
-            target.unlink(missing_ok=True)
-        return {"success": False, "error": scan_error}
 
     result = {
         "success": True,
@@ -1518,37 +1264,6 @@ def skill_manage(
         try:
             from agent.prompt_builder import clear_skills_system_prompt_cache
             clear_skills_system_prompt_cache(clear_snapshot=True)
-        except Exception:
-            pass
-        # Curator telemetry: bump patch_count on edit/patch/write_file (the actions
-        # that mutate an existing skill's guidance), drop the record on delete.
-        # Only mark a skill as agent-created when the background self-improvement
-        # review fork creates it — foreground `skill_manage(create)` calls are
-        # user-directed, and those skills belong to the user (the curator must
-        # not touch them). Best-effort; telemetry failures never break the tool.
-        try:
-            from tools.skill_usage import bump_patch, forget, record_created
-            from tools.skill_provenance import is_background_review
-            if action == "create":
-                record_created(
-                    name,
-                    agent_created=is_background_review(),
-                    task_id=task_id,
-                    session_id=session_id,
-                )
-            elif action in {"patch", "edit", "write_file", "remove_file"}:
-                bump_patch(
-                    name,
-                    action=action,
-                    task_id=task_id,
-                    session_id=session_id,
-                )
-            elif action == "delete":
-                # A recoverable curator archive (routed through archive_skill)
-                # keeps its usage record as STATE_ARCHIVED so `pilotage curator
-                # status`/`restore` still see it. Only a hard delete forgets.
-                if not result.get("_archived"):
-                    forget(name)
         except Exception:
             pass
 

@@ -2556,18 +2556,10 @@ def _run_blank_slate_setup(config: dict, pilotage_home, is_existing: bool):
 
     if path == 0:
         save_config(config)
-        # Blank Slate means no bundled skills; record the opt-out so future
-        # `pilotage update` runs don't re-inject them.
-        try:
-            from tools.skills_sync import set_bundled_skills_opt_out
-            set_bundled_skills_opt_out(True)
-        except Exception as exc:
-            logger.debug("blank-slate skill opt-out error: %s", exc)
         print()
         print_success("Blank Slate setup complete — minimal agent ready.")
         print_info("Enable anything later, on demand:")
         print_info("  Enable tools:        pilotage tools")
-        print_info("  Seed skills:         pilotage skills opt-in --sync")
         print_info("  Add MCP servers:     pilotage mcp add")
         print_info("  Enable plugins:      pilotage plugins")
         print_info("  Tune agent settings: pilotage setup agent")
@@ -2583,30 +2575,6 @@ def _blank_slate_walkthrough(config: dict, pilotage_home):
     """Opt-in walkthrough for Blank Slate: skills, tools, plugins, MCP, gateway."""
     from pilotage_cli.config import load_config
 
-    # ── Bundled skills — default to NONE, offer to seed all ──
-    print()
-    print_header("Bundled Skills")
-    print_info("Blank Slate ships with NO bundled skills by default.")
-    seed_skills = prompt_yes_no(
-        "Seed the full bundled skill catalog? (No = start with zero skills)",
-        default=False,
-    )
-    try:
-        from tools.skills_sync import set_bundled_skills_opt_out, sync_skills
-        if seed_skills:
-            # Make sure no stale opt-out marker blocks the seed, then sync.
-            set_bundled_skills_opt_out(False)
-            result = sync_skills(quiet=True)
-            copied = len(result.get("copied", [])) if isinstance(result, dict) else 0
-            print_success(f"Seeded {copied} bundled skills.")
-        else:
-            set_bundled_skills_opt_out(True)
-            print_info("No skills seeded. A .no-bundled-skills marker keeps future")
-            print_info("`pilotage update` runs from re-injecting them. Opt back in any")
-            print_info("time with `pilotage skills opt-in --sync`.")
-    except Exception as exc:
-        logger.debug("blank-slate skill handling error: %s", exc)
-        print_warning(f"Skill setup step encountered an error: {exc}")
 
     # ── Walk through enabling additional tools ──
     print()

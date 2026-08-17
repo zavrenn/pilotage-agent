@@ -793,15 +793,6 @@ DEFAULT_CONFIG = {
         # single-shape tool returns DB content directly). The old
         # ``auxiliary.session_search.*`` block was removed here. Existing
         # values in user config.yaml files are harmless leftovers and ignored.
-        "skills_hub": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 30,
-            "extra_body": {},
-            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
-        },
         "approval": {
             "provider": "auto",
             "model": "",           # fast/cheap model recommended (e.g. gpt-4o-mini)
@@ -862,20 +853,6 @@ DEFAULT_CONFIG = {
             "base_url": "",
             "api_key": "",
             "timeout": 60,
-            "extra_body": {},
-            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
-        },
-        # Curator — skill-usage review fork. Timeout is generous because the
-        # review pass can take several minutes on reasoning models (umbrella
-        # building over hundreds of candidate skills). "auto" = use main chat
-        # model; override via `pilotage model` → auxiliary → Curator to route
-        # to a cheaper aux model.
-        "curator": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 600,
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
         },
@@ -1388,56 +1365,6 @@ DEFAULT_CONFIG = {
         #                     never crammed into a chat bubble), apply with
         #                     /skills approve <id> or drop with /skills reject <id>.
         "write_approval": False,
-    },
-
-    # Curator — background skill maintenance.
-    #
-    # Periodically reviews AGENT-CREATED skills (never bundled or
-    # hub-installed) and keeps the collection tidy: marks long-unused skills
-    # as stale, archives genuinely obsolete ones (archive only, never
-    # deletes), and spawns a forked aux-model agent to consolidate overlaps
-    # and patch drift. Runs inactivity-triggered from session start — no
-    # cron daemon.
-    #
-    # See `pilotage curator status` for the last run summary.
-    "curator": {
-        "enabled": True,
-        # How long to wait between curator runs (hours).  Default: 7 days.
-        "interval_hours": 24 * 7,
-        # Only run when the agent has been idle at least this long (hours).
-        "min_idle_hours": 2,
-        # Mark a skill as "stale" after this many days without use.
-        "stale_after_days": 30,
-        # Archive a skill (move to skills/.archive/) after this many days
-        # without use. Archived skills are recoverable — no auto-deletion.
-        "archive_after_days": 90,
-        # Run the LLM consolidation (umbrella-building) pass. OFF by default.
-        # When off, a curator run does ONLY the deterministic inactivity prune
-        # (mark stale / archive long-unused skills) and skips the forked
-        # aux-model review entirely — no umbrella-building, no aux-model cost.
-        # Set to true to opt back into merging overlapping skills into
-        # class-level umbrellas. `pilotage curator run --consolidate` overrides
-        # this for a single invocation.
-        "consolidate": False,
-        # Also prune (archive) bundled built-in skills after the inactivity
-        # period, not just agent-created ones. ON by default. Built-ins are
-        # normally restored on every `pilotage update`, so pruning them only
-        # sticks because a suppression list tells the re-seeder to leave them
-        # archived. Hub-installed skills are NEVER pruned here — they have an
-        # external upstream owner. Built-ins accrue usage telemetry and their
-        # inactivity clock starts the first time the curator sees them, so a
-        # long-unused built-in is archived only after archive_after_days of
-        # genuine non-use (never a mass-prune on the first run). Set to false
-        # to keep all bundled built-ins permanently.
-        "prune_builtins": True,
-        # Pre-run backup: before every real curator pass (dry-run is
-        # skipped), snapshot ~/.pilotage/skills/ into
-        # ~/.pilotage/skills/.curator_backups/<utc-iso>/skills.tar.gz so the
-        # user can roll back with `pilotage curator rollback`.
-        "backup": {
-            "enabled": True,
-            "keep": 5,  # retain last N regular snapshots
-        },
     },
 
     # Honcho AI-native memory -- reads ~/.honcho/config.json as single source of truth.

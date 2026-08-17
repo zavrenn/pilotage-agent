@@ -2064,20 +2064,6 @@ def _skill_view_with_bump(args, **kw):
         parsed = json.loads(result)
         if isinstance(parsed, dict) and parsed.get("success"):
             _record_skill_view(task_id, name, args.get("file_path"), parsed)
-            # Use the resolved skill name from the payload when present —
-            # qualified forms ("plugin:skill") return with the canonical name.
-            resolved = parsed.get("name") or name
-            if resolved:
-                from tools.skill_usage import bump_use, bump_view
-                bump_view(str(resolved))
-                # A skill_view tool call is the agent actively loading the skill
-                # to act on it — that counts as use, not just a browse/view.
-                # Curator's stale timer keys off last_used_at (see agent/curator.py).
-                bump_use(
-                    str(resolved),
-                    task_id=kw.get("task_id"),
-                    session_id=kw.get("session_id"),
-                )
     except Exception:
         pass
     return result

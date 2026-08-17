@@ -861,7 +861,7 @@ def ensure_pilotage_home():
         home.mkdir(parents=True, exist_ok=True)
         _secure_dir(home)
         for subdir in (
-            "cron", "sessions", "logs", "logs/curator", "memories",
+            "cron", "sessions", "logs", "memories",
             "pairing", "hooks", "image_cache", "audio_cache", "skills",
         ):
             d = home / subdir
@@ -886,10 +886,6 @@ def _ensure_pilotage_home_managed(home: Path):
                 f"{d} does not exist. "
                 "Run 'sudo nixos-rebuild switch' first."
             )
-    # Curator reports dir is a sub-path of logs/; create it if missing.
-    # In managed mode the activation script may not know about this subdir,
-    # so we mkdir it ourselves (it's inside an already-secured logs/ dir).
-    (home / "logs" / "curator").mkdir(parents=True, exist_ok=True)
     # Inside umask(0o007) scope — SOUL.md will be created as 0660
     _ensure_default_soul_md(home)
 

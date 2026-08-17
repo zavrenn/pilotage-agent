@@ -620,13 +620,6 @@ def build_skill_invocation_message(
 
     loaded_skill, skill_dir, skill_name = loaded
 
-    # Track active usage for Curator lifecycle management
-    try:
-        from tools.skill_usage import bump_use
-        bump_use(skill_name, task_id=task_id)
-    except Exception:
-        pass  # Non-critical — skill invocation proceeds regardless
-
     activation_note = (
         f'[IMPORTANT: The user has invoked the "{skill_name}" skill, indicating they want '
         "you to follow its instructions. The full skill content is loaded below.]"
@@ -728,13 +721,6 @@ def build_stacked_skill_invocation_message(
             continue
         loaded_skill, skill_dir, skill_name = loaded
 
-        # Track active usage for Curator lifecycle management
-        try:
-            from tools.skill_usage import bump_use
-            bump_use(skill_name, task_id=task_id)
-        except Exception:
-            pass  # Non-critical
-
         # NOTE: must start with "[Loaded as part of the " — that prefix is
         # the bundle block marker the memory-scaffolding extractor cuts on.
         activation_note = (
@@ -814,13 +800,6 @@ def build_preloaded_skills_prompt(
         if skill_name in disabled_names or identifier in disabled_names:
             missing.append(identifier)
             continue
-
-        # Track active usage for Curator lifecycle management
-        try:
-            from tools.skill_usage import bump_use
-            bump_use(skill_name, task_id=task_id)
-        except Exception:
-            pass  # Non-critical
 
         activation_note = (
             f'[IMPORTANT: The user launched this CLI session with the "{skill_name}" skill '

@@ -129,23 +129,6 @@ _CLONE_ALL_HISTORY_EXCLUDE_ROOT: frozenset[str] = frozenset({
     "checkpoints",
 })
 
-# Marker file written by `pilotage profile create --no-skills`.  When present in
-# a profile's root, callers of seed_profile_skills() (fresh-create, `pilotage
-# update`'s all-profile sync, the web dashboard) skip bundled-skill seeding
-# for that profile.  The user can still install skills manually via
-# `pilotage skills install` or drop SKILL.md files into the profile's skills/.
-# Delete the marker file to opt back in.
-NO_BUNDLED_SKILLS_MARKER = ".no-bundled-skills"
-
-
-def has_bundled_skills_opt_out(profile_dir: Path) -> bool:
-    """Return True if the profile opted out of bundled-skill seeding."""
-    try:
-        return (profile_dir / NO_BUNDLED_SKILLS_MARKER).exists()
-    except OSError:
-        return False
-
-
 def _clone_all_copytree_ignore(source_dir: Path):
     """Exclude infrastructure artifacts when cloning a profile via --clone-all.
 
@@ -1176,19 +1159,6 @@ def create_profile(
         except Exception:
             pass  # best-effort — don't fail profile creation over this
 
-    # Write the opt-out marker so seed_profile_skills() and `pilotage update`'s
-    # all-profile sync loop both skip this profile for bundled-skill seeding.
-    if no_skills:
-        try:
-            (profile_dir / NO_BUNDLED_SKILLS_MARKER).write_text(
-                "This profile opted out of bundled-skill seeding "
-                "(`pilotage profile create --no-skills`).\n"
-                "Delete this file to re-enable sync on the next `pilotage update`.\n",
-                encoding="utf-8",
-            )
-        except OSError:
-            pass  # best-effort — the feature still works via the empty skills/ dir
-
     # Cloned configs can be older than the running Pilotage (or predate schema
     # tracking entirely). Migrate config-only clones immediately so
     # desktop/status surfaces don't warn that a just-created profile is
@@ -1219,51 +1189,6 @@ def create_profile(
     _maybe_register_gateway_service(canon)
 
     return profile_dir
-
-
-def seed_profile_skills(profile_dir: Path, quiet: bool = False) -> Optional[dict]:
-    """Seed bundled skills into a profile via subprocess.
-
-    Uses subprocess because sync_skills() caches PILOTAGE_HOME at module level.
-    Returns the sync result dict, or None on failure.
-
-    Profiles that opted out of bundled skills (via ``pilotage profile create
-    --no-skills`` — which writes ``.no-bundled-skills`` to the profile root)
-    are skipped and get an empty-result dict so callers can report
-    "opted out" instead of "failed".
-    """
-    if has_bundled_skills_opt_out(profile_dir):
-        return {
-            "copied": [],
-            "updated": [],
-            "user_modified": [],
-            "skipped_opt_out": True,
-        }
-    project_root = Path(__file__).parent.parent.resolve()
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c",
-             "import json; from tools.skills_sync import sync_skills; "
-             "r = sync_skills(quiet=True); print(json.dumps(r))"],
-            env={**os.environ, "PILOTAGE_HOME": str(profile_dir)},
-            cwd=str(project_root),
-            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return json.loads(result.stdout.strip())
-        if not quiet:
-            print(f"⚠ Skill seeding returned exit code {result.returncode}")
-            if result.stderr.strip():
-                print(f"  {result.stderr.strip()[:200]}")
-        return None
-    except subprocess.TimeoutExpired:
-        if not quiet:
-            print("⚠ Skill seeding timed out (60s)")
-        return None
-    except Exception as e:
-        if not quiet:
-            print(f"⚠ Skill seeding failed: {e}")
-        return None
 
 
 def backfill_profile_envs(quiet: bool = False) -> List[str]:

@@ -3449,7 +3449,6 @@ def _build_job_prompt(
         )
 
     from tools.skills_tool import skill_view
-    from tools.skill_usage import bump_use
     from agent.skill_bundles import build_bundle_invocation_message, resolve_bundle_command_key
     from agent.skill_utils import normalize_skill_lookup_name
 
@@ -3492,12 +3491,6 @@ def _build_job_prompt(
             logger.warning("Cron job '%s': skill not found, skipping — %s", job.get("name", job.get("id")), error)
             skipped.append(skill_name)
             continue
-
-        # Bump usage so the curator sees this skill as actively used.
-        try:
-            bump_use(skill_name, task_id=str(job.get("id") or "") or None)
-        except Exception:
-            logger.debug("Cron job: failed to bump skill usage for '%s'", skill_name, exc_info=True)
 
         content = str(loaded.get("content") or "").strip()
         if parts:

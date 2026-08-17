@@ -355,10 +355,6 @@ TIPS = [
     'Hook events include gateway:startup, session:start, agent:step, and command:* wildcard subscriptions.',
     'Drop a ~/.pilotage/BOOT.md checklist and a gateway:startup hook runs it as a one-shot agent every boot.',
 
-    # --- Curator ---
-    'pilotage curator run --dry-run previews what the curator would archive or consolidate without mutating anything.',
-    "pilotage curator pin <skill> hard-fences a skill against both auto-archival and the agent's skill_manage tool.",
-    'pilotage curator rollback restores skills from a pre-run snapshot — backups live under skills/.curator_backups/.',
 
     # --- Credential Pools & Routing ---
     'pilotage auth reset <provider> clears all cooldowns and exhaustion flags on a credential pool.',
