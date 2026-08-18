@@ -84,16 +84,6 @@ def _codex_curated_models() -> list[str]:
 _PROVIDER_MODELS: dict[str, list[str]] = {
     # Native OpenAI Chat Completions (api.openai.com). Used by /model counts and
     # provider_model_ids fallback when /v1/models is unavailable.
-    "openai": [
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5-mini",
-        "gpt-5.3-codex",
-        "gpt-5.2-codex",
-        "gpt-4.1",
-        "gpt-4o",
-        "gpt-4o-mini",
-    ],
     "openai-api": [
         "gpt-5.6-sol",
         "gpt-5.6-sol-pro",
@@ -1353,31 +1343,6 @@ def fetch_api_models(
     ).get("models")
 
 
-def _custom_endpoint_fingerprint(
-    api_key: Optional[str],
-    api_mode: Optional[str],
-    headers: Optional[dict[str, str]],
-) -> str:
-    """Fingerprint the credentials/wire-shape used to probe a custom endpoint.
-
-    Custom OpenAI-compatible endpoints have no ``PROVIDER_REGISTRY`` slug to
-    key off (unlike ``_credential_fingerprint``), so this hashes exactly the
-    values callers pass to :func:`fetch_api_models`: a rotated ``api_key``, a
-    changed ``api_mode``, or an edited ``extra_headers`` block each bust the
-    cache entry on their own.
-    """
-    import hashlib
-
-    blob = "|".join((
-        api_key or "",
-        api_mode or "",
-        json.dumps(headers or {}, sort_keys=True),
-    )).encode("utf-8", errors="replace")
-    # blake2b for cache-key fingerprinting only, same rationale as
-    # _credential_fingerprint (avoids CodeQL's sha256-over-secrets rule).
-    return hashlib.blake2b(blob, digest_size=8).hexdigest()
-
-
 def _cache_entry_valid(entry: Any, fp: str) -> "TypeGuard[dict[str, Any]]":
     """True when *entry* is a well-formed cache row for fingerprint *fp*.
 
@@ -1393,99 +1358,6 @@ def _cache_entry_valid(entry: Any, fp: str) -> "TypeGuard[dict[str, Any]]":
         and isinstance(entry.get("at"), (int, float))
         and not isinstance(entry.get("at"), bool)
     )
-
-
-def cached_fetch_api_models(
-    api_key: Optional[str],
-    base_url: Optional[str],
-    *,
-    timeout: float = 5.0,
-    api_mode: Optional[str] = None,
-    headers: Optional[dict[str, str]] = None,
-    force_refresh: bool = False,
-    cache_only: bool = False,
-    ttl_seconds: int = _PROVIDER_MODELS_CACHE_TTL,
-) -> Optional[list[str]]:
-    """Disk-cached wrapper around :func:`fetch_api_models` for custom endpoints.
-
-    Mirrors :func:`cached_provider_model_ids` — including its
-    stale-while-revalidate tier — but keys ``provider_models_cache.json``
-    off ``custom:<base_url>`` instead of a ``PROVIDER_REGISTRY`` slug, since
-    custom endpoints (named ``custom_providers`` rows, bare
-    ``provider: custom``, and per-endpoint-map entries) have none. Same
-    stale-beats-nothing fallback policy: a live-fetch failure serves the
-    last same-fingerprint result rather than an empty list. Returns whatever
-    :func:`fetch_api_models` would (a list or ``None``); corrupt cache rows
-    degrade to a live fetch instead of raising.
-
-    ``cache_only`` serves a previously-discovered catalog without touching
-    the network at all — no live fetch, no background revalidation — and
-    returns ``None`` when nothing usable is cached. Callers that deliberately
-    skip live probing for latency reasons (GUI picker opens, which must not
-    block on a stopped local endpoint) use this so a warm catalog still
-    reaches the picker instead of collapsing to the config-declared subset.
-    """
-    normalized_url = str(base_url or "").strip().rstrip("/").lower()
-    if not normalized_url:
-        if cache_only:
-            return None
-        # No base_url means nothing to key the cache on — fall through to a
-        # live call so callers keep getting fetch_api_models' own behavior.
-        return fetch_api_models(
-            api_key, base_url, timeout=timeout, api_mode=api_mode, headers=headers
-        )
-
-    cache_key = f"custom:{normalized_url}"
-    fp = _custom_endpoint_fingerprint(api_key, api_mode, headers)
-    cache = _load_provider_models_cache()
-    entry = cache.get(cache_key)
-    now = time.time()
-
-    if cache_only:
-        # Same trust window as the stale-while-revalidate tier below, minus
-        # the revalidation: an entry this side of the bound is good enough to
-        # render, and anything older is treated as a miss so the caller falls
-        # back to its configured list rather than showing a stale catalog.
-        if force_refresh or not _cache_entry_valid(entry, fp):
-            return None
-        if now - entry["at"] >= _PROVIDER_MODELS_STALE_SERVE_MAX:
-            return None
-        return list(entry["models"])
-
-    if not force_refresh and _cache_entry_valid(entry, fp):
-        age = now - entry["at"]
-        if age < ttl_seconds:
-            return list(entry["models"])
-        if age < _PROVIDER_MODELS_STALE_SERVE_MAX:
-            # Stale-while-revalidate: serve the expired entry immediately so
-            # picker opens never block on a live /v1/models round-trip
-            # 's stall class, which a plain TTL would reintroduce an
-            # hour into the session); refresh off-thread for the next open.
-            def _refresh_custom():
-                live = fetch_api_models(
-                    api_key, base_url,
-                    timeout=timeout, api_mode=api_mode, headers=headers,
-                )
-                if not live:
-                    return None
-                return {"fp": fp, "at": time.time(), "models": list(live)}
-
-            _spawn_swr_refresh(cache_key, _refresh_custom)
-            return list(entry["models"])
-
-    live = fetch_api_models(
-        api_key, base_url, timeout=timeout, api_mode=api_mode, headers=headers
-    )
-    if live:
-        cache[cache_key] = {"fp": fp, "at": now, "models": list(live)}
-        _save_provider_models_cache(cache)
-        return list(live)
-
-    # Live fetch returned nothing (offline endpoint, timeout, auth hiccup).
-    # A stale same-fingerprint entry beats an empty result.
-    if _cache_entry_valid(entry, fp):
-        return list(entry["models"])
-    return live
 
 
 def validate_requested_model(
