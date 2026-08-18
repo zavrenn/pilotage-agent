@@ -32,8 +32,8 @@ dependencies = [
   # introduce ranges back without a written justification.
   #
   # Scope rule: only packages used by EVERY pilotage session belong here.
-  # Anything that's provider-specific (`mistralai`, `firecrawl-py`,
-  # `exa-py`, `fal-client`, `parallel-web`) belongs in an
+  # Anything that's backend-specific (`firecrawl-py`, `exa-py`,
+  # `fal-client`, `parallel-web`) belongs in an
   # extra and gets lazy-installed via `tools/lazy_deps.py` when the
   # user picks that backend. Smaller `dependencies` = smaller blast
   # radius for the next supply-chain attack.
@@ -183,15 +183,6 @@ pty = []
 nemo-relay = []
 homeassistant = ["aiohttp==3.14.3"]
 whatsapp = ["aiohttp==3.14.3"]
-# mistral: Voxtral STT + TTS. Pinned to an exact verified-clean version.
-# The `mistralai` PyPI project was quarantined 2026-05-12 after the malicious
-# 2.4.6 release (Mini Shai-Hulud worm); 2.4.6 was removed from PyPI and the
-# project is serving clean releases again (2.4.7 2026-05-25, 2.4.8 2026-05-28).
-# Like other opt-in TTS/STT backends, this is lazy-installed via
-# tools/lazy_deps.py (stt.mistral / tts.mistral) at first use — deliberately
-# NOT re-added to [all] so a future quarantined release can't break fresh
-# installs (see [all] policy comment below).
-mistral = ["mistralai==2.4.8"]
 # OTLP gateway monitoring export (optional). Provides the OpenTelemetry SDK +
 # OTLP/HTTP exporter for monitoring.gateway_health_export. Lazy-installed via
 # tools/lazy_deps.py on first use; never a core dependency and deliberately

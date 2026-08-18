@@ -254,8 +254,8 @@ BUILTIN_STT_PROVIDERS = frozenset({"openai"})
 # become an STT backend with zero Python.
 #
 # Resolution order:
-#   1. Built-in (``local``, ``local_command``, ``groq``, ``openai``,
-#      ``mistral``, ``xai``)              → native handler. **Always wins.**
+#   1. Built-in (``local``, ``local_command``, ``openai``)
+#                                               → native handler. **Always wins.**
 #   2. ``stt.providers.<name>: type: command``  → command-provider runner.
 #   3. Plugin-registered TranscriptionProvider  → plugin dispatch.
 #   4. No match                                 → "No STT provider available".
@@ -345,8 +345,8 @@ def _dispatch_to_plugin_provider(
     Resolution invariants enforced here:
 
     1. Built-in provider names short-circuit — never reach the plugin
-       registry. The caller (``transcribe_audio``) handles ``local``,
-       ``groq``, ``openai``, etc. via its existing elif chain; this
+       registry. The caller (``transcribe_audio``) handles ``local`` and
+       ``openai`` via its existing elif chain; this
        function defensively rejects those names so a plugin can't be
        silently dispatched under a built-in name even if it somehow
        slipped past the registry's built-in shadow guard.
@@ -498,7 +498,7 @@ def _enforce_prompt_length_limit(
     """Truncate *prompt* to the provider's known token cap (fail-open).
 
     Only whisper-family backends have a documented ~224-token prompt window;
-    other providers (mistral, plugin providers) own their own validation.
+    plugin providers own their own validation.
     Truncation keeps the TAIL of the prompt because whisper conditions on
     the final context window — the most recently appended hints survive.
     """
@@ -852,8 +852,8 @@ _CLOUD_TRIM_KEEP_MS_DEFAULT = 300  # how much of each pause survives the trim
 _CLOUD_TRIM_MIN_SAVING = 0.10  # use the trimmed file only when >=10% shorter
 _CLOUD_TRIM_MIN_RESULT_SECONDS = 0.3  # all-silence guard floor: never upload ~empty audio
 # Below this duration the trim can't pay for itself: a >=10% saving on a short
-# clip is ~a second of audio, several providers bill a per-request minimum
-# anyway (Groq: 10s), and the encode would sit on the synchronous voice-note
+# clip is ~a second of audio, cloud STT tends to bill a per-request minimum
+# anyway, and the encode would sit on the synchronous voice-note
 # response path. Skip the whole pipeline.
 _CLOUD_TRIM_MIN_INPUT_SECONDS = 12.0
 
