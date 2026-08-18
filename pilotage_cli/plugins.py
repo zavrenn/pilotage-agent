@@ -1427,12 +1427,6 @@ class PluginContext:
                 "Rejected config path %r from plugin %s", key, self.plugin_id
             )
             raise
-        from pilotage_cli import config as config_mod
-
-        if config_mod.is_managed():
-            raise PermissionError(
-                "Plugin settings cannot be changed in a managed install"
-            )
         from pilotage_cli import managed_scope
 
         dotted_path = ".".join((

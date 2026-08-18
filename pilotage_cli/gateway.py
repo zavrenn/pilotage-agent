@@ -45,8 +45,6 @@ from gateway.restart import (
 from pilotage_cli.config import (
     get_env_value,
     get_pilotage_home,
-    is_managed,
-    managed_error,
     read_raw_config,
     save_env_value,
     write_platform_config_field,
@@ -6051,10 +6049,6 @@ def _configure_platform(platform: dict) -> None:
 
 def gateway_setup():
     """Interactive setup for messaging platforms + gateway service."""
-    if is_managed():
-        managed_error("run gateway setup")
-        return
-
     print()
     print(
         color(
@@ -6562,9 +6556,6 @@ def _gateway_command_inner(args):
 
     # Service management commands
     if subcmd == "install":
-        if is_managed():
-            managed_error("install gateway service (managed by NixOS)")
-            return
         force = getattr(args, "force", False)
         system = getattr(args, "system", False)
         run_as_user = getattr(args, "run_as_user", None)
@@ -6671,9 +6662,6 @@ def _gateway_command_inner(args):
             sys.exit(1)
 
     elif subcmd == "uninstall":
-        if is_managed():
-            managed_error("uninstall gateway service (managed by NixOS)")
-            return
         system = getattr(args, "system", False)
         if is_termux():
             print(

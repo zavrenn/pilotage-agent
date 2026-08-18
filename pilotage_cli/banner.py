@@ -683,21 +683,15 @@ def get_update_result(timeout: float = 0.5) -> Optional[int]:
 
 def _format_update_notice(behind: int) -> str:
     """Render the update warning line for a non-zero ``behind`` result."""
-    from pilotage_cli.config import get_managed_update_command, recommended_update_command
+    from pilotage_cli.config import recommended_update_command
     if behind > 0:
         commits_word = "commit" if behind == 1 else "commits"
         return (
             f"[bold yellow]⚠ {behind} {commits_word} behind[/]"
             f"[dim yellow] — run [bold]{recommended_update_command()}[/bold] to update[/]"
         )
-    # UPDATE_AVAILABLE_NO_COUNT: nix-built pilotage; we know an update
-    # exists but not by how much, and we don't know how the user
-    # installed it (nix run, profile, system flake, home-manager).
-    managed_cmd = get_managed_update_command()
-    line = "[bold yellow]⚠ update available[/]"
-    if managed_cmd:
-        line += f"[dim yellow] — run [bold]{managed_cmd}[/bold][/]"
-    return line
+    # UPDATE_AVAILABLE_NO_COUNT: an update exists but not by how much.
+    return "[bold yellow]⚠ update available[/]"
 
 
 _deferred_update_notice_started = False

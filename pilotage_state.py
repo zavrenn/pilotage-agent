@@ -1362,7 +1362,6 @@ def _wal_reset_repair_hint() -> str:
             return f"Pilotage-managed installs can repair the embedded runtime with `{cmd}`"
         if method == "docker":
             return f"update the container image with `{cmd}`"
-        # nix/nixos
         return cmd
     except Exception:
         pass

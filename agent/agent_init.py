@@ -309,7 +309,7 @@ def _codex_gpt55_autoraise_notice_marker():
     """Path to the per-profile marker recording that the autoraise notice ran.
 
     Lives under ``$PILOTAGE_HOME`` (which is profile-scoped) alongside the other
-    internal markers like ``.container-mode`` — so it is not a user-facing config
+    internal markers — so it is not a user-facing config
     key, and every profile tracks its own notice state independently.
     """
     return get_pilotage_home() / ".codex_gpt55_autoraise_notice"

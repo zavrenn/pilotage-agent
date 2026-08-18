@@ -290,66 +290,8 @@ from pilotage_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
 
 
 # =============================================================================
-# Managed mode (NixOS declarative config)
+# Install method detection
 # =============================================================================
-
-_MANAGED_TRUE_VALUES = ("true", "1", "yes")
-_MANAGED_SYSTEM_NAMES = {
-    "nix": "NixOS",
-    "nixos": "NixOS",
-}
-# The Nix store root. Used by detect_install_method to identify installs
-# from `nix run` / `nix profile install` (which don't set PILOTAGE_MANAGED).
-# A module-level constant so tests can patch it without creating files
-# under the real /nix/store.
-_NIX_STORE = Path("/nix/store")
-# Values that used to signal a Homebrew-managed install. Homebrew is no
-# longer a supported distribution method, so these are explicitly ignored
-# rather than treated as a managed system — they fall through to git/unknown
-# detection instead of blocking config writes.
-_IGNORED_MANAGED_VALUES = frozenset({"brew", "homebrew"})
-
-
-def get_managed_system() -> Optional[str]:
-    """Return the package manager owning this install, if any."""
-    raw = os.getenv("PILOTAGE_MANAGED", "").strip()
-    if raw:
-        normalized = raw.lower()
-        if normalized in _IGNORED_MANAGED_VALUES:
-            return None
-        if normalized in _MANAGED_TRUE_VALUES:
-            return "NixOS"
-        return _MANAGED_SYSTEM_NAMES.get(normalized, raw)
-
-    managed_marker = get_pilotage_home() / ".managed"
-    if managed_marker.exists():
-        return "NixOS"
-    return None
-
-
-def is_managed() -> bool:
-    """Check if Pilotage is running in package-manager-managed mode.
-
-    Two signals: the PILOTAGE_MANAGED env var (set by the systemd service),
-    or a .managed marker file in PILOTAGE_HOME (set by the NixOS activation
-    script, so interactive shells also see it).
-    """
-    return get_managed_system() is not None
-
-
-_NIX_UPDATE_MSG = (
-    "Update Pilotage through the Nix source that installed it "
-    "(e.g. nix profile upgrade, or update your flake input and rebuild with nixos-rebuild or home-manager switch)"
-)
-
-
-def get_managed_update_command() -> Optional[str]:
-    """Return the preferred upgrade command for a managed install."""
-    managed_system = get_managed_system()
-    if managed_system == "NixOS":
-        return _NIX_UPDATE_MSG
-    return None
-
 
 def _install_method_project_root(project_root: Optional[Path] = None) -> Path:
     """Resolve the directory that holds the *running code* (the install tree).
@@ -366,7 +308,7 @@ def _install_method_project_root(project_root: Optional[Path] = None) -> Path:
 
 
 def detect_install_method(project_root: Optional[Path] = None) -> str:
-    """Detect how Pilotage was installed: 'docker', 'nix', 'nixos', 'git', or 'unknown'.
+    """Detect how Pilotage was installed: 'docker', 'git', or 'unknown'.
 
     Resolution order:
     1. Code-scoped stamp ``<install tree>/.install_method`` (next to the
@@ -374,10 +316,8 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
     2. Legacy home-scoped stamp ``$PILOTAGE_HOME/.install_method`` — read for
        backward compatibility, but a ``docker`` value is IGNORED when we are
        not actually running inside a container (see below).
-    3. PILOTAGE_MANAGED env / .managed marker (NixOS managed mode)
-    4. /nix/store/ path detection -> 'nix' (nix run / nix profile install)
-    5. .git directory presence -> 'git'
-    6. Fallback -> 'unknown'
+    3. .git directory presence -> 'git'
+    4. Fallback -> 'unknown'
 
     Why the stamp is code-scoped, not home-scoped (issue: shared ``~/.pilotage``)
     --------------------------------------------------------------------------
@@ -410,7 +350,7 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
     See.
     """
     root = _install_method_project_root(project_root)
-    supported_methods = {"docker", "nix", "nixos", "git", "unknown"}
+    supported_methods = {"docker", "git", "unknown"}
 
     # 1. Code-scoped stamp — authoritative, immune to shared $PILOTAGE_HOME.
     try:
@@ -433,21 +373,6 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
         )
         if method in supported_methods and not (method == "docker" and not _running_in_container()):
             return method
-    except OSError:
-        pass
-
-    managed = get_managed_system()
-    if managed:
-        return managed.lower().replace(" ", "-")
-
-    # detect Nix installs that don't set PILOTAGE_MANAGED (e.g. ``nix run``,
-    # ``nix profile install``). The code lives under /nix/store/ which is the
-    # hallmark of a nix-built install — no other supported install path puts
-    # code there.
-    try:
-        resolved = root.resolve()
-        if resolved != _NIX_STORE and _NIX_STORE in resolved.parents:
-            return "nix"
     except OSError:
         pass
 
@@ -500,8 +425,6 @@ def stamp_install_method(method: str, project_root: Optional[Path] = None) -> No
 
 def recommended_update_command_for_method(method: str) -> str:
     """Return the update command or guidance for a given install method."""
-    if method in {"nix", "nixos"}:
-        return _NIX_UPDATE_MSG
     if method == "docker":
         return "docker pull nousresearch/pilotage-agent:latest"
     return "pilotage update"
@@ -509,9 +432,6 @@ def recommended_update_command_for_method(method: str) -> str:
 
 def recommended_update_command() -> str:
     """Return the best update command for the current installation."""
-    managed_cmd = get_managed_update_command()
-    if managed_cmd:
-        return managed_cmd
     method = detect_install_method(get_project_root())
     return recommended_update_command_for_method(method)
 
@@ -566,79 +486,6 @@ def format_docker_update_message() -> str:
     above for the full rationale.
     """
     return _DOCKER_UPDATE_MESSAGE
-
-
-def format_managed_message(action: str = "modify this Pilotage installation") -> str:
-    """Build a user-facing error for managed installs."""
-    managed_system = get_managed_system() or "a package manager"
-    raw = os.getenv("PILOTAGE_MANAGED", "").strip().lower()
-
-    if managed_system == "NixOS":
-        env_hint = "true" if raw in _MANAGED_TRUE_VALUES else raw or "true"
-        return (
-            f"Cannot {action}: this Pilotage installation is managed by NixOS "
-            f"(PILOTAGE_MANAGED={env_hint}).\n"
-            "Edit services.pilotage-agent.settings in your configuration.nix and run:\n"
-            "  sudo nixos-rebuild switch"
-        )
-
-    return (
-        f"Cannot {action}: this Pilotage installation is managed by {managed_system}.\n"
-        "Use your package manager to upgrade or reinstall Pilotage."
-    )
-
-def managed_error(action: str = "modify configuration"):
-    """Print user-friendly error for managed mode."""
-    print(format_managed_message(action), file=sys.stderr)
-
-
-# =============================================================================
-# Container-aware CLI (NixOS container mode)
-# =============================================================================
-
-def get_container_exec_info() -> Optional[dict]:
-    """Read container mode metadata from PILOTAGE_HOME/.container-mode.
-
-    Returns a dict with keys: backend, container_name, exec_user, pilotage_bin
-    or None if container mode is not active, we're already inside the
-    container, or PILOTAGE_DEV=1 is set.
-
-    The .container-mode file is written by the NixOS activation script when
-    container.enable = true. It tells the host CLI to exec into the container
-    instead of running locally.
-    """
-    if os.environ.get("PILOTAGE_DEV") == "1":
-        return None
-
-    from pilotage_constants import is_container
-    if is_container():
-        return None
-
-    container_mode_file = get_pilotage_home() / ".container-mode"
-
-    try:
-        info = {}
-        with open(container_mode_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if "=" in line and not line.startswith("#"):
-                    key, _, value = line.partition("=")
-                    info[key.strip()] = value.strip()
-    except FileNotFoundError:
-        return None
-    # All other exceptions (PermissionError, malformed data, etc.) propagate
-
-    backend = info.get("backend", "docker")
-    container_name = info.get("container_name", "pilotage-agent")
-    exec_user = info.get("exec_user", "pilotage")
-    pilotage_bin = info.get("pilotage_bin", "/data/current-package/bin/pilotage")
-
-    return {
-        "backend": backend,
-        "container_name": container_name,
-        "exec_user": exec_user,
-        "pilotage_bin": pilotage_bin,
-    }
 
 
 # =============================================================================
@@ -723,10 +570,6 @@ def _chown_to_pilotage_uid(path) -> None:
 def _secure_dir(path):
     """Set directory to owner-only access (0700 by default). No-op on Windows.
 
-    Skipped in managed mode — the NixOS module sets group-readable
-    permissions (0750) so interactive users in the pilotage group can
-    share state with the gateway service.
-
     The mode can be overridden via the PILOTAGE_HOME_MODE environment variable
     (e.g. PILOTAGE_HOME_MODE=0701) for deployments where a web server (nginx,
     caddy, etc.) needs to traverse PILOTAGE_HOME to reach a served subdirectory.
@@ -738,8 +581,6 @@ def _secure_dir(path):
     created at runtime by kanban workers don't land as root:root and block
     subsequent uid-mapped workers).
     """
-    if is_managed():
-        return
     try:
         mode_str = os.environ.get("PILOTAGE_HOME_MODE", "").strip()
         mode = int(mode_str, 8) if mode_str else 0o700
@@ -780,13 +621,10 @@ def _is_container() -> bool:
 def _secure_file(path):
     """Set file to owner-only read/write (0600). No-op on Windows.
 
-    Skipped in managed mode — the NixOS activation script sets
-    group-readable permissions (0640) on config files.
-
     Skipped in containers — Docker/Podman volume mounts often need broader
     permissions.  Set PILOTAGE_SKIP_CHMOD=1 to force-skip on other systems.
     """
-    if is_managed() or _is_container():
+    if _is_container():
         return
     try:
         if os.path.exists(str(path)):
@@ -825,10 +663,6 @@ _PILOTAGE_HOME_ENSURED: set = set()
 def ensure_pilotage_home():
     """Ensure ~/.pilotage directory structure exists with secure permissions.
 
-    In managed mode (NixOS), dirs are created by the activation script with
-    setgid + group-writable (2770). We skip mkdir and set umask(0o007) so
-    any files created (e.g. SOUL.md) are group-writable (0660).
-
     Memoized per home path: this runs on EVERY ``load_config()`` (inside the
     config lock), and the ~14 mkdir/chmod syscalls per call made repeated
     config loads the dominant cost of hot read paths like ``model.options``.
@@ -851,43 +685,18 @@ def ensure_pilotage_home():
             f"Named profile home does not exist: {home}. "
             "Create the profile explicitly before using it."
         )
-    if is_managed():
-        old_umask = os.umask(0o007)
-        try:
-            _ensure_pilotage_home_managed(home)
-        finally:
-            os.umask(old_umask)
-    else:
-        home.mkdir(parents=True, exist_ok=True)
-        _secure_dir(home)
-        for subdir in (
-            "cron", "sessions", "logs", "memories",
-            "pairing", "hooks", "image_cache", "audio_cache", "skills",
-        ):
-            d = home / subdir
-            d.mkdir(parents=True, exist_ok=True)
-            _secure_dir(d)
-        _ensure_default_soul_md(home)
+    home.mkdir(parents=True, exist_ok=True)
+    _secure_dir(home)
+    for subdir in (
+        "cron", "sessions", "logs", "memories",
+        "pairing", "hooks", "image_cache", "audio_cache", "skills",
+    ):
+        d = home / subdir
+        d.mkdir(parents=True, exist_ok=True)
+        _secure_dir(d)
+    _ensure_default_soul_md(home)
 
     _PILOTAGE_HOME_ENSURED.add(key)
-
-
-def _ensure_pilotage_home_managed(home: Path):
-    """Managed-mode variant: verify dirs exist (activation creates them), seed SOUL.md."""
-    if not home.is_dir():
-        raise RuntimeError(
-            f"PILOTAGE_HOME {home} does not exist. "
-            "Run 'sudo nixos-rebuild switch' first."
-        )
-    for subdir in ("cron", "sessions", "logs", "memories"):
-        d = home / subdir
-        if not d.is_dir():
-            raise RuntimeError(
-                f"{d} does not exist. "
-                "Run 'sudo nixos-rebuild switch' first."
-            )
-    # Inside umask(0o007) scope — SOUL.md will be created as 0660
-    _ensure_default_soul_md(home)
 
 
 # =============================================================================
@@ -3638,9 +3447,6 @@ def save_config(
     already deep-merge) must leave this False so intentional deletions survive.
     """
     with _CONFIG_LOCK:
-        if is_managed():
-            managed_error("save configuration")
-            return
         # Managed scope: strip any leaf the managed layer pins, so a bulk write
         # (wizard / programmatic save) never persists a user value that would
         # silently lose to managed on the next load. Single-key `config set`
@@ -3978,11 +3784,8 @@ def _env_line_defines_key(line: str, key: str) -> bool:
 
 def save_env_value(key: str, value: str):
     """Save or update a value in ~/.pilotage/.env."""
-    if is_managed():
-        managed_error(f"set {key}")
-        return
     # Managed scope guard: a managed env key can't be set by the user — the
-    # managed .env wins at load anyway. Distinct from is_managed() above.
+    # managed .env wins at load anyway.
     from pilotage_cli import managed_scope
 
     if managed_scope.is_env_managed(key):
@@ -4094,9 +3897,6 @@ def remove_env_value(key: str) -> bool:
 
     Returns True if the key was found and removed, False otherwise.
     """
-    if is_managed():
-        managed_error(f"remove {key}")
-        return False
     # Managed scope guard: a managed env key can't be removed by the user.
     from pilotage_cli import managed_scope
 
@@ -4568,9 +4368,6 @@ def show_config():
 
 def edit_config():
     """Open config file in user's editor."""
-    if is_managed():
-        managed_error("edit configuration")
-        return
     config_path = get_config_path()
     
     # Ensure config exists
@@ -5084,12 +4881,9 @@ def set_config_value(key: str, value: str, force: bool = False):
             refused (bare ``model`` is redirected to ``model.default``). The
             CLI exposes this via ``pilotage config set --force``.
     """
-    if is_managed():
-        managed_error("set configuration values")
-        return
     # Managed scope guard (D2): a key pinned by the managed layer cannot be set by
     # the user — the next load would override it anyway. Hard-reject and name the
-    # source. Distinct from is_managed() above (the package-manager write-lock).
+    # source.
     # Env-shaped keys (API keys / tokens) route to save_env_value below, which has
     # its own managed-env-key guard; this catches the config.yaml keys.
     from pilotage_cli import managed_scope
@@ -5311,9 +5105,6 @@ def get_config_value(key: str, *, as_json: bool = False):
 
 def unset_config_value(key: str):
     """Remove a user-set configuration or .env value."""
-    if is_managed():
-        managed_error("unset configuration values")
-        return
     # Managed scope guard: a key pinned by the managed layer cannot be unset by
     # the user — the next load would reinstate it anyway (mirrors set_config_value).
     from pilotage_cli import managed_scope

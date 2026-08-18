@@ -2125,10 +2125,6 @@ def run_setup_wizard(args):
       pilotage setup telemetry — just local shared metrics
       pilotage setup agent     — just agent settings
     """
-    from pilotage_cli.config import is_managed, managed_error
-    if is_managed():
-        managed_error("run setup wizard")
-        return
     ensure_pilotage_home()
 
     reset_requested = bool(getattr(args, "reset", False))
