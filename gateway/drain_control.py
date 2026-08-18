@@ -36,7 +36,7 @@ auto-updated instance refused every turn for ~52 min). Stamping the marker with
 an identity of *this* container/VM instantiation, and ignoring a marker whose
 epoch doesn't match, makes "a deliberate restart clears the drain" true by
 construction — while a marker written during the *current* instantiation (the
-live drain) still matches, and an s6 respawn of just the gateway (PID 1 / init
+live drain) still matches, and a supervisor respawn of just the gateway (init
 unchanged) still honours an in-flight drain.
 
 Reading the marker never raises: a malformed/half-written file reads as
@@ -97,7 +97,7 @@ _expiry_logged_for: Optional[str] = None
 def current_instantiation_epoch() -> str:
     """Identity of THIS container / VM instantiation.
 
-    Stable for the life of the PID-1 init process — so an s6 respawn of just
+    Stable for the life of the PID-1 init process — so a respawn of just
     the gateway keeps the same epoch and an in-flight drain is honoured — but
     changes when the machine/container is recreated (a fresh PID 1 → a fresh
     epoch). Composed from two ``/proc`` facts:
@@ -114,7 +114,7 @@ def current_instantiation_epoch() -> str:
       |--------------------------------|---------|------------|--------|--------|
       | Fly microVM reboot (auto-upd.) | changes | changes    | NEW    | reject |
       | plain ``docker restart``       | same    | changes    | NEW    | reject |
-      | s6 respawn of the gateway only | same    | same       | SAME   | honour |
+      | respawn of the gateway only    | same    | same       | SAME   | honour |
       | host ``pilotage gateway restart``| same    | same(init) | SAME   | honour |
 
     The last row is intentional: a host install has no durable-volume drain

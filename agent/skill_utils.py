@@ -281,7 +281,7 @@ def skill_matches_platform(frontmatter: Dict[str, Any]) -> bool:
 # ``--skills``), because an explicit request is explicit consent.
 #
 # Detection is cached for the process lifetime via ``_ENV_DETECT_CACHE``.
-_KNOWN_ENVIRONMENTS = frozenset({"docker", "s6"})
+_KNOWN_ENVIRONMENTS = frozenset({"docker"})
 
 _ENV_DETECT_CACHE: Dict[str, bool] = {}
 
@@ -301,14 +301,6 @@ def _detect_environment(env: str) -> bool:
             result = is_container()
         except Exception:
             result = False
-    elif env == "s6":
-        # The Pilotage Docker image runs s6-overlay as PID 1 (/init). s6 plants
-        # its runtime scaffolding under /run/s6 and ships its admin tree under
-        # /package/admin/s6-overlay. Either marker means we're inside an
-        # s6-supervised container.
-        result = os.path.isdir("/run/s6") or os.path.isdir(
-            "/package/admin/s6-overlay"
-        )
 
     _ENV_DETECT_CACHE[env] = result
     return result
@@ -320,8 +312,6 @@ def skill_matches_environment(frontmatter: Dict[str, Any]) -> bool:
     Skills may declare an ``environments`` list in their YAML frontmatter::
 
         environments: [docker]        # only relevant inside a container
-        environments: [s6]            # only relevant inside the s6 Docker image
-        environments: [docker]        # only relevant inside any container
 
     If the field is absent or empty the skill is relevant in **all**
     environments (backward-compatible default).

@@ -2056,9 +2056,6 @@ def _platform_has_bot_credential(platform: "Platform", platform_config: "Platfor
     return False
 
 
-_DOCKER_VOLUME_SPEC_RE = re.compile(r"^(?P<host>.+):(?P<container>/[^:]+?)(?::(?P<options>[^:]+))?$")
-_DOCKER_MEDIA_OUTPUT_CONTAINER_PATHS = {"/output", "/outputs"}
-
 # This env var is internal bridge plumbing, not a user-facing configuration
 # source. Initialize it from the canonical config default after dotenv loading
 # so an ambient process/.env value can never control lease safety on its own.
@@ -5989,7 +5986,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         # sites are untouched when multiplexing is off (this dict is empty).
         # Populated by _start_secondary_profile_adapters().
         self._profile_adapters: Dict[str, Dict[Platform, BasePlatformAdapter]] = {}
-        self._warn_if_docker_media_delivery_is_risky()
         _gateway_runner_ref = _weakref.ref(self)
 
         # Load ephemeral config from config.yaml / env vars.
@@ -6056,13 +6052,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         self._restart_requested = False
         # Set by shutdown_signal_handler when a SIGTERM/SIGINT arrived
         # WITHOUT a planned-stop / takeover marker — i.e. an unexpected
-        # external signal (container/s6 SIGTERM on `docker restart` or
-        # image upgrade, OOM-killer, bare `kill`). Distinct from an
+        # external signal (SIGTERM from a supervisor on restart or
+        # upgrade, OOM-killer, bare `kill`). Distinct from an
         # operator-requested stop, which writes a marker first. Used by
-        # _stop_impl to decide whether to persist gateway_state=stopped
-        # (see): an unexpected signal must NOT persist
-        # "stopped", or container_boot refuses to auto-start the gateway
-        # on the next boot.
+        # _stop_impl to decide whether to persist gateway_state=stopped:
+        # an unexpected signal must NOT persist "stopped", or the run
+        # intent is lost across the restart.
         self._signal_initiated_shutdown = False
         self._restart_task_started = False
         self._restart_detached = False
@@ -6352,55 +6347,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         # inbound chokepoint all adapters call; seeded to "now" so a fresh
         # gateway isn't considered idle from epoch.
         self._last_inbound_at: float = time.time()
-
-
-    def _warn_if_docker_media_delivery_is_risky(self) -> None:
-        """Warn when Docker-backed gateways lack an explicit export mount.
-
-        MEDIA delivery happens in the gateway process, so paths emitted by the model
-        must be readable from the host. A plain container-local path like
-        `/workspace/report.txt` or `/output/report.txt` often exists only inside
-        Docker, so users commonly need a dedicated export mount such as
-        `host-dir:/output`.
-        """
-        if os.getenv("TERMINAL_ENV", "").strip().lower() != "docker":
-            return
-
-        connected = self.config.get_connected_platforms()
-        messaging_platforms = [p for p in connected if p not in {Platform.LOCAL, Platform.API_SERVER, Platform.WEBHOOK}]
-        if not messaging_platforms:
-            return
-
-        raw_volumes = os.getenv("TERMINAL_DOCKER_VOLUMES", "").strip()
-        volumes: List[str] = []
-        if raw_volumes:
-            try:
-                parsed = json.loads(raw_volumes)
-                if isinstance(parsed, list):
-                    volumes = [str(v) for v in parsed if isinstance(v, str)]
-            except Exception:
-                logger.debug("Could not parse TERMINAL_DOCKER_VOLUMES for gateway media warning", exc_info=True)
-
-        has_explicit_output_mount = False
-        for spec in volumes:
-            match = _DOCKER_VOLUME_SPEC_RE.match(spec)
-            if not match:
-                continue
-            container_path = match.group("container")
-            if container_path in _DOCKER_MEDIA_OUTPUT_CONTAINER_PATHS:
-                has_explicit_output_mount = True
-                break
-
-        if has_explicit_output_mount:
-            return
-
-        logger.warning(
-            "Docker backend is enabled for the messaging gateway but no explicit host-visible "
-            "output mount (for example '/home/user/.pilotage/cache/documents:/output') is configured. "
-            "This is fine if the model already emits host-visible paths, but MEDIA file delivery can fail "
-            "for container-local paths like '/workspace/...' or '/output/...'."
-        )
-
 
 
     # -- Setup skill availability ----------------------------------------
@@ -11446,7 +11392,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
                 # during polling startup).  Exiting with
                 # GATEWAY_FATAL_CONFIG_EXIT_CODE here is wrong in both
                 # supervision worlds: under supervisors that honor the
-                # exit-78 contract (systemd RestartPreventExitStatus, s6
+                # exit-78 contract (systemd RestartPreventExitStatus, supervisor
                 # finish→125 since) the gateway goes PERMANENTLY down
                 # over a network blip; under anything else it crash-loops.
                 # Either way the retryable platforms never get their retry.
@@ -13380,30 +13326,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
             self._draining = False
             # Persist the terminal gateway_state. The default is "stopped",
             # but when this teardown was triggered by an UNEXPECTED external
-            # signal (container/s6 SIGTERM on `docker restart` or image
-            # upgrade, OOM-killer, bare `kill`) we instead persist "running"
-            # to preserve the operator's run-intent across the restart.
-            #
-            # On Docker (s6-overlay), container_boot.py reads gateway_state
-            # on the next boot and only auto-starts gateways whose last
-            # state was "running" (_AUTOSTART_STATES). Persisting "stopped"
-            # — or leaving the mid-shutdown "draining" marker in place — for
-            # a routine `docker compose up --force-recreate` permanently
-            # suppresses auto-start, so the messaging channels silently stay
-            # dark until the operator manually restarts.
+            # signal (supervisor SIGTERM on restart or upgrade, OOM-killer,
+            # bare `kill`) we instead persist "running" to preserve the
+            # operator's run-intent across the restart.
             #
             # An operator-initiated stop (`pilotage gateway stop`,
-            # systemd/launchd ExecStop, the s6 stop path, Ctrl+C) writes a
-            # planned-stop marker BEFORE signalling, so it is classified as
-            # a planned stop (not signal-initiated) and correctly persists
-            # "stopped" — respecting the explicit intent. A restart also
-            # persists "stopped" here; the restarting process brings the
-            # gateway back up itself.
+            # systemd/launchd ExecStop, Ctrl+C) writes a planned-stop marker
+            # BEFORE signalling, so it is classified as a planned stop (not
+            # signal-initiated) and correctly persists "stopped" —
+            # respecting the explicit intent. A restart also persists
+            # "stopped" here; the restarting process brings the gateway back
+            # up itself.
             if getattr(self, "_signal_initiated_shutdown", False) and not self._restart_requested:
                 logger.info(
                     "Gateway stopped by an unexpected signal — persisting "
-                    "gateway_state=running so container_boot auto-starts on "
-                    "the next boot "
+                    "gateway_state=running to preserve run intent"
                 )
                 self._update_runtime_status("running", self._exit_reason)
             else:
@@ -26723,7 +26660,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
             _signal_initiated_shutdown = True
             # Mirror onto the runner so _stop_impl can suppress the
             # gateway_state=stopped persist for unexpected signals
-            # (container/s6 SIGTERM on restart, OOM, bare kill) — see
+            # (supervisor SIGTERM on restart, OOM, bare kill) — see
             # Operator-initiated stops set a planned-stop
             # marker first, land in the `planned_stop` branch above, and
             # leave this flag False so they DO persist "stopped".
@@ -26881,11 +26818,11 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
             logger.error("Gateway exiting cleanly: %s", runner.exit_reason)
         # A clean exit that carries an explicit exit code (e.g. a fatal
         # config error stamped with GATEWAY_FATAL_CONFIG_EXIT_CODE) must
-        # propagate that code to the process so the s6 finish script can
+        # propagate that code to the process so the supervisor can
         # translate it (78 → 125) and stop the supervisor restart loop.
         # Without this, the early `return True` below makes main() exit 0,
         # the finish script's `[ "$1" = "78" ]` check never matches, and
-        # s6 crash-loops the gateway anyway.
+        # the supervisor crash-loops the gateway anyway.
         if runner.exit_code is not None:
             raise SystemExit(runner.exit_code)
         return True

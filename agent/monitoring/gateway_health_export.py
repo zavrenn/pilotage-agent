@@ -2,7 +2,7 @@
 
 This exporter emits operator-owned gateway service-health metrics plus
 narrow redacted diagnostic events. It is deliberately in-process and fail-open so
-it works under systemd, launchd, s6, containers, tmux, nohup, or a simple shell
+it works under systemd, launchd, containers, tmux, nohup, or a simple shell
 without a sidecar/watchdog dependency.
 """
 
@@ -269,8 +269,6 @@ def _install_id(config: Dict[str, Any]) -> str:
 def _supervision_mode() -> str:
     if os.environ.get("INVOCATION_ID"):
         return "systemd"
-    if os.environ.get("S6_CMD_ARG0") or os.environ.get("S6_VERSION"):
-        return "s6"
     if os.environ.get("container") or os.path.exists("/.dockerenv"):
         return "container"
     if os.environ.get("LAUNCHD_SOCKET"):

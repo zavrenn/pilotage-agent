@@ -488,34 +488,25 @@ def _secure_dir(path):
 
 
 def _is_container() -> bool:
-    """Detect if we're running inside a Docker/Podman/LXC container.
+    """Detect if we're running inside a container (LXC, Podman, Docker...).
 
     When Pilotage runs in a container with volume-mounted config files, forcing
     0o600 permissions breaks multi-process setups where the gateway and
     dashboard run as different UIDs or the volume mount requires broader
     permissions.
     """
-    # Explicit opt-out
+    # Explicit opt-out — also lets a bare-metal host skip the chmod.
     if os.environ.get("PILOTAGE_CONTAINER") or os.environ.get("PILOTAGE_SKIP_CHMOD"):
         return True
-    # Docker / Podman marker file
-    if os.path.exists("/.dockerenv"):
-        return True
-    # LXC / cgroup-based detection
-    try:
-        with open("/proc/1/cgroup", "r", encoding="utf-8") as f:
-            cgroup_content = f.read()
-        if "docker" in cgroup_content or "lxc" in cgroup_content or "kubepods" in cgroup_content:
-            return True
-    except (OSError, IOError):
-        pass
-    return False
+    from pilotage_constants import is_container
+
+    return is_container()
 
 
 def _secure_file(path):
     """Set file to owner-only read/write (0600). No-op on Windows.
 
-    Skipped in containers — Docker/Podman volume mounts often need broader
+    Skipped in containers — bind/volume mounts often need broader
     permissions.  Set PILOTAGE_SKIP_CHMOD=1 to force-skip on other systems.
     """
     if _is_container():

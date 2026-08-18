@@ -518,54 +518,6 @@ def _check_version_consistency(issues: list[str]) -> None:
         )
 
 
-def _check_s6_supervision(issues: list[str]) -> None:
-    """Inside a container under our s6 /init, surface what s6 sees.
-
-    Runs as a counterpart to :func:`_check_gateway_service_linger` for
-    the systemd-on-host case. No-op everywhere except in the s6
-    container so host runs aren't cluttered with irrelevant output.
-
-    Reports:
-      - Whether the main-pilotage and dashboard static services are up
-      - How many per-profile gateway slots are registered (via
-        ``S6ServiceManager.list_profile_gateways()``) and how many are
-        currently supervised as ``up``
-    """
-    try:
-        from pilotage_cli.service_manager import (
-            S6ServiceManager,
-            detect_service_manager,
-        )
-    except Exception:
-        return
-
-    if detect_service_manager() != "s6":
-        return
-
-    _section("s6 Supervision")
-
-    mgr = S6ServiceManager()
-
-    # Static services. They live under /run/service/ via s6-rc symlinks,
-    # so the same s6-svstat probe works.
-    for static in ("main-pilotage", "dashboard"):
-        if mgr.is_running(static):
-            check_ok(f"{static}: up")
-        else:
-            check_info(f"{static}: down (expected if not enabled via env)")
-
-    profiles = mgr.list_profile_gateways()
-    if not profiles:
-        check_info("No per-profile gateways registered yet — create one with `pilotage profile create <name>`")
-        return
-
-    up_count = sum(1 for p in profiles if mgr.is_running(f"gateway-{p}"))
-    check_ok(
-        f"Per-profile gateways: {up_count}/{len(profiles)} supervised up"
-        + (f" ({', '.join(sorted(profiles))})" if len(profiles) <= 8 else "")
-    )
-
-
 def check_certificates(should_fix: bool = False, issues: "list | None" = None) -> None:
     """Verify the certifi CA bundle is loadable.
 
@@ -653,31 +605,18 @@ def check_certificates(should_fix: bool = False, issues: "list | None" = None) -
 
 
 def _check_gateway_service_linger(issues: list[str]) -> None:
-    """Warn when a systemd user gateway service will stop after logout.
-
-    Skipped inside a container running under s6 — the linger concept
-    (user-systemd surviving SSH logout) doesn't apply there, and the
-    s6 supervision state is surfaced separately by
-    ``_check_s6_supervision``.
-    """
+    """Warn when a systemd user gateway service will stop after logout."""
     try:
         from pilotage_cli.gateway import (
             get_systemd_linger_status,
             get_systemd_unit_path,
             is_linux,
         )
-        from pilotage_cli.service_manager import detect_service_manager
     except Exception as e:
         check_warn("Gateway service linger", f"(could not import gateway helpers: {e})")
         return
 
     if not is_linux():
-        return
-
-    # Inside a container under our s6 /init, _check_s6_supervision
-    # reports the live supervision state; the linger warning would be
-    # confusing here (no systemd, no logout, no "lingering" concept).
-    if detect_service_manager() == "s6":
         return
 
     unit_path = get_systemd_unit_path()
@@ -1635,7 +1574,6 @@ def run_doctor(args):
             pass
 
     _check_gateway_service_linger(issues)
-    _check_s6_supervision(issues)
 
     if sys.platform != "win32":
         _section("Command Installation")

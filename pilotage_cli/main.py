@@ -256,10 +256,6 @@ def _is_global_fast_version_argv(argv: list[str]) -> bool:
     return _startup_fast.is_global_fast_version_argv(argv)
 
 
-def _is_container_startup_environment_fast() -> bool:
-    return _startup_fast.is_container_startup_environment()
-
-
 def _active_profile_may_override_home_fast(pilotage_root: str) -> bool:
     return _startup_fast.active_profile_may_override_home(pilotage_root)
 
@@ -492,17 +488,7 @@ def _apply_profile_override() -> None:
 
     # 2. If no flag, check active_profile in the pilotage root.
     #
-    # EXCEPTION: a supervised s6 gateway child (exported by the container
-    # run-script as PILOTAGE_S6_SUPERVISED_CHILD=1) must NOT follow the sticky
-    # active_profile. Each supervised slot has a fixed profile identity: named
-    # slots pass ``-p <name>`` explicitly (handled in step 1 above), and the
-    # reserved ``gateway-default`` slot runs bare ``pilotage gateway run`` to mean
-    # "the root PILOTAGE_HOME profile". If the reserved default child read
-    # active_profile here, switching the active profile (e.g. via the dashboard)
-    # would silently redirect the default gateway into that profile — yielding a
-    # duplicate gateway for the active profile and no real default gateway. See
-    # the "Docker & Profiles & Dashboard" report.
-    if profile_name is None and not os.environ.get("PILOTAGE_S6_SUPERVISED_CHILD"):
+    if profile_name is None:
         try:
             from pilotage_constants import get_default_pilotage_root
 

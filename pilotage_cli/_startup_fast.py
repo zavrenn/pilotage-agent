@@ -30,7 +30,6 @@ __all__ = [
     "is_termux_env",
     "is_termux_fast_version_argv",
     "is_global_fast_version_argv",
-    "is_container_startup_environment",
     "active_profile_may_override_home",
     "read_openai_version",
     "read_install_method",
@@ -73,18 +72,6 @@ def is_termux_fast_version_argv(argv: list[str]) -> bool:
 
 def is_global_fast_version_argv(argv: list[str]) -> bool:
     return argv in (["--version"], ["-V"])
-
-
-def is_container_startup_environment() -> bool:
-    """True when we're already INSIDE a container (fast path is then safe)."""
-    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
-        return True
-    try:
-        with open("/proc/1/cgroup", encoding="utf-8") as handle:
-            cgroup = handle.read()
-    except OSError:
-        return False
-    return "docker" in cgroup or "podman" in cgroup or "/lxc/" in cgroup
 
 
 def active_profile_may_override_home(pilotage_root: str) -> bool:

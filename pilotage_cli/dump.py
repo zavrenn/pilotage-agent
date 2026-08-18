@@ -52,15 +52,7 @@ def _dotenv_key_names() -> set[str]:
 
 
 def _get_git_commit(project_root: Path) -> str:
-    """Return short git commit hash, or '(unknown)'.
-
-    Source installs and dev images resolve this live via ``git rev-parse``.
-    The published Docker image excludes ``.git`` from the build context, so
-    that lookup always fails — we fall back to the baked-in build SHA written
-    to ``<project_root>/.pilotage_build_sha`` by the Dockerfile's
-    ``PILOTAGE_GIT_SHA`` build-arg (see ``pilotage_cli/build_info.py``).
-    The output format is identical regardless of source.
-    """
+    """Return short git commit hash, or '(unknown)'."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short=8", "HEAD"],
@@ -74,28 +66,11 @@ def _get_git_commit(project_root: Path) -> str:
     except Exception:
         pass
 
-    # Fall back to the build-time baked SHA (populated in published Docker
-    # images, absent otherwise).  Defers the import so the dump module
-    # stays cheap on non-dump code paths.
-    try:
-        from pilotage_cli.build_info import get_build_sha
-        baked = get_build_sha(short=8)
-        if baked:
-            return baked
-    except Exception:
-        pass
-
     return "(unknown)"
 
 
 def _get_git_commit_date(project_root: Path) -> str:
-    """Return the date the HEAD commit was authored (YYYY-MM-DD), or ''.
-
-    Resolves live via ``git log`` on source installs.  The published Docker
-    image excludes ``.git``, so this returns '' there — the dump line simply
-    drops the date suffix in that case (the baked SHA still identifies the
-    build).
-    """
+    """Return the date the HEAD commit was authored (YYYY-MM-DD), or ''."""
     try:
         result = subprocess.run(
             ["git", "log", "-1", "--format=%cd", "--date=short", "HEAD"],

@@ -10,7 +10,7 @@ from pilotage_cli.config import DEFAULT_CONFIG
 GATEWAY_SERVICE_RESTART_EXIT_CODE = 75
 
 # EX_CONFIG from sysexits.h — fatal configuration error (e.g. token
-# collision, no messaging platforms).  The s6 finish script translates
+# collision, no messaging platforms).  The supervisor translates
 # this into exit 125 (permanent failure) so the supervisor stops
 # restarting the gateway. See.
 GATEWAY_FATAL_CONFIG_EXIT_CODE = 78
@@ -59,8 +59,6 @@ def is_gateway_supervisor_process(
     env = os.environ if environ is None else environ
     if env.get("INVOCATION_ID"):
         return True
-    if env.get("PILOTAGE_S6_SUPERVISED_CHILD"):
-        return True
     xpc_service = env.get("XPC_SERVICE_NAME", "")
     if xpc_service and xpc_service != "0":
         return True
@@ -70,18 +68,6 @@ def is_gateway_supervisor_process(
         "yes",
         "on",
     }
-
-
-def is_container_restart_context() -> bool:
-    """Return whether the gateway is running inside a container for restart
-    routing purposes (Docker/Podman ⇒ the detached setsid path dies with the
-    cgroup; exit-75 service restart is the only viable path).
-
-    Extracted from the inline probe in the /restart handler so tests can mock
-    container detection hermetically — a real ``/.dockerenv`` on a
-    containerized CI runner otherwise flips the routing under the test.
-    """
-    return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
 
 
 def parse_restart_drain_timeout(raw: object) -> float:

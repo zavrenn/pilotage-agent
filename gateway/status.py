@@ -544,7 +544,7 @@ def _record_matches_live_gateway_pid(
 
     Prefer the live command line whenever it is readable. Runtime status files
     can outlive the gateway process they describe; if PID reuse leaves the same
-    PID occupied by an s6 supervisor/log process, the stale record's argv should
+    PID occupied by a supervisor/log process, the stale record's argv should
     not make that unrelated process count as a running gateway.
 
     When ``expected_home`` is provided (the dashboard enumerating a specific

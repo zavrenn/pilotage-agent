@@ -38,7 +38,7 @@ _KNOWN_GATEWAY_STATES = {
 _KNOWN_PLATFORM_STATES = _RUNNING_PLATFORM_STATES | _FATAL_PLATFORM_STATES | {
     "connecting", "disconnected", "disabled", "paused", "retrying", "unknown"
 }
-_SUPERVISION_MODES = {"systemd", "s6", "container", "launchd", "manual", "unknown"}
+_SUPERVISION_MODES = {"systemd", "container", "launchd", "manual", "unknown"}
 _SOURCE_LOGGER_RE = re.compile(r"^gateway(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
 

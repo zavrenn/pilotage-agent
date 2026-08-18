@@ -262,7 +262,7 @@ def skill_matches_environment(frontmatter: Dict[str, Any]) -> bool:
 
     Delegates to ``agent.skill_utils.skill_matches_environment`` — kept here
     as a public re-export so existing callers don't need updating. This is an
-    offer-time relevance gate (docker/s6), NOT a hard-compatibility gate;
+    offer-time relevance gate, NOT a hard-compatibility gate;
     explicit skill loads bypass it.
     """
     from agent.skill_utils import skill_matches_environment as _impl

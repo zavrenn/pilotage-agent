@@ -113,16 +113,10 @@ def _ssh_password_auth_enabled() -> Optional[str]:
 
 
 def _in_container() -> bool:
-    """Best-effort container detection (Docker / Podman / generic OCI)."""
-    if os.path.exists("/.dockerenv"):
-        return True
-    try:
-        cgroup = Path("/proc/1/cgroup").read_text(encoding="utf-8", errors="replace")
-        if any(tok in cgroup for tok in ("docker", "containerd", "kubepods", "libpod")):
-            return True
-    except Exception:
-        pass
-    return False
+    """Best-effort container detection (LXC / Podman / generic OCI)."""
+    from pilotage_constants import is_container
+
+    return is_container()
 
 
 def _path_is_mounted(path: Path) -> bool:

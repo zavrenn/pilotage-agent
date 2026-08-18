@@ -1076,9 +1076,8 @@ def _parse_skill_file(skill_file: Path) -> tuple[bool, dict, str]:
             return False, frontmatter, ""
 
         # Environment relevance gate (offer-time only): hide skills tagged for
-        # a runtime environment that isn't active (e.g. s6-only skills
-        # outside the container). Explicit
-        # loads (skill_view / --skills) bypass this — see skill_matches_environment.
+        # a runtime environment that isn't active. Explicit loads
+        # (skill_view / --skills) bypass this — see skill_matches_environment.
         if not skill_matches_environment(frontmatter):
             return False, frontmatter, ""
 

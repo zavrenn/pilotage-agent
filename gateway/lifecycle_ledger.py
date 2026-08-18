@@ -310,23 +310,3 @@ def mark_exited(
         logger.debug("Failed to mark lifecycle sentinel exited", exc_info=True)
 
 
-def read_prior_exit_label(profile_home: Path) -> str:
-    """Container-boot helper: one-word summary of how the profile's last
-    gateway life ended.  ``clean`` / ``unclean`` / ``unknown`` (no sentinel
-    or never ran).  Read-only and exception-free — used by
-    ``pilotage_cli.container_boot`` to annotate ``container-boot.log``.
-    """
-    try:
-        sentinel = _read_json(get_lifecycle_sentinel_path(profile_home))
-        if not sentinel:
-            return "unknown"
-        phase = sentinel.get("phase")
-        if phase == "exited":
-            return "clean"
-        if phase == "running":
-            # At container boot the old PID namespace is gone — any
-            # "running" sentinel is from a life that never exited cleanly.
-            return "unclean"
-    except Exception:
-        pass
-    return "unknown"

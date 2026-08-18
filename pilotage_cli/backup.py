@@ -113,18 +113,13 @@ _EXCLUDED_NAMES = {
 # recorded run/desired state. Restoring them onto a different host (or a hosted
 # container) is at best meaningless and at worst actively harmful:
 #
-#   - ``gateway_state.json`` drives the container-boot reconciler
-#     (``container_boot._read_desired_state``), which only auto-starts a
-#     gateway whose recorded state is ``running``. A backup taken from a
-#     machine where the gateway was stopped (or carrying a stale/foreign
-#     value) overwrites the container's own state and leaves the gateway
-#     stuck "starting"/"cooking", disconnecting it from the Nous portal
-#     (NS-508 / the second half of NS-501).
+#   - ``gateway_state.json`` records the operator's run intent for this
+#     machine. A backup taken where the gateway was stopped (or carrying a
+#     stale/foreign value) overwrites the target's own state and leaves the
+#     gateway stuck "starting"/"cooking".
 #   - ``gateway.pid`` / ``cron.pid`` / ``gateway.lock`` / ``processes.json``
 #     reference PIDs and locks in the *source* machine's process namespace; a
 #     numerically-equal PID in the new environment is a different process.
-#     These mirror exactly what ``container_boot._STALE_RUNTIME_FILES`` already
-#     sweeps on every container boot.
 #
 # Older backups predate the backup-side exclusions, so we filter on import too
 # rather than trusting the archive's contents.

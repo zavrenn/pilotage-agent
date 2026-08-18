@@ -1454,23 +1454,15 @@ class GatewaySlashCommandsMixin:
             logger.debug("Failed to write restart dedup marker: %s", e)
 
         active_agents = self._running_agent_count()
-        # When running under a service manager (systemd/launchd) or inside a
-        # Docker/Podman container, use the service restart path: exit with
-        # code 75 so the service manager / container restart policy restarts
-        # us.  The detached subprocess approach (setsid + bash) doesn't work
-        # under systemd (KillMode=mixed kills the cgroup) or Docker (tini
-        # exits when the gateway dies, taking the detached helper with it).
-        # Native supervisor markers cover direct systemd/launchd starts. The
-        # explicit marker covers wrappers such as ``sudo env -i`` that strip
-        # those markers before execing the foreground gateway.
-        from gateway.restart import (
-            is_container_restart_context,
-            is_gateway_supervisor_process,
-        )
+        # Under a service manager, use the service restart path: exit with
+        # code 75 so systemd/launchd restarts us. The detached subprocess
+        # approach (setsid + bash) doesn't survive systemd's KillMode=mixed,
+        # which kills the whole cgroup. Native supervisor markers cover direct
+        # systemd/launchd starts; the explicit marker covers wrappers such as
+        # ``sudo env -i`` that strip those markers before execing the gateway.
+        from gateway.restart import is_gateway_supervisor_process
 
-        _under_service = is_gateway_supervisor_process()
-        _in_container = is_container_restart_context()
-        if _under_service or _in_container:
+        if is_gateway_supervisor_process():
             self.request_restart(detached=False, via_service=True)
         else:
             self.request_restart(detached=True, via_service=False)
