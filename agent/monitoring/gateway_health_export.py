@@ -182,12 +182,6 @@ def _enabled(config: Dict[str, Any]) -> bool:
 
 
 def _require_metrics_sdk(*, auto_install: bool = True, prompt: bool = False) -> Dict[str, Any]:
-    if auto_install:
-        try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("export.otlp", prompt=prompt)
-        except Exception:
-            pass
     try:
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter

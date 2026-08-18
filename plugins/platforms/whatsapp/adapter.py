@@ -386,9 +386,9 @@ def whatsapp_deps_present() -> bool:
     Registry ``check_fn`` — called from status displays and config loading,
     so it must never install anything.  ``find_spec`` is used instead of an
     import so a status pass doesn't pull aiohttp into the process.  The
-    ACTIVE lazy-installer (``ensure_whatsapp_requirements``) is registered
-    as ``ensure_deps_fn`` and runs from ``create_adapter()`` when this
-    returns False.
+    ACTIVE probe (``ensure_whatsapp_requirements``) is registered as
+    ``ensure_deps_fn`` and runs from ``create_adapter()`` when this returns
+    False.
     """
     if not check_whatsapp_requirements():
         return False
@@ -401,22 +401,15 @@ def whatsapp_deps_present() -> bool:
 
 
 def ensure_whatsapp_requirements() -> bool:
-    """ACTIVE installer: lazy-install aiohttp, then re-probe.
+    """ACTIVE probe: re-check the WhatsApp dependencies.
 
     Registered as ``ensure_deps_fn``, so the registry runs it right before
     the gateway brings WhatsApp up.  The adapter polls the local Node bridge
     over HTTP, so aiohttp is required at ``connect()`` time even though the
-    bridge itself is a Node process.  Node is *not* installable from here —
-    if it's missing this returns False and the caller reports it.
+    bridge itself is a Node process.  Nothing is installed from here — the
+    deployment owns its environment; a missing dep returns False and the
+    caller reports it.
     """
-    if whatsapp_deps_present():
-        return True
-    try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-
-        _lazy_ensure("platform.whatsapp", prompt=False)
-    except Exception:
-        return False
     return whatsapp_deps_present()
 
 
@@ -2032,8 +2025,8 @@ def register(ctx) -> None:
         label="WhatsApp",
         adapter_factory=_build_adapter,
         check_fn=whatsapp_deps_present,
-        # ACTIVE lazy-installer — create_adapter() calls this when check_fn
-        # is False, right before the gateway connects WhatsApp.
+        # ACTIVE probe — create_adapter() calls this when check_fn is
+        # False, right before the gateway connects WhatsApp.
         ensure_deps_fn=ensure_whatsapp_requirements,
         is_connected=_is_connected,
         required_env=["WHATSAPP_ENABLED"],

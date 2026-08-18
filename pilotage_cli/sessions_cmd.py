@@ -1054,12 +1054,8 @@ def cmd_sessions(args, sessions_parser=None):
             print("Cancelled.")
             return
 
-        # Launch pilotage --resume <id> by replacing the current process
-        print(f"Resuming session: {selected_id}")
-        from pilotage_cli.relaunch import relaunch
-
-        relaunch(["--resume", selected_id])
-        return  # won't reach here after execvp
+        print(f"Resume it with:\n  pilotage --resume {selected_id}")
+        return
 
     elif action == "optimize":
         db_path = db.db_path

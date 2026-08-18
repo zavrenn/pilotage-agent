@@ -398,7 +398,7 @@ def telegram_deps_present() -> bool:
     """PASSIVE probe: is python-telegram-bot importable right now?
 
     Registry ``check_fn`` — called from status displays and config loading,
-    so it must never install anything.  The ACTIVE lazy-installer
+    so it must never install anything.  The ACTIVE probe
     (``check_telegram_requirements``) is registered as ``ensure_deps_fn``
     and runs from ``create_adapter`` when this returns False.
     """
@@ -408,10 +408,10 @@ def telegram_deps_present() -> bool:
 def check_telegram_requirements() -> bool:
     """Check if Telegram dependencies are available.
 
-    If python-telegram-bot is missing, attempts to lazy-install it via
-    ``tools.lazy_deps.ensure("platform.telegram")``. After a successful
-    install, re-imports the SDK and flips ``TELEGRAM_AVAILABLE`` to True
-    so the adapter's class-level type aliases get rebound.
+    ``python-telegram-bot`` is a core dependency, so a False here means the
+    environment is missing it and the deployment must install it. Re-probes
+    the SDK and flips ``TELEGRAM_AVAILABLE`` to True on success so the
+    adapter's class-level type aliases get rebound.
     """
     global TELEGRAM_AVAILABLE, Update, Bot, Message, InlineKeyboardButton
     global InlineKeyboardMarkup, LinkPreviewOptions, Application
@@ -419,11 +419,6 @@ def check_telegram_requirements() -> bool:
     global ContextTypes, filters, ParseMode, ChatType, HTTPXRequest
     if TELEGRAM_AVAILABLE:
         return True
-    try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("platform.telegram", prompt=False)
-    except Exception:
-        return False
     try:
         from telegram import Update as _Update, Bot as _Bot, Message as _Message
         from telegram import InlineKeyboardButton as _IKB, InlineKeyboardMarkup as _IKM

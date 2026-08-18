@@ -241,7 +241,7 @@ _RESERVED_NAMES = frozenset({
 _PILOTAGE_SUBCOMMANDS = frozenset({
     "chat", "model", "gateway", "setup", "whatsapp", "login", "logout",
     "status", "cron", "doctor", "dump", "config", "pairing", "skills", "tools",
-    "mcp", "sessions", "insights", "version", "update", "uninstall",
+    "mcp", "sessions", "insights", "version",
     "profile", "plugins", "honcho", "acp",
 })
 
@@ -1393,8 +1393,7 @@ def delete_profile(name: str, yes: bool = False) -> Path:
 
     if canon == "default":
         raise ValueError(
-            "Cannot delete the default profile (~/.pilotage).\n"
-            "To remove everything, use: pilotage uninstall"
+            "Cannot delete the default profile (~/.pilotage)."
         )
 
     profile_dir = get_profile_dir(canon)

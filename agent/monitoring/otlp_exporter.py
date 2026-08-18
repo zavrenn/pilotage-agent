@@ -35,28 +35,12 @@ class OTLPUnavailable(RuntimeError):
 
 
 def _require_sdk(*, auto_install: bool = True, prompt: bool = True):
-    """Import the OTel SDK, lazily installing it on first use if needed.
+    """Import the OTel SDK, raising OTLPUnavailable when it isn't installed.
 
-    Routes through tools.lazy_deps (feature 'export.otlp') so a missing SDK
-    triggers the standard venv install flow — same as every other optional
-    backend — gated by security.allow_lazy_installs and TTY-prompted. Falls back
-    to OTLPUnavailable (with a manual install hint) when the SDK can't be made
-    importable (lazy installs disabled, install failed, or auto_install=False).
-
-    ``auto_install``: attempt the lazy install when missing (default True).
-    ``prompt``: ask before installing when interactive (default True); pass
-    False from non-interactive contexts like the continuous streamer.
+    The SDK is an opt-in extra (``pilotage-agent[otlp]``); the deployment
+    installs it. ``auto_install`` and ``prompt`` are accepted for call-site
+    compatibility and ignored.
     """
-    if auto_install:
-        try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("export.otlp", prompt=prompt)
-        except ImportError:
-            pass  # lazy_deps unavailable — fall through to the import attempt
-        except Exception:
-            # FeatureUnavailable (lazy installs disabled / declined / failed) —
-            # fall through; the import below raises OTLPUnavailable with the hint.
-            pass
     try:
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -240,10 +224,8 @@ def start_streaming(
     ``event_filter`` scopes the exporter to its plane, e.g. gateway-health
     export, so enabling one plane cannot silently export unrelated events.
 
-    Non-interactive context (startup): attempts a lazy install with prompt=False
-    so a configured-but-missing SDK is installed once (gated by
-    security.allow_lazy_installs), then streams. If it still can't load, logs and
-    no-ops — never blocks or raises into startup.
+    If the SDK can't load, logs and no-ops — never blocks or raises into
+    startup.
     """
     if not is_enabled(config):
         return None

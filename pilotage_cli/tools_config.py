@@ -368,15 +368,8 @@ def _pip_install(
     venv_root = Path(sys.executable).parent.parent
     uv_env = {**os.environ, "VIRTUAL_ENV": str(venv_root)}
 
-    # Managed uv first: $PILOTAGE_HOME/bin is never on PATH, so a bare which()
-    # misses the uv Pilotage installed and prefers a system one when both exist.
-    # ensure_uv() rather than a pure lookup because this runs during setup,
-    # where installing uv is in scope — and tier 2 is a pip that the Windows
-    # installer's `uv venv` does not seed, so failing to find uv here is the
-    # difference between a working post-setup hook and "No module named pip".
-    from pilotage_cli.managed_uv import ensure_uv
-
-    uv_bin = ensure_uv()
+    # uv first when the environment provides one; pip is the fallback tier.
+    uv_bin = shutil.which("uv")
     if uv_bin:
         try:
             result = subprocess.run(

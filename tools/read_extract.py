@@ -101,14 +101,6 @@ def _anydoc() -> Optional[Any]:
         ):
             return None
         try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-
-            # prompt=False: read_file must never block on an install prompt.
-            _lazy_ensure("tool.doc_extract", prompt=False)
-        except Exception:
-            _anydoc_failed_at = time.monotonic()
-            return None
-        try:
             _anydoc_module = importlib.import_module("anydoc")
         except Exception:  # ImportError or a broken native binding
             _anydoc_failed_at = time.monotonic()

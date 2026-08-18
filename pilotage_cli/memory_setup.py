@@ -160,30 +160,10 @@ def _install_dependencies(provider_name: str, *, force: bool = False) -> None:
     if not missing:
         return
 
-    print(f"\n  Installing dependencies: {', '.join(missing)}")
-
-    # Environment-aware install: on immutable hosted images the agent venv
-    # is sealed read-only and installs must go to the durable target on the
-    # data volume (PILOTAGE_LAZY_INSTALL_TARGET). install_specs handles the
-    # routing/gating; on normal installs it is venv-scoped as before (NS-605).
-    from tools.lazy_deps import install_specs
-
-    manual_cmd = f"uv pip install {' '.join(missing)}"
-    try:
-        outcome = install_specs(missing, timeout=120)
-        if outcome.ok:
-            print(f"  ✓ Installed {', '.join(missing)}")
-        elif outcome.blocked:
-            print(f"  ⚠ Cannot install {', '.join(missing)}: {outcome.reason}")
-        else:
-            print(f"  ⚠ Failed to install {', '.join(missing)}")
-            stderr = (outcome.stderr or "")[:200]
-            if stderr:
-                print(f"    {stderr}")
-            print(f"  Run manually: {manual_cmd}")
-    except Exception as e:
-        print(f"  ⚠ Install failed: {e}")
-        print(f"  Run manually: {manual_cmd}")
+    # Pilotage never installs packages into the environment it runs in — the
+    # deployment owns its own dependencies. Report what is missing and stop.
+    print(f"\n  Missing dependencies: {', '.join(missing)}")
+    print(f"  Install them with: uv pip install {' '.join(missing)}")
 
     # Also show external dependencies (non-pip) if any
     ext_deps = meta.get("external_dependencies", [])

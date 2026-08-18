@@ -678,13 +678,6 @@ def _prepare_audio_for_transcription(
     if audio_path.suffix.lower() != ".silk":
         return file_path, None, None
     if not _HAS_PILK:
-        # pilk is a tiny silk-v3 codec binding — lazy-install it on first
-        # .silk voice note instead of bloating the base install.
-        try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("stt.silk", prompt=False)
-        except Exception:
-            pass
         if not _safe_find_spec("pilk"):
             return None, None, {
                 "success": False,
@@ -1055,7 +1048,7 @@ def _transcribe_prepared_audio(
         return {"success": False, "transcript": "", "error": blocked}
 
     # Apply common path validation before provider resolution so invalid files
-    # cannot trigger provider setup or lazy installation. The remote-upload
+    # cannot trigger provider setup. The remote-upload
     # size cap is enforced separately below, only for non-local providers.
     error = _validate_audio_file(file_path, enforce_size_limit=False)
     if error:

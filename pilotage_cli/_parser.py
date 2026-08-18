@@ -1,10 +1,6 @@
 """
 Top-level argparse construction for the pilotage CLI.
 
-Lives in its own module so other modules (e.g. ``relaunch.py``) can
-introspect the parser to discover which flags exist without running the
-``main`` fn.
-
 Only the top-level parser and the ``chat`` subparser live here. Every other
 subparser (model, gateway, sessions, …) is built inline in ``main.py``
 because its dispatch is tightly coupled to module-level ``cmd_*`` functions.
@@ -13,28 +9,11 @@ because its dispatch is tightly coupled to module-level ``cmd_*`` functions.
 import argparse
 
 
-# `--profile` / `-p` is consumed by ``main._apply_profile_override`` before
-# argparse runs (it sets ``PILOTAGE_HOME`` and strips itself from ``sys.argv``),
-# so it isn't on the parser. Listed here so all "carry over on relaunch"
-# metadata lives in one file.
-PRE_ARGPARSE_INHERITED_FLAGS: list[tuple[str, bool]] = [
-    ("--profile", True),
-    ("-p", True),
-]
-
-
 def _inherited_flag(parser, *args, **kwargs):
-    """Register a flag that ``pilotage_cli.relaunch`` should carry over when
-    the CLI re-execs itself (e.g. after ``sessions browse`` picks a session,
-    or after the setup wizard launches chat).
-
-    Equivalent to ``parser.add_argument(...)`` plus tagging the resulting
-    Action with ``inherit_on_relaunch = True`` so the relaunch table builder
-    can find it via introspection.
+    """``parser.add_argument`` for flags shared by the top-level and ``chat``
+    parsers. Kept as a distinct name so the shared set stays greppable.
     """
-    action = parser.add_argument(*args, **kwargs)
-    action.inherit_on_relaunch = True
-    return action
+    return parser.add_argument(*args, **kwargs)
 
 
 _EPILOGUE = """
@@ -286,9 +265,8 @@ def build_top_level_parser():
     # the subparser shares the same namespace and `dest`. SUPPRESS keeps the
     # subparser action a no-op unless the user actually passes the flag after
     # the subcommand. Matches the pattern already used for `-s/--skills` and
-    # the relaunch-inherited flags `-r/--resume`, `-c/--continue`,
-    # `-w/--worktree`, `--yolo`, etc. (see tests/pilotage_cli/
-    # test_argparse_flag_propagation.py).
+    # the shared flags `-r/--resume`, `-c/--continue`, `-w/--worktree`,
+    # `--yolo`, etc.
     _inherited_flag(
         chat_parser,
         "-m", "--model",
