@@ -839,7 +839,7 @@ def _resolve_named_custom_runtime(
         if pool_result:
             pool_result["source"] = "direct-alias"
             return pool_result
-        _da_is_openai_url   = base_url_host_matches(base_url, "openai.com") or base_url_host_matches(base_url, "openai.azure.com")
+        _da_is_openai_url   = base_url_host_matches(base_url, "openai.com")
         api_key_candidates = [
             (explicit_api_key or "").strip(),
             # Gate env key fallbacks on authoritative hosts
@@ -896,7 +896,7 @@ def _resolve_named_custom_runtime(
             pool_result["extra_headers"] = dict(custom_provider["extra_headers"])
         return pool_result
 
-    _cp_is_openai_url   = base_url_host_matches(base_url, "openai.com") or base_url_host_matches(base_url, "openai.azure.com")
+    _cp_is_openai_url   = base_url_host_matches(base_url, "openai.com")
     api_key_candidates = [
         (explicit_api_key or "").strip(),
         str(custom_provider.get("api_key", "") or "").strip(),
@@ -995,15 +995,14 @@ def _resolve_custom_endpoint_runtime(
         )
 
     # Custom endpoint: use api_key from config when using config base_url.
-    # Gate each provider key on its own host — sending OPENAI_API_KEY to an
-    # unrelated custom endpoint (Groq, Mistral, …) leaks credentials and
-    # causes 401s. Host-gated matching only, never substring.
+    # Gate the provider key on its own host — sending OPENAI_API_KEY to an
+    # unrelated custom endpoint leaks credentials and causes 401s.
+    # Host-gated matching only, never substring.
     _is_openai_url    = base_url_host_matches(base_url, "openai.com")
-    _is_openai_azure  = base_url_host_matches(base_url, "openai.azure.com")
     api_key_candidates = [
         explicit_api_key,
         (cfg_api_key if use_config_base_url else ""),
-        (_getenv("OPENAI_API_KEY")     if (_is_openai_url or _is_openai_azure) else ""),
+        (_getenv("OPENAI_API_KEY")     if _is_openai_url else ""),
         # Bonus: derive `<VENDOR>_API_KEY` from the host so users
         # who set a vendor env key get the intuitive match. Helper
         # returns "" for IPs/loopback and for env vars already handled by

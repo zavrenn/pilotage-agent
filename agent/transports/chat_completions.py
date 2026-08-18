@@ -101,8 +101,8 @@ def _is_openai_api_base_url(base_url: Any) -> bool:
     OpenAI documents ``prompt_cache_key`` as a first-class body field and
     GPT-5.6+ docs recommend it for reliable cache routing, so the flag is
     implied for the real endpoint. Deliberately NOT a substring match:
-    Azure OpenAI and strict OpenAI-compat endpoints may reject unknown
-    fields and must stay opt-in via ``supports_prompt_cache_key``.
+    strict OpenAI-compat endpoints may reject unknown fields and must stay
+    opt-in via ``supports_prompt_cache_key``.
     """
     try:
         from urllib.parse import urlparse

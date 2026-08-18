@@ -2,7 +2,7 @@
 
 The inner retry loop in ``run_conversation`` (``while retry_count <
 max_retries``) makes several distinct recovery attempts on a single model API
-call: a credential-pool 429 retry, a per-provider OAuth refresh, a long-context
+call: a credential-pool 429 retry, an OAuth refresh, a long-context
 compression restart, a length-
 continuation restart, and a handful of format-recovery branches (thinking-
 signature stripping, multimodal-tool-content stripping, llama.cpp grammar
@@ -39,19 +39,8 @@ class TurnRetryState:
     to decide whether to rebuild the request and retry.
     """
 
-    # ── Per-provider OAuth / credential refresh guards ───────────────────
+    # ── OAuth / credential refresh guards ────────────────────────────────
     codex_auth_retry_attempted: bool = False
-    anthropic_auth_retry_attempted: bool = False
-    copilot_auth_retry_attempted: bool = False
-    # Copilot surfaces a stale/degraded credential as a 400
-    # ``model_not_available_for_integrator`` / ``model_not_supported`` instead
-    # of a clean 401 (e.g. a raw OAuth token seeded when the token exchange
-    # degraded at startup, routing the request to the restricted
-    # ``copilot-language-server`` integrator). Guard a single-shot forced
-    # re-exchange + client rebuild for that case, separate from the 401 guard
-    # so both can fire within one attempt if needed.
-    copilot_stale_cred_retry_attempted: bool = False
-    vertex_auth_retry_attempted: bool = False
 
     # ── Format / payload recovery guards ─────────────────────────────────
     invalid_encrypted_content_retry_attempted: bool = False
@@ -73,8 +62,8 @@ class TurnRetryState:
     # ── Restart signals (read by the outer loop after the attempt) ───────
     restart_with_compressed_messages: bool = False
     restart_with_length_continuation: bool = False
-    # Set when a content-filter stream stall (e.g. MiniMax "new_sensitive")
-    # has been escalated to the fallback chain: the partial-stream content
+    # Set when a content-filter stream stall has been escalated to the
+    # fallback chain: the partial-stream content
     # was rolled back off ``messages`` and the loop should re-issue the API
     # call against the newly-activated provider.
     restart_with_rebuilt_messages: bool = False

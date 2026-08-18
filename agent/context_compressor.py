@@ -3978,8 +3978,8 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             _today_str = ""
 
         # Preamble shared by both first-compaction and iterative-update prompts.
-        # Keep the wording deliberately plain: Azure/OpenAI-compatible content
-        # filters have flagged stronger "injection" / "do not respond" framing.
+        # Keep the wording deliberately plain: content filters have flagged
+        # stronger "injection" / "do not respond" framing.
         if has_user_turn:
             _language_and_provenance_rule = (
                 "Write the summary in the same language the user was using in the "

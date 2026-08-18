@@ -1,7 +1,6 @@
 """Ctrl+S prompt stash — pure state machine for the classic CLI composer.
 
 Park a half-written prompt, send something else, then bring the draft back.
-Mirrors Claude Code's ``ctrl + s to stash prompt`` affordance.
 
 The state machine lives here (no prompt_toolkit imports) so it can be unit
 tested directly; ``cli.py`` owns only the keybinding and the rendering.

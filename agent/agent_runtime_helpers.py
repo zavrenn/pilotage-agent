@@ -1846,11 +1846,8 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
                 _sm_custom_providers = get_compatible_custom_providers(load_config())
             except Exception:
                 _sm_custom_providers = None
-        # ``agent.api_key`` may be a callable (Azure Foundry Entra ID
-        # token provider). ``get_model_context_length`` expects a
-        # string for its live-probe paths; for Foundry the context
-        # length normally resolves via config or static catalogs and
-        # never hits a probe, but coerce to empty string defensively.
+        # ``get_model_context_length`` expects a string for its live-probe
+        # paths — coerce defensively.
         _ctx_api_key = agent.api_key if isinstance(agent.api_key, str) else ""
         new_context_length = get_model_context_length(
             agent.model,
@@ -1864,7 +1861,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
             model=agent.model,
             context_length=new_context_length,
             base_url=agent.base_url,
-            api_key=agent.api_key,  # context_compressor forwards to call_llm; callable preserved
+            api_key=agent.api_key,
             provider=agent.provider,
             api_mode=agent.api_mode,
         )

@@ -240,12 +240,8 @@ def build_models_payload(
                     continue
                 slug = row.get("slug", "")
                 # Only strip overlaps from TRUE routing aggregators
-                # custom:* proxies). Flat-namespace resellers (opencode-go /
-                # opencode-zen) serve every listed model as a first-party model,
-                # so their rows must keep models that a user's proxy happens to
-                # share a name with — otherwise a subscription provider's own
-                # catalog is silently
-                # gutted in the picker.
+                # (custom:* proxies), whose models really do live on another
+                # provider's endpoint.
                 if not _is_routing_aggregator(slug):
                     continue
                 original = row.get("models") or []
@@ -472,7 +468,7 @@ def _apply_featured(rows: list[dict]) -> None:
                 break
             date = ""
             if get_model_info is not None:
-                info = get_model_info(slug, model) or get_model_info("openrouter", model)
+                info = get_model_info(slug, model)
                 date = getattr(info, "release_date", "") if info else ""
             by_lab.setdefault(lab, []).append((pos, date, model))
 

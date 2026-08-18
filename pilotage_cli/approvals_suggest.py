@@ -14,7 +14,7 @@ classifier that triggers the prompt) AND whose tool result is not a
 block/denial marker must have been approved by the user (once, session,
 always, smart-approve, or yolo) before it ran.  Frequently re-approved
 patterns are exactly the prompts worth turning into one-time allowlist
-policy — the port of Claude Code's ``/fewer-permission-prompts``.
+policy.
 
 Safety posture:
 

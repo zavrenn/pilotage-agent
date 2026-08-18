@@ -272,14 +272,6 @@ _EXTRA_ENV_KEYS = frozenset({
     # longer listed here and doctor flags it as ignored.
     "PILOTAGE_TOOL_PROGRESS_MODE",
     "WHATSAPP_MODE", "WHATSAPP_ENABLED",
-    # ACP (Agent Client Protocol) keys — profile-isolable so different
-    # profiles can use different ACP backends without cross-leak.
-    "PILOTAGE_ACP_AUTH_METHOD",
-    "PILOTAGE_ACP_AUTO_APPROVE",
-    "PILOTAGE_COPILOT_ACP_COMMAND",
-    "PILOTAGE_COPILOT_ACP_ARGS",
-    "COPILOT_CLI_PATH",
-    "COPILOT_ACP_BASE_URL",
 })
 import yaml
 

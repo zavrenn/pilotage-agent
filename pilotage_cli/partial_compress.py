@@ -1,16 +1,11 @@
 """Boundary-aware partial compression — "summarize up to here".
 
-Inspired by Claude Code's Rewind menu "Summarize up to here" action
-(v2.1.139–v2.1.142, Week 20, May 2026):
-https://code.claude.com/docs/en/whats-new/2026-w20
-
 Pilotage already has ``/compress`` (full-history compaction) and an
 automatic token-budget tail-protection heuristic inside
 ``ContextCompressor``. What was missing is *user-chosen* boundary
 control: "fold everything before this point into a summary, but keep
-my most recent N exchanges exactly as they are." That is the value of
-the Claude Code feature — the user decides the compression boundary
-instead of leaving it to the token-budget heuristic.
+my most recent N exchanges exactly as they are." The user decides the
+compression boundary instead of leaving it to the token-budget heuristic.
 
 This module owns the pure, side-effect-free split logic so both the
 CLI (``cli.py::_manual_compress``) and the gateway
@@ -62,8 +57,7 @@ def parse_partial_compress_args(
     * ``here``            → partial compress, keep ``DEFAULT_KEEP_LAST``
     * ``here 4``          → partial compress, keep 4 exchanges
     * ``--keep 4``        → partial compress, keep 4 exchanges
-    * ``up to here``      → alias for ``here`` (matches Claude Code's
-                            menu label "Summarize up to here")
+    * ``up to here``      → alias for ``here``
 
     Anything else is treated as a focus topic for the existing full
     ``/compress <focus>`` behavior.
@@ -75,8 +69,7 @@ def parse_partial_compress_args(
       when ``partial`` is True).
     * ``focus_topic`` — focus string for full compression, or None.
       Always None when ``partial`` is True (the two modes are exclusive;
-      a focused partial compress is not a documented Claude Code
-      behavior and would muddy the UX).
+      a focused partial compress would muddy the UX).
     """
     text = (raw_args or "").strip()
     if not text:

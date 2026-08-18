@@ -261,6 +261,21 @@ def _validate_registry(data: Any) -> bool:
     return isinstance(data, dict) and len(data) > 0
 
 
+def _prune_registry(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop every provider block Pilotage cannot route to.
+
+    The upstream registry ships 100+ vendors; this runtime resolves models
+    for OpenAI only (see ``PROVIDER_TO_MODELS_DEV``). Pruning at ingest
+    keeps the on-disk cache and the in-memory registry to the providers we
+    actually query, instead of carrying foreign catalogs and pricing tables
+    that no code path can reach.
+    """
+    if not isinstance(data, dict):
+        return data
+    keep = set(PROVIDER_TO_MODELS_DEV.values())
+    return {pid: block for pid, block in data.items() if pid in keep}
+
+
 def _load_disk_cache() -> Dict[str, Any]:
     """Load models.dev data from disk cache.
 
@@ -280,7 +295,12 @@ def _load_disk_cache() -> Dict[str, Any]:
                 )
                 _quarantine_corrupt_cache(cache_path)
                 return {}
-            return data
+            pruned = _prune_registry(data)
+            if not _validate_registry(pruned):
+                # Pre-prune cache that held no routable provider.
+                _quarantine_corrupt_cache(cache_path)
+                return {}
+            return pruned
     except Exception as e:
         logger.warning(
             "Failed to load models.dev disk cache; quarantining: %s", e
@@ -394,6 +414,10 @@ def _fetch_models_dev_from_network(
     data = response.json()
     if not _validate_registry(data):
         raise ValueError("models.dev returned an empty or invalid registry")
+
+    data = _prune_registry(data)
+    if not _validate_registry(data):
+        raise ValueError("models.dev registry carries no routable provider")
 
     return data, response.headers.get("ETag", "")
 

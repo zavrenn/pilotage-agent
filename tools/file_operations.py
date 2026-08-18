@@ -1952,9 +1952,7 @@ class ShellFileOperations(FileOperations):
 
         # Snapshot LSP diagnostics for this file (best-effort) so the
         # post-write LSP layer can return only diagnostics introduced
-        # by this specific edit.  Mirrors claude-code's
-        # ``beforeFileEdited`` pattern but wired to the local LSP
-        # rather than an external IDE.
+        # by this specific edit.
         self._snapshot_lsp_baseline(path)
 
         # Write atomically.  ``mkdir -p`` is folded into _atomic_write

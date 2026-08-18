@@ -11,12 +11,12 @@ Features:
 - Configurable model parameters
 - Error handling and recovery
 - Message history management
-- Support for multiple model providers
+- OpenAI / Codex model support
 
 Usage:
     from run_agent import AIAgent
     
-    agent = AIAgent(base_url="http://localhost:30000/v1", model="claude-opus-4-20250514")
+    agent = AIAgent(base_url="https://api.openai.com/v1", model="gpt-5.2")
     response = agent.run_conversation("Tell me about the latest Python updates")
 """
 
@@ -1174,22 +1174,6 @@ class AIAgent:
             )
         return hostname == "api.openai.com"
 
-    def _is_azure_openai_url(self, base_url: str = None) -> bool:
-        """Return True when a base URL targets Azure OpenAI.
-
-        Azure OpenAI exposes an OpenAI-compatible endpoint at
-        ``{resource}.openai.azure.com/openai/v1`` that accepts the
-        standard ``openai`` Python client.  Unlike api.openai.com it
-        does NOT support the Responses API — gpt-5.x models are served
-        on the regular ``/chat/completions`` path — so routing decisions
-        must treat Azure separately from direct OpenAI.
-        """
-        if base_url is not None:
-            url = str(base_url).lower()
-        else:
-            url = getattr(self, "_base_url_lower", "") or ""
-        return base_url_host_matches(url, "openai.azure.com")
-
     def _resolved_api_call_timeout(self) -> float:
         """Resolve the effective per-call request timeout in seconds.
 
@@ -1362,20 +1346,17 @@ class AIAgent:
         """Return the correct max tokens kwarg for the current provider.
 
         OpenAI's newer models (gpt-4o, gpt-4.1, gpt-5+, o-series) require
-        'max_completion_tokens'. Azure OpenAI also requires
-        'max_completion_tokens' for those families served via its
-        OpenAI-compatible endpoint. Local models and older OpenAI models use
+        'max_completion_tokens'. Local models and older OpenAI models use
         'max_tokens'.
 
-        The check is URL-first (api.openai.com / Azure both use the new
-        kwarg), then falls back to a model-name check so third-party
-        OpenAI-compatible endpoints fronting those models are recognised —
-        URL-only detection misses that case and silently sends the wrong
-        kwarg, which the upstream model rejects with a 400.
+        The check is URL-first (api.openai.com uses the new kwarg), then
+        falls back to a model-name check so third-party OpenAI-compatible
+        endpoints fronting those models are recognised — URL-only detection
+        misses that case and silently sends the wrong kwarg, which the
+        upstream model rejects with a 400.
         """
         if (
             self._is_direct_openai_url()
-            or self._is_azure_openai_url()
             or model_forces_max_completion_tokens(self.model)
         ):
             return {"max_completion_tokens": value}
@@ -2245,10 +2226,6 @@ class AIAgent:
         return f"{prefix}{raw[:500]}"
 
     def _mask_api_key_for_logs(self, key: Any) -> Optional[str]:
-        # Azure Foundry Entra ID bearer providers are callables — never
-        # invoke them in log paths; identify the auth surface instead.
-        if callable(key) and not isinstance(key, str):
-            return "<entra-id-bearer>"
         if not key:
             return None
         if len(key) <= 12:
@@ -4030,8 +4007,7 @@ class AIAgent:
         resulting message has only thinking blocks, which strict endpoints
         reject with HTTP 400.
 
-        Symmetric with Claude Code's ``filterOrphanedThinkingOnlyMessages``
-        (src/utils/messages.ts). We drop the whole turn from the API copy
+        We drop the whole turn from the API copy
         rather than fabricating stub text — the message log (UI transcript)
         keeps the reasoning block; only the wire copy is cleaned.
         """

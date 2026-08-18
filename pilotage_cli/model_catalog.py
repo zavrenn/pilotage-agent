@@ -1,9 +1,9 @@
 """Remote model catalog fetcher.
 
 The Pilotage docs site hosts a JSON manifest of curated models for providers
-we want to update without shipping a release (currently OpenRouter and
-Nous Portal). This module fetches, validates, and caches that manifest,
-falling back to the in-repo hardcoded lists when the network is unavailable.
+we want to update without shipping a release. This module fetches, validates,
+and caches that manifest, falling back to the in-repo hardcoded lists when the
+network is unavailable.
 
 Pipeline
 --------
@@ -13,9 +13,9 @@ Pipeline
    - Fetches the master URL if disk cache is stale or missing.
    - On any fetch failure, keeps using the stale cache (or empty dict).
 
-2. ``get_curated_openrouter_models()`` / ``get_curated_nous_models()`` —
-   thin accessors returning the shapes existing callers expect. Each
-   falls back to the in-repo hardcoded list on any lookup failure.
+2. ``_get_provider_block()`` / ``get_default_model_from_cache()`` — thin
+   accessors returning the shapes existing callers expect. Each falls back
+   to the in-repo hardcoded list on any lookup failure.
 
 Schema (version 1)
 ------------------
@@ -26,14 +26,13 @@ Schema (version 1)
       "updated_at": "2026-04-25T22:00:00Z",
       "metadata": {...},                # free-form
       "providers": {
-        "openrouter": {
+        "openai-api": {
           "metadata": {...},            # free-form
           "models": [
-            {"id": "vendor/model", "description": "recommended",
+            {"id": "model", "description": "recommended",
              "metadata": {...}}          # free-form, model-level
           ]
-        },
-        "nous": {...}
+        }
       }
     }
 
@@ -296,7 +295,7 @@ def get_catalog(*, force_refresh: bool = False) -> dict[str, Any]:
 
     # Stale-while-revalidate: an expired disk copy is served immediately and
     # refreshed off-thread, so interactive surfaces (the /model picker calls
-    # this via get_curated_nous_model_ids on every open) never block on the
+    # this on every open) never block on the
     # manifest fetch. Only a cold cache (no disk copy at all) still blocks.
     if not force_refresh and disk_data is not None:
         _catalog_cache = disk_data
@@ -355,25 +354,6 @@ def _get_provider_block(provider: str) -> dict[str, Any] | None:
         return None
     block = catalog.get("providers", {}).get(provider)
     return block if isinstance(block, dict) else None
-
-
-def get_curated_openrouter_models() -> list[tuple[str, str]] | None:
-    """Return OpenRouter's curated ``[(id, description), ...]`` from the manifest.
-
-    Returns ``None`` when the manifest is unavailable, so callers can fall
-    back to their hardcoded list.
-    """
-    block = _get_provider_block("openrouter")
-    if not block:
-        return None
-    out: list[tuple[str, str]] = []
-    for m in block.get("models", []):
-        mid = str(m.get("id") or "").strip()
-        if not mid:
-            continue
-        desc = str(m.get("description") or "")
-        out.append((mid, desc))
-    return out or None
 
 
 def _default_model_from_block(block: dict[str, Any] | None) -> str | None:

@@ -2031,11 +2031,7 @@ def set_runtime_main(
         "requested_provider": (requested_provider or "").strip().lower(),
         "model": (model or "").strip(),
         "base_url": (base_url or "").strip(),
-        "api_key": (
-            api_key.strip()
-            if isinstance(api_key, str)
-            else api_key if callable(api_key) else ""
-        ),
+        "api_key": api_key.strip() if isinstance(api_key, str) else "",
         "api_mode": (api_mode or "").strip(),
         "auth_mode": (auth_mode or "").strip().lower(),
         "session_id": (session_id or "").strip(),
@@ -2271,11 +2267,8 @@ _MAIN_RUNTIME_CONTEXT_FIELDS = _MAIN_RUNTIME_FIELDS + ("requested_provider",)
 def _normalize_main_runtime(main_runtime: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Return a sanitized copy of a live main-runtime override.
 
-    Most fields are stripped strings. ``api_key`` may legitimately be a
-    zero-arg callable (Azure Foundry Entra ID token provider) — preserve
-    those as-is so auxiliary clients inherit the same authentication
-    surface as the main agent. The OpenAI SDK accepts ``Callable[[], str]``
-    for ``api_key`` and calls it before every request.
+    Every field is a stripped string; blank values are dropped so a
+    partially-populated override never masks a resolved credential.
     """
     if main_runtime is None:
         # Context-local state is inherited by tool worker wrappers while
@@ -2290,10 +2283,6 @@ def _normalize_main_runtime(main_runtime: Optional[Dict[str, Any]]) -> Dict[str,
     normalized: Dict[str, Any] = {}
     for field in _MAIN_RUNTIME_CONTEXT_FIELDS:
         value = main_runtime.get(field)
-        # Preserve a callable api_key (Entra ID bearer provider) unchanged.
-        if field == "api_key" and callable(value) and not isinstance(value, str):
-            normalized[field] = value
-            continue
         if isinstance(value, str) and value.strip():
             normalized[field] = value.strip()
     for identity_field in ("provider", "requested_provider"):
@@ -2310,10 +2299,9 @@ def _is_payment_error(exc: Exception) -> bool:
     whose message indicates billing exhaustion or daily quota exhaustion
     rather than transient rate limiting.
 
-    Daily token quota errors (e.g. Bedrock "Too many tokens per day",
-    Vertex AI "quota exceeded") are functionally equivalent to credit
-    exhaustion — the provider cannot serve the request until the quota
-    resets — and should trigger the same provider-fallback logic.
+    Daily token quota errors ("too many tokens per day", "quota exceeded")
+    are functionally equivalent to credit exhaustion — the endpoint cannot
+    serve the request until the quota resets — and are classified the same.
     """
     status = getattr(exc, "status_code", None)
     if status == 402:
@@ -2337,8 +2325,8 @@ def _is_payment_error(exc: Exception) -> bool:
             "quota exceeded", "quota_exceeded",
             "too many tokens per day", "daily limit",
             "tokens per day", "daily quota",
-            "resource exhausted",  # Vertex AI / gRPC quota errors
-            "weekly usage limit", "weekly limit",  # OpenCode Go weekly subscription cap
+            "resource exhausted",
+            "weekly usage limit", "weekly limit",
         )):
             return True
     return False
@@ -3322,8 +3310,6 @@ def resolve_provider_client(
             return False
         if raw_codex:
             return False
-        if provider == "actual":
-            return True
         if api_mode == "codex_responses":
             return True
         # Auto-detect: api.openai.com + codex model name pattern
@@ -3477,11 +3463,7 @@ def resolve_provider_client(
             if client is not None:
                 final_model = _normalize_resolved_model(model or default, provider)
                 _cbase = str(getattr(client, "base_url", "") or "")
-                # ``client.api_key`` may be a callable (Azure Foundry Entra
-                # bearer provider). Pass empty string for the wrapper-detection
-                # path — wrapping decisions are based on base_url + api_mode.
-                _raw_ckey = getattr(client, "api_key", "")
-                _ckey = "" if (callable(_raw_ckey) and not isinstance(_raw_ckey, str)) else str(_raw_ckey or "")
+                _ckey = str(getattr(client, "api_key", "") or "")
                 client = _wrap_if_needed(client, final_model, _cbase, _ckey)
                 return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode
                         else (client, final_model))
@@ -3559,24 +3541,6 @@ def resolve_provider_client(
     except ImportError:
         pass
 
-    # ── Azure Foundry (delegates to runtime resolver for auth_mode-aware routing) ─
-    #
-    # The generic PROVIDER_REGISTRY path below uses
-    # ``resolve_api_key_provider_credentials`` which only knows about the
-    # static ``AZURE_FOUNDRY_API_KEY`` env var. That misses two important
-    # cases for the ``azure-foundry`` provider:
-    #
-    #   1. ``model.auth_mode: entra_id`` — no static key exists; we need
-    #      a callable bearer-token provider from ``azure_identity_adapter``.
-    #   2. Non-default ``model.base_url`` (Foundry projects path) — the
-    #      env-var-only resolver doesn't apply config-yaml-driven URL
-    #      overrides.
-    #
-    # Delegate to the same runtime resolver the main agent uses so
-    # auxiliary tasks (title generation, compression, vision, embedding,
-    # session search) inherit the user's full Azure config.
-
-
     # ── API-key providers from PROVIDER_REGISTRY ─────────────────────
     try:
         from pilotage_cli.auth import (
@@ -3608,19 +3572,6 @@ def resolve_provider_client(
         raw_base_url = str(creds.get("base_url", "")).strip().rstrip("/") or pconfig.inference_base_url
         if explicit_base_url:
             raw_base_url = explicit_base_url.strip().rstrip("/")
-        if provider == "actual":
-            try:
-                from pilotage_cli.auth import (
-                    ACTUAL_LOCAL_NOAUTH_PLACEHOLDER,
-                    is_actual_local_base_url,
-                    normalize_actual_base_url,
-                )
-
-                raw_base_url = normalize_actual_base_url(raw_base_url)
-                if not api_key and is_actual_local_base_url(raw_base_url):
-                    api_key = ACTUAL_LOCAL_NOAUTH_PLACEHOLDER
-            except Exception:
-                pass
         if not api_key:
             tried_sources = list(pconfig.api_key_env_vars)
             logger.debug("resolve_provider_client: provider %s has no API "
@@ -4029,32 +3980,8 @@ _client_cache_lock = threading.Lock()
 _CLIENT_CACHE_MAX_SIZE = 64  # safety belt — evict oldest when exceeded
 
 
-class _CallableCacheDiscriminator:
-    """Hash a credential callback by identity without exposing its state."""
-
-    __slots__ = ("_callback",)
-
-    def __init__(self, callback: Any) -> None:
-        # Retain the callback so its id cannot be reused while cached.
-        self._callback = callback
-
-    def __hash__(self) -> int:
-        return id(self._callback)
-
-    def __eq__(self, other: object) -> bool:
-        return (
-            isinstance(other, _CallableCacheDiscriminator)
-            and self._callback is other._callback
-        )
-
-    def __repr__(self) -> str:
-        return "<callable-api-key>"
-
-
 def _runtime_cache_discriminator(field: str, value: Any) -> Any:
     """Return a hashable, secret-safe runtime cache-key component."""
-    if field == "api_key" and callable(value):
-        return _CallableCacheDiscriminator(value)
     if field == "api_key" and isinstance(value, str) and value:
         digest = hashlib.blake2b(value.encode("utf-8"), digest_size=16).digest()
         return ("api-key-digest", digest)
@@ -4834,8 +4761,8 @@ def _build_call_kwargs(
     # auxiliary tasks (compression, titles, vision) want.
 
     if tools:
-        # Defensive dedup: providers like Google Vertex, Azure, and Bedrock
-        # reject requests with duplicate tool names (HTTP 400).  The upstream
+        # Defensive dedup: duplicate tool names are rejected with HTTP 400.
+        # The upstream
         # injection paths (run_agent.py) already dedup, but this guard
         # converts a hard API failure into a warning if an upstream regression
         # reintroduces duplicates. See:

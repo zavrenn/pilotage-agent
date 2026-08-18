@@ -170,15 +170,6 @@ _EDIT_FORMAT_GUIDANCE: dict[str, tuple[tuple[str, ...], str]] = {
         "existing code use `patch` with `mode='patch'` (V4A diff) — including "
         "single-file edits. It's the edit format you handle most reliably.",
     ),
-    "replace": (
-        ("claude", "sonnet", "opus", "haiku",
-         "gemini", "gemma", "deepseek", "qwen", "glm",
-         "pilotage", "llama", "mistral", "devstral", "minimax"),
-        "- Edit format: author new files with `write_file`; for edits to "
-        "existing code prefer `patch` in `mode='replace'` — match a unique "
-        "snippet and swap it. Reach for `mode='patch'` (V4A) only when an edit "
-        "genuinely spans several files at once.",
-    ),
 }
 
 

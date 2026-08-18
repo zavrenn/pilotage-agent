@@ -109,8 +109,6 @@ AUTH_LOCK_TIMEOUT_SECONDS = 15.0
 ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120       # refresh 2 min before expiry
 DEVICE_AUTH_POLL_INTERVAL_CAP_SECONDS = 1     # poll at most every 1s
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
-DEFAULT_ACTUAL_BASE_URL = "https://api.actual.inc/v1"
-DEFAULT_ACTUAL_LOCAL_BASE_URL = "http://127.0.0.1:8080/v1"
 CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
 try:  # Version tag for the Codex token-endpoint User-Agent; fall back if unavailable.
@@ -121,41 +119,6 @@ CODEX_OAUTH_USER_AGENT = f"pilotage-cli/{_PILOTAGE_CLI_VERSION}"
 CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
 OAUTH_OVER_SSH_DOCS_URL = ""
 SERVICE_PROVIDER_NAMES: Dict[str, str] = {}
-
-ACTUAL_LOCAL_NOAUTH_PLACEHOLDER = "dummy-actual-local-api-key"
-
-
-def is_actual_local_base_url(base_url: str) -> bool:
-    """Return True for Actual's loopback local API endpoint."""
-    try:
-        host = (urlparse(base_url or "").hostname or "").lower().rstrip(".")
-    except Exception:
-        return False
-    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
-
-
-def normalize_actual_base_url(base_url: str) -> str:
-    """Return Actual's OpenAI-compatible base URL.
-
-    Actual hosted inference is exposed at api.actual.inc, while the Actual
-    client's offline local server binds a loopback host. Both use a /v1 API
-    surface for Pilotage' Responses transport.
-    """
-    url = str(base_url or "").strip().rstrip("/")
-    if not url:
-        return DEFAULT_ACTUAL_BASE_URL
-    try:
-        parsed = urlparse(url)
-        host = (parsed.hostname or "").lower().rstrip(".")
-        path = parsed.path.rstrip("/")
-    except Exception:
-        return url
-    if host == "api.actual.inc" and path in {"", "/"}:
-        return url + "/v1"
-    if is_actual_local_base_url(url) and path in {"", "/"}:
-        return url + "/v1"
-    return url
-
 
 # =============================================================================
 # Provider Registry

@@ -1,16 +1,15 @@
 """Thinking-timeout detection and user-facing guidance for reasoning models.
 
-When a known reasoning model (NVIDIA Nemotron 3 Ultra, OpenAI o1/o3,
-Anthropic Opus 4.x thinking, DeepSeek R1, Qwen QwQ, xAI Grok reasoning)
-hits a transport-layer error before the first content token arrives, the
+When a known reasoning model (OpenAI o1/o3, gpt-5.x thinking) hits a
+transport-layer error before the first content token arrives, the
 upstream proxy has almost certainly idle-killed a long thinking stream —
 not a true context overflow or a configuration error.  The user needs
 distinct guidance for this case:
 
     "The model's thinking phase exceeded the upstream proxy's idle
      timeout before the first content token arrived.  This is a known
-     issue with reasoning models behind cloud gateways (NVIDIA NIM,
-     OpenAI, Anthropic, DeepSeek).  Workarounds in priority order:
+     issue with reasoning models behind cloud gateways.  Workarounds
+     in priority order:
      1. Set `providers.<provider>.models.<model>.stale_timeout_seconds: 900`
         in `~/.pilotage/config.yaml` to extend the per-call timeout...
      2. Lower `reasoning_budget` or set `reasoning_effort: medium`...
@@ -55,8 +54,7 @@ def is_thinking_timeout(classified: object, model: str, error_msg: str) -> bool:
     Args:
         classified: a :class:`agent.error_classifier.ClassifiedError` instance
             (duck-typed here to avoid an import cycle in unit tests).
-        model: the model slug at failure time (e.g.
-            ``"nvidia/nemotron-3-ultra-550b-a55b"``).
+        model: the model slug at failure time (e.g. ``"o3"``).
         error_msg: lowercased string representation of the underlying
             exception (typically ``str(api_error).lower()``).
 
@@ -107,22 +105,19 @@ def build_thinking_timeout_guidance(
     """Return the user-facing guidance string appended to ``_final_response``.
 
     Args:
-        provider: provider slug (e.g. ``"nvidia"``, ``"openai"``).
+        provider: provider slug (e.g. ``"openai-api"``).
         model: bare model slug the user would put in their config
-            (e.g. ``"nemotron-3-ultra-550b-a55b"`` if the user uses
-            NVIDIA direct, or the full ``"nvidia/nemotron-3-ultra-550b-a55b"``
-            if they go through an aggregator).  Used verbatim in the
-            config snippet so the user can copy-paste.
+            (e.g. ``"o3"``).  Used verbatim in the config snippet so the
+            user can copy-paste.
         model_label: optional short label for the model name in the
-            prose (e.g. ``"Nemotron 3 Ultra"``).  Falls back to the
-            slug if not provided.
+            prose.  Falls back to the slug if not provided.
     """
     label = model_label or model
     return (
         "\n\nThe model's thinking phase exceeded the upstream proxy's "
         "idle timeout before the first content token arrived. This is a "
         f"known issue with reasoning models (like {label}) behind cloud "
-        "gateways (NVIDIA NIM, OpenAI, Anthropic, DeepSeek). Workarounds "
+        "gateways. Workarounds "
         "in priority order:\n"
         f"1. Set `providers.{provider}.models.{model}.stale_timeout_seconds: 900` "
         "in `~/.pilotage/config.yaml` to extend the per-call timeout. "

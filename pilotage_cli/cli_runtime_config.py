@@ -173,7 +173,7 @@ def load_cli_config() -> Dict[str, Any]:
                     # promote model.model to model.default so the user's explicit
                     # choice isn't shadowed by the hardcoded default.  Without this,
                     # profile configs that only set "model:" (not "default:") silently
-                    # fall back to claude-opus because the merge preserves the
+                    # fall back to the built-in model because the merge preserves the
                     # hardcoded default and PilotageCLI.__init__ checks "default" first.
                     if "model" in file_config["model"] and "default" not in file_config["model"]:
                         defaults["model"]["default"] = file_config["model"]["model"]

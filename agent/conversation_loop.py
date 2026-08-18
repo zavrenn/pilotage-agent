@@ -2106,12 +2106,6 @@ def run_conversation(
                 # session instead of re-failing every retry.
                 if getattr(agent, "_disable_streaming", False):
                     _use_streaming = False
-                # An ACP subprocess client communicates via stdio / TCP and
-                # returns a plain SimpleNamespace — not an iterable
-                # stream.  Mirror the ACP exclusion used for Responses
-                # API upgrade (lines ~1083-1085).
-                elif str(agent.base_url or "").lower().startswith("acp+tcp://"):
-                    _use_streaming = False
                 elif not agent._has_stream_consumers():
                     # No display/TTS consumer. Still prefer streaming for
                     # health checking, but skip for Mock clients in tests
@@ -3252,10 +3246,6 @@ def run_conversation(
                         # that survives message/tool sanitization.
                         _credential_sanitized = False
                         _raw_key = getattr(agent, "api_key", None) or ""
-                        # Entra ID bearer providers are callables — their
-                        # minted JWTs are always ASCII, so no sanitization
-                        # is needed (and ``_strip_non_ascii`` would crash
-                        # on a callable input).
                         if _raw_key and isinstance(_raw_key, str):
                             _clean_key = _strip_non_ascii(_raw_key)
                             if _clean_key != _raw_key:

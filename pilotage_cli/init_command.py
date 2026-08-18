@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """``/init`` — build the prompt that generates or updates a project AGENTS.md.
 
-Port of Codex ``/init`` (Claude Code has the same for CLAUDE.md). Pilotage
+Port of Codex ``/init``. Pilotage
 already *loads* AGENTS.md / CLAUDE.md / .cursorrules as project context, but
 had no command to bootstrap one. ``/init`` hands the live agent ONE
 guidance-laden prompt instructing it to:

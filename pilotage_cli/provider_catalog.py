@@ -7,8 +7,8 @@ they were not: the CLI picker read :data:`pilotage_cli.models.CANONICAL_PROVIDER
 tabs read separate hand-maintained lists (``_OAUTH_PROVIDER_CATALOG``,
 ``OPTIONAL_ENV_VARS`` + ``PROVIDER_GROUPS``) that nobody kept in sync.  Every
 provider added after those lists were written silently went missing from the
-GUI — e.g. GitHub Copilot showing up only under "tools", or ``openai-api`` being
-configurable from the CLI but not the desktop app.
+GUI — e.g. ``openai-api`` being configurable from the CLI but not the desktop
+app.
 
 This module fixes that at the root: it derives ONE descriptor per provider from
 the same universe ``pilotage model`` renders (``CANONICAL_PROVIDERS``), joining:
@@ -43,11 +43,7 @@ from dataclasses import dataclass
 # in pilotage_cli.auth.PROVIDER_REGISTRY and providers.base.ProviderProfile.
 _ACCOUNTS_AUTH_TYPES: frozenset[str] = frozenset(
     {
-        "oauth_device_code",
-        "oauth_external",
-        "oauth_minimax",
-        "external_process",  # copilot-acp: spawns `copilot --acp --stdio`
-        "copilot",           # GitHub Copilot token / gh auth
+        "oauth_external",  # openai-codex: ChatGPT / Codex sign-in
     }
 )
 
@@ -59,7 +55,7 @@ class ProviderDescriptor:
     slug: str                      # canonical id, e.g. "openai-codex"
     label: str                     # human display name
     description: str               # one-line description
-    auth_type: str                 # api_key | oauth_* | external_process | copilot
+    auth_type: str                 # api_key | oauth_external
     tab: str                       # "keys" | "accounts"
     api_key_env_vars: tuple[str, ...]  # credential env vars (may be empty)
     base_url_env_var: str          # base-URL override env var (may be "")

@@ -1,18 +1,15 @@
 """Session recap — summarize what's happened in the current session.
 
-Inspired by Claude Code's `/recap` command (v2.1.114, April 2026), which
-shows a one-line summary of what happened while a terminal was unfocused
+Shows a one-line summary of what happened while a session was unattended
 so users juggling multiple sessions can re-orient quickly.
 
-Source: https://code.claude.com/docs/en/whats-new/2026-w17
-
-Differences from Claude Code:
+Properties:
     - Pure local computation from the in-memory conversation history. No
       LLM call, no auxiliary model, no prompt-cache invalidation. A
       recap should be instant and free.
     - Works unchanged on CLI and every gateway platform (Telegram,
       Discord, Slack, …) because both call into the same ``build_recap``
-      helper. Claude Code only shows this on the CLI.
+      helper.
     - Tailored to pilotage-agent's tool vocabulary (``terminal``, ``patch``,
       ``write_file``, ``delegate_task``, ``browser_*``, ``web_*``) — the
       recap surfaces which classes of work were most active.

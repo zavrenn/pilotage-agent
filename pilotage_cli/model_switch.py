@@ -222,9 +222,6 @@ MODEL_ALIASES: dict[str, ModelIdentity] = {
     "codex":     ModelIdentity("openai", "codex"),
     "o3":        ModelIdentity("openai", "o3"),
     "o4":        ModelIdentity("openai", "o4"),
-
-    # Meta
-    "llama":     ModelIdentity("meta-llama", "llama"),
 }
 
 

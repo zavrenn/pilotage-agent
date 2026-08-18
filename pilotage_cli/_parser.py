@@ -293,7 +293,7 @@ def build_top_level_parser():
         chat_parser,
         "-m", "--model",
         default=argparse.SUPPRESS,
-        help="Model to use (e.g., anthropic/claude-sonnet-4)",
+        help="Model to use (e.g., gpt-5.2)",
     )
     chat_parser.add_argument(
         "-t", "--toolsets",

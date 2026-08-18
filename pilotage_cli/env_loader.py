@@ -67,20 +67,14 @@ def _known_pilotage_env_keys() -> set[str]:
 
 
 # Behavioral routing keys a parent Pilotage process injects into child env and
-# that silently redirect a profile onto the wrong provider path (ACP auth
-# method, copilot-ACP endpoints). These — and ONLY these — are scrubbed from
-# os.environ at startup when absent from the profile's .env. Credential keys
-# (API keys/tokens) are excluded: shell exports are a legitimate,
-# documented way to supply them, and read-time secret-scope checks
-# (agent/secret_scope.py) own cross-profile credential isolation.
-_PROFILE_MANAGED_ENV_KEYS: frozenset[str] = frozenset({
-    "PILOTAGE_ACP_AUTH_METHOD",
-    "PILOTAGE_ACP_AUTO_APPROVE",
-    "PILOTAGE_COPILOT_ACP_COMMAND",
-    "PILOTAGE_COPILOT_ACP_ARGS",
-    "COPILOT_CLI_PATH",
-    "COPILOT_ACP_BASE_URL",
-})
+# that silently redirect a profile onto the wrong provider path. These — and
+# ONLY these — are scrubbed from os.environ at startup when absent from the
+# profile's .env. Credential keys (API keys/tokens) are excluded: shell
+# exports are a legitimate, documented way to supply them, and read-time
+# secret-scope checks (agent/secret_scope.py) own cross-profile credential
+# isolation. Empty today: every remaining routing key is read from config,
+# not env. The scrub stays wired so a future key only needs listing here.
+_PROFILE_MANAGED_ENV_KEYS: frozenset[str] = frozenset()
 
 
 def _env_keys_defined_in_dotenv(path: Path) -> set[str]:
@@ -120,9 +114,9 @@ def _clear_known_keys_missing_from_dotenv(path: Path) -> None:
     in the file.
 
     Scope is deliberately NARROW: only ``_PROFILE_MANAGED_ENV_KEYS`` —
-    behavioral routing keys (ACP auth method, copilot-ACP endpoints) that a
-    parent Pilotage process injects and that silently change *which provider
-    path* a profile uses. Provider API keys (OPENAI_API_KEY, …) are
+    behavioral routing keys that a parent Pilotage process injects and that
+    silently change *which provider path* a profile uses. Provider API keys
+    (OPENAI_API_KEY, …) are
     intentionally excluded: users legitimately export those in their shell
     (``export OPENAI_API_KEY=…`` is a documented flow — see
     ``tests/pilotage_cli/test_dump_env_visibility.py``), and a startup scrub

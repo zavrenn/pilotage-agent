@@ -368,15 +368,12 @@ _CONTENT_POLICY_BLOCKED_PATTERNS = [
     "violates our usage policies",
     "violates openai's usage policies",
     "your request was flagged by",
-    # Generic content-filter wording seen on Azure / OpenAI Responses.
     # ``content_filter`` (underscore) is the OpenAI-standard error/finish
     # token surfaced verbatim by their SDKs when a request is blocked.
-    # ``responsibleaipolicyviolation`` is Azure OpenAI's error code.
     # Deliberately NOT matching the space variant ("content filter") — it
     # appears in benign config descriptions and tooltip text that providers
     # echo back; the underscore form is provider-specific enough.
     "content_filter",
-    "responsibleaipolicyviolation",
 ]
 
 # Auth patterns (non-status-code signals)

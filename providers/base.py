@@ -17,7 +17,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Sentinel for "omit temperature entirely" (Kimi: server manages it)
+# Sentinel for "omit temperature entirely" (server manages it)
 OMIT_TEMPERATURE = object()
 
 
@@ -53,7 +53,7 @@ class ProviderProfile:
     env_vars: tuple = ()
     base_url: str = ""
     models_url: str = ""  # explicit models endpoint; falls back to {base_url}/models
-    auth_type: str = "api_key"   # api_key|oauth_device_code|oauth_external|copilot
+    auth_type: str = "api_key"   # api_key|oauth_external
     supports_health_check: bool = True  # False → doctor skips /models probe for this provider
 
     # ── Vision support ────────────────────────────────────────
@@ -161,7 +161,7 @@ class ProviderProfile:
 
         This split exists because some providers put reasoning config in
         extra_body (OpenRouter: extra_body.reasoning) while others put it
-        as top-level api_kwargs (Kimi: api_kwargs.reasoning_effort).
+        as top-level api_kwargs (e.g. api_kwargs.reasoning_effort).
 
         Default: ({}, {}).
         """

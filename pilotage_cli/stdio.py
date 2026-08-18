@@ -19,12 +19,9 @@ Entry points (``cli.py`` ``main``, ``pilotage_cli/main.py`` CLI dispatch,
 ``gateway/run.py`` startup) call :func:`configure_windows_stdio` exactly
 once early in startup.
 
-Patterns cribbed from Claude Code (``src/utils/platform.ts``), OpenCode
-(``packages/opencode/src/pty/index.ts`` env injection), and OpenAI Codex
-(``codex-rs/core/src/unified_exec/process_manager.rs``).  None of those
-actually flip the console code page — they rely on their runtime (Node or
-Rust) writing UTF-16 to the Win32 console API and letting the terminal
-sort it out.  Python doesn't get that luxury.
+Runtimes such as Node and Rust write UTF-16 straight to the Win32 console
+API and let the terminal sort it out, so they never need to flip the console
+code page.  Python doesn't get that luxury.
 """
 
 from __future__ import annotations

@@ -600,6 +600,8 @@ def init_agent(
         else agent.provider
     )
     agent._credential_pool = credential_pool
+    # Subprocess-transport launch spec, consumed by delegated child agents
+    # (tools/delegate_tool.py) that spawn an external CLI agent.
     agent.acp_command = acp_command or command
     agent.acp_args = list(acp_args or args or [])
     if api_mode in {"chat_completions", "codex_responses"}:
@@ -647,19 +649,12 @@ def init_agent(
 
     # GPT-5.x models usually require the Responses API path; auto-upgrade
     # for direct OpenAI URLs (api.openai.com) since all newer tool-calling
-    # models prefer Responses there. ACP runtimes are excluded — they
-    # handle their own routing and have no Responses surface.
+    # models prefer Responses there.
     # When api_mode was explicitly provided, respect it — the user knows
     # what their endpoint supports.
-    # Exception: Azure OpenAI serves gpt-5.x on /chat/completions and does
-    # NOT support the Responses API — skip the upgrade for Azure.
     if (
         api_mode is None
         and agent.api_mode == "chat_completions"
-        and agent.provider != "copilot-acp"
-        and not str(agent.base_url or "").lower().startswith("acp://copilot")
-        and not str(agent.base_url or "").lower().startswith("acp+tcp://")
-        and not agent._is_azure_openai_url()
         and (
             agent._is_direct_openai_url()
             or agent._provider_model_requires_responses_api(
@@ -887,7 +882,7 @@ def init_agent(
     if api_key and base_url:
         # Explicit credentials from CLI/gateway — construct directly.
         # The runtime provider resolver already handled auth for us.
-        # Extract query params (e.g. Azure api-version) from base_url
+        # Extract query params from base_url
         # and pass via default_query to prevent loss during SDK URL
         # joining (httpx drops query string when joining paths).
         _parsed_url = urlparse(base_url)
@@ -905,9 +900,6 @@ def init_agent(
             client_kwargs = {"api_key": api_key, "base_url": base_url}
         if _provider_timeout is not None:
             client_kwargs["timeout"] = _provider_timeout
-        if agent.provider == "copilot-acp":
-            client_kwargs["command"] = agent.acp_command
-            client_kwargs["args"] = agent.acp_args
         effective_base = base_url
         if base_url_host_matches(effective_base, "chatgpt.com"):
             from agent.auxiliary_client import _codex_cloudflare_headers
@@ -1804,14 +1796,7 @@ def init_agent(
             _configured_provider
         )
         _custom_provider_candidate = bool(_configured_provider_norm)
-        _runtime_first_provider_ids = {
-            "auto",
-            "vertex",
-            "google-vertex",
-            "vertex-ai",
-            "gcp-vertex",
-            "vertexai",
-        }
+        _runtime_first_provider_ids = {"auto"}
         if _configured_provider_norm in _runtime_first_provider_ids:
             _custom_provider_candidate = False
         elif (
