@@ -19,7 +19,7 @@ Three concerns live here:
 
 * :func:`try_shrink_image_parts_in_messages` — image-too-large recovery
   helper that re-encodes ``data:image/...;base64,...`` parts at a smaller
-  size so retries can fit under provider ceilings (Anthropic's 5 MB).
+  size so retries can fit under provider per-image ceilings.
 
 ``run_agent`` keeps thin wrappers for each so existing call sites
 (``self._compress_context(...)``) keep working.  Tests that exercise
@@ -3750,17 +3750,17 @@ def try_shrink_image_parts_in_messages(
     max_dimension: int = 8000,
 ) -> bool:
     """Re-encode all native image parts at a smaller size to recover from
-    image-too-large errors (Anthropic 5 MB, unknown other providers).
+    image-too-large errors reported by the provider.
 
     Mutates ``api_messages`` in place. Returns True if any image part was
     actually replaced, False if there were no image parts to shrink or
     Pillow couldn't help (caller should surface the original error).
 
     Strategy: look for ``image_url`` / ``input_image`` parts carrying a
-    ``data:image/...;base64,...`` payload, plus Anthropic-native
+    ``data:image/...;base64,...`` payload, plus native
     ``{"type": "image", "source": {"type": "base64", ...}}`` blocks.
     For each one whose encoded size exceeds 4 MB (a safe target that slides
-    under Anthropic's 5 MB ceiling with header overhead) or whose longest side
+    under the strictest observed ceiling with header overhead) or whose longest side
     exceeds ``max_dimension``, write the base64 to a tempfile, call
     ``vision_tools._resize_image_for_vision`` to produce a smaller data
     URL, and substitute it in place.
@@ -3777,13 +3777,12 @@ def try_shrink_image_parts_in_messages(
         logger.warning("image-shrink recovery: vision_tools unavailable — %s", exc)
         return False
 
-    # 4 MB target leaves comfortable headroom under Anthropic's 5 MB.
-    # Non-Anthropic providers we haven't observed rejecting are fine with
-    # much larger; shrinking to 4 MB here loses quality but only fires
+    # 4 MB target leaves comfortable headroom under the strictest observed
+    # per-image ceiling. Shrinking to 4 MB loses quality but only fires
     # after a confirmed provider rejection, so the alternative is failure.
     target_bytes = 4 * 1024 * 1024
-    # Anthropic enforces an 8000px per-side dimension cap independently of
-    # the 5 MB byte cap.  In many-image requests, the provider can report a
+    # Providers can also enforce a per-side dimension cap independently of
+    # the byte cap.  In many-image requests, the provider can report a
     # lower cap (observed: 2000px).  The caller passes that parsed ceiling
     # when the rejection includes it.
     changed_count = 0
@@ -3830,7 +3829,7 @@ def try_shrink_image_parts_in_messages(
         # the original (PNG compression is non-monotonic in image size — a
         # smaller raster with LANCZOS resampling noise compresses worse than a
         # larger smooth one).  Rejecting a pixel-correct downscale purely
-        # because its bytes grew permanently wedges sessions on the Anthropic
+        # because its bytes grew permanently wedges sessions on the
         # many-image 2000px path.
         needs_shrink = len(url) > target_bytes  # over byte budget
         triggered_by = "bytes" if needs_shrink else None

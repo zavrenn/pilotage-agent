@@ -1294,18 +1294,17 @@ def _normalize_codex_response(
     saw_final_answer_phase = False
     saw_reasoning_item = False
 
-    # Server-side built-in tool calls (xAI's native web_search, code
+    # Server-side built-in tool calls (native web_search, code
     # interpreter, etc.) are executed by the provider and reported as
-    # discrete ``*_call`` output items.  xAI's /v1/responses surface
-    # (e.g. grok-composer-2.5-fast on SuperGrok OAuth) routinely leaves
-    # these items at ``status="in_progress"`` even when the overall
+    # discrete ``*_call`` output items.  A /v1/responses surface can
+    # leave these items at ``status="in_progress"`` even when the overall
     # ``response.status == "completed"`` — the search ran to completion
     # server-side, the per-item status simply isn't reconciled.  These
     # are NOT a signal that the model's turn is unfinished, so they must
     # not flip ``has_incomplete_items``.  Only the response-level status
     # and genuine model output items (message/reasoning/function_call)
     # govern the incomplete verdict.  Without this guard, any turn where
-    # grok-composer invokes server-side search is misclassified as
+    # the model invokes server-side search is misclassified as
     # ``finish_reason="incomplete"`` and burns 3 fruitless continuation
     # retries before failing with "Codex response remained incomplete
     # after 3 continuation attempts".  client-side function/custom tool

@@ -1307,9 +1307,7 @@ def _model_section_has_credentials(config: dict) -> bool:
       * ``PROVIDER_REGISTRY`` in ``pilotage_cli.auth`` — lists every supported
         provider along with its ``api_key_env_vars``.
       * ``active_provider`` in the auth store — covers OAuth device-code /
-        external-OAuth providers (Codex, Qwen, Gemini CLI, ...).
-      * The legacy OpenRouter aggregator env vars, which route generic
-        ``OPENAI_API_KEY`` / ``OPENROUTER_API_KEY`` values through OpenRouter.
+        external-OAuth providers (Codex, ...).
     """
     try:
         from pilotage_cli.auth import get_active_provider

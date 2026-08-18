@@ -381,8 +381,8 @@ def get_tool_definitions(
         # schemas to self.tools) don't poison the cache. Without this, a
         # long-lived Gateway process accumulates duplicate tool names across
         # agent inits and providers that enforce unique tool names
-        # (DeepSeek, Xiaomi MiMo, Moonshot Kimi) reject the request with
-        # HTTP 400. Mirrors the cache-hit path above. 
+        # reject the request with HTTP 400. Mirrors the cache-hit path
+        # above.
         # Bound the cache with LRU eviction so a long-lived Gateway process
         # doesn't accumulate entries unboundedly across the many distinct
         # toolset/config fingerprints it sees over its lifetime.
@@ -548,12 +548,11 @@ def _compute_tool_definitions(
     global _last_resolved_tool_names
     _last_resolved_tool_names = [t["function"]["name"] for t in filtered_tools]
 
-    # Sanitize schemas for broad backend compatibility. llama.cpp's
-    # json-schema-to-grammar converter (used by its OAI server to build
-    # GBNF tool-call parsers) rejects some shapes that cloud providers
-    # silently accept — bare "type": "object" with no properties,
-    # string-valued schema nodes from malformed MCP servers, etc. This
-    # is a no-op for schemas that are already well-formed.
+    # Sanitize schemas for broad backend compatibility. Grammar-based
+    # tool-call parsers reject some shapes that cloud providers silently
+    # accept — bare "type": "object" with no properties, string-valued
+    # schema nodes from malformed MCP servers, etc. This is a no-op for
+    # schemas that are already well-formed.
     try:
         from tools.schema_sanitizer import sanitize_tool_schemas
         filtered_tools = sanitize_tool_schemas(filtered_tools)
@@ -619,9 +618,8 @@ def _resolve_active_context_length() -> int:
             return 0
         from agent.model_metadata import get_model_context_length
         # Honor explicit `model.context_length` in config.yaml — short-circuits
-        # the OpenRouter /models probe at get_model_context_length step 0, so
-        # non-OpenRouter providers don't pay the ~2-3s OpenRouter fetch at every
-        # CLI startup. See.
+        # the remote catalog probe at get_model_context_length step 0, so the
+        # CLI doesn't pay a ~2-3s fetch at every startup.
         raw_ctx = model_cfg.get("context_length")
         config_ctx = raw_ctx if isinstance(raw_ctx, int) and raw_ctx > 0 else None
         # Provider-aware resolution: providers like Codex OAuth enforce a
@@ -753,8 +751,8 @@ def coerce_tool_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     and union types (``"type": ["integer", "string"]``).
 
     Also wraps bare scalar values in a single-element list when the schema
-    declares ``"type": "array"``.  Open-weight models (DeepSeek, Qwen, GLM)
-    sometimes emit ``{"urls": "https://a.com"}`` when the tool expects
+    declares ``"type": "array"``.  Models sometimes emit
+    ``{"urls": "https://a.com"}`` when the tool expects
     ``{"urls": ["https://a.com"]}``; wrapping here avoids a confusing tool
     failure on what is otherwise a well-formed call.
     """
@@ -873,8 +871,8 @@ def _normalize_json_strings_for_schema(value: Any, schema: Any) -> Any:
     """Recursively parse JSON-encoded string values that a schema expects to
     be arrays or objects, including nested array items and object properties.
 
-    Open-weight models (DeepSeek, Qwen, GLM, and others) sometimes emit a
-    structured field — or an *element* of a structured field — as a
+    Models sometimes emit a structured field — or an *element* of a
+    structured field — as a
     JSON-encoded string instead of a native value. The top-level
     :func:`coerce_tool_args` pass repairs the outermost value; this helper
     walks the rest of the tree so cases like::

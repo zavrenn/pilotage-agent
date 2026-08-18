@@ -19,7 +19,7 @@ def build_auth_parser(subparsers, *, cmd_auth: Callable) -> None:
     auth_add = auth_subparsers.add_parser("add", help="Add a pooled credential")
     auth_add.add_argument(
         "provider",
-        help="Provider id (for example: anthropic, openai-codex, openrouter)",
+        help="Provider id (for example: openai-codex, openai-api, custom)",
     )
     auth_add.add_argument(
         "--type",

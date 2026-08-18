@@ -64,8 +64,8 @@ def _resolve_review_runtime(agent: Any) -> Dict[str, Any]:
         "credential_pool": getattr(agent, "_credential_pool", None),
         "request_overrides": dict(getattr(agent, "request_overrides", {}) or {}),
         "max_tokens": getattr(agent, "max_tokens", None),
-        "command": getattr(agent, "acp_command", None),
-        "args": list(getattr(agent, "acp_args", []) or []),
+        "command": getattr(agent, "launch_command", None),
+        "args": list(getattr(agent, "launch_args", []) or []),
         "routed": False,
     }
     try:
@@ -752,8 +752,8 @@ def _run_review_in_thread(
             if isinstance(_rt.get("max_tokens"), int):
                 _fork_kwargs["max_tokens"] = _rt["max_tokens"]
             if isinstance(_rt.get("command"), str) and _rt["command"]:
-                _fork_kwargs["acp_command"] = _rt["command"]
-                _fork_kwargs["acp_args"] = _rt.get("args") or []
+                _fork_kwargs["command"] = _rt["command"]
+                _fork_kwargs["args"] = _rt.get("args") or []
             # Same-model path only: when routed to a different aux model the
             # cache is cold regardless (parity buys nothing) and the parent's
             # effort vocabulary may not be valid for the routed model/provider
@@ -840,10 +840,8 @@ def _run_review_in_thread(
             # Without this, the fork rebuilds the system prompt from
             # scratch (fresh _pilotage_now() timestamp, fresh
             # session_id, narrower toolset → different skills_prompt)
-            # and the byte-exact prefix-cache key misses. See
-            # and for the full analysis +
-            # measured impact (~26% end-to-end cost reduction on
-            # Sonnet 4.5).
+            # and the byte-exact prefix-cache key misses (measured:
+            # ~26% end-to-end cost reduction when it hits).
             # Share the parent's warm cached system prompt ONLY when the review
             # runs on the SAME model (not routed). When routed to a different
             # model the parent's cached prompt is for the wrong model/cache key

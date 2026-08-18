@@ -7470,7 +7470,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         # Aux-task rows (task != '') must NOT inherit the session's main-loop
         # route: an aux call may use a completely different provider/model
-        # (vision on gemini while the main loop runs anthropic). Missing info
+        # (vision on a different model than the main loop). Missing info
         # stays 'unknown'/empty rather than borrowing a misleading route.
         if task:
             eff_model = model or "unknown"
@@ -10197,7 +10197,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             if row["observed"]:
                 msg["observed"] = True
             # Restore reasoning fields on assistant messages so providers
-            # that replay reasoning (OpenRouter, OpenAI, Nous) receive
+            # that replay reasoning receive
             # coherent multi-turn reasoning context.
             if row["role"] == "assistant":
                 if row["finish_reason"]:
@@ -11054,8 +11054,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         A session is considered empty when it has no messages and no
         user-assigned title. Used by CLI exit / session-rotation paths so
         immediately-started-and-quit sessions don't pile up in ``/resume``
-        and ``pilotage sessions list`` output. (Pattern ported from
-        google-gemini/gemini-cli.)
+        and ``pilotage sessions list`` output.
 
         The emptiness check and delete run in one transaction, so a message
         flushed concurrently by another writer can't be lost. Sessions with

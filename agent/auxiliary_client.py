@@ -3153,10 +3153,8 @@ def _effective_provider_for_client(client: Any, fallback: str) -> str:
 def _to_async_client(sync_client, model: str, is_vision: bool = False):
     """Convert a sync client to its async counterpart, preserving Codex routing.
 
-    When ``is_vision=True`` and the underlying base URL is Copilot, the
-    resulting async client carries the ``Copilot-Vision-Request: true``
-    header so the request is routed to Copilot's vision-capable
-    infrastructure (otherwise vision payloads silently time out).
+    ``is_vision`` only discriminates the client-cache key so a vision
+    client and a text client for the same route never share an entry.
     """
     from openai import AsyncOpenAI
 
@@ -4016,7 +4014,7 @@ def _client_cache_key(
     pool_hint = _pool_cache_hint(provider, main_runtime=main_runtime)
     # The model MUST participate in the key. Two concurrent auxiliary calls to
     # the SAME provider/base_url/key but DIFFERENT models (e.g. a MoA reference
-    # fan-out running opus + gpt-5.5 in parallel threads) would otherwise share
+    # fan-out running gpt-5.6 + gpt-5.6-sol in parallel threads) would otherwise share
     # one cache entry. On a cache MISS both build a client for the same key; the
     # second's _store_cached_client sees the first as the "old" entry and CLOSES
     # it — while the first call is still mid-request on it — yielding a spurious
@@ -4749,10 +4747,9 @@ def _build_call_kwargs(
         "timeout": timeout,
     }
 
-    # Opus 4.7+ rejects any non-default temperature/top_p/top_k — silently
-    # drop here so auxiliary callers that hardcode temperature (e.g. 0 on
-    # structured-JSON extraction) don't 400 the moment
-    # the aux model is flipped to 4.7.
+    # Only forward temperature when the caller set one: reasoning models
+    # reject any non-default value, and auxiliary callers that hardcode
+    # temperature (e.g. 0 on structured-JSON extraction) would 400.
     if temperature is not None:
         kwargs["temperature"] = temperature
 

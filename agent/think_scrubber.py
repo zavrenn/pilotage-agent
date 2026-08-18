@@ -5,7 +5,7 @@ string, but when it runs *per-delta* in ``_fire_stream_delta`` it destroys
 the state that downstream consumers (CLI ``_stream_delta``, gateway
 ``GatewayStreamConsumer._filter_and_accumulate``) rely on.
 
-Concretely, when MiniMax-M2.7 streams
+Concretely, when a model streams
 
     delta1 = "<think>"
     delta2 = "Let me check their config"

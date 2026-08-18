@@ -580,7 +580,7 @@ def parse_model_switch_args(raw: str) -> ModelSwitchRequest:
     * ``--once`` with no model and no ``--provider``
       → ``MODEL_SWITCH_ERR_ONCE_REQUIRES_TARGET``
 
-    Model targets pass through untouched: bare names (``sonnet``),
+    Model targets pass through untouched: bare names (``gpt-5.6``),
     aggregator slugs (``vendor/model``), and colon forms (``vendor:model``)
     are all resolved later by :func:`switch_model` (aggregator-aware — bare
     names resolve WITHIN the current aggregator first).
@@ -2153,7 +2153,7 @@ def list_authenticated_providers(
     from pilotage_cli.auth import PROVIDER_REGISTRY
     from pilotage_cli.models import (
         _PROVIDER_MODELS,
-        _MODELS_DEV_PREFERRED, _merge_with_models_dev, cached_provider_model_ids,
+        cached_provider_model_ids,
         clear_provider_models_cache,
     )
 
@@ -2331,8 +2331,6 @@ def list_authenticated_providers(
         model_ids = cached_provider_model_ids(pilotage_id)
         if not model_ids:
             model_ids = curated.get(pilotage_id, [])
-            if pilotage_id in _MODELS_DEV_PREFERRED:
-                model_ids = _merge_with_models_dev(pilotage_id, model_ids)
         # A providers.<built-in>.models block extends the provider's discovered
         # catalog. Section 3 cannot emit it later because this built-in row owns
         # the slug, so merge declarations here before applying max_models.
@@ -2449,13 +2447,10 @@ def list_authenticated_providers(
             model_ids = cached_provider_model_ids(pilotage_slug)
         else:
             # Unified pathway — see Section 1 rationale. Fall back to the
-            # curated dict (with models.dev merge for preferred providers)
-            # when the live fetcher comes up empty.
+            # curated dict when the live fetcher comes up empty.
             model_ids = cached_provider_model_ids(pilotage_slug)
             if not model_ids:
                 model_ids = curated.get(pilotage_slug, []) or curated.get(pid, [])
-                if pilotage_slug in _MODELS_DEV_PREFERRED:
-                    model_ids = _merge_with_models_dev(pilotage_slug, model_ids)
         total = len(model_ids)
         if pilotage_slug in _UNCAPPED_PICKER_PROVIDERS:
             top = model_ids  # Aggregator: show full catalog regardless of max_models

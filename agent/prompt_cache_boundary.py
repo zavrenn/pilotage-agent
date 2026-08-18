@@ -69,7 +69,7 @@ def find_stable_prefix(content: str) -> Optional[str]:
     """Longest registered prefix that is a *proper* prefix of ``content``.
 
     Proper (``len(content) > len(prefix)``) so the split never produces an
-    empty volatile text block, which Anthropic rejects on the wire.
+    empty volatile text block, which providers reject on the wire.
 
     A hit refreshes the entry's LRU position: a scaffold fired every minute
     by cron must not be evicted by a burst of one-off skill invocations,

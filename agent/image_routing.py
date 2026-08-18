@@ -481,8 +481,8 @@ def decide_image_input_mode(
 # Image size handling is REACTIVE rather than proactive: we attempt native
 # attachment at full size regardless of provider, and rely on
 # ``run_agent._try_shrink_image_parts_in_messages`` to shrink + retry if
-# the provider rejects the request (e.g. Anthropic's hard 5 MB per-image
-# ceiling returned as HTTP 400 "image exceeds 5 MB maximum").
+# the provider rejects the request (e.g. a hard per-image byte ceiling
+# returned as HTTP 400 "image exceeds 5 MB maximum").
 #
 # A proactive per-provider table would be stale the moment a provider raises
 # or lowers its limit, and silently degrading quality for users on providers
@@ -498,8 +498,8 @@ def _sniff_mime_from_bytes(raw: bytes) -> Optional[str]:
     upstream platforms lie about content-type. Discord, for example, can
     serve a PNG with ``content_type=image/webp`` for proxied/animated
     stickers, custom emoji previews, or images uploaded via certain bots.
-    Anthropic strictly validates that declared media_type matches the
-    actual bytes and returns HTTP 400 on mismatch, so we sniff to be safe.
+    Providers strictly validate that declared media_type matches the
+    actual bytes and return HTTP 400 on mismatch, so we sniff to be safe.
     """
     if not raw:
         return None
@@ -542,8 +542,8 @@ def _sniff_mime_from_bytes(raw: bytes) -> Optional[str]:
     return None
 
 
-# Formats every major vision provider (Anthropic, OpenAI, Gemini, Bedrock)
-# accepts natively. Anything outside this set has to be transcoded to PNG
+# Formats every major vision provider accepts natively. Anything
+# outside this set has to be transcoded to PNG
 # before we declare media_type, otherwise the provider returns HTTP 400
 # ("Could not process image" / "Unsupported image media type") and the
 # whole turn fails with no salvage path.
@@ -642,14 +642,14 @@ def _file_to_data_url(path: Path) -> Optional[str]:
     Size limits are NOT enforced here — the agent retry loop
     (``run_agent._try_shrink_image_parts_in_messages``) shrinks on the
     provider's first rejection. Keeping this simple means providers that
-    accept large images (OpenAI 49 MB+, Gemini 100 MB) don't pay a silent
-    quality tax just because one other provider is stricter.
+    accept large images (OpenAI 49 MB+) don't pay a silent quality tax
+    just because another endpoint is stricter.
 
     Format compatibility IS handled here: if the sniffed MIME isn't one
     of ``_UNIVERSALLY_SUPPORTED_MIMES`` (i.e. it's something like AVIF,
     HEIC, BMP, TIFF, or ICO that some providers reject outright), we
     transcode to PNG with Pillow before declaring media_type. This fixes
-    the user-visible "Could not process image" HTTP 400 from Anthropic on
+    the user-visible "Could not process image" HTTP 400 on
     Discord-attached AVIF/HEIC/BMP files.
 
     Returns None if the file can't be read OR if the format isn't
@@ -725,8 +725,8 @@ def build_native_content_parts(
     <path>``) so behaviour is consistent across both image input modes.
 
     Images are attached at their native size. If a provider rejects the
-    request because an image is too large (e.g. Anthropic's 5 MB per-image
-    ceiling), the agent's retry loop transparently shrinks and retries
+    request because an image is too large (a per-image byte ceiling),
+    the agent's retry loop transparently shrinks and retries
     once — see ``run_agent._try_shrink_image_parts_in_messages``.
 
     Returns (content_parts, skipped). Skipped entries are local paths

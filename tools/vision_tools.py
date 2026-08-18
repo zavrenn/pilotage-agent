@@ -984,7 +984,7 @@ def _supports_media_in_tool_results(provider: str, model: str) -> bool:
         return False
 
     # OpenAI Chat Completions and Responses
-    if p in {"openai", "openai-chat", "openai-codex", "azure-openai"}:
+    if p in {"openai", "openai-chat", "openai-codex"}:
         return True
 
     # Check the provider's registered profile for the supports_vision flag,

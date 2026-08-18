@@ -996,9 +996,8 @@ def _normalize_custom_provider_entry(
         "contextLength": "context_length",
         "rateLimitDelay": "rate_limit_delay",
     }
-    # api_key_env is a documented snake_case alias for key_env (see
-    # website/docs/guides/azure-foundry.md).  Normalize it up front so the
-    # rest of the normalizer treats it as the canonical field.
+    # api_key_env is a documented snake_case alias for key_env. Normalize
+    # it up front so the rest of the normalizer treats it as canonical.
     if "api_key_env" in entry and "key_env" not in entry:
         entry["key_env"] = entry["api_key_env"]
     _KNOWN_KEYS = {

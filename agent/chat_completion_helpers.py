@@ -2015,8 +2015,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
             }
             if agent.max_tokens is not None:
                 summary_kwargs.update(agent._max_tokens_param(agent.max_tokens))
-            if _lm_reasoning_effort is not None:
-                summary_kwargs["reasoning_effort"] = _lm_reasoning_effort
 
             # Merge the profile's canonical body even when routing is unset:
             # profiles may always emit required metadata such as Portal tags.
@@ -2078,8 +2076,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                 }
                 if agent.max_tokens is not None:
                     summary_kwargs.update(agent._max_tokens_param(agent.max_tokens))
-                if _lm_reasoning_effort is not None:
-                    summary_kwargs["reasoning_effort"] = _lm_reasoning_effort
                 if summary_extra_body:
                     summary_kwargs["extra_body"] = summary_extra_body
 
@@ -2485,7 +2481,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 and _stream_stale_timeout != float("inf")
                 and _stream_stale_timeout > _stream_read_timeout
             ):
-                # Cloud reasoning models (e.g. Opus) routinely pause mid-stream
+                # Cloud reasoning models routinely pause mid-stream
                 # for minutes during extended thinking.  The stale-stream
                 # detector is deliberately scaled up to tolerate this (180–300s,
                 # see the stale-timeout block below), but the raw httpx socket
@@ -2706,8 +2702,8 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 # Usage comes in the final chunk with empty choices
                 if hasattr(chunk, "usage") and chunk.usage:
                     usage_obj = chunk.usage
-                # Some OpenAI-compatible providers (DeepInfra, etc.)
-                # return validation errors as in-stream error chunks:
+                # Some OpenAI-compatible endpoints return validation
+                # errors as in-stream error chunks:
                 # choices=None with error_type/error_message in
                 # model_extra.  Without this check the error is
                 # silently dropped and the stream ends empty →

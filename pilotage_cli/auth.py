@@ -1355,22 +1355,6 @@ def resolve_provider(
     """
     normalized = (requested or "auto").strip().lower()
 
-    # Normalize provider aliases. Built-in slugs need none; plugin-declared
-    # aliases are merged in below.
-    _PROVIDER_ALIASES = {}
-    # Extend with aliases declared in plugins/model-providers/<name>/ that aren't already mapped.
-    # This keeps providers/ as the single source for new aliases while the
-    # hardcoded dict above remains authoritative for existing ones.
-    try:
-        from providers import list_providers as _lp
-        for _pp in _lp():
-            for _alias in _pp.aliases:
-                if _alias not in _PROVIDER_ALIASES:
-                    _PROVIDER_ALIASES[_alias] = _pp.name
-    except Exception:
-        pass
-    normalized = _PROVIDER_ALIASES.get(normalized, normalized)
-
     if normalized == "custom":
         return "custom"
     if normalized in PROVIDER_REGISTRY:

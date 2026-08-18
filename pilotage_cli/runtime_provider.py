@@ -151,9 +151,8 @@ def _host_derived_api_key(base_url: str) -> str:
     """Look up `<VENDOR>_API_KEY` in the env, derived from the base URL host.
 
     Examples:
-        https://api.groq.com/openai/v1 → GROQ_API_KEY
-        https://api.groq.com/openai/v1 → GROQ_API_KEY
-        https://generativelanguage.googleapis.com/v1beta/openai/ → GOOGLEAPIS_API_KEY
+        https://api.vendor.com/v1 → VENDOR_API_KEY
+        https://inference.example.net/v1 → EXAMPLE_API_KEY
 
     Returns the env value (stripped) or "". Never returns env vars whose names
     are already explicitly checked elsewhere — those are handled by their own
@@ -161,7 +160,7 @@ def _host_derived_api_key(base_url: str) -> str:
 
     The vendor label is the *registrable* portion of the hostname: strip
     ``api.`` / ``www.`` prefixes, then take the second-to-last label
-    (``api.groq.com`` → ``groq``). Falls back to "" for hostnames
+    (``api.vendor.com`` → ``vendor``). Falls back to "" for hostnames
     that don't yield a usable vendor label (IPs, loopback, single-label
     hosts).
     """
@@ -182,13 +181,12 @@ def _host_derived_api_key(base_url: str) -> str:
         return ""
     # Take the *registrable* label (second-to-last). For typical provider
     # hosts this is what users intuitively call "the vendor":
-    #   groq.com                    → labels[-2] = "groq"       ✓
-    #   api.groq.com → groq.com    → labels[-2] = "groq"      ✓
-    #   api.mistral.ai             → labels[-2] = "mistral"   ✓
+    #   vendor.com                    → labels[-2] = "vendor"   ✓
+    #   api.vendor.com → vendor.com   → labels[-2] = "vendor"   ✓
     # Crucially, lookalike hosts pick the ATTACKER's label, not the spoofed
     # vendor:
-    #   api.groq.com.attacker.test → labels[-2] = "attacker"
-    # so GROQ_API_KEY stays put and the chain falls through to
+    #   api.vendor.com.attacker.test  → labels[-2] = "attacker"
+    # so VENDOR_API_KEY stays put and the chain falls through to
     # no-key-required. This mirrors how `base_url_host_matches` resists the
     # same lookalike attack for explicit hosts.
     vendor = labels[-2]

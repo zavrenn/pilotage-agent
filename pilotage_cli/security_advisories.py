@@ -102,9 +102,8 @@ ADVISORIES: tuple[Advisory, ...] = (
             "environment variables and credential files (~/.npmrc, ~/.pypirc, "
             "~/.aws/credentials, GitHub PATs, cloud SDK tokens) and exfils "
             "them to a hardcoded webhook. If you ran any Python process that "
-            "imported mistralai 2.4.6 — including pilotage when configured "
-            "with provider=mistral for TTS or STT — assume those credentials "
-            "are exposed. PyPI has since removed 2.4.6 and the project ships "
+            "imported mistralai 2.4.6, assume those credentials are exposed. "
+            "PyPI has since removed 2.4.6 and the project ships "
             "clean releases again (2.4.7, 2.4.8); this advisory only fires if "
             "the compromised 2.4.6 is still installed."
         ),
@@ -114,8 +113,7 @@ ADVISORIES: tuple[Advisory, ...] = (
         ),
         remediation=(
             "Run: pip uninstall -y mistralai  (or: uv pip uninstall mistralai)",
-            "Rotate API keys in ~/.pilotage/.env (OpenRouter, Anthropic, OpenAI, "
-            "Nous, GitHub, AWS, Google, Mistral, etc.).",
+            "Rotate API keys in ~/.pilotage/.env (OpenAI, GitHub, AWS, Google, etc.).",
             "Audit ~/.npmrc, ~/.pypirc, ~/.aws/credentials, ~/.config/gh/hosts.yml, "
             "and any other credential files for tokens that may have been read.",
             "Check GitHub for unexpected new SSH keys, deploy keys, or webhook "

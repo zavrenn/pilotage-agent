@@ -229,9 +229,9 @@ def finalize_turn(
         # When the turn was interrupted and the last message is a tool
         # result, append a synthetic assistant message to close the
         # tool-call sequence. Without this, the session persists a
-        # ``tool → user`` alternation that strict providers (Gemini,
-        # Claude) reject, causing them to hallucinate a continuation of
-        # the user's message on the next turn.
+        # ``tool → user`` alternation that strict providers reject,
+        # causing them to hallucinate a continuation of the user's
+        # message on the next turn.
         #
         # ``_drop_trailing_empty_response_scaffolding`` only rewinds the
         # tool tail when an empty-response scaffolding flag is present; a
@@ -588,7 +588,7 @@ def finalize_turn(
     # earlier is from a prior turn and must not leak into the reasoning
     # box (confusing stale display;). Within the current turn
     # we still want the *most recent* non-empty reasoning: many
-    # providers (Claude thinking, DeepSeek v4, Codex Responses) emit
+    # providers (Codex Responses included) emit
     # reasoning on the tool-call step and leave the final-answer step
     # with reasoning=None, so picking only the last assistant would
     # silently drop legitimate same-turn reasoning.
@@ -606,7 +606,7 @@ def finalize_turn(
     # history by ``build_assistant_message``. Any lone UTF-16 surrogate
     # (U+D800–U+DFFF) in it crashes downstream consumers — oneshot stdout
     # writes, Telegram's ``utf16_len`` length check, Signal formatting,
-    # JSON envelope encodes — on every provider (Ollama, NVIDIA NIM, …).
+    # JSON envelope encodes — on every provider.
     # Scrub once here, where model text leaves the conversation loop, so
     # every delivery surface receives valid Unicode.
     if isinstance(final_response, str):

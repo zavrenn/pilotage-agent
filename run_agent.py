@@ -286,8 +286,8 @@ def _pool_may_recover_from_rate_limit(pool) -> bool:
     at least one entry not currently in exhaustion cooldown.  But rotation is
     only meaningful when the pool has more than one entry.
 
-    With a single-credential pool (common for Vertex service accounts and any
-    "one personal key" configuration), the primary entry just 429'd and there
+    With a single-credential pool (any "one personal key" configuration),
+    the primary entry just 429'd and there
     is nothing to rotate to.  Waiting for the pool cooldown to expire means
     retrying against the same exhausted quota — the daily-quota 429 will recur
     immediately, and the retry budget is burned.
@@ -339,8 +339,8 @@ class _StreamErrorEvent(Exception):
     streaming path raises this exception so ``_summarize_api_error`` and
     ``_extract_api_error_context`` see a familiar ``.body`` /
     ``.status_code`` shape and the entitlement detector can match the
-    underlying provider message ("do not have an active Grok
-    subscription", etc.).
+    underlying provider message ("do not have an active subscription",
+    etc.).
     """
 
     def __init__(
@@ -397,8 +397,6 @@ class AIAgent:
         api_key: str = None,
         provider: str = None,
         api_mode: str = None,
-        acp_command: str = None,
-        acp_args: list[str] | None = None,
         command: str = None,
         args: list[str] | None = None,
         model: str = "",
@@ -474,8 +472,6 @@ class AIAgent:
             provider=provider,
             requested_provider=requested_provider,
             api_mode=api_mode,
-            acp_command=acp_command,
-            acp_args=acp_args,
             command=command,
             args=args,
             model=model,
@@ -1221,12 +1217,12 @@ class AIAgent:
             return float(env_timeout), False
 
         # Reasoning-model floor: auto-mitigation for known reasoning models
-        # (Nemotron 3 Ultra, OpenAI o1/o3, xAI Grok reasoning, etc.) whose cloud
+        # (OpenAI o-series, GPT-5 reasoning, etc.) whose cloud
         # gateways idle-kill before the model's thinking phase ends.
         # uses_implicit_default is False here so the local-endpoint
         # short-circuit in _compute_non_stream_stale_timeout does not
         # disable stale detection for users running reasoning models on a
-        # local NIM endpoint.
+        # local endpoint.
         from agent.reasoning_timeouts import get_reasoning_stale_timeout_floor
         reasoning_floor = get_reasoning_stale_timeout_floor(self.model)
         if reasoning_floor is not None:
@@ -3729,13 +3725,7 @@ class AIAgent:
         except Exception:
             pass
 
-        # 3. Clean browser daemon sessions
-        try:
-            cleanup_browser(task_id)
-        except Exception:
-            pass
-
-        # 4. Close active child agents
+        # 3. Close active child agents
         try:
             with self._active_children_lock:
                 children = list(self._active_children)
@@ -3748,7 +3738,7 @@ class AIAgent:
         except Exception:
             pass
 
-        # 6. Close the OpenAI/httpx client
+        # 4. Close the OpenAI/httpx client
         try:
             client = getattr(self, "client", None)
             if client is not None:
@@ -3779,7 +3769,7 @@ class AIAgent:
         except Exception:
             pass
 
-        # 7. Free conversation history.  Mirrors _release_evicted_agent_soft's
+        # 5. Free conversation history.  Mirrors _release_evicted_agent_soft's
         # soft-eviction clear — close() is the hard teardown for true session
         # boundaries (/new, /reset, session expiry), so the message list won't
         # be reused.  Drops the reference proactively rather than waiting for
@@ -3799,7 +3789,7 @@ class AIAgent:
         except Exception:
             pass
 
-        # 8. Finalize the owned SQLite session row unless this agent is only a
+        # 6. Finalize the owned SQLite session row unless this agent is only a
         # temporary helper that deliberately handed session ownership forward
         # (manual compression helpers that rotate to a continuation session_id,
         # or background-review forks that share the live parent's session_id and
@@ -3815,7 +3805,7 @@ class AIAgent:
         except Exception:
             pass
 
-        # 9. Close the SQLite handle itself, but ONLY when this agent owns it.
+        # 7. Close the SQLite handle itself, but ONLY when this agent owns it.
         # end_session() above finalizes the session ROW; it does not release the
         # connection. For the shared launch handle that is correct — it outlives
         # every agent — so _owns_session_db defaults False and this is a no-op.

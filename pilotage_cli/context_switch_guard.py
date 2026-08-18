@@ -85,7 +85,7 @@ def merge_preflight_compression_warning(
 
     # Classic CLI historically omitted custom_providers here while the /model
     # confirmation display threaded agent._custom_providers — so the shrink
-    # warning fell through to the hardcoded catalog (e.g. "qwen" → 131072)
+    # warning fell through to the hardcoded catalog (e.g. 131072)
     # even when custom_providers[].models.<id>.context_length was 1M.
     if custom_providers is None:
         custom_providers = getattr(agent, "_custom_providers", None)

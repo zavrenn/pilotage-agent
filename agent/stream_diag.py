@@ -26,9 +26,6 @@ logger = logging.getLogger(__name__)
 STREAM_DIAG_HEADERS = (
     "cf-ray",
     "cf-cache-status",
-    "x-openrouter-provider",
-    "x-openrouter-model",
-    "x-openrouter-id",
     "x-request-id",
     "x-vercel-id",
     "via",

@@ -258,9 +258,6 @@ def group_providers(slugs):
     return rows
 
 
-_PROVIDER_ALIASES: dict[str, str] = {}
-
-
 # In-repo fallback for the model Pilotage silently lands on when the user
 # never picked one (empty ``model.default``, or provider set with no model).
 PREFERRED_SILENT_DEFAULT_MODEL = "gpt-5.4"
@@ -299,13 +296,6 @@ def pick_silent_default_model(model_ids: list[str], provider: str = "openai-code
     return model_ids[0] if model_ids else ""
 
 
-# Providers whose *silent* auto-default must go through the cost-safe
-# catalog-labeled default (``get_preferred_silent_default_model``) instead
-# of curated-list entry [0], so a missing model never escalates to the
-# priciest flagship. None are currently defined.
-_SILENT_DEFAULT_PROVIDERS: frozenset[str] = frozenset()
-
-
 def get_default_model_for_provider(provider: str) -> str:
     """Return a cost-safe default model for a provider, or "" if unknown.
 
@@ -313,22 +303,10 @@ def get_default_model_for_provider(provider: str) -> str:
     model was ever selected (e.g. ``pilotage auth add openai-codex`` without
     ``pilotage model``, or a profile that sets ``provider`` with no ``model``).
 
-    For most providers this is the first entry in ``_PROVIDER_MODELS`` — the
-    same model the ``pilotage model`` picker offers first. For metered aggregators
-    whose curated list is ordered most-capable-first, that entry is also the
-    most EXPENSIVE one, so silently defaulting to it is a billing footgun.
-    Those providers (``_SILENT_DEFAULT_PROVIDERS``) resolve through the
-    catalog-labeled default instead; a missing model must never auto-escalate
-    to the flagship.
+    This is the first entry in ``_PROVIDER_MODELS`` — the same model the
+    ``pilotage model`` picker offers first.
     """
     models = _PROVIDER_MODELS.get(provider, [])
-    if provider in _SILENT_DEFAULT_PROVIDERS:
-        preferred = get_preferred_silent_default_model(provider)
-        # Trust the preferred default even when the provider has no static
-        # catalog (OpenRouter's picker list is fetched live; its curated
-        # snapshot carries the default).
-        if preferred and (preferred in models or not models):
-            return preferred
     return models[0] if models else ""
 
 
@@ -480,7 +458,6 @@ def get_pricing_for_provider(provider: str, *, force_refresh: bool = False) -> d
 # All provider IDs and aliases that are valid for the provider:model syntax.
 _KNOWN_PROVIDER_NAMES: set[str] = (
     set(_PROVIDER_LABELS.keys())
-    | set(_PROVIDER_ALIASES.keys())
     | {"custom"}
 )
 
@@ -488,7 +465,7 @@ _KNOWN_PROVIDER_NAMES: set[str] = (
 def list_available_providers() -> list[dict[str, str]]:
     """Return info about all providers the user could use with ``provider:model``.
 
-    Each dict has ``id``, ``label``, and ``aliases``.
+    Each dict has ``id`` and ``label``.
     Checks which providers have valid credentials configured.
 
     Derives the provider list from :data:`CANONICAL_PROVIDERS` (single
@@ -497,15 +474,9 @@ def list_available_providers() -> list[dict[str, str]]:
     # Derive display order from canonical list + custom
     provider_order = [p.slug for p in CANONICAL_PROVIDERS] + ["custom"]
 
-    # Build reverse alias map
-    aliases_for: dict[str, list[str]] = {}
-    for alias, canonical in _PROVIDER_ALIASES.items():
-        aliases_for.setdefault(canonical, []).append(alias)
-
     result = []
     for pid in provider_order:
         label = _PROVIDER_LABELS.get(pid, pid)
-        alias_list = aliases_for.get(pid, [])
         # Check if this provider has credentials available
         has_creds = False
         try:
@@ -521,7 +492,6 @@ def list_available_providers() -> list[dict[str, str]]:
         result.append({
             "id": pid,
             "label": label,
-            "aliases": alias_list,
             "authenticated": has_creds,
         })
     return result
@@ -533,7 +503,7 @@ def parse_model_input(raw: str, current_provider: str) -> tuple[str, str]:
     Supports ``provider:model`` syntax to switch providers at runtime::
 
         openai-api:gpt-5.4                       →  ("openai-api", "gpt-5.4")
-        custom:local:qwen                        →  ("custom:local", "qwen")
+        custom:local:my-model                    →  ("custom:local", "my-model")
         gpt-5.4                                 →  (current_provider, "gpt-5.4")
 
     The colon is only treated as a provider delimiter if the left side is a
@@ -550,8 +520,8 @@ def parse_model_input(raw: str, current_provider: str) -> tuple[str, str]:
         model_part = stripped[colon + 1:].strip()
         if provider_part and model_part and provider_part in _KNOWN_PROVIDER_NAMES:
             # Support custom:name:model triple syntax for named custom
-            # providers.  ``custom:local:qwen`` → ("custom:local", "qwen").
-            # Single colon ``custom:qwen`` → ("custom", "qwen") as before.
+            # providers.  ``custom:local:m`` → ("custom:local", "m").
+            # Single colon ``custom:m`` → ("custom", "m") as before.
             if provider_part == "custom" and ":" in model_part:
                 second_colon = model_part.find(":")
                 custom_name = model_part[:second_colon].strip()
@@ -622,25 +592,11 @@ def _model_in_provider_catalog(name_lower: str, providers: set[str]) -> bool:
     )
 
 
-_AGGREGATOR_PROVIDERS: frozenset[str] = frozenset()
-
-# Subscription/OAuth providers whose catalogs RE-EXPOSE other vendors' models
-# would be listed here (tried only as a last resort for bare short-alias
-# resolution, after every native-vendor catalog, so they never hijack an alias
-# away from the model's native vendor). None are currently defined.
-_BORROWED_MODEL_PROVIDERS: frozenset[str] = frozenset()
-
-# Providers whose live /v1/models endpoint is the authoritative catalog, so
-# the curated list is a discovery-only fallback (the picker would merge
-# live-first for these). None are currently defined.
-_LIVE_FIRST_PICKER_PROVIDERS: frozenset[str] = frozenset()
-
-
 def _resolve_static_model_alias(
     name_lower: str,
     current_keys: set[str],
 ) -> Optional[tuple[str, str]]:
-    """Resolve short aliases (e.g. sonnet/opus) using static catalogs only."""
+    """Resolve short model aliases using static catalogs only."""
     try:
         from pilotage_cli.model_switch import MODEL_ALIASES
     except Exception:
@@ -657,11 +613,7 @@ def _resolve_static_model_alias(
         models = _PROVIDER_MODELS.get(provider, [])
         if not models:
             return None
-        prefix = (
-            f"{vendor}/{family}"
-            if provider in _AGGREGATOR_PROVIDERS
-            else family
-        ).lower()
+        prefix = family.lower()
         for model in models:
             if model.lower().startswith(prefix):
                 return model
@@ -672,24 +624,9 @@ def _resolve_static_model_alias(
             return provider, matched
 
     for provider in _PROVIDER_MODELS:
-        if (
-            provider in current_keys
-            or provider in _AGGREGATOR_PROVIDERS
-            or provider in _BORROWED_MODEL_PROVIDERS
-        ):
+        if provider in current_keys:
             continue
         if matched := _match(provider):
-            return provider, matched
-
-    for provider in _AGGREGATOR_PROVIDERS:
-        if provider in current_keys and (matched := _match(provider)):
-            return provider, matched
-
-    # Last resort: providers that re-expose other vendors' models. Only reached
-    # when no native-vendor catalog matched. None are currently defined
-    # (_BORROWED_MODEL_PROVIDERS is empty).
-    for provider in _BORROWED_MODEL_PROVIDERS:
-        if provider in current_keys and (matched := _match(provider)):
             return provider, matched
 
     return None
@@ -720,7 +657,7 @@ def detect_static_provider_for_model(
     # If someone types `/model openai-api`, treat it as a provider switch and
     # pick the first model from that provider's catalog. Skip "custom" — it
     # has no model catalog.
-    resolved_provider = _PROVIDER_ALIASES.get(name_lower, name_lower)
+    resolved_provider = name_lower
     if resolved_provider != "custom":
         default_models = _PROVIDER_MODELS.get(resolved_provider, [])
         if (
@@ -728,20 +665,11 @@ def detect_static_provider_for_model(
             and default_models
             and resolved_provider not in current_keys
         ):
-            # Route through the cost-safe default rather than picking
-            # ``default_models[0]`` directly. For metered providers whose
-            # curated list is ordered most-capable-first, entry [0] is also
-            # the priciest flagship, and typing the bare provider name would
-            # silently escalate to it — the exact billing footgun the
-            # catalog-labeled silent default (``_SILENT_DEFAULT_PROVIDERS``)
-            # exists to prevent. For providers outside that set this is
-            # unchanged (it returns ``models[0]``).
             return (
                 resolved_provider,
                 get_default_model_for_provider(resolved_provider) or default_models[0],
             )
 
-    # Aggregators list other providers' models — never auto-switch TO them
     # If the model belongs to the current provider's catalog, don't suggest switching
     if _model_in_provider_catalog(name_lower, current_keys):
         return None
@@ -756,21 +684,9 @@ def detect_static_provider_for_model(
         or current_provider.startswith("custom:")
     )
     for pid in _PROVIDER_MODELS:
-        if (
-            pid in current_keys
-            or pid in _AGGREGATOR_PROVIDERS
-            or pid in _BORROWED_MODEL_PROVIDERS
-        ):
+        if pid in current_keys:
             continue
         if _is_custom_current:
-            continue
-        if any(name_lower == m.lower() for m in _provider_catalog_names(pid)):
-            return (pid, name)
-
-    # Borrow-list providers (re-expose other vendors' models) only after every
-    # native-vendor catalog, and only when one is the current provider.
-    for pid in _BORROWED_MODEL_PROVIDERS:
-        if pid in current_keys:
             continue
         if any(name_lower == m.lower() for m in _provider_catalog_names(pid)):
             return (pid, name)
@@ -811,8 +727,7 @@ def normalize_provider(provider: Optional[str]) -> str:
     ``pilotage_cli.auth.resolve_provider()`` to resolve it to a concrete
     provider based on credentials and environment.
     """
-    normalized = (provider or "openai-api").strip().lower()
-    return _PROVIDER_ALIASES.get(normalized, normalized)
+    return (provider or "openai-api").strip().lower()
 
 
 def provider_label(provider: Optional[str]) -> str:
@@ -882,18 +797,6 @@ def resolve_fast_mode_overrides(model_id: Optional[str]) -> dict[str, Any] | Non
 
 
 # Providers where models.dev is treated as authoritative: curated static
-# lists are kept only as an offline fallback and to capture custom additions
-# the registry doesn't publish yet. Adding a provider here causes its
-# curated list to be merged with fresh models.dev entries (fresh first, any
-# curated-only names appended) for both the CLI and the gateway /model picker.
-#
-# Empty in the OpenAI-only registry: openai-codex / openai-api handle catalog
-# freshness through their own live endpoints below, and custom endpoints are
-# probed live. Kept as the mechanism so a future provider can opt in with a
-# one-line addition.
-_MODELS_DEV_PREFERRED: frozenset[str] = frozenset()
-
-
 def _model_dedup_key(model_id: str) -> str:
     """Case-insensitive dedup key that also folds picker-search aliases.
 
@@ -909,43 +812,6 @@ def _model_dedup_key(model_id: str) -> str:
         return model_alias_canonical(key)
     except Exception:
         return key
-
-
-def _merge_with_models_dev(provider: str, curated: list[str]) -> list[str]:
-    """Merge curated list with fresh models.dev entries for a preferred provider.
-
-    Returns models.dev entries first (in models.dev order), then any
-    curated-only entries appended. Preserves case for curated fallbacks
-    while trusting models.dev for newer variants.
-
-    If models.dev is unreachable or returns nothing, the curated list is
-    returned unchanged — this is the offline/CI fallback path.
-    """
-    try:
-        from agent.models_dev import list_agentic_models
-        mdev = list_agentic_models(provider)
-    except Exception:
-        mdev = []
-
-    if not mdev:
-        return list(curated)
-
-    # Case-insensitive dedup while preserving order and curated casing.
-    seen_lower: set[str] = set()
-    merged: list[str] = []
-    for mid in mdev:
-        key = str(mid).lower()
-        if key in seen_lower:
-            continue
-        seen_lower.add(key)
-        merged.append(mid)
-    for mid in curated:
-        key = str(mid).lower()
-        if key in seen_lower:
-            continue
-        seen_lower.add(key)
-        merged.append(mid)
-    return merged
 
 
 def _openai_discovery_base_url(provider: str) -> str:
@@ -977,10 +843,7 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
     """Return the best known model catalog for a provider.
 
     Tries live API endpoints for providers that support them (Codex, OpenAI,
-    custom endpoints), falling back to static lists. For providers in
-    ``_MODELS_DEV_PREFERRED``, models.dev entries are merged on top of
-    curated so new models released on the platform appear in ``/model``
-    without a Pilotage release.
+    custom endpoints), falling back to static lists.
     """
     normalized = normalize_provider(provider)
     if normalized == "openai-codex":
@@ -1081,10 +944,7 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                         _p.fallback_models or ()
                     )
                     if curated:
-                        if normalized in _LIVE_FIRST_PICKER_PROVIDERS:
-                            primary, secondary = live, curated
-                        else:
-                            primary, secondary = curated, live
+                        primary, secondary = curated, live
                         merged = list(primary)
                         merged_lower = {_model_dedup_key(m) for m in primary}
                         for m in secondary:
@@ -1099,11 +959,7 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
     except Exception:
         pass
 
-    curated_static = list(_PROVIDER_MODELS.get(normalized, []))
-    if normalized in _MODELS_DEV_PREFERRED:
-        merged = _merge_with_models_dev(normalized, curated_static)
-        return merged
-    return curated_static
+    return list(_PROVIDER_MODELS.get(normalized, []))
 
 
 # ---------------------------------------------------------------------------
@@ -1766,7 +1622,7 @@ def validate_requested_model(
             # for entitlement-gated *hidden* slugs the curated listing hasn't
             # caught up with — but those are always the provider's own family
             # (openai-codex -> gpt-*). Accepting an
-            # unrelated typed name (e.g. `llama-3.1-8b`) here turns
+            # unrelated typed name here turns
             # what should be an actionable "did you mean --provider <x>?" error
             # into a confusing success that 400s on the next turn. Only soft-
             # accept names that share the provider's family prefix; reject the

@@ -1478,9 +1478,6 @@ def _build_child_agent(
     override_api_mode: Optional[str] = None,
     override_request_overrides: Optional[Dict[str, Any]] = None,
     override_max_tokens: Optional[int] = None,
-    # ACP transport overrides from trusted delegation config.
-    override_acp_command: Optional[str] = None,
-    override_acp_args: Optional[List[str]] = None,
     # Per-call role controlling whether the child can further delegate.
     # 'leaf' (default) cannot; 'orchestrator' retains the delegation
     # toolset subject to depth/kill-switch bounds applied below.
@@ -1658,43 +1655,6 @@ def _build_child_agent(
         effective_api_mode = None  # force re-derivation from provider's defaults
     else:
         effective_api_mode = getattr(parent_agent, "api_mode", None)
-    # Defensive: validate trusted delegation.command exists on PATH before
-    # honoring it. Stale config should not force a child onto the ACP transport
-    # and then fail at subprocess startup.
-    if override_acp_command:
-        import shutil as _shutil
-
-        if not _shutil.which(override_acp_command):
-            logger.warning(
-                "Ignoring acp_command=%r: binary not found on PATH; "
-                "falling back to default transport.",
-                override_acp_command,
-            )
-            override_acp_command = None
-            override_acp_args = None
-    effective_acp_command = override_acp_command or getattr(
-        parent_agent, "acp_command", None
-    )
-    effective_acp_args = list(
-        override_acp_args
-        if override_acp_args is not None
-        else (getattr(parent_agent, "acp_args", []) or [])
-    )
-
-    # When override_provider is set (e.g. delegation.provider: minimax-cn),
-    # the subagent must use direct API calls — not the parent's ACP transport.
-    # Inheriting acp_command unconditionally causes run_agent.py to initialize
-    # CopilotACPClient, bypassing override credentials entirely.
-    if override_provider and not override_acp_command:
-        effective_acp_command = None
-        effective_acp_args = []
-
-    if override_acp_command:
-        # If explicitly forcing an ACP transport override, the provider MUST be copilot-acp
-        # so run_agent.py initializes the CopilotACPClient.
-        effective_provider = "copilot-acp"
-        effective_api_mode = "chat_completions"
-
     # Resolve reasoning config: delegation override > parent inherit
     parent_reasoning = getattr(parent_agent, "reasoning_config", None)
     child_reasoning = parent_reasoning
@@ -1770,8 +1730,6 @@ def _build_child_agent(
                 model=effective_model,
                 provider=effective_provider,
                 api_mode=effective_api_mode,
-                acp_command=effective_acp_command,
-                acp_args=effective_acp_args,
                 max_iterations=max_iterations,
 
                 reasoning_config=child_reasoning,
@@ -3619,8 +3577,6 @@ def delegate_task(
             override_api_mode=creds["api_mode"],
             override_request_overrides=creds.get("request_overrides"),
             override_max_tokens=creds.get("max_output_tokens"),
-            override_acp_command=creds.get("command"),
-            override_acp_args=creds.get("args"),
             role=effective_role,
         )
         # Attach the validated schema for the completion-side validation
@@ -4592,7 +4548,7 @@ def _model_background_value(args: dict, parent_agent=None) -> bool:
     return not is_subagent
 
 
-_MODEL_HIDDEN_TASK_FIELDS = {"acp_command", "acp_args"}
+_MODEL_HIDDEN_TASK_FIELDS: set[str] = set()
 
 
 def _strip_model_hidden_task_fields(tasks: Any) -> Any:

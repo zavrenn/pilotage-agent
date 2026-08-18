@@ -59,8 +59,8 @@ class ProviderProfile:
     # ── Vision support ────────────────────────────────────────
     # True when the provider's API accepts image content inside
     # tool-result messages natively.  Set on providers that expose
-    # multimodal models via tool results (Anthropic Messages API,
-    # OpenAI Chat Completions, Gemini, MiniMax, etc.).
+    # multimodal models via tool results (OpenAI Chat Completions,
+    # OpenAI Responses, etc.).
     # Falls back to model-catalog lookup when False and the provider
     # has no registered profile.
     supports_vision: bool = False
@@ -160,8 +160,8 @@ class ProviderProfile:
         top_level_kwargs directly into api_kwargs.
 
         This split exists because some providers put reasoning config in
-        extra_body (OpenRouter: extra_body.reasoning) while others put it
-        as top-level api_kwargs (e.g. api_kwargs.reasoning_effort).
+        extra_body (extra_body.reasoning) while others put it as
+        top-level api_kwargs (api_kwargs.reasoning_effort).
 
         Default: ({}, {}).
         """
@@ -208,9 +208,8 @@ class ProviderProfile:
 
         Resolution order for the endpoint URL:
           1. self.models_url  (explicit override — use when the models
-             endpoint differs from the inference base URL, e.g. OpenRouter
-             exposes a public catalog at /api/v1/models while inference is
-             at /api/v1)
+             endpoint differs from the inference base URL, e.g. a public
+             catalog at /api/v1/models while inference is at /api/v1)
           2. base_url (caller override — user-configured model.base_url)
           3. self.base_url + "/models"  (standard OpenAI-compat fallback)
 

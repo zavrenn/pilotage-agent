@@ -456,78 +456,6 @@ def redeem_codex_reset_credit(
     )
 
 
-def _fetch_openrouter_account_usage(base_url: Optional[str], api_key: Optional[str]) -> Optional[AccountUsageSnapshot]:
-    runtime = resolve_runtime_provider(
-        requested="openrouter",
-        explicit_base_url=base_url,
-        explicit_api_key=api_key,
-    )
-    token = str(runtime.get("api_key", "") or "").strip()
-    if not token:
-        return None
-    normalized = str(runtime.get("base_url", "") or "").rstrip("/")
-    credits_url = f"{normalized}/credits"
-    key_url = f"{normalized}/key"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-    }
-    with httpx.Client(timeout=10.0) as client:
-        credits_resp = client.get(credits_url, headers=headers)
-        credits_resp.raise_for_status()
-        credits = (credits_resp.json() or {}).get("data") or {}
-        try:
-            key_resp = client.get(key_url, headers=headers)
-            key_resp.raise_for_status()
-            key_data = (key_resp.json() or {}).get("data") or {}
-        except Exception:
-            key_data = {}
-    total_credits = float(credits.get("total_credits") or 0.0)
-    total_usage = float(credits.get("total_usage") or 0.0)
-    details = [f"Credits balance: ${max(0.0, total_credits - total_usage):.2f}"]
-    windows: list[AccountUsageWindow] = []
-    limit = key_data.get("limit")
-    limit_remaining = key_data.get("limit_remaining")
-    limit_reset = str(key_data.get("limit_reset") or "").strip()
-    usage = key_data.get("usage")
-    if (
-        isinstance(limit, (int, float))
-        and float(limit) > 0
-        and isinstance(limit_remaining, (int, float))
-        and 0 <= float(limit_remaining) <= float(limit)
-    ):
-        limit_value = float(limit)
-        remaining_value = float(limit_remaining)
-        used_percent = ((limit_value - remaining_value) / limit_value) * 100
-        detail_parts = [f"${remaining_value:.2f} of ${limit_value:.2f} remaining"]
-        if limit_reset:
-            detail_parts.append(f"resets {limit_reset}")
-        windows.append(
-            AccountUsageWindow(
-                label="API key quota",
-                used_percent=used_percent,
-                detail=" • ".join(detail_parts),
-            )
-        )
-    if isinstance(usage, (int, float)):
-        usage_parts = [f"API key usage: ${float(usage):.2f} total"]
-        for value, label in (
-            (key_data.get("usage_daily"), "today"),
-            (key_data.get("usage_weekly"), "this week"),
-            (key_data.get("usage_monthly"), "this month"),
-        ):
-            if isinstance(value, (int, float)) and float(value) > 0:
-                usage_parts.append(f"${float(value):.2f} {label}")
-        details.append(" • ".join(usage_parts))
-    return AccountUsageSnapshot(
-        provider="openrouter",
-        source="credits_api",
-        fetched_at=_utc_now(),
-        windows=tuple(windows),
-        details=tuple(details),
-    )
-
-
 def fetch_account_usage(
     provider: Optional[str],
     *,
@@ -540,8 +468,6 @@ def fetch_account_usage(
     try:
         if normalized == "openai-codex":
             return _fetch_codex_account_usage(base_url=base_url, api_key=api_key)
-        if normalized == "openrouter":
-            return _fetch_openrouter_account_usage(base_url, api_key)
     except Exception:
         return None
     return None

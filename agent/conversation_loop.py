@@ -4665,8 +4665,8 @@ def run_conversation(
             finish_reason = normalized.finish_reason
             
             # Normalize content to string — some OpenAI-compatible servers
-            # (llama-server, etc.) return content as a dict or list instead
-            # of a plain string, which crashes downstream .strip() calls.
+            # return content as a dict or list instead of a plain string,
+            # which crashes downstream .strip() calls.
             if assistant_message.content is not None and not isinstance(assistant_message.content, str):
                 raw = assistant_message.content
                 if isinstance(raw, dict):
@@ -6035,42 +6035,6 @@ def run_conversation(
                     # Track whether this candidate was already streamed so the
                     # finalizer can mark the turn previewed only if the
                     # candidate is actually reused as the final response.
-                    _pending_verification_response = final_response
-                    _pending_verification_response_previewed = (
-                        agent._interim_content_was_streamed(final_response or "")
-                    )
-                    final_response = None
-                    continue
-
-                # User verification-loop gate: when the agent edited code this
-                # turn, let a registered `pre_verify` hook (plugin/shell) keep it
-                # going one more turn. The shipped guidance is folded into the
-                # evidence-based verify-on-stop nudge above, so this path has no
-                # default continuation cost.
-                _verify_nudge2 = None
-
-                if _verify_nudge2:
-                    agent._pre_verify_nudges = _attempt + 1
-                    final_msg["finish_reason"] = "verify_hook_continue"
-                    # The assistant response is real content — persist it and
-                    # emit to the UI as an interim message so the user sees the
-                    # attempted final answer before the pre_verify loop runs.
-                    # Only the nudge is flagged synthetic so it gets stripped
-                    # from the durable transcript §7).
-                    agent._emit_interim_assistant_message(final_msg)
-                    append_message(messages, final_msg)
-                    try:
-                        agent._flush_messages_to_session_db(messages, conversation_history)
-                    except Exception:
-                        logger.debug("pre_verify interim flush failed", exc_info=True)
-                    append_message(messages, {
-                        "role": "user",
-                        "content": _verify_nudge2,
-                        "_pre_verify_synthetic": True,
-                    })
-                    agent._session_messages = messages
-                    logger.debug("pre_verify nudge issued (attempt %d)",
-                                 agent._pre_verify_nudges)
                     _pending_verification_response = final_response
                     _pending_verification_response_previewed = (
                         agent._interim_content_was_streamed(final_response or "")

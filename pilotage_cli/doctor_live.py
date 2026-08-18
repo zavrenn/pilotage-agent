@@ -36,7 +36,6 @@ DEFAULT_PROBE_TIMEOUT = 10.0
 FIRECRAWL_HEALTH_URL = "https://api.firecrawl.dev/v2/team/credit-usage"
 FAL_MODELS_URL = "https://fal.ai/api/models?page=1"
 OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
-GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
 
 # TTS/STT providers that never touch the network (nothing to probe).
 _LOCAL_AUDIO_PROVIDERS = {"", "local"}
@@ -120,23 +119,19 @@ def _audio_provider_probe(kind: str, provider: str,
 
     probes = {
         "openai": (OPENAI_MODELS_URL, "OPENAI_API_KEY", "Bearer"),
-        "groq": (GROQ_MODELS_URL, "GROQ_API_KEY", "Bearer"),
     }
     entry = probes.get(provider)
     if entry is None:
         return ProbeResult(name, "skip",
                            f"(provider '{provider}' — no live probe "
                            "implemented)")
-    url, env_var, scheme = entry
+    url, env_var, _scheme = entry
     key = os.getenv(env_var, "").strip()
     if not key:
         return ProbeResult(name, "warn",
                            f"(provider '{provider}' configured but "
                            f"{env_var} is not set)")
-    if scheme == "xi":
-        headers = {"xi-api-key": key}
-    else:
-        headers = {"Authorization": f"Bearer {key}"}
+    headers = {"Authorization": f"Bearer {key}"}
     resp = _http_get(url, headers=headers, timeout=timeout)
     result = _classify_http(name, resp, env_var)
     result.detail = f"({provider}) {result.detail}"

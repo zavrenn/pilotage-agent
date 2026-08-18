@@ -4708,8 +4708,8 @@ def run_job(
         #
         # An UNPINNED job (no explicit job["provider"]/["model"]) follows the
         # global default, which can change after the job was created — a switch
-        # to a paid PROVIDER (e.g. nous) OR a paid MODEL on the same provider
-        # (e.g. claude-fable-5 on openrouter). Without a guard the job would
+        # to a paid PROVIDER OR a paid MODEL on the same provider.
+        # Without a guard the job would
         # silently inherit that change and spend real money on every tick — the
         # $7.73 incident named BOTH a provider and a model.
         #
@@ -4824,8 +4824,8 @@ def run_job(
             provider=runtime.get("provider"),
             requested_provider=runtime.get("requested_provider"),
             api_mode=runtime.get("api_mode"),
-            acp_command=runtime.get("command"),
-            acp_args=runtime.get("args"),
+            command=runtime.get("command"),
+            args=runtime.get("args"),
             max_iterations=max_iterations,
             reasoning_config=reasoning_config,
             prefill_messages=prefill_messages,

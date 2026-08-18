@@ -1069,8 +1069,8 @@ class ShellFileOperations(FileOperations):
         padding was pure token overhead: on dense source the padded gutter
         cost ~48% more tokens than the bare content and ~16% more than the
         compact form, because the leading spaces + zero-padding tokenize
-        into extra tokens on every single line. An A/B (Sonnet 4.6, 2
-        passes) showed the compact gutter matches the padded gutter on
+        into extra tokens on every single line. An A/B (2 passes)
+        showed the compact gutter matches the padded gutter on
         line-reference / patch / value-lookup / structure tasks (4/4 both),
         while dropping line numbers entirely regressed line-referencing
         (the model hand-counted and was off-by-one, 3/4) — so we keep the

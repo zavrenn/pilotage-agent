@@ -4,11 +4,8 @@ Optional per-task ``output_schema`` (a JSON Schema object): the child is
 told about the contract via an OUTPUT CONTRACT block appended to its
 context, the parent validates the child's final answer with jsonschema,
 and on failure sends exactly ONE bounded retry turn carrying the
-validation errors verbatim (per llm-structured-output-schema-design:
-max 1 retry, exact errors, no schema re-paste).
-
-Pattern from: github/copilot-cli ctx.agent(prompt, {schema}) — PATTERN
-ONLY, zero code/prompt text copied (proprietary).
+validation errors verbatim (max 1 retry, exact errors, no schema
+re-paste).
 """
 
 from __future__ import annotations

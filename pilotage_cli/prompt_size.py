@@ -70,7 +70,7 @@ def _build_inspection_agent(platform: str) -> Any:
     return AIAgent(
         model=model,
         api_key="inspect-only",
-        base_url="https://openrouter.ai/api/v1",
+        base_url="https://api.openai.com/v1",
         quiet_mode=True,
         save_trajectories=False,
         platform=platform,

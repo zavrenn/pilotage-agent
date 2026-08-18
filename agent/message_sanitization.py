@@ -150,10 +150,10 @@ def _escape_invalid_chars_in_json_strings(raw: str) -> str:
     sequence with their ``\\uXXXX`` equivalents. Pass-through for everything
     else.
 
-    Ported from — complements the other repair passes in
+    Complements the other repair passes in
     ``_repair_tool_call_arguments`` when ``json.loads(strict=False)`` is
-    not enough (e.g. llama.cpp backends that emit literal apostrophes or
-    tabs alongside other malformations).
+    not enough (backends that emit literal apostrophes or tabs alongside
+    other malformations).
     """
     out: list[str] = []
     in_string = False
@@ -195,8 +195,8 @@ _FULL_ARGS_LOG_BOUND = 100_000
 def _repair_tool_call_arguments(raw_args: str, tool_name: str = "?") -> str:
     """Attempt to repair malformed tool_call argument JSON.
 
-    Models like GLM-5.1 via Ollama can produce truncated JSON, trailing
-    commas, Python ``None``, etc.  The API proxy rejects these with HTTP 400
+    Models can produce truncated JSON, trailing commas, Python ``None``,
+    etc.  The API proxy rejects these with HTTP 400
     "invalid tool call arguments".  This function applies common repairs;
     if all fail it returns ``"{}"`` so the request succeeds (better than
     crashing the session).  All repairs are logged at WARNING level.
@@ -213,7 +213,7 @@ def _repair_tool_call_arguments(raw_args: str, tool_name: str = "?") -> str:
         logger.warning("Sanitized Python-None tool_call arguments for %s", tool_name)
         return "{}"
 
-    # Repair pass 0: llama.cpp backends sometimes emit literal control
+    # Repair pass 0: some backends emit literal control
     # characters (tabs, newlines) inside JSON string values. json.loads
     # with strict=False accepts these and lets us re-serialise the
     # result into wire-valid JSON without any string surgery. This is
@@ -300,7 +300,7 @@ def close_interrupted_tool_sequence(messages: list, final_response: Any = None) 
     ``tool`` message (a tool finished, or its execution was cancelled, but the
     model never streamed a closing assistant turn). Persisting that tail means
     the next user message lands as ``… tool → user`` — a role-alternation
-    violation that strict providers (Gemini, Claude) react to by hallucinating
+    violation that strict providers react to by hallucinating
     a continuation of the user's message and ignoring prior context, which
     reads to the user as "lost context".
 

@@ -236,9 +236,9 @@ TOOL_USE_ENFORCEMENT_MODELS = ("gpt", "codex")
 # by model family.  Addresses two cross-model failure modes:
 #   1. Stopping after a stub: writing a tiny file or running one command
 #      and then ending the turn with a description of the plan instead
-#      of the finished artifact.  (Observed on Opus during a real
-#      Sarasota real-estate build task: 3 API calls, 85-byte file,
-#      one terminal command, finish_reason=stop.)
+#      of the finished artifact.  (Observed on a real build task:
+#      3 API calls, 85-byte file, one terminal command,
+#      finish_reason=stop.)
 #   2. Fabricating output when a real path is blocked.  When `pip` or a
 #      tool fails, some models will synthesize plausible-looking results
 #      (fake addresses, fake JSON, fake numbers) instead of reporting

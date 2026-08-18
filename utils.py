@@ -852,8 +852,8 @@ def base_url_hostname(base_url: str) -> str:
     """Return the lowercased hostname for a base URL, or ``""`` if absent.
 
     Use exact-hostname comparisons against known provider hosts
-    (``api.openai.com``, ``api.x.ai``, ``api.anthropic.com``) instead of
-    substring matches on the raw URL. Substring checks treat attacker- or
+    (``api.openai.com``) instead of substring matches on the raw URL.
+    Substring checks treat attacker- or
     proxy-controlled paths/hosts like ``https://api.openai.com.example/v1``
     or ``https://proxy.test/api.openai.com/v1`` as native endpoints, which
     leads to wrong api_mode / auth routing.
@@ -884,9 +884,9 @@ def model_forces_max_completion_tokens(model: str) -> bool:
 
     Handles vendor prefixes like ``openai/gpt-5.4`` by stripping to the tail.
     The URL-based check (``base_url_hostname == "api.openai.com"``) misses
-    third-party OpenAI-compatible endpoints (custom OpenAI gateways,
-    OpenRouter) that front these models and enforce the same parameter
-    constraint, so name-based detection is required as a fallback.
+    third-party OpenAI-compatible endpoints that front these models and
+    enforce the same parameter constraint, so name-based detection is
+    required as a fallback.
     """
     m = (model or "").strip().lower()
     if not m:
@@ -910,10 +910,10 @@ def base_url_host_matches(base_url: str, domain: str) -> bool:
     false-positive class documented on ``base_url_hostname``. Accepts bare
     hosts, full URLs, and URLs with paths.
 
-        base_url_host_matches("https://api.moonshot.ai/v1", "moonshot.ai") == True
-        base_url_host_matches("https://moonshot.ai", "moonshot.ai")        == True
-        base_url_host_matches("https://evil.com/moonshot.ai/v1", "moonshot.ai") == False
-        base_url_host_matches("https://moonshot.ai.evil/v1", "moonshot.ai")     == False
+        base_url_host_matches("https://api.openai.com/v1", "openai.com") == True
+        base_url_host_matches("https://openai.com", "openai.com")        == True
+        base_url_host_matches("https://evil.com/openai.com/v1", "openai.com") == False
+        base_url_host_matches("https://openai.com.evil/v1", "openai.com")     == False
     """
     hostname = base_url_hostname(base_url)
     if not hostname:

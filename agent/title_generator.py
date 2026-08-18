@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 
 # Callback signature: (task_name, exception) -> None. Used to surface
 # auxiliary failures to the user through AIAgent._emit_auxiliary_failure
-# so silent-drops (e.g. OpenRouter 402 exhausting the fallback chain)
-# become visible instead of piling up as NULL session titles.
+# so silent-drops become visible instead of piling up as NULL
+# session titles.
 FailureCallback = Callable[[str, BaseException], None]
 
 # Callback signature: (title, source) -> None, where source is the provenance

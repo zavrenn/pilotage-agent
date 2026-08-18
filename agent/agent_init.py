@@ -449,8 +449,6 @@ def init_agent(
     api_key: str = None,
     provider: str = None,
     api_mode: str = None,
-    acp_command: str = None,
-    acp_args: list[str] | None = None,
     command: str = None,
     args: list[str] | None = None,
     model: str = "",
@@ -600,10 +598,8 @@ def init_agent(
         else agent.provider
     )
     agent._credential_pool = credential_pool
-    # Subprocess-transport launch spec, consumed by delegated child agents
-    # (tools/delegate_tool.py) that spawn an external CLI agent.
-    agent.acp_command = acp_command or command
-    agent.acp_args = list(acp_args or args or [])
+    agent.launch_command = command
+    agent.launch_args = list(args or [])
     if api_mode in {"chat_completions", "codex_responses"}:
         agent.api_mode = api_mode
     elif agent.provider == "openai-codex":

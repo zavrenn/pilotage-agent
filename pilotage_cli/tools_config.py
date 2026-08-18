@@ -331,12 +331,12 @@ TOOL_CATEGORIES = {
 # `vision` is listed here only so it registers as a *configurable* toolset
 # (the value gates the reconfigure menu + the "[no API key]" suffix). Its
 # actual setup runs through `_configure_vision_backend()` — a full
-# provider+model picker like `pilotage model` — NOT this single-key prompt, so
-# users are never forced onto OpenRouter. `_toolset_has_keys("vision")`
-# resolves via `resolve_vision_provider_client()`, so the tuple below is never
-# prompted or read for vision; it's purely a presence marker.
+# provider+model picker like `pilotage model` — NOT this single-key prompt.
+# `_toolset_has_keys("vision")` resolves via
+# `resolve_vision_provider_client()`, so the tuple below is never prompted or
+# read for vision; it's purely a presence marker.
 TOOLSET_ENV_REQUIREMENTS = {
-    "vision":     [("OPENROUTER_API_KEY",   "https://openrouter.ai/keys")],
+    "vision":     [("OPENAI_API_KEY",   "https://platform.openai.com/api-keys")],
 }
 
 
@@ -2165,7 +2165,7 @@ def _configure_vision_backend() -> None:
     Vision is an auxiliary task whose provider/model are resolved from
     ``auxiliary.vision.{provider,model,base_url}`` in config.yaml (see
     ``agent/auxiliary_client.resolve_vision_provider_client``). Rather than
-    forcing the user onto OpenRouter, let them pick any authenticated
+    forcing a single hardcoded backend, let them pick any authenticated
     provider + model — the same surface as ``pilotage model`` — or point at a
     custom OpenAI-compatible endpoint. "Auto" leaves the config keys empty so
     the resolver uses the main model / aggregator fallback chain.

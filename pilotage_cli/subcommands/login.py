@@ -25,9 +25,9 @@ def build_login_parser(subparsers, *, cmd_login: Callable) -> None:
       without the ``help=argparse.SUPPRESS`` ``==SUPPRESS==`` leak that
       argparse emits for a top-level subparser on Python 3.12+.
     - ``--provider`` accepts ANY value (no ``choices=``) so that, e.g.,
-      ``pilotage login --provider anthropic`` reaches the deprecation handler and
-      gets pointed at ``pilotage model`` instead of crashing in argparse with
-      ``invalid choice: 'anthropic'`` before the handler can run.
+      ``pilotage login --provider <anything>`` reaches the deprecation handler
+      and gets pointed at ``pilotage model`` instead of crashing in argparse
+      with ``invalid choice`` before the handler can run.
     """
     login_parser = subparsers.add_parser(
         "login",
@@ -38,7 +38,7 @@ def build_login_parser(subparsers, *, cmd_login: Callable) -> None:
     )
     # No ``choices=`` on purpose — the handler is a deprecation notice that
     # ignores the value, and a restrictive list would reject providers the user
-    # legitimately wants (e.g. ``anthropic``) with an argparse error before the
+    # legitimately wants with an argparse error before the
     # friendly redirect message is ever printed.
     login_parser.add_argument(
         "--provider",

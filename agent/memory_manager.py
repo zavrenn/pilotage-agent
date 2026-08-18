@@ -59,7 +59,7 @@ def normalize_tool_schema(schema: Any) -> Optional[Dict[str, Any]]:
     form (``{"type": "function", "function": {"name": ...}}``). Wrapping that
     a second time produces ``{"type": "function", "function": {"type":
     "function", "function": {...}}}`` whose ``function`` has no top-level
-    ``name``. Strict providers (e.g. DeepSeek) reject the *entire* request
+    ``name``. Strict providers reject the *entire* request
     with ``tools[N].function: missing field name`` (HTTP 400), so one bad
     schema disables the whole toolset and breaks every turn.
 

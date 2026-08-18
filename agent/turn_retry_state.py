@@ -5,7 +5,7 @@ max_retries``) makes several distinct recovery attempts on a single model API
 call: a credential-pool 429 retry, an OAuth refresh, a long-context
 compression restart, a length-
 continuation restart, and a handful of format-recovery branches (thinking-
-signature stripping, multimodal-tool-content stripping, llama.cpp grammar
+signature stripping, multimodal-tool-content stripping, grammar
 fallback, image shrink, invalid-encrypted-content, 1M-beta header).
 
 Each of those branches is guarded by a one-shot boolean so it fires at most

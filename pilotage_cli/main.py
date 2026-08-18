@@ -1958,7 +1958,6 @@ def select_provider_and_model(args=None):
     from pilotage_cli.models import (
         CANONICAL_PROVIDERS,
         _PROVIDER_LABELS,
-        _PROVIDER_ALIASES,
         group_providers,
         provider_group_for_slug,
     )
@@ -1993,15 +1992,9 @@ def select_provider_and_model(args=None):
         if p
     }
     if _cli_excluded:
-        _alias_to_canon = _PROVIDER_ALIASES
-        _names_for: dict[str, set[str]] = {}
-        for _p in CANONICAL_PROVIDERS:
-            _names_for[_p.slug] = {_p.slug.lower()}
-        for _alias, _canon in _alias_to_canon.items():
-            _names_for.setdefault(_canon, {_canon.lower()}).add(_alias.lower())
         _visible_slugs = [
             p.slug for p in CANONICAL_PROVIDERS
-            if not _names_for.get(p.slug, {p.slug.lower()}) & _cli_excluded
+            if p.slug.lower() not in _cli_excluded
         ]
     else:
         _visible_slugs = [p.slug for p in CANONICAL_PROVIDERS]
@@ -6151,7 +6144,7 @@ def main():
         p.add_argument(
             "--model",
             help="Only match sessions whose model name contains this substring "
-            "(e.g. 'sonnet', 'gpt-5', 'pilotage')",
+            "(e.g. 'gpt-5.6', 'codex', 'pilotage')",
         )
         p.add_argument(
             "--provider",

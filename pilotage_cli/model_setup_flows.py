@@ -12,7 +12,7 @@ explicit import) so existing call sites — and test monkeypatches that target
 ``pilotage_cli.main._model_flow_*`` — keep resolving against main.py's namespace.
 
 main.py-internal helpers the flows call (``_prompt_api_key``, ``_save_custom_provider``,
-the reasoning-effort/qwen helpers, …) are
+the reasoning-effort helpers, …) are
 imported lazily inside the flows (``from pilotage_cli.main import ...`` resolves at
 call time, when main.py is fully loaded) so this module never imports
 ``pilotage_cli.main`` at import time -> no import cycle.
@@ -267,7 +267,7 @@ def _model_flow_custom(config):
 
     effective_key = api_key or current_key
 
-    # Hint: most local model servers (Ollama, vLLM, llama.cpp) require /v1
+    # Hint: most local model servers require /v1
     # in the base URL for OpenAI-compatible chat completions.  Prompt the
     # user if the URL looks like a local server without /v1.
     _url_lower = effective_url.rstrip("/").lower()
@@ -278,7 +278,7 @@ def _model_flow_custom(config):
     if _looks_local and not _url_lower.endswith("/v1"):
         print()
         print("  Hint: Did you mean to add /v1 at the end?")
-        print("  Most local model servers (Ollama, vLLM, llama.cpp) require it.")
+        print("  Most local model servers require it.")
         print(f"  e.g. {effective_url.rstrip('/')}/v1")
         try:
             _add_v1 = input("  Add /v1? [Y/n]: ").strip().lower()
@@ -346,7 +346,7 @@ def _model_flow_custom(config):
             if confirm in {"", "y", "yes"}:
                 model_name = detected_models[0]
             else:
-                model_name = input("Model name (e.g. gpt-4, llama-3-70b): ").strip()
+                model_name = input("Model name (e.g. gpt-5.6): ").strip()
         elif len(detected_models) > 1:
             print("  Available models:")
             for i, m in enumerate(detected_models, 1):
@@ -359,7 +359,7 @@ def _model_flow_custom(config):
             elif pick:
                 model_name = pick
         else:
-            model_name = input("Model name (e.g. gpt-4, llama-3-70b): ").strip()
+            model_name = input("Model name (e.g. gpt-5.6): ").strip()
 
         context_length_str = input(
             "Context length in tokens [leave blank for auto-detect]: "
@@ -817,9 +817,9 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
             # else: no defaults either, will fall through to raw input
 
     if model_list:
-        # Per-model pricing, when the provider supports it (fireworks via the
-        # models.dev disk cache, novita/deepinfra via their cached /models
-        # endpoints). get_pricing_for_provider() is memoized in-process and
+        # Per-model pricing, when the provider supports it (via the
+        # models.dev disk cache or a cached /models endpoint).
+        # get_pricing_for_provider() is memoized in-process and
         # returns {} for providers without pricing — never a blocking fetch
         # beyond the catalog lookup that already happened above.
         pricing: dict = {}

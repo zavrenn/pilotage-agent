@@ -103,7 +103,7 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
     cron_create.add_argument(
         "--provider",
         dest="model_provider",
-        help="Inference provider paired with --model (e.g. 'openrouter', 'nous').",
+        help="Inference provider paired with --model (e.g. 'openai-codex', 'openai-api').",
     )
 
     # cron edit

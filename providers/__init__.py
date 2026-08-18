@@ -26,8 +26,7 @@ plugin layout.
 Usage::
 
     from providers import get_provider_profile
-    profile = get_provider_profile("nvidia")   # ProviderProfile or None
-    profile = get_provider_profile("kimi")     # checks name + aliases
+    profile = get_provider_profile("openai-codex")  # ProviderProfile or None
 """
 
 from __future__ import annotations
@@ -296,8 +295,7 @@ def _discover_providers() -> None:
     #    filesystem steps means a bundled or ``$PILOTAGE_HOME`` profile of the
     #    same name always overrides a pip-installed one. That prevents a
     #    third-party package from silently hijacking a first-party provider
-    #    name (e.g. ``openrouter``) while still letting pip packages add
-    #    genuinely new providers.
+    #    name while still letting pip packages add genuinely new providers.
     _discover_entry_point_providers()
 
     # 1. Bundled plugins — shipped with pilotage-agent.

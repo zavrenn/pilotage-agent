@@ -276,9 +276,8 @@ _CONTEXT_OVERFLOW_PATTERNS = [
     "max input token",
     "input token",
     "exceeds the maximum number of input tokens",
-    # Together/Fireworks-style: "Input length 131393 exceeds the maximum
-    # allowed input length of 131040 tokens."  No other pattern in this list
-    # matches that wording. (port of)
+    # "Input length 131393 exceeds the maximum allowed input length of
+    # 131040 tokens." — no other pattern in this list matches that wording.
     "maximum allowed input length",
 ]
 
