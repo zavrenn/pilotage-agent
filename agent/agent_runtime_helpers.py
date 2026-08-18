@@ -945,7 +945,6 @@ def recover_with_credential_pool(
     has_retried_429: bool,
     classified_reason: Optional[FailoverReason] = None,
     error_context: Optional[Dict[str, Any]] = None,
-    billing_unverified: bool = False,
 ) -> tuple[bool, bool]:
     """Attempt credential recovery via pool rotation.
 
@@ -961,11 +960,6 @@ def recover_with_credential_pool(
     different status code, such as Anthropic returning HTTP 400 for
     "out of extra usage".
 
-    `billing_unverified` marks a billing verdict that rests on an ambiguous
-    body (``ClassifiedError.billing_unverified``,): the pool persists
-    it as ``billing_unverified`` so the exhausted entry gets a short cooldown
-    instead of the one-hour billing bench — the same 400 can be a
-    content-filter rejection that leaves the credential healthy.
     """
     pool = agent._credential_pool
     if pool is None:
@@ -1059,11 +1053,6 @@ def recover_with_credential_pool(
         # ``effective_reason`` is resolved below; this closure runs after.
         if effective_reason is not None:
             _failure_reason = effective_reason.value
-            if effective_reason == FailoverReason.billing and billing_unverified:
-                # Ambiguous billing body: persist the ambiguity so
-                # the cooldown is sized as transient, not a 1-hour bench.
-                from agent.credential_pool import FAILURE_REASON_BILLING_UNVERIFIED
-                _failure_reason = FAILURE_REASON_BILLING_UNVERIFIED
             kwargs["failure_reason"] = _failure_reason
         return pool.mark_exhausted_and_rotate(**kwargs)
 
@@ -1075,25 +1064,6 @@ def recover_with_credential_pool(
             effective_reason = FailoverReason.rate_limit
         elif status_code in {401, 403}:
             effective_reason = FailoverReason.auth
-
-    if effective_reason == FailoverReason.upstream_rate_limit:
-        # An upstream provider (e.g. DeepSeek behind OpenRouter) is
-        # rate-limiting the aggregator's traffic — the user's credential is
-        # healthy. Do NOT rotate or mark exhausted; let the caller's fallback
-        # path switch to a different model entirely.
-        upstream = (error_context or {}).get("upstream_provider") if error_context else None
-        if upstream:
-            _ra().logger.info(
-                "Upstream provider %s rate-limited via aggregator — skipping "
-                "credential rotation, deferring to fallback chain",
-                upstream,
-            )
-        else:
-            _ra().logger.info(
-                "Upstream aggregator 429 (provider unknown) — skipping "
-                "credential rotation, deferring to fallback chain"
-            )
-        return False, has_retried_429
 
     if effective_reason == FailoverReason.billing:
         rotate_status = status_code if status_code is not None else 402
@@ -1261,13 +1231,8 @@ def try_recover_primary_transport(
 
     After ``max_retries`` exhaust, rebuild the primary client (clearing
     stale connection pools) and give it one more attempt before falling
-    back.  This is most useful for direct endpoints (custom, Z.AI,
-    Anthropic, OpenAI, local models) where a TCP-level hiccup does not
-    mean the provider is down.
-
-    Skipped for proxy/aggregator providers (OpenRouter, Nous) which
-    already manage connection pools and retries server-side — if our
-    retries through them are exhausted, one more rebuilt client won't help.
+    back.  This is most useful for direct endpoints where a TCP-level
+    hiccup does not mean the provider is down.
     """
     if agent._fallback_activated:
         return False
@@ -1277,9 +1242,6 @@ def try_recover_primary_transport(
     if error_type not in _TRANSIENT_TRANSPORT_ERRORS:
         return False
 
-    # Skip for aggregator providers — they manage their own retry infra
-    if agent._is_openrouter_url():
-        return False
     provider_lower = (agent.provider or "").strip().lower()
 
     try:

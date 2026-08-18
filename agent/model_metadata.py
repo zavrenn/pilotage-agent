@@ -6,7 +6,6 @@ and run_agent.py for pre-flight context checks.
 
 import base64
 import hashlib
-import ipaddress
 import json
 import logging
 import os
@@ -101,19 +100,6 @@ _PROVIDER_PREFIXES: frozenset[str] = frozenset(
 )
 
 
-_OLLAMA_TAG_PATTERN = re.compile(
-    r"^(\d+\.?\d*b|latest|stable|q\d|fp?\d|instruct|chat|coder|vision|text)",
-    re.IGNORECASE,
-)
-
-
-# Tailscale's CGNAT range (RFC 6598). `ipaddress.is_private` excludes this
-# block, so without an explicit check Ollama reached over Tailscale (e.g.
-# `http://100.77.243.5:11434`) wouldn't be treated as local and its stream
-# read / stale timeouts wouldn't get auto-bumped. Built once at import time.
-_TAILSCALE_CGNAT = ipaddress.IPv4Network("100.64.0.0/10")
-
-
 def _strip_provider_prefix(model: str) -> str:
     """Strip a recognised provider prefix from a model string.
 
@@ -122,8 +108,6 @@ def _strip_provider_prefix(model: str) -> str:
 
     ``"local:my-model"`` → ``"my-model"``
     ``"qwen3.5:27b"``   → ``"qwen3.5:27b"``  (unchanged — not a provider prefix)
-    ``"qwen:0.5b"``     → ``"qwen:0.5b"``    (unchanged — Ollama model:tag)
-    ``"deepseek:latest"``→ ``"deepseek:latest"``(unchanged — Ollama model:tag)
     """
     if ":" not in model or model.startswith("http"):
         return model
@@ -136,9 +120,6 @@ def _strip_provider_prefix(model: str) -> str:
     except Exception:
         is_provider = False
     if is_provider:
-        # Don't strip if suffix looks like an Ollama tag (e.g. "7b", "latest", "q4_0")
-        if _OLLAMA_TAG_PATTERN.match(suffix.strip()):
-            return model
         return suffix
     return model
 
@@ -150,16 +131,6 @@ _MODEL_CACHE_TTL = 3600
 _endpoint_model_metadata_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _endpoint_model_metadata_cache_time: Dict[str, float] = {}
 _ENDPOINT_MODEL_CACHE_TTL = 300
-# Bounded-lifetime cache: after the first successful probe we remember the
-# server type so subsequent refreshes skip the full waterfall (no more 404
-# spam every 5 minutes on non-matching endpoints like /api/v1/models on vllm).
-# Entries expire after _ENDPOINT_PROBE_TTL_SECONDS so a server swap on the
-# same port (stop Ollama, start LM Studio) is eventually re-detected instead
-# of being pinned to the stale type for the whole process lifetime.
-# Values are (server_type, monotonic_timestamp).
-_ENDPOINT_PROBE_TTL_SECONDS = 3600.0
-_endpoint_probe_path_cache: Dict[str, tuple] = {}
-
 # A configured endpoint that is routable-but-dead — e.g. a corp LAN address
 # while off-VPN — blackholes TCP: the SYN draws no SYN-ACK, no RST and no ICMP
 # error, so a probe waits out its full timeout instead of failing fast. Startup
@@ -180,8 +151,7 @@ def _endpoint_host_key(base_url: str) -> Optional[str]:
     """Return a ``host:port`` key for ``base_url``, or None if it has no host.
 
     Keyed on host:port rather than the full URL so every probe path for one
-    server — ``/v1``-suffixed or not, LM Studio root or API root — shares a
-    single entry.
+    server — ``/v1``-suffixed or not — shares a single entry.
     """
     normalized = _normalize_base_url(base_url)
     if not normalized:
@@ -249,68 +219,6 @@ def _is_connect_timeout(exc: BaseException) -> bool:
     except Exception:
         pass
     return False
-
-# ── Disk L2 for local-endpoint probe results ────────────────────────────────
-# The in-process caches above die with the process, so every CLI cold start
-# with a local model re-paid the probe waterfall in AIAgent.__init__:
-# detect_local_server_type (up to 4 HTTP GETs, ≤2 s each on a hung server)
-# + /api/show (≤3 s). A short-TTL disk cache makes back-to-back CLI
-# invocations hit disk instead of the network. Only SUCCESSFUL probes are
-# persisted (a down server must not pin a negative verdict), and the TTL is
-# short enough that swapping the server on a port (stop Ollama, start
-# LM Studio) is picked up within minutes — strictly fresher than the 1 h
-# in-process TTL that already accepts that staleness.
-_LOCAL_PROBE_DISK_TTL_SECONDS = 300.0
-
-
-def _local_probe_disk_cache_path() -> Path:
-    from pilotage_constants import get_pilotage_home
-    return get_pilotage_home() / "cache" / "local_endpoint_probes.json"
-
-
-def _load_local_probe_disk_cache() -> Dict[str, Any]:
-    try:
-        with _local_probe_disk_cache_path().open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _local_probe_disk_get(kind: str, key: str) -> Optional[Any]:
-    """Return a fresh cached value for ``kind:key``, else None."""
-    entry = _load_local_probe_disk_cache().get(f"{kind}:{key}")
-    if not isinstance(entry, dict):
-        return None
-    try:
-        if (time.time() - float(entry["ts"])) >= _LOCAL_PROBE_DISK_TTL_SECONDS:
-            return None
-        return entry["value"]
-    except Exception:
-        return None
-
-
-def _local_probe_disk_put(kind: str, key: str, value: Any) -> None:
-    """Persist a successful probe result. Best-effort; prunes stale entries."""
-    try:
-        now = time.time()
-        data = _load_local_probe_disk_cache()
-        data = {
-            k: v
-            for k, v in data.items()
-            if isinstance(v, dict)
-            and (now - float(v.get("ts", 0))) < _LOCAL_PROBE_DISK_TTL_SECONDS
-        }
-        data[f"{kind}:{key}"] = {"value": value, "ts": now}
-        atomic_json_write(
-            _local_probe_disk_cache_path(),
-            data,
-            indent=0,
-            separators=(",", ":"),
-        )
-    except Exception as e:
-        logger.debug("Failed to save local probe disk cache: %s", e)
-
 
 def _get_model_metadata_cache_path() -> Path:
     """Return path to the OpenRouter model metadata disk cache."""
@@ -404,15 +312,6 @@ def _warn_context_length_fallback(model: str, base_url: str) -> None:
 # Sessions, model switches, and cron jobs should reject models below this.
 MINIMUM_CONTEXT_LENGTH = 64_000
 
-# Short-lived in-process cache for local-server context probes. Bounds the
-# probe rate when the new local-endpoint live-probe paths (reconcile-on-hit +
-# pre-defaults step 7) resolve the same model several times during one startup
-# (banner, /model switch, compressor update_model). Keyed by (model, base_url);
-# values are (result, monotonic_timestamp). Not persisted to disk — cross-
-# restart freshness is handled by the reconcile logic re-probing after expiry.
-_LOCAL_CTX_PROBE_TTL_SECONDS = 30.0
-_LOCAL_CTX_PROBE_CACHE: Dict[tuple, tuple] = {}
-
 # Thin fallback defaults — only broad model family patterns.
 # These fire only when provider is unknown AND models.dev/OpenRouter/Anthropic
 # all miss. Replaced the previous 80+ entry dict.
@@ -469,16 +368,6 @@ _MAX_COMPLETION_KEYS = (
     "max_tokens",
 )
 
-# Local server hostnames / address patterns
-_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
-# Docker / Podman / Lima DNS names that resolve to the host machine
-_CONTAINER_LOCAL_SUFFIXES = (
-    ".docker.internal",
-    ".containers.internal",
-    ".lima.internal",
-)
-
-
 def _normalize_base_url(base_url: str) -> str:
     return (base_url or "").strip().rstrip("/")
 
@@ -533,16 +422,6 @@ def _infer_provider_from_url(base_url: str) -> Optional[str]:
     return None
 
 
-def _lmstudio_server_root(base_url: str) -> str:
-    """Return the LM Studio server root for native ``/api/v1`` endpoints."""
-    root = _normalize_base_url(base_url).rstrip("/")
-    for suffix in ("/api/v1", "/api", "/v1"):
-        if root.endswith(suffix):
-            root = root[: -len(suffix)].rstrip("/")
-            break
-    return root
-
-
 def _is_known_provider_base_url(base_url: str) -> bool:
     return _infer_provider_from_url(base_url) is not None
 
@@ -579,257 +458,12 @@ def _endpoint_scoped_context_length(model: str, base_url: str) -> Optional[int]:
 def _skip_persistent_context_cache(base_url: str, provider: str) -> bool:
     """Return True when the on-disk context cache must not short-circuit probing.
 
-    LM Studio excludes caching because loaded context is transient — the user
-    can reload the model with a different context_length at any time.
-
     Codex OAuth excludes caching because its context window is account- and
     entitlement-specific metadata supplied by the authenticated /models
     endpoint. A fallback value written after a transient probe failure must
     not prevent a later live probe from observing an updated allocation.
     """
-    return (provider or "").strip().lower() in {"lmstudio", "openai-codex"}
-
-
-def _maybe_cache_local_context_length(
-    model: str,
-    base_url: str,
-    length: int,
-) -> None:
-    """Persist a locally probed context length only when it meets Pilotage minimum.
-
-    Sub-minimum live windows (e.g. vLLM ``--max-model-len 32768``) are still
-    returned to callers so ``agent_init`` can fail with the existing
-    minimum-context guidance — they must not be normalized into the on-disk cache
-    as if they were valid operating limits.
-    """
-    if length >= MINIMUM_CONTEXT_LENGTH:
-        save_context_length(model, base_url, length)
-
-
-def _reconcile_local_cached_context_length(
-    model: str,
-    base_url: str,
-    cached: int,
-    api_key: str = "",
-) -> int:
-    """Return *cached* unless a live local probe reports a different limit.
-
-    vLLM/Ollama operators can restart with a new ``--max-model-len`` / ``num_ctx``
-    without changing the model id.  When the server is reachable, prefer its
-    reported window over a stale disk entry; when the probe fails (offline tests,
-    network blip), keep the cached value.
-
-    Live probes below :data:`MINIMUM_CONTEXT_LENGTH` invalidate stale cache
-    entries but are not persisted — startup should reject them, not bless a
-    sub-64K window as config.
-    """
-    live_ctx = _query_local_context_length(model, base_url, api_key=api_key)
-    if live_ctx and live_ctx > 0 and live_ctx != cached:
-        if live_ctx < MINIMUM_CONTEXT_LENGTH:
-            logger.info(
-                "Live local probe for %s@%s reports %s (< minimum %s); "
-                "invalidating stale cache — agent init should reject",
-                model, base_url, f"{live_ctx:,}", f"{MINIMUM_CONTEXT_LENGTH:,}",
-            )
-            _invalidate_cached_context_length(model, base_url)
-            return live_ctx
-        logger.info(
-            "Reconciling stale local cache entry %s@%s: %s -> %s (live probe)",
-            model, base_url, f"{cached:,}", f"{live_ctx:,}",
-        )
-        _invalidate_cached_context_length(model, base_url)
-        _maybe_cache_local_context_length(model, base_url, live_ctx)
-        return live_ctx
-    return cached
-
-
-def is_local_endpoint(base_url: str) -> bool:
-    """Return True if base_url points to a local machine.
-
-    Recognises loopback (``localhost``, ``127.0.0.0/8``, ``::1``),
-    container-internal DNS names (``host.docker.internal`` et al.),
-    RFC-1918 private ranges (``10/8``, ``172.16/12``, ``192.168/16``),
-    link-local, and Tailscale CGNAT (``100.64.0.0/10``). Tailscale CGNAT
-    is included so remote-but-trusted Ollama boxes reached over a
-    Tailscale mesh get the same timeout auto-bumps as localhost Ollama.
-    """
-    normalized = _normalize_base_url(base_url)
-    if not normalized:
-        return False
-    url = normalized if "://" in normalized else f"http://{normalized}"
-    try:
-        parsed = urlparse(url)
-        host = parsed.hostname or ""
-    except Exception:
-        return False
-    if host in _LOCAL_HOSTS:
-        return True
-    # Docker / Podman / Lima internal DNS names (e.g. host.docker.internal)
-    if any(host.endswith(suffix) for suffix in _CONTAINER_LOCAL_SUFFIXES):
-        return True
-    # Unqualified hostnames (no dots) are local by definition — Docker
-    # Compose service names, /etc/hosts entries, or mDNS names.
-    if host and "." not in host:
-        return True
-    # RFC-1918 private ranges, link-local, and Tailscale CGNAT
-    try:
-        addr = ipaddress.ip_address(host)
-        if addr.is_private or addr.is_loopback or addr.is_link_local:
-            return True
-        if isinstance(addr, ipaddress.IPv4Address) and addr in _TAILSCALE_CGNAT:
-            return True
-    except ValueError:
-        pass
-    # Bare IP that looks like a private range (e.g. 172.26.x.x for WSL)
-    # or Tailscale CGNAT (100.64.x.x–100.127.x.x).
-    parts = host.split(".")
-    if len(parts) == 4:
-        try:
-            first, second = int(parts[0]), int(parts[1])
-            if first == 10:
-                return True
-            if first == 172 and 16 <= second <= 31:
-                return True
-            if first == 192 and second == 168:
-                return True
-            if first == 100 and 64 <= second <= 127:
-                return True
-        except ValueError:
-            pass
-    return False
-
-
-def _localhost_to_ipv4(url: str) -> str:
-    """Rewrite a ``localhost`` HOST to ``127.0.0.1`` in a probe URL.
-
-    On Windows dual-stack machines, httpx resolves ``localhost`` to ``::1``
-    first and pays a ~2s IPv6 connect timeout before falling back to IPv4
-    when the local server only listens on IPv4 (LM Studio, Ollama defaults).
-    Probing the IPv4 loopback directly skips that penalty.
-
-    Only the URL's own host component is rewritten (anchored at the scheme),
-    so a non-localhost URL whose path or query merely embeds the substring
-    ``http://localhost...`` (e.g. ``?upstream=http://localhost:11434``)
-    passes through untouched.
-    """
-    if not url or not isinstance(url, str):
-        # Non-string values (test doubles, lazily-resolved config objects)
-        # previously flowed through these call sites untouched — keep that
-        # contract; re.sub would raise TypeError.
-        return url
-    return re.sub(
-        r"^(https?://)localhost(?=[:/]|$)",
-        r"\g<1>127.0.0.1",
-        url,
-        count=1,
-    )
-
-
-def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
-    """Detect which local server is running at base_url by probing known endpoints.
-
-    Returns one of: "ollama", "lm-studio", "vllm", "llamacpp", or None.
-
-    The result is cached for the lifetime of the process so that repeated
-    calls (e.g. every 5-minute metadata refresh) never re-run the waterfall
-    and never spray 404s at endpoints the server does not expose.
-    """
-    import httpx
-
-    normalized = _normalize_base_url(base_url)
-
-    # Resolve localhost to IPv4 to avoid 2s IPv6 timeout on Windows dual-stack.
-    # Applied to ``normalized`` before deriving server/LM Studio URLs AND
-    # before the cache lookup, so localhost and 127.0.0.1 share a cache entry.
-    normalized = _localhost_to_ipv4(normalized)
-
-    server_url = normalized
-    if server_url.endswith("/v1"):
-        server_url = server_url[:-3]
-    lmstudio_url = _lmstudio_server_root(normalized)
-
-    cached = _endpoint_probe_path_cache.get(server_url)
-    if cached is not None and (time.monotonic() - cached[1]) < _ENDPOINT_PROBE_TTL_SECONDS:
-        return cached[0]
-
-    # The host already blackholed a connect: skip the waterfall below, each leg
-    # of which would otherwise burn its full 2s timeout. Deliberately NOT
-    # written to _endpoint_probe_path_cache — that entry lives for an hour,
-    # which would pin the endpoint to "undetected" long after it comes back.
-    if _endpoint_blackholed(server_url):
-        return None
-
-    # Disk L2: a fresh cross-process verdict skips the HTTP waterfall
-    # entirely (back-to-back CLI invocations, cron ticks).
-    disk_hit = _local_probe_disk_get("server_type", server_url)
-    if isinstance(disk_hit, str):
-        _endpoint_probe_path_cache[server_url] = (disk_hit, time.monotonic())
-        return disk_hit
-
-    headers = _auth_headers(api_key)
-
-    def _probe_failed(exc: Exception) -> None:
-        """Swallow a probe error — or abort the waterfall if we were blackholed.
-
-        Re-raising propagates out of the ``with`` block to the outer handler,
-        so the remaining legs are skipped instead of each stalling in turn.
-        """
-        if _is_connect_timeout(exc):
-            _note_endpoint_blackholed(server_url)
-            raise exc
-
-    result: Optional[str] = None
-    try:
-        with httpx.Client(timeout=2.0, headers=headers) as client:
-            # LM Studio exposes /api/v1/models — check first (most specific)
-            try:
-                r = client.get(f"{lmstudio_url}/api/v1/models")
-                if r.status_code == 200:
-                    result = "lm-studio"
-            except Exception as exc:
-                _probe_failed(exc)
-            if result is None:
-                # Ollama exposes /api/tags and responds with {"models": [...]}
-                # LM Studio returns {"error": "Unexpected endpoint"} with status 200
-                # on this path, so we must verify the response contains "models".
-                try:
-                    r = client.get(f"{server_url}/api/tags")
-                    if r.status_code == 200:
-                        try:
-                            data = r.json()
-                            if "models" in data:
-                                result = "ollama"
-                        except Exception:
-                            pass
-                except Exception as exc:
-                    _probe_failed(exc)
-            if result is None:
-                # llama.cpp exposes /v1/props (older builds used /props without the /v1 prefix)
-                try:
-                    r = client.get(f"{server_url}/v1/props")
-                    if r.status_code != 200:
-                        r = client.get(f"{server_url}/props")  # fallback for older builds
-                    if r.status_code == 200 and "default_generation_settings" in r.text:
-                        result = "llamacpp"
-                except Exception as exc:
-                    _probe_failed(exc)
-            if result is None:
-                # vLLM: /version
-                try:
-                    r = client.get(f"{server_url}/version")
-                    if r.status_code == 200:
-                        data = r.json()
-                        if "version" in data:
-                            result = "vllm"
-                except Exception as exc:
-                    _probe_failed(exc)
-    except Exception:
-        pass
-
-    if result is not None:
-        _endpoint_probe_path_cache[server_url] = (result, time.monotonic())
-        _local_probe_disk_put("server_type", server_url, result)
-    return result
+    return (provider or "").strip().lower() == "openai-codex"
 
 
 def _iter_nested_dicts(value: Any):
@@ -1033,71 +667,13 @@ def fetch_endpoint_model_metadata(
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     last_error: Optional[Exception] = None
 
-    if is_local_endpoint(normalized):
-        try:
-            if detect_local_server_type(normalized, api_key=api_key) == "lm-studio":
-                server_url = _lmstudio_server_root(normalized)
-                response = requests.get(
-                    server_url.rstrip("/") + "/api/v1/models",
-                    headers=headers,
-                    timeout=(5, 10),
-                    verify=_resolve_requests_verify(normalized),
-                )
-                response.raise_for_status()
-                payload = response.json()
-                cache: Dict[str, Dict[str, Any]] = {}
-                for model in payload.get("models", []):
-                    if not isinstance(model, dict):
-                        continue
-                    model_id = model.get("key") or model.get("id")
-                    if not model_id:
-                        continue
-                    entry: Dict[str, Any] = {"name": model.get("name", model_id)}
-
-                    context_length = None
-                    for inst in model.get("loaded_instances", []) or []:
-                        if not isinstance(inst, dict):
-                            continue
-                        cfg = inst.get("config", {})
-                        ctx = cfg.get("context_length") if isinstance(cfg, dict) else None
-                        if isinstance(ctx, int) and ctx > 0:
-                            context_length = ctx
-                            break
-                    if context_length is not None:
-                        entry["context_length"] = context_length
-
-                    max_completion_tokens = _extract_max_completion_tokens(model)
-                    if max_completion_tokens is not None:
-                        entry["max_completion_tokens"] = max_completion_tokens
-
-                    pricing = _extract_pricing(model)
-                    if pricing:
-                        entry["pricing"] = pricing
-
-                    _add_model_aliases(cache, model_id, entry)
-                    alt_id = model.get("id")
-                    if isinstance(alt_id, str) and alt_id and alt_id != model_id:
-                        _add_model_aliases(cache, alt_id, entry)
-
-                _endpoint_model_metadata_cache[normalized] = cache
-                _endpoint_model_metadata_cache_time[normalized] = time.time()
-                return cache
-        except Exception as exc:
-            last_error = exc
-            if _is_connect_timeout(exc):
-                _note_endpoint_blackholed(normalized)
-
     for candidate in candidates:
         # A connect timeout on one candidate condemns the host, not the path:
         # the remaining candidates differ only by URL suffix, so trying them
         # would repeat the same stall.
         if _endpoint_blackholed(normalized):
             break
-        # normalized/candidates stay unrewritten (cache key stability); only
-        # the outbound request target is IPv4-resolved to skip the multi-second
-        # dual-stack IPv6 connect timeout (see _localhost_to_ipv4).
-        request_candidate = _localhost_to_ipv4(candidate)
-        url = request_candidate.rstrip("/") + "/models"
+        url = candidate.rstrip("/") + "/models"
         response = None
         try:
             response = requests.get(
@@ -1134,29 +710,6 @@ def fetch_endpoint_model_metadata(
                 if pricing:
                     entry["pricing"] = pricing
                 _add_model_aliases(cache, model_id, entry)
-
-            # If this is a llama.cpp server, query /props for actual allocated context
-            is_llamacpp = any(
-                m.get("owned_by") == "llamacpp"
-                for m in payload.get("data", []) if isinstance(m, dict)
-            )
-            if is_llamacpp:
-                try:
-                    # Try /v1/props first (current llama.cpp); fall back to /props for older builds
-                    base = request_candidate.rstrip("/").replace("/v1", "")
-                    _verify = _resolve_requests_verify(normalized)
-                    props_resp = requests.get(base + "/v1/props", headers=headers, timeout=5, verify=_verify)
-                    if not props_resp.ok:
-                        props_resp = requests.get(base + "/props", headers=headers, timeout=5, verify=_verify)
-                    if props_resp.ok:
-                        props = props_resp.json()
-                        gen_settings = props.get("default_generation_settings", {})
-                        n_ctx = gen_settings.get("n_ctx")
-                        model_alias = props.get("model_alias", "")
-                        if n_ctx and model_alias and model_alias in cache:
-                            cache[model_alias]["context_length"] = n_ctx
-                except Exception:
-                    pass
 
             _endpoint_model_metadata_cache[normalized] = cache
             _endpoint_model_metadata_cache_time[normalized] = time.time()
@@ -1292,13 +845,6 @@ def _invalidate_cached_context_length(model: str, base_url: str) -> None:
     """Drop a stale cache entry so it gets re-resolved on the next lookup."""
     key = _context_cache_key(model, base_url)
     cache = _load_context_cache()
-    # Invalidation must also drop the in-memory TTL probe entries for this
-    # pair — otherwise the next resolution inside the TTL window reuses the
-    # very value we just declared stale and re-persists it.
-    bare = _strip_provider_prefix(model)
-    stripped = (base_url or "").rstrip("/")
-    _LOCAL_CTX_PROBE_CACHE.pop((bare, stripped), None)
-    _LOCAL_CTX_PROBE_CACHE.pop(("ollama_show", bare, stripped), None)
     # Clear every key shape for this pair: canonical, the caller's literal
     # form, and the slashed legacy form — same set get_cached_context_length
     # consults, so a lookup can never resurrect a row invalidation missed.
@@ -1580,212 +1126,6 @@ def _model_id_matches(candidate_id: str, lookup_model: str) -> bool:
     return False
 
 
-def query_ollama_num_ctx(model: str, base_url: str, api_key: str = "") -> Optional[int]:
-    """Query an Ollama server for the model's context length.
-
-    Returns the model's maximum context from GGUF metadata via ``/api/show``,
-    or the explicit ``num_ctx`` from the Modelfile if set.  Returns None if
-    the server is unreachable or not Ollama.
-
-    This is the value that should be passed as ``num_ctx`` in Ollama chat
-    requests to override the default 2048.
-    """
-    import httpx
-
-    bare_model = _strip_provider_prefix(model)
-    server_url = _localhost_to_ipv4(base_url.rstrip("/"))
-    if server_url.endswith("/v1"):
-        server_url = server_url[:-3]
-
-    try:
-        server_type = detect_local_server_type(base_url, api_key=api_key)
-    except Exception:
-        return None
-    if server_type != "ollama":
-        return None
-
-    # Disk L2: /api/show results are stable for a given (model, server) on
-    # human timescales — skip the HTTP roundtrip on fresh cross-process hits.
-    _disk_key = f"{server_url}|{bare_model}"
-    disk_hit = _local_probe_disk_get("ollama_num_ctx", _disk_key)
-    if isinstance(disk_hit, int) and disk_hit > 0:
-        return disk_hit
-
-    headers = _auth_headers(api_key)
-
-    try:
-        with httpx.Client(timeout=3.0, headers=headers) as client:
-            resp = client.post(f"{server_url}/api/show", json={"name": bare_model})
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-
-            # Prefer explicit num_ctx from Modelfile parameters (user override)
-            params = data.get("parameters", "")
-            if "num_ctx" in params:
-                for line in params.split("\n"):
-                    if "num_ctx" in line:
-                        parts = line.strip().split()
-                        if len(parts) >= 2:
-                            try:
-                                _ctx = int(parts[-1])
-                                _local_probe_disk_put("ollama_num_ctx", _disk_key, _ctx)
-                                return _ctx
-                            except ValueError:
-                                pass
-
-            # Fall back to GGUF model_info context_length (training max)
-            model_info = data.get("model_info", {})
-            for key, value in model_info.items():
-                if "context_length" in key and isinstance(value, (int, float)):
-                    _ctx = int(value)
-                    _local_probe_disk_put("ollama_num_ctx", _disk_key, _ctx)
-                    return _ctx
-    except Exception:
-        pass
-    return None
-
-
-def query_ollama_supports_vision(model: str, base_url: str, api_key: str = "") -> Optional[bool]:
-    """Return True/False when Ollama ``/api/show`` reports vision support.
-
-    Uses the ``capabilities`` field on Ollama 0.6.0+ and falls back to
-    ``model_info.*.vision.block_count`` on older servers. Returns None when
-    the server is unreachable, not Ollama, or the model is unknown.
-    """
-    import httpx
-
-    bare_model = _strip_provider_prefix(model)
-    if not bare_model or not base_url:
-        return None
-
-    try:
-        if detect_local_server_type(base_url, api_key=api_key) != "ollama":
-            return None
-    except Exception:
-        return None
-
-    server_url = _localhost_to_ipv4(base_url.rstrip("/"))
-    if server_url.endswith("/v1"):
-        server_url = server_url[:-3]
-
-    headers = _auth_headers(api_key)
-
-    try:
-        with httpx.Client(timeout=3.0, headers=headers) as client:
-            resp = client.post(f"{server_url}/api/show", json={"name": bare_model})
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-    except Exception:
-        return None
-
-    caps = data.get("capabilities")
-    if isinstance(caps, list):
-        if any(str(cap).lower() == "vision" for cap in caps):
-            return True
-        if caps:
-            return False
-
-    model_info = data.get("model_info")
-    if isinstance(model_info, dict):
-        for key in model_info:
-            if "vision.block_count" in str(key).lower():
-                return True
-
-    return None
-
-
-def _query_ollama_api_show(model: str, base_url: str, api_key: str = "") -> Optional[int]:
-    """Query an Ollama server's native ``/api/show`` for context length.
-
-    Provider-agnostic: works against ANY Ollama-compatible server regardless
-    of hostname — local Ollama, Ollama Cloud (``ollama.com``), custom Ollama
-    hosting behind a reverse proxy, etc.  For non-Ollama servers the POST
-    returns 404/405 quickly; the function handles errors gracefully.
-
-    Results are cached in ``_LOCAL_CTX_PROBE_CACHE`` (same 30s TTL,
-    positive-only — see ``_query_local_context_length``) so back-to-back
-    resolutions during one startup issue a single POST instead of one per
-    call site. Failures are never memoized: a server that isn't up yet must
-    be re-probed once it comes up.
-
-    For hosted servers the GGUF ``model_info.*.context_length`` is the
-    authoritative source: the user can't set their own ``num_ctx``, and the
-    OpenAI-compat ``/v1/models`` endpoint correctly omits ``context_length``
-    per the OpenAI schema.
-
-    Resolution order for hosted Ollama:
-      1. ``model_info.*.context_length`` — GGUF training max (authoritative)
-      2. ``parameters`` → ``num_ctx`` — server-side Modelfile override
-    The order is flipped vs ``query_ollama_num_ctx()`` because local users
-    control ``num_ctx`` themselves; hosted users can't.
-    """
-    import time as _time
-
-    # Namespaced cache key: shares the TTL store with
-    # _query_local_context_length but never collides with its (model, url)
-    # keys — the two probes can return different values for the same pair.
-    cache_key = ("ollama_show", _strip_provider_prefix(model), base_url.rstrip("/"))
-    now = _time.monotonic()
-    cached = _LOCAL_CTX_PROBE_CACHE.get(cache_key)
-    if cached is not None and (now - cached[1]) < _LOCAL_CTX_PROBE_TTL_SECONDS:
-        return cached[0]
-
-    result = _query_ollama_api_show_uncached(model, base_url, api_key=api_key)
-    if result:  # positive-only — never memoize a failed probe
-        _LOCAL_CTX_PROBE_CACHE[cache_key] = (result, now)
-    return result
-
-
-def _query_ollama_api_show_uncached(model: str, base_url: str, api_key: str = "") -> Optional[int]:
-    """Uncached body of ``_query_ollama_api_show`` — one POST to ``/api/show``."""
-    import httpx
-
-    server_url = _localhost_to_ipv4(base_url.rstrip("/"))
-    if server_url.endswith("/v1"):
-        server_url = server_url[:-3]
-
-    if _endpoint_blackholed(server_url):
-        return None
-
-    headers = _auth_headers(api_key)
-
-    try:
-        with httpx.Client(timeout=5.0, headers=headers) as client:
-            resp = client.post(f"{server_url}/api/show", json={"name": model})
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-
-            # Hosted Ollama: GGUF model_info is the real max — prefer it over
-            # num_ctx which the Cloud operator may have capped arbitrarily.
-            model_info = data.get("model_info", {})
-            for key, value in model_info.items():
-                if "context_length" in key and isinstance(value, (int, float)):
-                    ctx = int(value)
-                    if ctx >= 1024:
-                        return ctx
-
-            # Fall back to num_ctx from Modelfile parameters (rare on Cloud)
-            params = data.get("parameters", "")
-            if "num_ctx" in params:
-                for line in params.split("\n"):
-                    if "num_ctx" in line:
-                        parts = line.strip().split()
-                        if len(parts) >= 2:
-                            try:
-                                ctx = int(parts[-1])
-                                if ctx >= 1024:
-                                    return ctx
-                            except ValueError:
-                                pass
-    except Exception as exc:
-        if _is_connect_timeout(exc):
-            _note_endpoint_blackholed(server_url)
-    return None
-
-
 def _model_name_suggests_minimax_m3(model: str) -> bool:
     """Return True if the model name looks like MiniMax M3.
 
@@ -1860,164 +1200,6 @@ def _model_name_suggests_minimax(model: str) -> bool:
 def _model_name_suggests_stale_32k_underreport(model: str) -> bool:
     """Return True for model families known to be wrongly underreported as 32K."""
     return _model_name_suggests_minimax(model)
-
-
-def _query_local_context_length(model: str, base_url: str, api_key: str = "") -> Optional[int]:
-    """Query a local server for the model's context length (short-TTL cached).
-
-    The live-probe paths added for local endpoints (reconcile-on-hit and the
-    pre-defaults step-7 probe) can fire this function several times in quick
-    succession during one startup — banner display, ``/model`` switch,
-    compressor ``update_model`` all resolve the same model. Each raw probe
-    issues synchronous ``detect_local_server_type`` + query HTTP calls (bounded
-    by the 3s httpx timeout), so an unreachable/slow local server would pay
-    that cost repeatedly. A tiny in-process TTL cache collapses back-to-back
-    probes for the same (model, base_url) into one network round-trip without
-    persisting anything to disk (freshness across restarts is still handled by
-    the reconcile logic, which probes again once the TTL expires).
-    """
-    import time as _time
-
-    cache_key = (_strip_provider_prefix(model), base_url.rstrip("/"))
-    now = _time.monotonic()
-    cached = _LOCAL_CTX_PROBE_CACHE.get(cache_key)
-    if cached is not None and (now - cached[1]) < _LOCAL_CTX_PROBE_TTL_SECONDS:
-        return cached[0]
-
-    result = _query_local_context_length_uncached(model, base_url, api_key=api_key)
-    # Cache only positive results. A None/failure (server not up yet,
-    # connection refused, timeout) must NOT be memoized — otherwise a probe
-    # that fails during a startup race would suppress a legit retry seconds
-    # later once the server is reachable. Positive-only caching still fully
-    # bounds the hot-path probe rate (a reachable server returns a value and
-    # gets cached); an unreachable one simply re-probes on the next call.
-    if result:
-        _LOCAL_CTX_PROBE_CACHE[cache_key] = (result, now)
-    return result
-
-
-def _query_local_context_length_uncached(model: str, base_url: str, api_key: str = "") -> Optional[int]:
-    """Query a local server for the model's context length."""
-    import httpx
-
-    # Strip recognised provider prefix (e.g., "local:model-name" → "model-name").
-    # Ollama "model:tag" colons (e.g. "qwen3.5:27b") are intentionally preserved.
-    model = _strip_provider_prefix(model)
-
-    # Strip /v1 suffix to get the server root
-    server_url = _localhost_to_ipv4(base_url.rstrip("/"))
-    if server_url.endswith("/v1"):
-        server_url = server_url[:-3]
-    lmstudio_url = _localhost_to_ipv4(_lmstudio_server_root(base_url))
-
-    if _endpoint_blackholed(server_url):
-        return None
-
-    headers = _auth_headers(api_key)
-
-    try:
-        server_type = detect_local_server_type(base_url, api_key=api_key)
-    except Exception:
-        server_type = None
-
-    try:
-        with httpx.Client(timeout=3.0, headers=headers) as client:
-            # Ollama: /api/show returns model details with context info
-            if server_type == "ollama":
-                resp = client.post(f"{server_url}/api/show", json={"name": model})
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # Prefer explicit num_ctx from Modelfile parameters: this is
-                    # the *runtime* context Ollama will actually allocate KV cache
-                    # for. The GGUF model_info.context_length is the training max,
-                    # which can be larger than num_ctx — using it here would let
-                    # Pilotage grow conversations past the runtime limit and Ollama
-                    # would silently truncate. Matches query_ollama_num_ctx().
-                    params = data.get("parameters", "")
-                    if "num_ctx" in params:
-                        for line in params.split("\n"):
-                            if "num_ctx" in line:
-                                parts = line.strip().split()
-                                if len(parts) >= 2:
-                                    try:
-                                        return int(parts[-1])
-                                    except ValueError:
-                                        pass
-                    # Fall back to GGUF model_info context_length (training max)
-                    model_info = data.get("model_info", {})
-                    for key, value in model_info.items():
-                        if "context_length" in key and isinstance(value, (int, float)):
-                            return int(value)
-
-            # LM Studio native API: /api/v1/models returns max_context_length.
-            # This is more reliable than the OpenAI-compat /v1/models which
-            # doesn't include context window information for LM Studio servers.
-            # Use _model_id_matches for fuzzy matching: LM Studio stores models as
-            # "publisher/slug" but users configure only "slug" after "local:" prefix.
-            if server_type == "lm-studio":
-                resp = client.get(f"{lmstudio_url}/api/v1/models")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    for m in data.get("models", []):
-                        if _model_id_matches(m.get("key", ""), model) or _model_id_matches(m.get("id", ""), model):
-                            # Prefer loaded instance context (actual runtime value)
-                            for inst in m.get("loaded_instances", []):
-                                cfg = inst.get("config", {})
-                                ctx = cfg.get("context_length")
-                                if ctx and isinstance(ctx, (int, float)):
-                                    return int(ctx)
-                            break
-
-            # LM Studio / vLLM / llama.cpp: try /v1/models/{model}
-            resp = client.get(f"{server_url}/v1/models/{model}")
-            if resp.status_code == 200:
-                data = resp.json()
-                # vLLM returns max_model_len
-                ctx = data.get("max_model_len") or data.get("context_length") or data.get("max_tokens")
-                if ctx and isinstance(ctx, (int, float)):
-                    return int(ctx)
-
-            # Try /v1/models and find the model in the list.
-            # Use _model_id_matches to handle "publisher/slug" vs bare "slug".
-            resp = client.get(f"{server_url}/v1/models")
-            if resp.status_code == 200:
-                data = resp.json()
-                models_list = data.get("data", [])
-                # Match by id; on single-model servers (e.g. llama.cpp) the
-                # configured name rarely equals the reported id (a GGUF path),
-                # so fall back to the sole model when nothing matches.
-                matched = None
-                for m in models_list:
-                    if _model_id_matches(m.get("id", ""), model):
-                        matched = m
-                        break
-                if matched is None and len(models_list) == 1:
-                    matched = models_list[0]
-                if matched is not None:
-                    # llama.cpp nests the runtime context under meta.n_ctx; the
-                    # vLLM/OpenAI keys are also checked. Runtime n_ctx is
-                    # preferred over n_ctx_train (the training maximum, which
-                    # can be larger than what the server actually allocates).
-                    for source in (matched, matched.get("meta") or {}):
-                        if not isinstance(source, dict):
-                            continue
-                        for key in (
-                            "n_ctx",
-                            "context_length",
-                            "context_window",
-                            "max_model_len",
-                            "max_context_length",
-                            "max_tokens",
-                            "n_ctx_train",
-                        ):
-                            val = source.get(key)
-                            if isinstance(val, (int, float)) and val:
-                                return int(val)
-    except Exception as exc:
-        if _is_connect_timeout(exc):
-            _note_endpoint_blackholed(server_url)
-
-    return None
 
 
 def _normalize_model_version(model: str) -> str:
@@ -2265,12 +1447,11 @@ def get_model_context_length(
     0. Explicit config override (model.context_length or custom_providers per-model)
     0b. model_overrides config (per-provider+model context_window override)
     0c. Endpoint-scoped metadata for models validated on one multiplexed endpoint
-    1. Persistent cache (previously discovered via probing).  Nous URLs,
-       LM Studio, and Codex OAuth bypass the cache here so their provider
-       metadata can be reconciled against the authoritative live source.
+    1. Persistent cache (previously discovered via probing).  Codex OAuth
+       bypasses the cache here so its provider metadata can be reconciled
+       against the authoritative live source.
     2. Active endpoint metadata (/models for explicit custom endpoints)
-    3. Local server query (for local endpoints)
-    4. Anthropic /v1/models API (API-key users only, not OAuth)
+    3. Anthropic /v1/models API (API-key users only, not OAuth)
     5. Provider-aware lookups (before generic OpenRouter cache):
        a. Copilot live /models API
        b. Nous: live /v1/models probe first (authoritative), then OR
@@ -2278,12 +1459,10 @@ def get_model_context_length(
           portal-derived values are persisted to disk.
        c. Codex OAuth /models probe
        d. GMI /models endpoint
-       e. Ollama native /api/show probe (any base_url, provider-agnostic)
-       f. models.dev registry lookup (with :cloud/-cloud suffix fallback)
+       e. models.dev registry lookup (with :cloud/-cloud suffix fallback)
     6. OpenRouter live API metadata (Kimi-family 32k guard)
-    7. Local server query (before hardcoded defaults for local endpoints)
-    8. Hardcoded defaults (broad family patterns, longest-key-first)
-    9. Default fallback (256K)"""
+    7. Hardcoded defaults (broad family patterns, longest-key-first)
+    8. Default fallback (256K)"""
     # 0. Explicit config override — user knows best
     if config_context_length is not None and isinstance(config_context_length, int) and config_context_length > 0:
         return config_context_length
@@ -2347,7 +1526,7 @@ def get_model_context_length(
 
     # Normalise provider-prefixed model names (e.g. "local:model-name" →
     # "model-name") so cache lookups and server queries use the bare ID that
-    # local servers actually know about.  Ollama "model:tag" colons are preserved.
+    # the endpoint actually knows about.
     model = _strip_provider_prefix(model)
 
     # Endpoint-scoped provider metadata. Keep this ahead of the persistent
@@ -2358,9 +1537,6 @@ def get_model_context_length(
         return endpoint_context
 
     # 1. Check persistent cache (model+provider)
-    # LM Studio is excluded — its loaded context length is transient (the
-    # user can reload the model with a different context_length at any time
-    # via /api/v1/models/load), so a stale cached value would mask reloads.
     # Codex OAuth is excluded because the authenticated /models catalogue is
     # account-specific and a fallback must never suppress later revalidation.
     if base_url and not _skip_persistent_context_cache(base_url, provider):
@@ -2399,10 +1575,6 @@ def get_model_context_length(
                 )
                 _invalidate_cached_context_length(model, base_url)
             else:
-                if is_local_endpoint(base_url):
-                    return _reconcile_local_cached_context_length(
-                        model, base_url, cached, api_key=api_key,
-                    )
                 return cached
 
     if provider == "novita" or (base_url and base_url_host_matches(base_url, "api.novita.ai")):
@@ -2422,26 +1594,6 @@ def get_model_context_length(
         if context_length is not None:
             return context_length
         if not _is_known_provider_base_url(base_url):
-            # For local endpoints, run the probe that respects configured
-            # Modelfile context values first.  _query_local_context_length
-            # prefers num_ctx from Modelfile, while _query_ollama_api_show
-            # returns the GGUF training max first which can be larger and
-            # would create a false-safe window for compression.
-            # Non-local endpoints preserve the existing GGUF-first behavior.
-            if is_local_endpoint(base_url):
-                local_ctx = _query_local_context_length(model, base_url, api_key=api_key)
-                if local_ctx and local_ctx > 0:
-                    if not _skip_persistent_context_cache(base_url, provider):
-                        _maybe_cache_local_context_length(model, base_url, local_ctx)
-                    return local_ctx
-            # 2b. Ollama native /api/show — non-local endpoints preserve
-            # the existing generic /api/show GGUF-first behavior.
-            # Non-Ollama servers return 404/405 quickly.
-            ctx = _query_ollama_api_show(model, base_url, api_key=api_key)
-            if ctx is not None:
-                if not _skip_persistent_context_cache(base_url, provider):
-                    save_context_length(model, base_url, ctx)
-                return ctx
             # 3. Probe-down fallback after endpoint-specific detection failed
             logger.info(
                 "Could not detect context length for model %r at %s — "
@@ -2451,8 +1603,8 @@ def get_model_context_length(
             )
             # 3b. Before falling back to the hard 256K default, consult the
             # hardcoded catalog as a last resort.  A proxied/custom Anthropic
-            # gateway (e.g. corporate proxy) fails the Ollama/local probes
-            # above, but the model name may still match an entry in
+            # gateway (e.g. corporate proxy) fails the probes above, but
+            # the model name may still match an entry in
             # DEFAULT_CONTEXT_LENGTHS (e.g. "claude-opus-4-8" → 1M).
             # Without this, the early return here short-circuits the catalog
             # lookup at step 8 and silently caps context at 256K.
@@ -2514,29 +1666,6 @@ def get_model_context_length(
         ctx = _resolve_endpoint_context_length(model, base_url, api_key=api_key)
         if ctx is not None:
             return ctx
-    # 5e. Ollama native /api/show probe — runs for providers whose base_url
-    # is NOT a known non-Ollama provider.  Ollama-compatible servers expose
-    # this endpoint regardless of hostname (local Ollama, Ollama Cloud,
-    # custom Ollama hosting).  The OpenAI-compat /v1/models endpoint
-    # correctly omits context_length per the OpenAI schema, but /api/show
-    # returns the authoritative GGUF model_info.context_length.
-    # Known hosted providers (OpenRouter, Anthropic, OpenAI, …) are skipped:
-    # they are definitively not Ollama, the POST always 404s, and the result
-    # is never cached for them — so every fresh process used to pay a
-    # ~300ms blocking HTTP round-trip on the first-turn critical path
-    # (measured against openrouter.ai; worse on slow DNS).
-    if base_url:
-        _inferred_for_probe = _infer_provider_from_url(base_url)
-        _skip_ollama_probe = (
-            _inferred_for_probe is not None
-            and "ollama" not in _inferred_for_probe
-        )
-        if not _skip_ollama_probe:
-            ctx = _query_ollama_api_show(model, base_url, api_key=api_key)
-            if ctx is not None:
-                if not _skip_persistent_context_cache(base_url, provider):
-                    save_context_length(model, base_url, ctx)
-                return ctx
     # 5f. OpenRouter live /models metadata — authoritative for OpenRouter-routed
     # models. OpenRouter's catalog carries per-model context_length (e.g.
     # anthropic/claude-fable-5 -> 1M) and refreshes as new slugs ship, so it
@@ -2590,16 +1719,6 @@ def get_model_context_length(
                 )
             else:
                 return or_ctx
-
-    # 7. Query local server before hardcoded defaults — model names like
-    # ``Hermes-3-Llama-3.1-70B`` substring-match ``llama`` (131072) even when
-    # vLLM is running at a lower ``--max-model-len`` (e.g. 32768 on limited VRAM).
-    if base_url and is_local_endpoint(base_url):
-        local_ctx = _query_local_context_length(model, base_url, api_key=api_key)
-        if local_ctx and local_ctx > 0:
-            if not _skip_persistent_context_cache(base_url, provider):
-                _maybe_cache_local_context_length(model, base_url, local_ctx)
-            return local_ctx
 
     # 8. Hardcoded defaults (fuzzy match — longest key first for specificity)
     # Only check `default_model in model` (is the key a substring of the input).

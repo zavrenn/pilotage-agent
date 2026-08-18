@@ -34,12 +34,7 @@ from agent.context_compressor import ContextCompressor
 from agent.iteration_budget import IterationBudget
 from agent.memory_manager import StreamingContextScrubber
 from agent.session_activity import ActivityProvenance
-from agent.model_metadata import (
-    MINIMUM_CONTEXT_LENGTH,
-    fetch_model_metadata,
-    is_local_endpoint,
-    query_ollama_num_ctx,
-)
+from agent.model_metadata import MINIMUM_CONTEXT_LENGTH
 from agent.process_bootstrap import _install_safe_stdio
 from agent.subdirectory_hints import SubdirectoryHintTracker
 from agent.think_scrubber import StreamingThinkScrubber
@@ -474,13 +469,6 @@ def init_agent(
     ephemeral_system_prompt: str = None,
     log_prefix_chars: int = 100,
     log_prefix: str = "",
-    providers_allowed: List[str] = None,
-    providers_ignored: List[str] = None,
-    providers_order: List[str] = None,
-    provider_sort: str = None,
-    provider_require_parameters: bool = False,
-    provider_data_collection: str = None,
-    openrouter_min_coding_score: Optional[float] = None,
     session_id: str = None,
     tool_progress_callback: callable = None,
     tool_start_callback: callable = None,
@@ -546,13 +534,6 @@ def init_agent(
         ephemeral_system_prompt (str): System prompt used during agent execution but NOT saved to trajectories (optional)
         log_prefix_chars (int): Number of characters to show in log previews for tool calls/responses (default: 100)
         log_prefix (str): Prefix to add to all log messages for identification in parallel processing (default: "")
-        providers_allowed (List[str]): OpenRouter providers to allow (optional)
-        providers_ignored (List[str]): OpenRouter providers to ignore (optional)
-        providers_order (List[str]): OpenRouter providers to try in order (optional)
-        provider_sort (str): Sort providers by price/throughput/latency (optional)
-        openrouter_min_coding_score (float): Coding-score floor (0.0-1.0) for the
-            openrouter/pareto-code router. Only applied when model == "openrouter/pareto-code".
-            None or empty = let OpenRouter pick the strongest available coder.
         session_id (str): Pre-generated session ID for logging (optional, auto-generated if not provided)
         tool_progress_callback (callable): Callback function(tool_name, args_preview) for progress notifications
         clarify_callback (callable): Callback function(question, choices) -> str for interactive user questions.
@@ -667,13 +648,9 @@ def init_agent(
         pass  # Non-fatal — transport may not exist for all modes yet
 
     try:
-        from pilotage_cli.model_normalize import (
-            _AGGREGATOR_PROVIDERS,
-            normalize_model_for_provider,
-        )
+        from pilotage_cli.model_normalize import normalize_model_for_provider
 
-        if agent.provider not in _AGGREGATOR_PROVIDERS:
-            agent.model = normalize_model_for_provider(agent.model, agent.provider)
+        agent.model = normalize_model_for_provider(agent.model, agent.provider)
     except Exception:
         pass
 
@@ -709,22 +686,6 @@ def init_agent(
         # from chat_completions to codex_responses after the warm at __init__.
         if hasattr(agent, "_transport_cache"):
             agent._transport_cache.clear()
-
-    # Pre-warm OpenRouter model metadata cache in a background thread.
-    # fetch_model_metadata() is cached for 1 hour; this avoids a blocking
-    # HTTP request on the first API response when pricing is estimated.
-    # Use a process-level Event so this thread is only spawned once — a new
-    # AIAgent is created for every gateway request, so without the guard
-    # each message leaks one OS thread and the process eventually exhausts
-    # the system thread limit (RuntimeError: can't start new thread).
-    if (agent.provider == "openrouter" or agent._is_openrouter_url()) and \
-            not _ra()._openrouter_prewarm_done.is_set():
-        _ra()._openrouter_prewarm_done.set()
-        threading.Thread(
-            target=fetch_model_metadata,
-            daemon=True,
-            name="openrouter-prewarm",
-        ).start()
 
     agent.tool_progress_callback = tool_progress_callback
     agent.tool_start_callback = tool_start_callback
@@ -803,15 +764,6 @@ def init_agent(
     # the end of the prior turn had finished).
     agent._background_review_agent = None
     agent._background_review_lock = threading.Lock()
-
-    # Store OpenRouter provider preferences
-    agent.providers_allowed = providers_allowed
-    agent.providers_ignored = providers_ignored
-    agent.providers_order = providers_order
-    agent.provider_sort = provider_sort
-    agent.provider_require_parameters = provider_require_parameters
-    agent.provider_data_collection = provider_data_collection
-    agent.openrouter_min_coding_score = openrouter_min_coding_score
 
     # Store toolset filtering options
     agent.enabled_toolsets = enabled_toolsets
@@ -2430,55 +2382,6 @@ def init_agent(
     agent.session_cost_status = "unknown"
     agent.session_cost_source = "none"
     
-    # ── Ollama num_ctx injection ──
-    # Ollama defaults to 2048 context regardless of the model's capabilities.
-    # When running against an Ollama server, detect the model's max context
-    # and pass num_ctx on every chat request so the full window is used.
-    # User override: set model.ollama_num_ctx in config.yaml to cap VRAM use.
-    # If model.context_length is set, it caps num_ctx so the user's VRAM
-    # budget is respected even when GGUF metadata advertises a larger window.
-    agent._ollama_num_ctx: int | None = None
-    _ollama_num_ctx_override = None
-    if isinstance(_model_cfg, dict):
-        _ollama_num_ctx_override = _model_cfg.get("ollama_num_ctx")
-    if _ollama_num_ctx_override is not None:
-        try:
-            agent._ollama_num_ctx = int(_ollama_num_ctx_override)
-        except (TypeError, ValueError):
-            _ra().logger.debug("Invalid ollama_num_ctx config value: %r", _ollama_num_ctx_override)
-    if agent._ollama_num_ctx is None and agent.base_url and is_local_endpoint(agent.base_url):
-        try:
-            # ``agent.api_key`` may be a callable (Entra token provider).
-            # Ollama detection makes a manual HTTP request and expects a
-            # string — Azure Foundry isn't a local endpoint so this branch
-            # never fires for Entra, but guard defensively.
-            _key_for_ollama = agent.api_key if isinstance(agent.api_key, str) else ""
-            _detected = query_ollama_num_ctx(agent.model, agent.base_url, api_key=_key_for_ollama or "")
-            if _detected and _detected > 0:
-                agent._ollama_num_ctx = _detected
-        except Exception as exc:
-            _ra().logger.debug("Ollama num_ctx detection failed: %s", exc)
-    # Cap auto-detected ollama_num_ctx to the user's explicit context_length.
-    # Without this, GGUF metadata can advertise 256K+ which Ollama honours
-    # by allocating that much VRAM — blowing up small GPUs even though the
-    # user explicitly set a smaller context_length in config.yaml.
-    if (
-        agent._ollama_num_ctx
-        and _config_context_length
-        and _ollama_num_ctx_override is None  # don't override explicit ollama_num_ctx
-        and agent._ollama_num_ctx > _config_context_length
-    ):
-        _ra().logger.info(
-            "Ollama num_ctx capped: %d -> %d (model.context_length override)",
-            agent._ollama_num_ctx, _config_context_length,
-        )
-        agent._ollama_num_ctx = _config_context_length
-    if agent._ollama_num_ctx and not agent.quiet_mode:
-        _ra().logger.info(
-            "Ollama num_ctx: will request %d tokens (model max from /api/show)",
-            agent._ollama_num_ctx,
-        )
-
     # Codex gpt-5.x autoraise notice: show at most once per profile/config
     # state. Without the persisted marker the notice re-fires on every agent
     # init — and the gateway rebuilds the agent per inbound message, so Discord

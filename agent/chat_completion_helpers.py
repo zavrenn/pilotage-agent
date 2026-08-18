@@ -35,7 +35,6 @@ from agent.error_classifier import (
 )
 from agent.errors import EmptyStreamError
 from agent.turn_context import substitute_api_content
-from agent.model_metadata import is_local_endpoint
 from agent.message_content import flatten_message_text
 from agent.message_metadata import append_message, stamp_message_timestamp
 from agent.message_sanitization import (
@@ -48,7 +47,6 @@ from tools.terminal_tool import is_persistent_env
 from utils import base_url_host_matches, base_url_hostname, env_float, env_int
 
 logger = logging.getLogger(__name__)
-_OPENROUTER_PROVIDER_SORT_VALUES = {"throughput", "latency", "price"}
 _PROVIDER_STREAM_ERROR_FINISH_REASONS = {"error", "error_finish"}
 _PROVIDER_STREAM_SSE_FIELDS = {"event", "data", "id", "retry"}
 _PROVIDER_STREAM_ERROR_TEXT_LIMIT = 4096
@@ -540,42 +538,6 @@ def openai_codex_stale_timeout_floor(est_tokens: int) -> float:
     if est_tokens > 10_000:
         return 600.0
     return 0.0
-
-
-def _validated_openrouter_provider_sort(raw_sort: Any) -> Optional[str]:
-    """Return a normalized OpenRouter provider.sort value or None."""
-    if not isinstance(raw_sort, str):
-        return None
-    sort_value = raw_sort.strip().lower()
-    if not sort_value:
-        return None
-    if sort_value in _OPENROUTER_PROVIDER_SORT_VALUES:
-        return sort_value
-    logger.warning(
-        "Ignoring invalid OpenRouter provider.sort value %r (allowed: %s)",
-        raw_sort,
-        ", ".join(sorted(_OPENROUTER_PROVIDER_SORT_VALUES)),
-    )
-    return None
-
-
-def _provider_preferences_for_agent(agent) -> Dict[str, Any]:
-    """Build the validated provider-routing object shared by request paths."""
-    preferences: Dict[str, Any] = {}
-    if agent.providers_allowed:
-        preferences["only"] = agent.providers_allowed
-    if agent.providers_ignored:
-        preferences["ignore"] = agent.providers_ignored
-    if agent.providers_order:
-        preferences["order"] = agent.providers_order
-    provider_sort = _validated_openrouter_provider_sort(agent.provider_sort)
-    if provider_sort:
-        preferences["sort"] = provider_sort
-    if agent.provider_require_parameters:
-        preferences["require_parameters"] = True
-    if agent.provider_data_collection:
-        preferences["data_collection"] = agent.provider_data_collection
-    return preferences
 
 
 def _prompt_cache_scope_for_agent(agent) -> "str | None":
@@ -1656,7 +1618,6 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
 
     # Provider detection flags
     _is_qwen = agent._is_qwen_portal()
-    _is_or = agent._is_openrouter_url()
     _is_gh = (
         base_url_host_matches(agent._base_url_lower, "models.github.ai")
         or base_url_host_matches(agent._base_url_lower, "githubcopilot.com")
@@ -1664,9 +1625,6 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
     _is_nvidia = base_url_host_matches(agent._base_url_lower, "integrate.api.nvidia.com")
     _is_tokenhub = base_url_host_matches(agent._base_url_lower, "tokenhub.tencentmaas.com")
     _is_lmstudio = (agent.provider or "").strip().lower() == "lmstudio"
-
-    # Provider preferences (aggregator profile decides whether to emit them).
-    _prefs = _provider_preferences_for_agent(agent)
 
     # Anthropic-compatible max-output fallback (last resort only — applied in
     # build_kwargs *after* ephemeral/user/profile max_tokens, never overriding
@@ -1720,10 +1678,6 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
             session_id=getattr(agent, "session_id", None),
             cache_scope_id=_cache_scope_id,
             provider_profile=_profile,
-            ollama_num_ctx=agent._ollama_num_ctx,
-            # Context forwarded to profile hooks:
-            provider_preferences=_prefs or None,
-            openrouter_min_coding_score=agent.openrouter_min_coding_score,
             anthropic_max_output=_ant_max,
             supports_reasoning=agent._supports_reasoning_extra_body(),
             qwen_session_metadata=_qwen_meta,
@@ -1753,16 +1707,12 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         session_id=getattr(agent, "session_id", None),
         cache_scope_id=_cache_scope_id,
         model_lower=(agent.model or "").lower(),
-        is_openrouter=_is_or,
         is_qwen_portal=_is_qwen,
         is_github_models=_is_gh,
         is_nvidia_nim=_is_nvidia,
         is_tokenhub=_is_tokenhub,
         is_lmstudio=_is_lmstudio,
         is_custom_provider=agent.provider == "custom",
-        ollama_num_ctx=agent._ollama_num_ctx,
-        provider_preferences=_prefs or None,
-        openrouter_min_coding_score=agent.openrouter_min_coding_score,
         qwen_prepare_fn=agent._qwen_prepare_chat_messages if _is_qwen else None,
         qwen_prepare_inplace_fn=agent._qwen_prepare_chat_messages_inplace if _is_qwen else None,
         qwen_session_metadata=_qwen_meta,
@@ -2077,7 +2027,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
     auth resolution and client construction — no duplicated provider→key
     mappings.
     """
-    if reason in {FailoverReason.rate_limit, FailoverReason.billing, FailoverReason.upstream_rate_limit}:
+    if reason in {FailoverReason.rate_limit, FailoverReason.billing}:
         # Only start cooldown when leaving the primary provider.  If we're
         # already on a fallback and chain-switching, the primary wasn't the
         # source of the 429 so the cooldown should not be reset/extended.
@@ -2108,7 +2058,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         # provider again. Guards the cross-turn replay storm in.
         if (
             len(agent._fallback_chain) > 0
-            and reason not in {FailoverReason.rate_limit, FailoverReason.billing, FailoverReason.upstream_rate_limit}
+            and reason not in {FailoverReason.rate_limit, FailoverReason.billing}
         ):
             _existing_cooldown = getattr(agent, "_rate_limited_until", 0) or 0
             agent._rate_limited_until = max(
@@ -2545,7 +2495,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
 
             # Merge the profile's canonical body even when routing is unset:
             # profiles may always emit required metadata such as Portal tags.
-            provider_preferences = _provider_preferences_for_agent(agent)
             profile_extra_body = {}
             try:
                 from providers import get_provider_profile
@@ -2554,7 +2503,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                 if provider_profile is not None:
                     profile_extra_body = provider_profile.build_extra_body(
                         session_id=getattr(agent, "session_id", None),
-                        provider_preferences=provider_preferences or None,
                         model=agent.model,
                         base_url=agent.base_url,
                         reasoning_config=agent.reasoning_config,
@@ -2564,33 +2512,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
 
             if profile_extra_body:
                 summary_extra_body.update(profile_extra_body)
-            if provider_preferences and "provider" not in profile_extra_body and (
-                (agent.provider or "").strip().lower() == "openrouter"
-                or agent._is_openrouter_url()
-            ):
-                summary_extra_body["provider"] = provider_preferences
-
-            # Pareto Code router plugin — model-gated. Same shape as
-            # the main-loop emission so summary calls on
-            # openrouter/pareto-code respect the user's coding-score floor.
-            if (
-                agent.model == "openrouter/pareto-code"
-                and (
-                    (agent.provider or "").strip().lower() == "openrouter"
-                    or agent._is_openrouter_url()
-                )
-                and agent.openrouter_min_coding_score is not None
-                and agent.openrouter_min_coding_score != ""
-            ):
-                try:
-                    _ps = float(agent.openrouter_min_coding_score)
-                except (TypeError, ValueError):
-                    _ps = None
-                if _ps is not None and 0.0 <= _ps <= 1.0:
-                    summary_extra_body["plugins"] = [
-                        {"id": "pareto-router", "min_coding_score": _ps}
-                    ]
-
             if summary_extra_body:
                 summary_kwargs["extra_body"] = summary_extra_body
 
@@ -3034,17 +2955,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             _stream_read_timeout = _provider_timeout_cfg
         else:
             _stream_read_timeout = env_float("PILOTAGE_STREAM_READ_TIMEOUT", 120.0)
-            # Local providers (Ollama, llama.cpp, vLLM) can take minutes for
-            # prefill on large contexts before producing the first token.
-            # Auto-increase the httpx read timeout unless the user explicitly
-            # overrode PILOTAGE_STREAM_READ_TIMEOUT.
-            if _stream_read_timeout == 120.0 and agent.base_url and is_local_endpoint(agent.base_url):
-                _stream_read_timeout = _base_timeout
-                logger.debug(
-                    "Local provider detected (%s) — stream read timeout raised to %.0fs",
-                    agent.base_url, _stream_read_timeout,
-                )
-            elif (
+            if (
                 _stream_read_timeout == 120.0
                 and _stream_stale_timeout is not None
                 and _stream_stale_timeout != float("inf")
@@ -3941,59 +3852,27 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         _stream_stale_timeout_base = _cfg_stale
     else:
         _stream_stale_timeout_base = env_float("PILOTAGE_STREAM_STALE_TIMEOUT", 180.0)
-    # Local providers (Ollama, oMLX, llama-cpp) can take 300+ seconds
-    # for prefill on large contexts, so tolerate far longer silence than
-    # the cloud default — but a wedged local server must EVENTUALLY trip the
-    # detector rather than hang forever (an infinite timeout meant a crashed
-    # or deadlocked local endpoint stalled the session indefinitely).  900s
-    # tolerates slow prefill while still bounding a hung endpoint.  Applies
-    # unless the user explicitly set PILOTAGE_STREAM_STALE_TIMEOUT; override the
-    # local ceiling with PILOTAGE_LOCAL_STREAM_STALE_TIMEOUT (documented in
-    # website/docs/reference/environment-variables.md).
-    if _stream_stale_timeout_base == 180.0 and agent.base_url and is_local_endpoint(agent.base_url):
-        # Read config.yaml ``agent.local_stream_stale_timeout`` (default 900),
-        # env var ``PILOTAGE_LOCAL_STREAM_STALE_TIMEOUT`` overrides for escape-hatch.
-        _local_default = 900.0
-        try:
-            from pilotage_cli.config import load_config_readonly
-
-            _cfg = load_config_readonly()  # read-only consumer — no deepcopy
-            _agent_cfg = _cfg.get("agent") if isinstance(_cfg, dict) else None
-            if isinstance(_agent_cfg, dict):
-                _v = _agent_cfg.get("local_stream_stale_timeout")
-                if isinstance(_v, (int, float)):
-                    _local_default = float(_v)
-        except Exception:
-            pass
-        _stream_stale_timeout = env_float("PILOTAGE_LOCAL_STREAM_STALE_TIMEOUT", _local_default)
-        logger.debug(
-            "Local provider detected (%s) — stale stream timeout set to %.0fs",
-            agent.base_url, _stream_stale_timeout,
-        )
+    # Scale the stale timeout for large contexts: reasoning models can
+    # legitimately think for minutes before producing the first token when
+    # the context is large.  Without this, the stale detector kills healthy
+    # connections during the model's thinking phase, producing spurious
+    # RemoteProtocolError ("peer closed connection").
+    _est_tokens = estimate_request_context_tokens(api_kwargs)
+    if _est_tokens > 100_000:
+        _stream_stale_timeout = max(_stream_stale_timeout_base, 300.0)
+    elif _est_tokens > 50_000:
+        _stream_stale_timeout = max(_stream_stale_timeout_base, 240.0)
     else:
-        # Scale the stale timeout for large contexts: slow models (like Opus)
-        # can legitimately think for minutes before producing the first token
-        # when the context is large.  Without this, the stale detector kills
-        # healthy connections during the model's thinking phase, producing
-        # spurious RemoteProtocolError ("peer closed connection").
-        _est_tokens = estimate_request_context_tokens(api_kwargs)
-        if _est_tokens > 100_000:
-            _stream_stale_timeout = max(_stream_stale_timeout_base, 300.0)
-        elif _est_tokens > 50_000:
-            _stream_stale_timeout = max(_stream_stale_timeout_base, 240.0)
-        else:
-            _stream_stale_timeout = _stream_stale_timeout_base
-        # Reasoning-model floor: known reasoning models (Nemotron 3 Ultra,
-        # OpenAI o1/o3, Anthropic Opus 4.x thinking, DeepSeek R1, Qwen QwQ,
-        # xAI Grok reasoning, etc.) routinely exceed the default 180s chat-
-        # model threshold during their thinking phase.  The cloud gateway
-        # upstream kills the socket first, surfacing as BrokenPipeError.
-        # Raises the floor only — never overrides explicit user config
-        # (handled by get_provider_stale_timeout above).
-        from agent.reasoning_timeouts import get_reasoning_stale_timeout_floor
-        _reasoning_floor = get_reasoning_stale_timeout_floor(api_kwargs.get("model"))
-        if _reasoning_floor is not None:
-            _stream_stale_timeout = max(_stream_stale_timeout, _reasoning_floor)
+        _stream_stale_timeout = _stream_stale_timeout_base
+    # Reasoning-model floor: reasoning models routinely exceed the default
+    # 180s chat-model threshold during their thinking phase, and the upstream
+    # gateway kills the socket first (surfacing as BrokenPipeError).  Raises
+    # the floor only — never overrides explicit user config (handled by
+    # get_provider_stale_timeout above).
+    from agent.reasoning_timeouts import get_reasoning_stale_timeout_floor
+    _reasoning_floor = get_reasoning_stale_timeout_floor(api_kwargs.get("model"))
+    if _reasoning_floor is not None:
+        _stream_stale_timeout = max(_stream_stale_timeout, _reasoning_floor)
 
     t = threading.Thread(target=_context_thread_target(_call), daemon=True)
     t.start()

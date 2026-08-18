@@ -791,21 +791,6 @@ def _run_review_in_thread(
                 )
                 if _parent_prefill:
                     _fork_kwargs["prefill_messages"] = _parent_prefill
-                # OpenRouter provider-routing pins: prompt caches live per
-                # UPSTREAM provider, so a fork without the parent's pins can
-                # be routed to a different upstream and miss the warm cache
-                # even with byte-identical prompt/tools bytes.
-                for _pref_attr in (
-                    "providers_allowed",
-                    "providers_ignored",
-                    "providers_order",
-                    "provider_sort",
-                    "provider_require_parameters",
-                    "provider_data_collection",
-                ):
-                    _pref_val = getattr(agent, _pref_attr, None)
-                    if _pref_val:
-                        _fork_kwargs[_pref_attr] = _pref_val
             review_agent = AIAgent(
                 model=_rt.get("model") or agent.model,
                 max_iterations=16,

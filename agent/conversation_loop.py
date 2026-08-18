@@ -75,12 +75,7 @@ from agent.model_metadata import (
     save_context_length,
 )
 from agent.process_bootstrap import _install_safe_stdio
-from agent.retry_utils import (
-    adaptive_rate_limit_backoff,
-    is_zai_coding_overload_error,
-    jittered_backoff,
-    zai_coding_overload_retry_ceiling,
-)
+from agent.retry_utils import jittered_backoff
 from agent.trajectory import has_incomplete_scratchpad
 # Bind before the turn starts so a source-tree swap cannot load a skewed
 # finalizer at turn end.
@@ -219,7 +214,7 @@ def _join_truncated_parts(parts: List[str]) -> str:
 def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text: str) -> None:
     """Append a provider-safe checkpoint and correction to the live turn.
 
-    Incomplete provider reasoning blocks are not valid replay items (Anthropic
+    Incomplete provider reasoning blocks are not valid replay items (the
     signs them; Responses reasoning items require their following output).
     Preserve only the *visible* response text, demoted to ordinary text, then
     add the correction as a real user message. This keeps role alternation
@@ -229,7 +224,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
     message content. Streamed reasoning is display-only state: it may be shown
     live, but it does not re-enter the transcript as assistant (or user) text.
     An assistant turn whose content inlines its own chain-of-thought reads to
-    Anthropic's output classifier as reasoning-injection/prefill jailbreak,
+    the provider's output classifier as reasoning-injection/prefill jailbreak,
     and because the poisoned checkpoint is persisted and replayed on every
     subsequent call, the session dies permanently with deterministic
     "Provider returned an empty response" storms that no retry, nudge, or
@@ -342,7 +337,7 @@ def _ra():
 def _system_prompt_for_hooks(api_kwargs: Any, request_messages: Any) -> Any:
     """System prompt as actually sent to the provider, for observability hooks.
 
-    Providers move it out of ``messages``: Anthropic Messages uses a separate
+    Providers move it out of ``messages``: some wire formats use a separate
     ``system`` kwarg (str or content-block list), the Responses/Codex API uses
     top-level ``instructions``; Chat Completions keeps it as ``messages[0]``.
     Returns None when the request carries no system prompt.
@@ -363,58 +358,9 @@ def _billing_or_entitlement_message(
     provider: str,
     base_url: str,
     model: str,
-    unverified: bool = False,
 ) -> str:
     provider_label = (provider or "").strip() or "the selected provider"
     model_label = (model or "").strip() or "the selected model"
-
-    # Anthropic Claude Pro/Max OAuth subscriptions surface exhaustion of the
-    # metered "extra usage" bucket as a hard 400 ("You're out of extra
-    # usage"). Point at the exact settings page and note the cycle-reset
-    # option, since the generic "add credits with that provider" line doesn't
-    # apply to a subscription — the user waits for the reset or switches to an
-    # API key.
-    if (provider or "").strip().lower() == "anthropic":
-        # ``unverified`` (ClassifiedError.billing_unverified,): the
-        # "out of extra usage" 400 is ambiguous — Anthropic returns the same
-        # body when its server-side content filter rejects part of the request
-        # on a subscription OAuth token, so the message reliably misdirects
-        # diagnosis toward buying quota. Hedge the claim and name the other
-        # cause. A confirmed verdict (e.g. a real 402 or an API-key credit
-        # depletion) keeps the assertive wording.
-        if unverified:
-            lines = [
-                (
-                    f"{provider_label} reported that your Claude subscription usage may be "
-                    f"exhausted for {model_label} (included quota + extra-usage credits) — "
-                    "but this specific error is not proof of a billing problem."
-                ),
-                "If https://claude.ai/settings/usage still shows quota remaining, this is "
-                "probably NOT a billing problem: on a Claude subscription (OAuth) token "
-                "Anthropic returns this same message when its content filter rejects part "
-                "of the request — typically a phrase in the system prompt.",
-                "If usage really is exhausted: wait for the billing cycle to reset, or add "
-                "extra usage at https://claude.ai/settings/usage",
-                "You can also switch to an Anthropic API key or another provider with "
-                "/model <model> --provider <provider>.",
-                # The exhaustion latch replays the stored error without issuing
-                # a request, so a real fix looks like it didn't work.
-                "Retry with a fresh credential state: `pilotage auth reset anthropic`. Until "
-                "that cooldown clears, this error can be replayed from cache without "
-                "contacting the API.",
-            ]
-        else:
-            lines = [
-                (
-                    f"{provider_label} reported that your Claude subscription usage is "
-                    f"exhausted for {model_label} (included quota + extra-usage credits)."
-                ),
-                "Options: wait for the billing cycle to reset, or add extra usage at "
-                "https://claude.ai/settings/usage",
-                "You can also switch to an Anthropic API key or another provider with "
-                "/model <model> --provider <provider>.",
-            ]
-        return "\n".join(lines)
 
     lines = [
         (
@@ -427,18 +373,8 @@ def _billing_or_entitlement_message(
     return "\n".join(lines)
 
 
-def _billing_terminal_label(summary: str, unverified: bool) -> str:
-    """Terminal-failure prefix for a billing-classified error.
-
-    ``unverified``: the Anthropic "out of extra usage" 400 can be a
-    content-filter rejection, so the terminal line must not assert billing
-    exhaustion as fact.
-    """
-    if unverified:
-        return (
-            "Provider reported usage/credit exhaustion (unverified — the same "
-            f"error can be a content-filter rejection, not billing): {summary}"
-        )
+def _billing_terminal_label(summary: str) -> str:
+    """Terminal-failure prefix for a billing-classified error."""
     return f"Billing or credits exhausted: {summary}"
 
 
@@ -459,16 +395,14 @@ def _billing_failure_result(
     label, guidance, structured block, and ambiguity flag stay consistent
     across the non-retryable abort and max-retries paths.
     """
-    unverified = bool(getattr(classified, "billing_unverified", False))
     if guidance is None:
         guidance = _billing_or_entitlement_message(
             capability="model access",
             provider=provider,
             base_url=str(base_url),
             model=model,
-            unverified=unverified,
         )
-    final = _billing_terminal_label(summary, unverified)
+    final = _billing_terminal_label(summary)
     if guidance:
         final += f"\n\n{guidance}"
     return {
@@ -479,9 +413,6 @@ def _billing_failure_result(
         "failed": True,
         "error": summary,
         "failure_reason": classified.reason.value,
-        # The billing verdict may rest on an ambiguous body — carry
-        # that through the structured result, not just the prose.
-        "billing_unverified": unverified,
     }
 
 
@@ -492,14 +423,12 @@ def _print_billing_or_entitlement_guidance(
     provider: str,
     base_url: str,
     model: str,
-    unverified: bool = False,
 ) -> bool:
     message = _billing_or_entitlement_message(
         capability=capability,
         provider=provider,
         base_url=base_url,
         model=model,
-        unverified=unverified,
     )
     if not message:
         return False
@@ -559,7 +488,7 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
 
     if stored_prompt and _stored_prompt_matches_runtime(agent, stored_prompt):
         # Continuing session — reuse the exact system prompt from the
-        # previous turn so the Anthropic cache prefix matches.
+        # previous turn so the provider cache prefix matches.
         agent._cached_system_prompt = stored_prompt
         # Prompt-section callbacks are new-session-only. Recover their frozen
         # bytes from the persisted full prompt so a later compression rebuild
@@ -751,7 +680,7 @@ def _get_continuation_prompt(is_partial_stub: bool, dropped_tools: Optional[List
 # assistant message also carries no encrypted reasoning items and no
 # replayable message items, _chat_messages_to_responses_input emits nothing
 # for it — a bare retry would be byte-identical to the request that just
-# failed, so the model (observed: grok-4.20 on xai-oauth) deterministically
+# failed, so the model deterministically
 # repeats the reasoning-only response until the retry budget is exhausted.
 _CODEX_INCOMPLETE_NUDGE = (
     "[System: Your previous response contained only internal reasoning and "
@@ -954,7 +883,7 @@ def _invalid_tool_name_error_content(name: str, valid_tool_names) -> str:
     toward a real tool — it is almost always a weak open model echoing
     tool-call XML/JSON it saw in file or tool output :
     <tool_call>/<invoke name=...> payloads in a file prime
-    mimo/nemotron-class models to emit empty structured calls), or a model
+    weaker models to emit empty structured calls), or a model
     degrading at very large context (observed with gpt-5.6 past ~350K input).
     Dumping the full tool catalog in that case feeds the priming loop more
     names to mimic and inflates context 3-4x across retries, so send a terse
@@ -1052,7 +981,7 @@ def _compression_deferred_result(
 def _rewrite_system_content_blocks(system_message: dict, effective: str) -> bool:
     """Rewrite a cache-decorated system message in place, keeping its blocks.
 
-    ``apply_anthropic_cache_control`` runs once per call block, *before* the
+    ``apply_prompt_cache_control`` runs once per call block, *before* the
     retry loop, and splits the system prompt into ``[static prefix, volatile
     tail]`` text blocks carrying the cache_control breakpoints. Assigning a bare
     string over that list drops both breakpoints, so the failover retry ships
@@ -1554,7 +1483,7 @@ def run_conversation(
         # Prepare messages for API call
         # If we have an ephemeral system prompt, prepend it to the messages
         # Note: Reasoning is embedded in content via <think> tags for trajectory storage.
-        # However, providers like Moonshot AI require a separate 'reasoning_content' field
+        # However, some providers require a separate 'reasoning_content' field
         # on assistant messages with tool_calls. We handle both cases here.
         request_logger = getattr(agent, "logger", None) or logging.getLogger(__name__)
         # Per-agent validation cursor: skips re-json.loads-ing tool_call
@@ -1702,7 +1631,7 @@ def run_conversation(
             # We've copied it to 'reasoning_content' for the API above
             if "reasoning" in api_msg:
                 api_msg.pop("reasoning")
-            # Remove finish_reason - not accepted by strict APIs (e.g. Mistral)
+            # Remove finish_reason - not accepted by strict APIs
             if "finish_reason" in api_msg:
                 api_msg.pop("finish_reason")
             # _thinking_prefill survives here intentionally: the drop pass below
@@ -1711,12 +1640,12 @@ def run_conversation(
             api_msg.pop("_length_continuation_fragment", None)
             api_msg.pop("_length_continuation_nudge", None)
             # Strip Codex Responses API fields (call_id, response_item_id) for
-            # strict providers like Mistral, Fireworks, etc. that reject unknown fields.
+            # strict providers that reject unknown fields.
             # Uses new dicts so the internal messages list retains the fields
             # for Codex Responses compatibility.
             if agent._should_sanitize_tool_calls():
                 agent._sanitize_tool_calls_for_strict_api(api_msg, model=agent.model)
-            # Keep 'reasoning_details' - OpenRouter uses this for multi-turn reasoning context
+            # Keep 'reasoning_details' - used for multi-turn reasoning context
             # The signature field helps maintain reasoning continuity
             api_messages.append(api_msg)
 
@@ -1732,7 +1661,7 @@ def run_conversation(
         #
         # Pilotage invariant: the system prompt is built ONCE per session
         # (cached on ``_cached_system_prompt``) and replayed verbatim on
-        # every turn. ``apply_anthropic_cache_control`` may split its stable
+        # every turn. ``apply_prompt_cache_control`` may split its stable
         # prefix into content blocks on the wire, but the stored string and
         # its byte-stability remain unchanged.
         effective_system = active_system_prompt or ""
@@ -1780,9 +1709,9 @@ def run_conversation(
 
         # Drop thinking-only assistant turns (reasoning but no visible
         # output and no tool_calls) and merge any adjacent user messages
-        # left behind. Prevents Anthropic 400s ("The final block in an
+        # left behind. Prevents 400s ("The final block in an
         # assistant message cannot be `thinking`.") and equivalent errors
-        # from third-party Anthropic-compatible gateways that can't replay
+        # from third-party gateways that can't replay
         # a thinking-only turn. Runs on the per-call copy only — the
         # stored conversation history keeps the reasoning block for the
         # UI transcript and session persistence.
@@ -1794,7 +1723,7 @@ def run_conversation(
         # Normalize message whitespace and tool-call JSON for consistent
         # prefix matching.  Ensures bit-perfect prefixes across turns,
         # which enables KV cache reuse on local inference servers
-        # (llama.cpp, vLLM, Ollama) and improves cache hit rates for
+        # and improves cache hit rates for
         # cloud providers.  Operates on api_messages (the API copy) so
         # the original conversation history in `messages` is untouched.
         for am in api_messages:
@@ -1803,7 +1732,7 @@ def run_conversation(
         _canonicalize_api_tool_calls(api_messages)
 
         # Proactively strip any surrogate characters before the API call.
-        # Models served via Ollama (Kimi K2.5, GLM-5, Qwen) can return
+        # Some models can return
         # lone surrogates (U+D800-U+DFFF) that crash json.dumps() inside
         # the OpenAI SDK. Sanitizing here prevents the 3-retry cycle.
         _sanitize_messages_surrogates(api_messages)
@@ -1854,23 +1783,6 @@ def run_conversation(
         )
         if callable(_note_rough):
             _note_rough(request_pressure_tokens)
-
-        _runtime_context_error = _ollama_context_limit_error(
-            agent, request_pressure_tokens
-        )
-        if _runtime_context_error:
-            final_response = _runtime_context_error
-            failed = True
-            _turn_exit_reason = "ollama_runtime_context_too_small"
-            append_message(messages, {"role": "assistant", "content": final_response})
-            agent._emit_status("❌ Ollama runtime context is too small for Pilotage tool use")
-            api_call_count -= 1
-            agent._api_call_count = api_call_count
-            try:
-                agent.iteration_budget.refund()
-            except Exception:
-                pass
-            break
 
         # Pre-API pressure check. The turn-prologue preflight only saw the
         # incoming user message; a single turn can then grow by many large
@@ -2019,7 +1931,7 @@ def run_conversation(
                 # This preflight iteration never reaches the provider whether
                 # we skip the turn (handoff guard below) or re-run the loop —
                 # refund the consumed call/budget in BOTH cases, mirroring the
-                # ollama_runtime_context_too_small early-exit above. Without
+                # runtime-context early-exit above. Without
                 # the refund on the break path, every skipped turn leaked one
                 # iteration-budget unit for the agent's lifetime and
                 # finalize_turn logged an api_call_count including a call that
@@ -2112,7 +2024,7 @@ def run_conversation(
                 agent._reset_stream_delivery_tracking()
                 # api_messages is built once, before this retry loop, while the
                 # primary provider is active.  A mid-conversation fallback can
-                # switch to a require-side provider (DeepSeek / Kimi / MiMo) that
+                # switch to a require-side provider that
                 # rejects assistant turns lacking reasoning_content.  Re-apply the
                 # echo-back pad for the *current* provider here (idempotent no-op
                 # unless the active provider needs it) so the fallback request
@@ -2193,7 +2105,7 @@ def run_conversation(
                         # provider client.  New consumers should read the
                         # sanitised view from ``request["body"]["messages"]``.
                         _request_payload = agent._api_request_payload_for_hook(api_kwargs)
-                        # Anthropic (``system``) and Responses/Codex
+                        # Messages-style (``system``) and Responses/Codex
                         # (``instructions``) move the system prompt out of
                         # messages; pass it explicitly for observability
                         # plugins.
@@ -2498,16 +2410,11 @@ def run_conversation(
                     elif response and hasattr(response, 'message') and response.message:
                         error_msg = str(response.message)
                     
-                    # Try to get provider from model field (OpenRouter often returns actual model used)
+                    # Try to get provider from the model field (providers
+                    # often echo back the model actually used)
                     if provider_name == "Unknown" and response and hasattr(response, 'model') and response.model:
                         provider_name = f"model={response.model}"
                     
-                    # Check for x-openrouter-provider or similar metadata
-                    if provider_name == "Unknown" and response:
-                        # Log all response attributes for debugging
-                        resp_attrs = {k: str(v)[:100] for k, v in vars(response).items() if not k.startswith('_')}
-                        if agent.verbose_logging:
-                            logging.debug(f"Response attributes for invalid response: {resp_attrs}")
                     
                     # Extract error code from response for contextual diagnostics
                     _resp_error_code = None
@@ -2660,7 +2567,7 @@ def run_conversation(
                         messages,
                     ):
                         agent._vprint(
-                            f"{agent.log_prefix}⚠️  Treating suspicious Ollama/GLM stop response as truncated",
+                            f"{agent.log_prefix}⚠️  Treating suspicious stop response as truncated",
                             force=True,
                         )
                         finish_reason = "length"
@@ -2668,7 +2575,7 @@ def run_conversation(
                 # ── Content-policy refusal (HTTP 200) ──────────────────
                 # The model — or the provider's safety system — returned a
                 # *successful* response whose stop/finish reason is a refusal:
-                # Anthropic ``stop_reason="refusal"`` → ``content_filter``;
+                # A ``stop_reason="refusal"`` → ``content_filter``;
                 # OpenAI / portal ``finish_reason="content_filter"`` or a
                 # populated ``message.refusal`` (mapped in the chat_completions
                 # transport). The content is
@@ -2780,7 +2687,7 @@ def run_conversation(
                     # Normalize the truncated response to a single OpenAI-style
                     # message shape so text-continuation and tool-call retry
                     # work uniformly across chat_completions and
-                    # anthropic_messages.  For Anthropic we use the same
+                    # the Messages wire.  For that wire we use the same
                     # adapter the agent loop already relies on so the rebuilt
                     # interim assistant message is byte-identical to what
                     # would have been appended in the non-truncated path.
@@ -2799,8 +2706,8 @@ def run_conversation(
                     # targeted error instead of wasting 3 API calls.
                     # A response is "thinking exhausted" only when the model
                     # actually produced reasoning blocks but no visible text after
-                    # them.  Models that do not use <think> tags (e.g. GLM-4.7 on
-                    # NVIDIA Build, minimax) may return content=None or an empty
+                    # them.  Models that do not use <think> tags may return
+                    # content=None or an empty
                     # string for unrelated reasons — treat those as normal
                     # truncations that deserve continuation retries, not as
                     # thinking-budget exhaustion.
@@ -2857,7 +2764,7 @@ def run_conversation(
                         assistant_message = _trunc_msg
                         # ── Content-filter stream stall → fallback ──
                         # When the provider's output-layer safety filter (e.g.
-                        # MiniMax "output new_sensitive (1027)", Azure
+                        # Provider safety-filter codes, portal
                         # content_filter) kills the stream mid-delivery, the
                         # raw error was classified at the swallow point and the
                         # stub tagged ``_content_filter_terminated``.  This
@@ -2917,7 +2824,7 @@ def run_conversation(
                             # must not be appended as an interim assistant
                             # message: it would serialize as
                             # {"role": "assistant", "content": ""}, and
-                            # strict providers (Moonshot/Kimi via OpenRouter)
+                            # strict providers
                             # reject empty assistant content with HTTP 400
                             # ("message ... with role 'assistant' must not be
                             # empty") on the very next replay — permanently
@@ -3314,14 +3221,14 @@ def run_conversation(
                     
                     # Surface cache hit stats for any provider that reports
                     # them — not just those where we inject cache_control
-                    # markers.  OpenAI/Kimi/DeepSeek/Qwen all do automatic
+                    # markers.  Most chat providers do automatic
                     # server-side prefix caching and return
                     # ``prompt_tokens_details.cached_tokens``; users
                     # previously could not see their cache % because this
                     # line was gated on ``_use_prompt_caching``, which is
-                    # only True for Anthropic-style marker injection.
+                    # only True for Messages-style marker injection.
                     # ``canonical_usage`` is already normalised from all
-                    # three API shapes (Anthropic / Codex / OpenAI-chat)
+                    # two API shapes (Codex / OpenAI-chat)
                     # so we can rely on its values directly.
                     cached = canonical_usage.cache_read_tokens
                     written = canonical_usage.cache_write_tokens
@@ -3609,12 +3516,12 @@ def run_conversation(
                     # we don't false-trip on other URL validation
                     # errors. 
                     "image_url'. expected",
-                    # DeepSeek's OpenAI-compatible API reports text-only
+                    # Some OpenAI-compatible APIs report text-only
                     # request-body variants as:
                     # "unknown variant `image_url`, expected `text`".
                     "unknown variant `image_url`, expected `text`",
                     "unknown variant image_url, expected text",
-                    # OpenRouter routes a request to upstream endpoints and,
+                    # a request is routed to upstream endpoints and,
                     # when none of the candidate endpoints for the model accept
                     # image input, returns HTTP 404 "No endpoints found that
                     # support image input". Without this phrase the agent never
@@ -3690,13 +3597,12 @@ def run_conversation(
                     has_retried_429=_retry.has_retried_429,
                     classified_reason=classified.reason,
                     error_context=error_context,
-                    billing_unverified=classified.billing_unverified,
                 )
                 if recovered_with_pool:
                     continue
 
                 # Image-too-large recovery: shrink oversized native image
-                # parts in-place and retry once.  Triggered by Anthropic's
+                # parts in-place and retry once.  Triggered by the provider's
                 # per-image 5 MB ceiling (400 with "image exceeds 5 MB
                 # maximum") or any other provider that complains about
                 # image size.  If shrink fails or a second attempt still
@@ -3758,57 +3664,6 @@ def run_conversation(
                     if agent._try_refresh_codex_client_credentials(force=True):
                         agent._buffer_vprint("🔐 Codex auth refreshed after 401. Retrying request...")
                         continue
-                # Thinking block signature recovery.
-                #
-                # Anthropic signs thinking blocks against the full turn
-                # content. Any upstream mutation (context compression,
-                # session truncation, message merging) invalidates the
-                # signature and the API replies HTTP 400 ("invalid
-                # signature" or "cannot be modified"). Recovery strips
-                # ``reasoning_details`` so the retry sends no thinking
-                # blocks at all. One-shot per outer loop.
-                #
-                # The strip targets ``api_messages``, which is the
-                # API-call-time list that ``_build_api_kwargs`` consumes
-                # on every retry. ``api_messages`` was populated once at
-                # the start of the turn from shallow copies of
-                # ``messages``, so mutating it does not touch the
-                # canonical store. The previous implementation popped
-                # ``reasoning_details`` from ``messages`` instead, which
-                # had two problems: ``api_messages`` carried its own
-                # reference to the field through the shallow copy, so the
-                # retry's wire payload still included thinking blocks and
-                # the recovery never reached the API; and the mutation
-                # persisted into ``state.db`` through any subsequent
-                # ``_persist_session`` call, permanently corrupting the
-                # conversation. Future turns would replay the stripped
-                # state, hit the same 400, and the agent would terminate
-                # with ``max_retries_exhausted``, often spawning
-                # cascading compaction-ended sessions chained off the
-                # corrupted parent.
-                if (
-                    classified.reason == FailoverReason.thinking_signature
-                    and not _retry.thinking_sig_retry_attempted
-                ):
-                    _retry.thinking_sig_retry_attempted = True
-                    _api_stripped = 0
-                    for _m in api_messages:
-                        if isinstance(_m, dict) and "reasoning_details" in _m:
-                            _m.pop("reasoning_details", None)
-                            _api_stripped += 1
-                    agent._vprint(
-                        f"{agent.log_prefix}⚠️  Thinking block signature invalid, "
-                        f"stripped reasoning_details from api_messages for retry...",
-                        force=True,
-                    )
-                    logger.warning(
-                        "%sThinking block signature recovery: stripped "
-                        "reasoning_details from %d api_messages "
-                        "(canonical messages unchanged)",
-                        agent.log_prefix, _api_stripped,
-                    )
-                    continue
-
                 # ── Invalid encrypted reasoning replay recovery ───────
                 # OpenAI Responses API surfaces (and some compatible relays)
                 # return HTTP 400 ``invalid_encrypted_content`` when a
@@ -3885,49 +3740,6 @@ def run_conversation(
                         )
                         continue
 
-                # ── llama.cpp grammar-parse recovery ──────────────────
-                # llama.cpp's ``json-schema-to-grammar`` converter rejects
-                # regex escape classes (``\d``, ``\w``, ``\s``) and most
-                # ``format`` values in tool schemas.  MCP servers emit
-                # these routinely for date/phone/email params.  Recovery:
-                # strip ``pattern``/``format`` from ``agent.tools`` and
-                # retry once.  We keep the keywords by default so cloud
-                # providers get the full prompting hints; this branch
-                # fires only for users on llama.cpp's OAI server.
-                if (
-                    classified.reason == FailoverReason.llama_cpp_grammar_pattern
-                    and not _retry.llama_cpp_grammar_retry_attempted
-                ):
-                    _retry.llama_cpp_grammar_retry_attempted = True
-                    try:
-                        from tools.schema_sanitizer import strip_pattern_and_format
-                        _, _stripped = strip_pattern_and_format(agent.tools)
-                    except Exception as _strip_exc:  # pragma: no cover — defensive
-                        logger.warning(
-                            "%sllama.cpp grammar recovery: strip helper failed: %s",
-                            agent.log_prefix, _strip_exc,
-                        )
-                        _stripped = 0
-                    if _stripped:
-                        agent._vprint(
-                            f"{agent.log_prefix}⚠️  llama.cpp rejected tool schema grammar — "
-                            f"stripped {_stripped} pattern/format keyword(s), retrying...",
-                            force=True,
-                        )
-                        logger.warning(
-                            "%sllama.cpp grammar recovery: stripped %d "
-                            "pattern/format keyword(s) from tool schemas",
-                            agent.log_prefix, _stripped,
-                        )
-                        continue
-                    # No keywords found to strip — fall through to normal
-                    # retry path rather than loop forever on the same error.
-                    logger.warning(
-                        "%sllama.cpp grammar error but no pattern/format "
-                        "keywords to strip — falling through to normal retry",
-                        agent.log_prefix,
-                    )
-
                 retry_count += 1
                 elapsed_time = time.time() - api_start_time
                 agent._touch_activity(
@@ -3960,50 +3772,6 @@ def run_conversation(
                     if _err_body_str:
                         agent._buffer_vprint(f"   📋 Details: {_err_body_str}")
                 agent._buffer_vprint(f"   ⏱️  Elapsed: {elapsed_time:.2f}s  Context: {len(api_messages)} msgs, ~{approx_tokens:,} tokens")
-
-                # Actionable hint for OpenRouter "no tool endpoints" error.
-                # Buffered like the rest of the retry trace — surfaced only
-                # if every retry+fallback exhausts.  Avoids spamming users
-                # who recover automatically via fallback.
-                if (
-                    agent._is_openrouter_url()
-                    and "support tool use" in error_msg
-                ):
-                    agent._buffer_vprint(
-                        f"   💡 No OpenRouter providers for {_model} support tool calling with your current settings."
-                    )
-                    if agent.providers_allowed:
-                        agent._buffer_vprint(
-                            "      Your provider_routing.only restriction is filtering out tool-capable providers."
-                        )
-                        agent._buffer_vprint(
-                            "      Try removing the restriction or adding providers that support tools for this model."
-                        )
-                    agent._buffer_vprint(
-                        f"      Check which providers support tools: https://openrouter.ai/models/{_model}"
-                    )
-
-                # Actionable hint for a bare 404 on a provider whose catalogue
-                # uses ``vendor/model`` ids.  A model id that lost its prefix
-                # (e.g. ``nemotron-…`` instead of ``nvidia/nemotron-…``) gets
-                # a content-free "404 page not found" from the provider that
-                # never names the model, so it reads like an outage or an auth
-                # failure. Name the real cause and the exact id to use.
-                if getattr(api_error, "status_code", None) == 404:
-                    try:
-                        from pilotage_cli.model_normalize import suggest_prefixed_model_id
-
-                        _suggestion = suggest_prefixed_model_id(_provider, _model)
-                    except Exception:
-                        _suggestion = None
-                    if _suggestion:
-                        agent._buffer_vprint(
-                            f"   💡 Model '{_model}' is not a valid id for provider {_provider} — "
-                            f"it is missing its vendor prefix."
-                        )
-                        agent._buffer_vprint(
-                            f"      Did you mean '{_suggestion}'?  Re-pick it with `pilotage model`."
-                        )
 
                 # Check for interrupt before deciding to retry
                 if agent._interrupt_requested:
@@ -4053,7 +3821,6 @@ def run_conversation(
                 # does not require compression.  Exempt them from this guard
                 # so the retry still fires even when compression is disabled.
                 _overflow_reasons = {
-                    FailoverReason.long_context_tier,
                     FailoverReason.payload_too_large,
                     FailoverReason.context_overflow,
                 }
@@ -4098,66 +3865,6 @@ def run_conversation(
                         "compaction_disabled": True,
                     }
 
-                # ── Anthropic Sonnet long-context tier gate ───────────
-                # Anthropic returns HTTP 429 "Extra usage is required for
-                # long context requests" when a Claude Max (or similar)
-                # subscription doesn't include the 1M-context tier.  This
-                # is NOT a transient rate limit — retrying or switching
-                # credentials won't help.  Reduce context to 200k (the
-                # standard tier) and compress.
-                if classified.reason == FailoverReason.long_context_tier:
-                    _reduced_ctx = 200000
-                    compressor = agent.context_compressor
-                    old_ctx = compressor.context_length
-                    if old_ctx > _reduced_ctx:
-                        compressor.update_model(
-                            model=agent.model,
-                            context_length=_reduced_ctx,
-                            base_url=agent.base_url,
-                            api_key=getattr(agent, "api_key", ""),
-                            provider=agent.provider,
-                            api_mode=agent.api_mode,
-                        )
-                        # Context probing flags — only set on built-in
-                        # compressor (plugin engines manage their own).
-                        if hasattr(compressor, "_context_probed"):
-                            compressor._context_probed = True
-                            # Don't persist — this is a subscription-tier
-                            # limitation, not a model capability.  If the
-                            # user later enables extra usage the 1M limit
-                            # should come back automatically.
-                            compressor._context_probe_persistable = False
-                        agent._buffer_vprint(
-                            f"⚠️  Anthropic long-context tier "
-                            f"requires extra usage — reducing context: "
-                            f"{old_ctx:,} → {_reduced_ctx:,} tokens"
-                        )
-
-                    compression_attempts += 1
-                    if compression_attempts <= max_compression_attempts:
-                        original_len = len(messages)
-                        # Option A (LCM issue 441): overhead-aware request size so recovery arms on
-                        # the true request (msgs + tools + system), not the tool-blind message count.
-                        messages, active_system_prompt = agent._compress_context(
-                            messages, system_message,
-                            approx_tokens=estimate_request_tokens_rough(api_messages, tools=agent.tools or None),
-                            task_id=effective_task_id,
-                        )
-                        conversation_history = conversation_history_after_compression(
-                            agent, messages, conversation_history
-                        )
-                        if len(messages) < original_len or old_ctx > _reduced_ctx:
-                            agent._buffer_status(
-                                COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE.format(
-                                    new_ctx=_reduced_ctx, old_ctx=old_ctx
-                                )
-                            )
-                            time.sleep(2)
-                            _retry.restart_with_compressed_messages = True
-                            break
-                    # Fall through to normal error handling if compression
-                    # is exhausted or didn't help.
-
                 # Eager fallback for rate-limit errors (429 or quota exhaustion)
                 # and transport errors (connection failure / timeout / provider
                 # overloaded).  Rate limits and billing: switch immediately —
@@ -4167,24 +3874,11 @@ def run_conversation(
                 is_rate_limited = classified.reason in {
                     FailoverReason.rate_limit,
                     FailoverReason.billing,
-                    FailoverReason.upstream_rate_limit,
                 }
                 _is_transport_failure = classified.reason in {
                     FailoverReason.timeout,
                     FailoverReason.overloaded,
                 }
-                # Z.AI Coding Plan GLM-5.2 overload 429s classify as
-                # `overloaded` (to spare the credential pool), but `overloaded`
-                # is excluded from `is_rate_limited` — the gate for the adaptive
-                # Z.AI backoff below. Detect the overload directly so its
-                # long-backoff schedule runs, and raise the retry ceiling so the
-                # long tier (30/60/90/120s) is reachable. See
-                # zai_coding_overload_retry_ceiling() for the ceiling rationale.
-                _is_zai_coding_overload = is_zai_coding_overload_error(
-                    base_url=str(_base), model=_model, error=api_error
-                )
-                if _is_zai_coding_overload:
-                    max_retries = max(max_retries, zai_coding_overload_retry_ceiling())
                 _should_fallback = (
                     is_rate_limited
                     or (_is_transport_failure and retry_count >= 2)
@@ -4192,40 +3886,15 @@ def run_conversation(
                 if _should_fallback and agent._fallback_index < len(agent._fallback_chain):
                     # Don't eagerly fallback if credential pool rotation may
                     # still recover.  See _pool_may_recover_from_rate_limit
-                    # for the single-credential-pool exception. Fixes.
-                    #
-                    # Exception: an upstream-aggregator 429 — the credential
-                    # pool can't help when the *upstream* model (DeepSeek,
-                    # etc.) is throttling OpenRouter, so always fall back to a
-                    # different model regardless of pool state.
-                    _is_upstream = classified.reason == FailoverReason.upstream_rate_limit
-                    pool_may_recover = (
-                        False if _is_upstream
-                        else _ra()._pool_may_recover_from_rate_limit(
-                            agent._credential_pool,
-                        )
+                    # for the single-credential-pool exception.
+                    pool_may_recover = _ra()._pool_may_recover_from_rate_limit(
+                        agent._credential_pool,
                     )
                     if not pool_may_recover:
-                        if _is_upstream:
-                            _upstream_name = (classified.error_context or {}).get(
-                                "upstream_provider", "aggregator"
-                            )
+                        if classified.reason == FailoverReason.billing:
                             agent._buffer_status(
-                                f"⚠️ Upstream {_upstream_name} rate-limited — "
-                                "switching to fallback model..."
+                                "⚠️ Billing or credits exhausted — switching to fallback provider..."
                             )
-                        elif classified.reason == FailoverReason.billing:
-                            if classified.billing_unverified:
-                                # Ambiguous body — don't assert billing.
-                                agent._buffer_status(
-                                    "⚠️ Provider reported usage/credit exhaustion "
-                                    "(unverified — may be a content-filter rejection) "
-                                    "— switching to fallback provider..."
-                                )
-                            else:
-                                agent._buffer_status(
-                                    "⚠️ Billing or credits exhausted — switching to fallback provider..."
-                                )
                         elif _is_transport_failure:
                             agent._buffer_status(
                                 "⚠️ Provider unreachable — switching to fallback provider..."
@@ -4278,39 +3947,6 @@ def run_conversation(
                 is_payload_too_large = (
                     classified.reason == FailoverReason.payload_too_large
                 )
-
-                # Actionable hint for GitHub Models (Azure) 413 errors.
-                # The free tier enforces a hard 8K token cap per request,
-                # which Pilotage' system prompt + tool schemas alone exceed.
-                # Compression can't help — the floor is the system prompt
-                # itself, not the conversation — so surface a clear "not
-                # compatible" message instead of looping into three futile
-                # compression attempts.
-                if (
-                    status_code == 413
-                    and isinstance(agent.base_url, str)
-                    and base_url_host_matches(agent.base_url, "models.inference.ai.azure.com")
-                ):
-                    agent._vprint(
-                        f"{agent.log_prefix}   💡 GitHub Models free tier (models.inference.ai.azure.com) caps every",
-                        force=True,
-                    )
-                    agent._vprint(
-                        f"{agent.log_prefix}      request at ~8K tokens. Pilotage' system prompt + tool schemas baseline",
-                        force=True,
-                    )
-                    agent._vprint(
-                        f"{agent.log_prefix}      exceeds that floor, so this endpoint cannot run an agentic loop.",
-                        force=True,
-                    )
-                    agent._vprint(
-                        f"{agent.log_prefix}      Use the `copilot` provider with a Copilot subscription token (`pilotage",
-                        force=True,
-                    )
-                    agent._vprint(
-                        f"{agent.log_prefix}      setup` → GitHub Copilot), or pick any other provider.",
-                        force=True,
-                    )
 
                 if is_payload_too_large:
                     compression_attempts += 1
@@ -4563,21 +4199,6 @@ def run_conversation(
                     # and try compression; guessing probe tiers can incorrectly
                     # turn a user-configured 1M window into 256K/128K/64K.
                     new_ctx = get_context_length_from_provider_error(error_msg, old_ctx)
-                    _provider_lower = (getattr(agent, "provider", "") or "").lower()
-                    _base_lower = (getattr(agent, "base_url", "") or "").rstrip("/").lower()
-                    is_minimax_provider = (
-                        _provider_lower in {"minimax", "minimax-cn"}
-                        or _base_lower.startswith((
-                            "https://api.minimax.io/anthropic",
-                            "https://api.minimaxi.com/anthropic",
-                        ))
-                    )
-                    minimax_delta_only_overflow = (
-                        is_minimax_provider
-                        and new_ctx is None
-                        and "context window exceeds limit (" in error_msg
-                    )
-
                     if new_ctx is not None:
                         agent._buffer_vprint(f"Context limit detected from API: {new_ctx:,} tokens (was {old_ctx:,})")
                         compressor.update_model(
@@ -4602,11 +4223,6 @@ def run_conversation(
                             compressor._context_probed = True
                             compressor._context_probe_persistable = True
                         agent._buffer_vprint(f"⚠️  Context length exceeded — using provider limit: {old_ctx:,} → {new_ctx:,} tokens")
-                    elif minimax_delta_only_overflow:
-                        agent._buffer_vprint(
-                            f"Provider reported overflow amount only; "
-                            f"keeping context_length at {old_ctx:,} tokens and compressing."
-                        )
                     else:
                         agent._buffer_vprint(
                             f"⚠️  Context length exceeded, but provider did not report a max context length; "
@@ -4760,8 +4376,6 @@ def run_conversation(
                             FailoverReason.overloaded,
                             FailoverReason.context_overflow,
                             FailoverReason.payload_too_large,
-                            FailoverReason.long_context_tier,
-                            FailoverReason.thinking_signature,
                         }
                     )
                 ) and not is_context_length_error
@@ -4828,7 +4442,6 @@ def run_conversation(
                             provider=_provider,
                             base_url=str(_base),
                             model=_model,
-                            unverified=classified.billing_unverified,
                         ):
                             pass
                         elif _provider == "openai-codex" and status_code == 401:
@@ -4840,8 +4453,6 @@ def run_conversation(
                             agent._vprint(f"{agent.log_prefix}   💡 Your API key was rejected by the provider. Check:", force=True)
                             agent._vprint(f"{agent.log_prefix}      • Is the key valid? Run: pilotage setup", force=True)
                             agent._vprint(f"{agent.log_prefix}      • Does your account have access to {_model}?", force=True)
-                            if base_url_host_matches(str(_base), "openrouter.ai"):
-                                agent._vprint(f"{agent.log_prefix}      • Check credits: https://openrouter.ai/settings/credits", force=True)
                     else:
                         agent._vprint(f"{agent.log_prefix}   💡 This type of error won't be fixed by retrying.", force=True)
                     # Content-policy blocks deserve their own actionable
@@ -4868,8 +4479,7 @@ def run_conversation(
                         )
                     # TLS certificate failures are environment problems, not
                     # provider/prompt problems — tell the user exactly which
-                    # knobs fix each common cause. Inspired by Claude Code
-                    # v2.1.199's immediate SSL fix hints.
+                    # knobs fix each common cause.
                     if classified.reason == FailoverReason.ssl_cert_verification:
                         agent._vprint(
                             f"{agent.log_prefix}   💡 The TLS certificate chain could not be verified. This fails the same",
@@ -4896,7 +4506,7 @@ def run_conversation(
                             force=True,
                         )
                         agent._vprint(
-                            f"{agent.log_prefix}      • Self-signed local endpoint (llama.cpp, LM Studio, vLLM)? Use http://",
+                            f"{agent.log_prefix}      • Self-signed local endpoint? Use http://",
                             force=True,
                         )
                         agent._vprint(
@@ -4987,20 +4597,12 @@ def run_conversation(
                     _final_summary = agent._summarize_api_error(api_error)
                     _billing_guidance = ""
                     if classified.reason == FailoverReason.billing:
-                        if classified.billing_unverified:
-                            # Ambiguous body — hedge the terminal line.
-                            agent._emit_status(
-                                "❌ Provider reported usage/credit exhaustion "
-                                f"(unverified — may be a content-filter rejection) — {_final_summary}"
-                            )
-                        else:
-                            agent._emit_status(f"❌ Billing or credits exhausted — {_final_summary}")
+                        agent._emit_status(f"❌ Billing or credits exhausted — {_final_summary}")
                         _billing_guidance = _billing_or_entitlement_message(
                             capability="model access",
                             provider=_provider,
                             base_url=str(_base),
                             model=_model,
-                            unverified=classified.billing_unverified,
                         )
                         _print_billing_or_entitlement_guidance(
                             agent,
@@ -5008,7 +4610,6 @@ def run_conversation(
                             provider=_provider,
                             base_url=str(_base),
                             model=_model,
-                            unverified=classified.billing_unverified,
                         )
                     elif is_rate_limited:
                         agent._emit_status(f"❌ Rate limited after {max_retries} retries — {_final_summary}")
@@ -5076,8 +4677,7 @@ def run_conversation(
                             f"phase exceeded the upstream proxy's idle "
                             f"timeout before the first content token "
                             f"arrived. This is a known issue with "
-                            f"reasoning models behind cloud gateways "
-                            f"(NVIDIA NIM, OpenAI, Anthropic, DeepSeek).",
+                            f"reasoning models behind cloud gateways.",
                             force=True,
                         )
                         agent._vprint(
@@ -5114,12 +4714,8 @@ def run_conversation(
                             api_kwargs, reason="max_retries_exhausted", error=api_error,
                         )
                     agent._persist_session(messages, conversation_history)
-                    _billing_unverified = False
                     if classified.reason == FailoverReason.billing:
-                        _billing_unverified = classified.billing_unverified
-                        _final_response = _billing_terminal_label(
-                            _final_summary, _billing_unverified
-                        )
+                        _final_response = _billing_terminal_label(_final_summary)
                         if _billing_guidance:
                             _final_response += f"\n\n{_billing_guidance}"
                     else:
@@ -5161,9 +4757,6 @@ def run_conversation(
                         # different exit code. ``rate_limit`` / ``billing`` here
                         # mean "quota wall, not a task error".
                         "failure_reason": classified.reason.value,
-                        # True when the billing verdict rests on an ambiguous
-                        # body — may be a content-filter rejection.
-                        "billing_unverified": _billing_unverified,
                     }
 
                 # For rate limits, respect the Retry-After header if present
@@ -5174,7 +4767,7 @@ def run_conversation(
                         _ra_raw = _resp_headers.get("retry-after") or _resp_headers.get("Retry-After")
                         if _ra_raw:
                             try:
-                                # Cap at 10 minutes. Anthropic Tier 1 input-token
+                                # Cap at 10 minutes. Low-tier input-token
                                 # buckets reset in ~171s, so a 120s cap caused us to
                                 # retry before the actual reset window and re-trip the
                                 # limit. 600s covers all realistic provider reset
@@ -5184,29 +4777,11 @@ def run_conversation(
                                 pass
                 wait_time = _retry_after if _retry_after else jittered_backoff(retry_count, base_delay=2.0, max_delay=60.0)
                 _backoff_policy = None
-                if (is_rate_limited or _is_zai_coding_overload) and not _retry_after:
-                    wait_time, _backoff_policy = adaptive_rate_limit_backoff(
-                        retry_count,
-                        base_url=str(_base),
-                        model=_model,
-                        error=api_error,
-                        default_wait=wait_time,
+                if is_rate_limited:
+                    agent._buffer_status(
+                        f"⏱️ Rate limited. Waiting {wait_time:.1f}s "
+                        f"(attempt {retry_count + 1}/{max_retries})..."
                     )
-                if is_rate_limited or _is_zai_coding_overload:
-                    _policy_note = ""
-                    if _backoff_policy == "zai_coding_overload_long":
-                        _policy_note = " (Z.AI Coding overload adaptive long backoff)"
-                    elif _backoff_policy == "zai_coding_overload_short":
-                        _policy_note = " (Z.AI Coding overload short retry)"
-                    _wait_reason = "Provider overloaded" if _is_zai_coding_overload and not is_rate_limited else "Rate limited"
-                    _rate_limit_status = f"⏱️ {_wait_reason}. Waiting {wait_time:.1f}s (attempt {retry_count + 1}/{max_retries}){_policy_note}..."
-                    # Normal retries are buffered to avoid noisy transient chatter. Long
-                    # Z.AI Coding waits are different: they can last minutes, so surface
-                    # progress immediately instead of making the TUI look frozen.
-                    if _backoff_policy == "zai_coding_overload_long":
-                        agent._emit_status(_rate_limit_status)
-                    else:
-                        agent._buffer_status(_rate_limit_status)
                 else:
                     agent._buffer_status(f"⏳ Retrying in {wait_time:.1f}s (attempt {retry_count}/{max_retries})...")
                 logger.warning(
@@ -5561,7 +5136,7 @@ def run_conversation(
                     # items — plain-text reasoning only), a bare retry is
                     # byte-identical to the request that just came back
                     # incomplete and fails the same way every time
-                    # (observed with grok-4.20 on xai-oauth, whose
+                    # (observed on some providers, whose
                     # reasoning items lack encrypted_content).  Append a
                     # user-role nudge so the retry actually differs and
                     # explicitly asks for the final answer.
@@ -6111,7 +5686,7 @@ def run_conversation(
                 if _compressor.last_prompt_tokens > 0:
                     # Only use prompt_tokens — completion/reasoning
                     # tokens don't consume context window space.
-                    # Thinking models (GLM-5.1, QwQ, DeepSeek R1)
+                    # Thinking models
                     # inflate completion_tokens with reasoning,
                     # causing premature compression.
                     _real_tokens = _compressor.last_prompt_tokens
@@ -6338,7 +5913,7 @@ def run_conversation(
                     #      was mid-task narration, not a final answer)
                     # Instead of giving up, nudge the model to continue by
                     # appending a user-level hint. This is the case:
-                    # weaker models (mimo-v2-pro, GLM-5, etc.) sometimes
+                    # weaker models sometimes
                     # return empty after tool results instead of continuing
                     # to the next step.  One retry with a nudge usually
                     # fixes it.
@@ -6346,8 +5921,8 @@ def run_conversation(
                         m.get("role") == "tool"
                         for m in messages[-5:]  # check recent messages
                     )
-                    # Detect Qwen3/Ollama-style in-content thinking blocks.
-                    # Ollama puts <think> in the content field (not in
+                    # Detect in-content thinking blocks: some servers put
+                    # <think> in the content field (not in
                     # reasoning_content), so _has_structured below would
                     # miss it.  We check here so thinking-only responses
                     # after tool calls route to prefill instead of nudge.
@@ -6399,7 +5974,7 @@ def run_conversation(
                     # continue — the model will see its own reasoning
                     # on the next turn and produce the text portion.
                     # Inspired by clawdbot's "incomplete-text" recovery.
-                    # Also covers Qwen3/Ollama in-content <think> blocks
+                    # Also covers in-content <think> blocks
                     # (detected above as _has_inline_thinking).
                     _has_structured = bool(
                         getattr(assistant_message, "reasoning", None)
@@ -6431,8 +6006,8 @@ def run_conversation(
                     # times before attempting fallback.  This covers
                     # both truly empty responses (no content, no
                     # reasoning) AND reasoning-only responses after
-                    # prefill exhaustion — models like mimo-v2-pro
-                    # always populate reasoning fields via OpenRouter,
+                    # prefill exhaustion — some models always
+                    # populate reasoning fields,
                     # so the old `not _has_structured` guard blocked
                     # retries for every reasoning model after prefill.
                     _truly_empty = not agent._strip_think_blocks(
@@ -6491,7 +6066,7 @@ def run_conversation(
                     # Before giving up with "(empty)", attempt to
                     # switch to the next provider in the fallback
                     # chain.  This covers the case where a model
-                    # (e.g. GLM-4.5-Air) consistently returns empty
+                    # consistently returns empty
                     # due to context degradation or provider issues.
                     if _truly_empty and agent._fallback_chain:
                         logger.warning(
@@ -6655,10 +6230,9 @@ def run_conversation(
                 
                 final_msg = agent._build_assistant_message(assistant_message, finish_reason)
 
-                # ── Dropped tool-call recovery (copilot/Claude) ────────
-                # Some providers (observed: claude-opus-4.8 / claude-sonnet-4.5
-                # on GitHub Copilot, ~2026-07) return finish_reason="tool_calls"
-                # while the parsed tool_calls array is empty — the model
+                # ── Dropped tool-call recovery ───────────────────
+                # Some providers return finish_reason="tool_calls" while the
+                # parsed tool_calls array is empty — the model
                 # signalled it wanted to act but the payload shipped no call.
                 # Reaching finalization with that mismatch means the turn is
                 # about to end with the task unstarted (the narration, which may

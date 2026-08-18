@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Literal, Optional
 
-from agent.model_metadata import fetch_endpoint_model_metadata, fetch_model_metadata
-from utils import base_url_host_matches, base_url_hostname
+from agent.model_metadata import fetch_endpoint_model_metadata
+from utils import base_url_hostname
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,8 @@ def format_cost_label(amount: Decimal) -> str:
       as zero)
     - Normal → "~$1.23" (2 dp)
 
-    This fixes where sub-cent per-turn costs on cheap models
-    (DeepSeek, etc.) rendered as "$0.00" despite amount_usd carrying
-    full Decimal precision.
+    This fixes where sub-cent per-turn costs rendered as "$0.00"
+    despite amount_usd carrying full Decimal precision.
 
     Shared by per-response cost labels (estimate_usage_cost) and the
     insights cost-bucket formatters — keep both surfaces on this one
@@ -155,7 +154,7 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
     # variants (high-effort modes, GA alongside base tiers) bill at the
     # SAME per-token rates and are aliased onto these entries below the
     # dict (they cost more per task by consuming more tokens, not by a
-    # higher rate — verified against OpenRouter's live pricing 2026-07-09).
+    # higher rate).
     # Source: https://openai.com/index/previewing-gpt-5-6-sol/
     (
         "openai",
@@ -338,53 +337,15 @@ def resolve_billing_route(
 
     if provider_name == "openai-codex":
         return BillingRoute(provider="openai-codex", model=model, base_url=base_url or "", billing_mode="subscription_included")
-    if provider_name == "openrouter" or base_url_host_matches(base_url or "", "openrouter.ai"):
-        return BillingRoute(provider="openrouter", model=model, base_url=base_url or "", billing_mode="official_models_api")
-    if provider_name == "anthropic":
-        return BillingRoute(provider="anthropic", model=model.split("/")[-1], base_url=base_url or "", billing_mode="official_docs_snapshot")
     # "openai-api" is the picker/registry slug for direct api.openai.com; it
     # bills identically to bare "openai", so normalize it here — otherwise the
     # ("openai", <model>) _OFFICIAL_DOCS_PRICING keys are unreachable from the
     # openai-api provider path.
     if provider_name in {"openai", "openai-api"}:
         return BillingRoute(provider="openai", model=model.split("/")[-1], base_url=base_url or "", billing_mode="official_docs_snapshot")
-    if provider_name in {"minimax", "minimax-cn"}:
-        return BillingRoute(provider=provider_name, model=model.split("/")[-1], base_url=base_url or "", billing_mode="official_docs_snapshot")
-    # Google AI Studio (Gemini) and Vertex AI host the same Gemini models.
-    # Price them off the official docs snapshot — the pricing keys are
-    # keyed on provider='google', so normalize every Google-flavored
-    # provider name/host onto it. Strip the "google/" vendor prefix the
-    # Vertex OpenAI-compat endpoint requires so the pricing key matches.
-    if (
-        provider_name in {"google", "gemini", "vertex", "google-gemini", "google-ai-studio", "google-vertex", "vertex-ai"}
-        or base_url_host_matches(base_url or "", "aiplatform.googleapis.com")
-        or base_url_host_matches(base_url or "", "generativelanguage.googleapis.com")
-    ):
-        return BillingRoute(provider="google", model=model.split("/")[-1], base_url=base_url or "", billing_mode="official_docs_snapshot")
-    if provider_name == "fireworks" or base_url_host_matches(base_url or "", "api.fireworks.ai"):
-        # Fireworks model ids look like accounts/fireworks/models/<name>;
-        # rsplit("/", 1)[-1] yields just <name> which is what the dict keys on.
-        return BillingRoute(provider="fireworks", model=model.rsplit("/", 1)[-1], base_url=base_url or "", billing_mode="official_docs_snapshot")
     if provider_name in {"custom", "local"} or (base and base_url_hostname(base) in ("localhost", "127.0.0.1")):
         return BillingRoute(provider=provider_name or "custom", model=model, base_url=base_url or "", billing_mode="unknown")
     return BillingRoute(provider=provider_name or "unknown", model=model.split("/")[-1] if model else "", base_url=base_url or "", billing_mode="unknown")
-
-
-def _normalize_anthropic_model_name(model: str) -> str:
-    """Normalize Anthropic model name variants to canonical form.
-
-    Handles:
-      - Dot notation: claude-opus-4.7 → claude-opus-4-7
-      - Short aliases: claude-opus-4.7 → claude-opus-4-7
-      - Strips anthropic/ prefix if present
-    """
-    name = model.lower().strip()
-    if name.startswith("anthropic/"):
-        name = name[len("anthropic/"):]
-    # Normalize dots to dashes in version numbers (e.g. 4.7 → 4-7, 4.6 → 4-6)
-    # But preserve the rest of the name structure
-    name = re.sub(r"(\d+)\.(\d+)", r"\1-\2", name)
-    return name
 
 
 def _lookup_official_docs_pricing(route: BillingRoute) -> Optional[PricingEntry]:
@@ -393,23 +354,7 @@ def _lookup_official_docs_pricing(route: BillingRoute) -> Optional[PricingEntry]
     entry = _OFFICIAL_DOCS_PRICING.get((route.provider, model))
     if entry:
         return entry
-    # Try normalized name for Anthropic (handles dot-notation like opus-4.7)
-    if route.provider == "anthropic":
-        normalized = _normalize_anthropic_model_name(model)
-        if normalized != model:
-            entry = _OFFICIAL_DOCS_PRICING.get((route.provider, normalized))
-            if entry:
-                return entry
     return None
-
-
-def _openrouter_pricing_entry(route: BillingRoute) -> Optional[PricingEntry]:
-    return _pricing_entry_from_metadata(
-        fetch_model_metadata(),
-        route.model,
-        source_url="https://openrouter.ai/docs/api/api-reference/models/get-models",
-        pricing_version="openrouter-models-api",
-    )
 
 
 def _pricing_entry_from_metadata(
@@ -472,8 +417,6 @@ def get_pricing_entry(
             source="none",
             pricing_version="included-route",
         )
-    if route.provider == "openrouter":
-        return _openrouter_pricing_entry(route)
     if route.base_url:
         entry = _pricing_entry_from_metadata(
             fetch_endpoint_model_metadata(route.base_url, api_key=api_key or ""),
@@ -495,7 +438,6 @@ def normalize_usage(
     """Normalize raw API response usage into canonical token buckets.
 
     Handles three API shapes:
-    - Anthropic: input_tokens/output_tokens/cache_read_input_tokens/cache_creation_input_tokens
     - Codex Responses: input_tokens includes cache tokens; input_tokens_details.cached_tokens separates them
     - OpenAI Chat Completions: prompt_tokens includes cache tokens; prompt_tokens_details.cached_tokens separates them
 
@@ -529,10 +471,9 @@ def normalize_usage(
             )
         input_tokens = max(0, input_total - cache_read_tokens - cache_write_tokens)
     else:
-        # OpenAI-style names first; fall back to Anthropic-style
-        # (input_tokens/output_tokens). Local OpenAI-compatible servers like
-        # mlx_vlm.server emit the Anthropic names in chat_completions responses,
-        # and the OpenAI Python client preserves them as extra attributes.
+        # OpenAI-style names first; fall back to input_tokens/output_tokens,
+        # which some OpenAI-compatible proxies emit in chat_completions
+        # responses (the OpenAI Python client preserves them as extras).
         prompt_total = _usage_count(
             _usage_get(response_usage, "prompt_tokens", 0)
         ) or _usage_count(_usage_get(response_usage, "input_tokens", 0))
@@ -540,36 +481,16 @@ def normalize_usage(
             _usage_get(response_usage, "completion_tokens", 0)
         ) or _usage_count(_usage_get(response_usage, "output_tokens", 0))
         details = _usage_get(response_usage, "prompt_tokens_details", None)
-        # Primary: OpenAI-style prompt_tokens_details. Fallback: Anthropic-style
-        # top-level fields that some OpenAI-compatible proxies (OpenRouter, Vercel
-        # AI Gateway, Cline) expose when routing Claude models — without this
+        # Primary: OpenAI-style prompt_tokens_details. Fallback: top-level
+        # fields that some OpenAI-compatible proxies expose — without this
         # fallback, cache writes are undercounted as 0 and cache reads can be
         # missed when the proxy only surfaces them at the top level.
-        # Port of cline/cline.
         cache_read_tokens = _usage_count(
             _usage_get(details, "cached_tokens", 0) if details else 0
         )
         if not cache_read_tokens:
             cache_read_tokens = _usage_count(
                 _usage_get(response_usage, "cache_read_input_tokens", 0)
-            )
-        if not cache_read_tokens:
-            # DeepSeek's native API (api.deepseek.com) reports context-cache
-            # hits as top-level prompt_cache_hit_tokens (+ the complementary
-            # prompt_cache_miss_tokens; prompt_tokens = hit + miss), not the
-            # OpenAI nested shape. Without this, direct DeepSeek sessions
-            # always showed 0 cache-hit tokens.
-            cache_read_tokens = _usage_count(
-                _usage_get(response_usage, "prompt_cache_hit_tokens", 0)
-            )
-        if not cache_read_tokens:
-            # Kimi/Moonshot's native API (api.moonshot.cn / .ai) reports
-            # context-cache hits as a top-level usage.cached_tokens, not the
-            # OpenAI nested prompt_tokens_details.cached_tokens shape. Without
-            # this, direct Kimi sessions always showed 0 cache-hit tokens and
-            # the hits were billed at the full input rate.
-            cache_read_tokens = _usage_count(
-                _usage_get(response_usage, "cached_tokens", 0)
             )
         cache_write_tokens = _usage_count(
             _usage_get(details, "cache_write_tokens", 0) if details else 0
@@ -591,12 +512,10 @@ def normalize_usage(
 
     reasoning_tokens = 0
     # Responses API shape: output_tokens_details.reasoning_tokens.
-    # Chat Completions shape (OpenAI, OpenRouter, DeepSeek, etc.):
-    # completion_tokens_details.reasoning_tokens. Reading only the former
-    # left reasoning_tokens=0 for every chat_completions reasoning model —
-    # hidden thinking was invisible in session accounting even though it
-    # dominates output spend on models like deepseek-v4-flash (measured:
-    # single calls burning 21K reasoning tokens to emit 500 visible tokens).
+    # Chat Completions shape: completion_tokens_details.reasoning_tokens.
+    # Reading only the former left reasoning_tokens=0 for every
+    # chat_completions reasoning model — hidden thinking was invisible in
+    # session accounting even though it dominates output spend.
     output_details = _usage_get(response_usage, "output_tokens_details", None)
     if output_details:
         reasoning_tokens = _usage_count(_usage_get(output_details, "reasoning_tokens", 0))
@@ -682,9 +601,6 @@ def estimate_usage_cost(
         status = "included"
         label = "included"
         notes.append(_INCLUDED_NOTE)
-
-    if route.provider == "openrouter":
-        notes.append("OpenRouter cost is estimated from the models API until reconciled.")
 
     return CostResult(
         amount_usd=amount,

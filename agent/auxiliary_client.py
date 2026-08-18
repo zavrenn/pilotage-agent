@@ -7418,20 +7418,10 @@ def _call_llm_impl(
                 kwargs = retry_kwargs
 
         err_str = str(first_err)
-        # ZAI vision models (glm-4v-flash etc.) return error code 1210
-        # ("API 调用参数有误") when max_tokens is passed on multimodal
-        # calls.  The error message does NOT contain "max_tokens" so the
-        # generic retry below never fires.  Detect the ZAI-specific error
-        # and strip max_tokens before retrying.
-        _is_zai_param_error = (
-            "1210" in err_str
-            and "bigmodel" in str(getattr(client, "base_url", ""))
-        )
         if max_tokens is not None and (
             "max_tokens" in err_str
             or "unsupported_parameter" in err_str
             or _is_unsupported_parameter_error(first_err, "max_tokens")
-            or _is_zai_param_error
         ):
             kwargs.pop("max_tokens", None)
             kwargs.pop("max_completion_tokens", None)
@@ -8025,20 +8015,10 @@ async def _async_call_llm_impl(
                 kwargs = retry_kwargs
 
         err_str = str(first_err)
-        # ZAI vision models (glm-4v-flash etc.) return error code 1210
-        # ("API 调用参数有误") when max_tokens is passed on multimodal
-        # calls.  The error message does NOT contain "max_tokens" so the
-        # generic retry below never fires.  Detect the ZAI-specific error
-        # and strip max_tokens before retrying.
-        _is_zai_param_error = (
-            "1210" in err_str
-            and "bigmodel" in str(getattr(client, "base_url", ""))
-        )
         if max_tokens is not None and (
             "max_tokens" in err_str
             or "unsupported_parameter" in err_str
             or _is_unsupported_parameter_error(first_err, "max_tokens")
-            or _is_zai_param_error
         ):
             kwargs.pop("max_tokens", None)
             kwargs.pop("max_completion_tokens", None)

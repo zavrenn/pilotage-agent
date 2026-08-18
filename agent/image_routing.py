@@ -332,21 +332,6 @@ def _resolve_inference_base_url(
     return ""
 
 
-def _should_probe_ollama_vision(provider: str, base_url: str) -> bool:
-    """True when the active provider likely fronts a local Ollama server."""
-    p = (provider or "").strip().lower()
-    if p == "ollama":
-        return True
-    if not base_url:
-        return False
-    try:
-        from agent.model_metadata import detect_local_server_type
-
-        return detect_local_server_type(base_url) == "ollama"
-    except Exception:
-        return False
-
-
 def _coerce_mode(raw: Any) -> str:
     """Normalize a config value into one of the valid modes."""
     if not isinstance(raw, str):
@@ -445,23 +430,6 @@ def _lookup_supports_vision(
     if caps is not None:
         return bool(caps.supports_vision)
 
-    base_url = _resolve_inference_base_url(cfg, provider)
-    if not base_url and (provider or "").strip().lower() == "ollama":
-        base_url = "http://localhost:11434/v1"
-    if _should_probe_ollama_vision(provider, base_url):
-        try:
-            from agent.model_metadata import query_ollama_supports_vision
-
-            ollama_vision = query_ollama_supports_vision(model, base_url)
-            if ollama_vision is not None:
-                return ollama_vision
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.debug(
-                "image_routing: ollama vision probe failed for %s:%s — %s",
-                provider,
-                model,
-                exc,
-            )
     return None
 
 

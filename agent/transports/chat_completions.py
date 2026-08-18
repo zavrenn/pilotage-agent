@@ -431,16 +431,12 @@ class ChatCompletionsTransport(ProviderTransport):
             # Legacy-path flags — only used when provider_profile is None
             # (i.e. custom / unregistered providers). Known providers all go
             # through provider_profile.
-            is_openrouter: bool
             is_qwen_portal: bool
             is_github_models: bool
             is_nvidia_nim: bool
             is_tokenhub: bool
             is_lmstudio: bool
             is_custom_provider: bool
-            ollama_num_ctx: int | None
-            # Provider routing
-            provider_preferences: dict | None
             # Qwen-specific
             qwen_prepare_fn: callable | None — runs AFTER codex sanitization
             qwen_prepare_inplace_fn: callable | None — in-place variant for deepcopied lists
@@ -527,29 +523,9 @@ class ChatCompletionsTransport(ProviderTransport):
         # extra_body assembly
         extra_body: dict[str, Any] = {}
 
-        is_openrouter = params.get("is_openrouter", False)
         is_github_models = params.get("is_github_models", False)
         provider_name = str(params.get("provider_name") or "").strip().lower()
         base_url = params.get("base_url")
-
-        provider_prefs = params.get("provider_preferences")
-        if provider_prefs and is_openrouter:
-            extra_body["provider"] = provider_prefs
-
-        # Pareto Code router plugin — model-gated. Same shape as the
-        # profile path in plugins/model-providers/openrouter/__init__.py;
-        # this branch only runs when the OpenRouter profile isn't loaded.
-        if is_openrouter and model == "openrouter/pareto-code":
-            _pareto_score = params.get("openrouter_min_coding_score")
-            if _pareto_score is not None and _pareto_score != "":
-                try:
-                    _pareto_score_f = float(_pareto_score)
-                except (TypeError, ValueError):
-                    _pareto_score_f = None
-                if _pareto_score_f is not None and 0.0 <= _pareto_score_f <= 1.0:
-                    extra_body["plugins"] = [
-                        {"id": "pareto-router", "min_coding_score": _pareto_score_f}
-                    ]
 
         # Reasoning. LM Studio is handled above via top-level reasoning_effort,
         # so skip emitting extra_body.reasoning for it.
@@ -677,7 +653,6 @@ class ChatCompletionsTransport(ProviderTransport):
                 qwen_session_metadata=params.get("qwen_session_metadata"),
                 model=model,
                 base_url=params.get("base_url"),
-                ollama_num_ctx=params.get("ollama_num_ctx"),
                 session_id=params.get("session_id"),
             )
         )
@@ -689,11 +664,9 @@ class ChatCompletionsTransport(ProviderTransport):
         # Profile's extra_body (tags, provider prefs, vl_high_resolution, etc.)
         profile_body = profile.build_extra_body(
             session_id=params.get("session_id"),
-            provider_preferences=params.get("provider_preferences"),
             model=model,
             base_url=params.get("base_url"),
             reasoning_config=reasoning_config,
-            openrouter_min_coding_score=params.get("openrouter_min_coding_score"),
         )
         if profile_body:
             extra_body.update(profile_body)
