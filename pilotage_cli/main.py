@@ -22,7 +22,6 @@ Usage:
     pilotage plugins list        # List plugins
     pilotage sessions browse     # Interactive session picker with search
     pilotage version             # Show version
-    pilotage uninstall           # Uninstall Pilotage Agent
 
 Run `pilotage --help` for the full command list.
 """

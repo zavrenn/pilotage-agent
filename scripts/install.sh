@@ -540,8 +540,7 @@ install_uv() {
 
     # Pilotage owns its own uv at $PILOTAGE_HOME/bin/uv.  Always install there —
     # no PATH probing, no conda guards, no multi-location resolution chains.
-    # The runtime update path (pilotage_cli/managed_uv.py) looks in the same
-    # place, so install.sh and `pilotage update` stay in sync.
+    # Kept at a fixed location so repeat installs reuse the same uv.
     local _managed_uv="$PILOTAGE_HOME/bin/uv"
 
     if [ -x "$_managed_uv" ]; then
@@ -2599,7 +2598,6 @@ print_success() {
     echo -e "   ${GREEN}pilotage config${NC}       View/edit configuration"
     echo -e "   ${GREEN}pilotage config edit${NC}  Open config in editor"
     echo -e "   ${GREEN}pilotage gateway install${NC} Install gateway service (messaging + cron)"
-    echo -e "   ${GREEN}pilotage update${NC}       Update to latest version"
     echo ""
 
     echo -e "${CYAN}─────────────────────────────────────────────────────────${NC}"

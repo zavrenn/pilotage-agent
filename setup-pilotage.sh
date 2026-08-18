@@ -271,8 +271,7 @@ else
         # bypassing the curated [all] extra and pulling backends like
         # [matrix] (python-olm needs make on Windows) and [rl] (git+https
         # deps that fail offline). See pyproject.toml's [all] for the
-        # curated set, and tools/lazy_deps.py for backends that install
-        # at first use.
+        # curated set; opt-in backends are installed explicitly.
         # Also: stream stderr through directly so the user sees uv's
         # progress UI instead of staring at a frozen prompt.
         if run_locked_uv_sync "$SCRIPT_DIR/venv"; then
