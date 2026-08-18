@@ -135,11 +135,11 @@ def get_available_skills() -> Dict[str, List[str]]:
 _UPDATE_CHECK_CACHE_SECONDS = 6 * 3600
 
 # Sentinel returned when we know an update exists but can't count commits
-# (e.g. nix-built pilotage — no local git history to count against).
+# (no local git history to count against).
 UPDATE_AVAILABLE_NO_COUNT = -1
 
 _UPSTREAM_REPO_URL = ""
-_OFFICIAL_REPO_CANONICAL = "github.com/nousresearch/pilotage-agent"
+_OFFICIAL_REPO_CANONICAL = ""
 
 
 def _canonical_github_remote(url: str | None) -> str:
@@ -194,40 +194,11 @@ def _git_stdout(args: list[str], *, cwd: Path, timeout: int = 5) -> Optional[str
 
 
 def _github_compare_behind(current_rev: str, target_rev: str) -> Optional[int]:
-    """Exact behind-count via the GitHub compare API for uncountable graphs.
+    """Exact behind-count for graphs the local clone can't count across.
 
-    Shallow installer clones and ls-remote-only probes know the two tip SHAs
-    but have no local history to run ``rev-list --count`` across. GitHub's
-    ``GET /repos/<owner>/<repo>/compare/<current>...<target>`` knows the full
-    graph regardless of local clone depth and returns ``ahead_by`` — exactly
-    the behind count the local graph lost. Unauthenticated, bounded, and
-    best-effort: any failure (offline, rate limit, diverged/unknown SHAs)
-    returns None so callers keep the honest UPDATE_AVAILABLE_NO_COUNT.
+    Requires a configured upstream repo; with none set there is nothing to
+    compare against, so callers keep the honest UPDATE_AVAILABLE_NO_COUNT.
     """
-    if not (_is_full_sha(current_rev) and _is_full_sha(target_rev)):
-        return None
-    url = (
-        "https://api.github.com/repos/nousresearch/pilotage-agent/"
-        f"compare/{current_rev}...{target_rev}"
-    )
-    try:
-        import urllib.request
-
-        req = urllib.request.Request(
-            url,
-            headers={
-                "Accept": "application/vnd.github+json",
-                # api.github.com 403s requests without a User-Agent.
-                "User-Agent": "pilotage-cli-update-check",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return None
-    ahead = payload.get("ahead_by") if isinstance(payload, dict) else None
-    if isinstance(ahead, int) and not isinstance(ahead, bool) and ahead >= 0:
-        return ahead
     return None
 
 
@@ -390,17 +361,8 @@ def check_for_updates() -> Optional[int]:
 
     # Docker images have no working tree to count commits against — the
     # published image excludes `.git` (see .dockerignore) and sets no
-    # PILOTAGE_REVISION (that's nix-only). Returning None makes both the Rich
-    # banner (build_welcome_banner) and the Ink badge (branding.tsx, guarded
-    # on `typeof === 'number' && > 0`) show nothing. The dashboard's REST
-    # `/api/pilotage/update/check` endpoint short-circuits docker the same way
-    # (web_server.py); mirror that here so the banner/TUI surfaces agree.
-    try:
-        from pilotage_cli.config import detect_install_method, get_project_root
-        if detect_install_method(get_project_root()) == "docker":
-            return None
-    except Exception:
-        pass
+    # PILOTAGE_REVISION. Returning None makes the Rich banner
+    # (build_welcome_banner) show nothing.
 
     # Read cache — invalidate if the embedded rev OR installed version has
     # changed since the last check.
@@ -982,7 +944,7 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
         if len(model_short) > 28:
             model_short = model_short[:25] + "..."
         ctx_str = f" [dim {dim}]·[/] [dim {dim}]{_format_context_length(context_length)} context[/]" if context_length else ""
-        left_lines.append(f"[{accent}]{model_short}[/]{ctx_str} [dim {dim}]·[/] [dim {dim}]Nous Research[/]")
+        left_lines.append(f"[{accent}]{model_short}[/]{ctx_str}")
 
     if os.getenv("PILOTAGE_YOLO_MODE"):
         left_lines.append(f"[bold red]⚠ YOLO mode[/] [dim {dim}]— all approval prompts bypassed[/]")

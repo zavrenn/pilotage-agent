@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from pilotage_constants import OPENROUTER_BASE_URL
 from pilotage_cli.config import load_env
 from agent.secret_scope import get_secret as _get_secret
 from agent.credential_persistence import (
@@ -32,7 +31,6 @@ from pilotage_cli.auth import (
     _load_auth_store,
     _load_provider_state,
     _load_provider_state_with_source,
-    _resolve_zai_base_url,
     _same_path,
     _save_auth_store,
     _save_provider_state,
@@ -76,7 +74,7 @@ STATUS_DEAD = "dead"
 
 # OAuth error reasons that indicate the credential is permanently invalid
 # server-side and cannot be recovered by retry/refresh.  Sourced from
-# OpenAI Codex Responses API and Anthropic OAuth spec.
+# the OpenAI Codex Responses API OAuth spec.
 _TERMINAL_AUTH_REASONS = frozenset({
     "token_invalidated",   # OpenAI Codex: "Your authentication token has been invalidated."
     "token_revoked",        # OAuth 2.0 RFC 7009: token explicitly revoked
@@ -92,8 +90,8 @@ _TERMINAL_AUTH_REASONS = frozenset({
 # without losing recoverability — the user always has the option to re-add
 # via ``pilotage auth add``.
 #
-# Singleton-seeded entries (``device_code``, ``claude_code``)
-# are NOT pruned because ``_seed_from_singletons`` would just re-create them
+# Singleton-seeded entries (``device_code``) are NOT pruned because
+# ``_seed_from_singletons`` would just re-create them
 # on the next ``load_pool()`` with the same stale singleton tokens, defeating
 # the cleanup.  They remain in the pool marked DEAD until an explicit re-auth
 # write-side sync (``_save_codex_tokens`` etc.) clears the status.
@@ -172,12 +170,6 @@ _EXTRA_KEYS = frozenset({
 
 def _normalize_pool_auth_type(provider: str, token: Any, auth_type: Any) -> str:
     """Infer pool auth metadata for token formats with one unambiguous meaning."""
-    if (
-        provider == "anthropic"
-        and isinstance(token, str)
-        and token.startswith("sk-ant-oat")
-    ):
-        return AUTH_TYPE_OAUTH
     return str(auth_type or AUTH_TYPE_API_KEY)
 
 
@@ -302,8 +294,8 @@ def _exhausted_ttl(
 
     *failure_reason* is the classified semantics from
     ``agent/error_classifier.py``. The raw status alone can't size the
-    cooldown: an OpenRouter ``key limit exceeded`` and a spending-limit
-    block both arrive as **403** but classify as ``billing``, and a 60s retry
+    cooldown: a ``key limit exceeded`` and a spending-limit block both
+    arrive as **403** but classify as ``billing``, and a 60s retry
     on a spent account just re-fails every minute. Billing keeps the full
     bench regardless of status; 402 does too, since it is billing by
     definition even when nothing classified it.
@@ -825,8 +817,8 @@ class CredentialPool:
         though fresh credentials are sitting on disk — and every request
         fails with "no available entries (all exhausted or empty)".
 
-        Mirrors the Anthropic resync path above.  Only applies to
-        device_code-sourced entries; env/API-key-sourced entries have no
+        Only applies to device_code-sourced entries; env/API-key-sourced
+        entries have no
         auth.json shadow to sync from.
         """
         if self.provider != "openai-codex" or entry.source not in ("device_code", "manual:device_code"):
@@ -1203,10 +1195,6 @@ class CredentialPool:
     def _entry_needs_refresh(self, entry: PooledCredential) -> bool:
         if entry.auth_type != AUTH_TYPE_OAUTH:
             return False
-        if self.provider == "anthropic":
-            if entry.expires_at_ms is None:
-                return False
-            return int(entry.expires_at_ms) <= int(time.time() * 1000) + 120_000
         if self.provider == "openai-codex":
             return _codex_access_token_is_expiring(
                 entry.access_token,
@@ -1285,16 +1273,7 @@ class CredentialPool:
             # can remain unhydrated; never lease or select it as an empty key.
             if entry.auth_type == AUTH_TYPE_API_KEY and not entry.runtime_api_key:
                 continue
-            # For anthropic claude_code entries, sync from the credentials file
-            # before any status/refresh checks. This picks up tokens refreshed
-            # by other processes (Claude Code CLI, other Pilotage profiles).
-            if (self.provider == "anthropic" and entry.source == "claude_code"
-                    and entry.last_status in {STATUS_EXHAUSTED, STATUS_DEAD}):
-                synced = self._sync_anthropic_entry_from_credentials_file(entry)
-                if synced is not entry:
-                    entry = synced
-                    cleared_any = True
-            # For openai-codex entries, same pattern: the user may have
+            # For openai-codex entries: the user may have
             # re-authed via `pilotage model` / `pilotage auth` after a 429/401,
             # leaving fresh tokens on disk while the pool entry is still
             # frozen behind last_error_reset_at (can be hours in the
@@ -1870,40 +1849,6 @@ def _upsert_entry(entries: List[PooledCredential], provider: str, source: str, p
     return bool(duplicate_indices)
 
 
-def _normalize_pool_priorities(provider: str, entries: List[PooledCredential]) -> bool:
-    if provider != "anthropic":
-        return False
-
-    source_rank = {
-        "env:ANTHROPIC_TOKEN": 0,
-        "env:CLAUDE_CODE_OAUTH_TOKEN": 1,
-        "pilotage_pkce": 2,
-        "claude_code": 3,
-        "env:ANTHROPIC_API_KEY": 4,
-    }
-    manual_entries = sorted(
-        (entry for entry in entries if _is_manual_source(entry.source)),
-        key=lambda entry: entry.priority,
-    )
-    seeded_entries = sorted(
-        (entry for entry in entries if not _is_manual_source(entry.source)),
-        key=lambda entry: (
-            source_rank.get(entry.source, len(source_rank)),
-            entry.priority,
-            entry.label,
-        ),
-    )
-
-    ordered = [*manual_entries, *seeded_entries]
-    id_to_idx = {entry.id: idx for idx, entry in enumerate(entries)}
-    changed = False
-    for new_priority, entry in enumerate(ordered):
-        if entry.priority != new_priority:
-            entries[id_to_idx[entry.id]] = replace(entry, priority=new_priority)
-            changed = True
-    return changed
-
-
 def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tuple[bool, Set[str]]:
     changed = False
     active_sources: Set[str] = set()
@@ -2027,27 +1972,6 @@ def _seed_from_env(provider: str, entries: List[PooledCredential]) -> Tuple[bool
             payload["secret_source"] = secret_source
         return payload
 
-    if provider == "openrouter":
-        # Prefer ~/.pilotage/.env over os.environ
-        token = _get_env_prefer_dotenv("OPENROUTER_API_KEY")
-        if token:
-            source = "env:OPENROUTER_API_KEY"
-            if _is_source_suppressed(provider, source):
-                return changed, active_sources
-            active_sources.add(source)
-            changed |= _upsert_entry(
-                entries,
-                provider,
-                source,
-                _env_payload(
-                    source=source,
-                    env_var="OPENROUTER_API_KEY",
-                    token=token,
-                    base_url=OPENROUTER_BASE_URL,
-                ),
-            )
-        return changed, active_sources
-
     pconfig = PROVIDER_REGISTRY.get(provider)
     if not pconfig or pconfig.auth_type != AUTH_TYPE_API_KEY:
         return changed, active_sources
@@ -2057,12 +1981,6 @@ def _seed_from_env(provider: str, entries: List[PooledCredential]) -> Tuple[bool
         env_url = _get_env_prefer_dotenv(pconfig.base_url_env_var).rstrip("/")
 
     env_vars = list(pconfig.api_key_env_vars)
-    if provider == "anthropic":
-        env_vars = [
-            "ANTHROPIC_TOKEN",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            "ANTHROPIC_API_KEY",
-        ]
 
     for env_var in env_vars:
         # Prefer ~/.pilotage/.env over os.environ
@@ -2074,8 +1992,6 @@ def _seed_from_env(provider: str, entries: List[PooledCredential]) -> Tuple[bool
             continue
         active_sources.add(source)
         base_url = env_url or pconfig.inference_base_url
-        if provider == "zai":
-            base_url = _resolve_zai_base_url(token, pconfig.inference_base_url, env_url)
         changed |= _upsert_entry(
             entries,
             provider,
@@ -2105,7 +2021,7 @@ def _prune_stale_seeded_entries(
         # (e.g. an `pilotage auth` command that confirmed the source is gone).
         if entry.source.startswith("env:"):
             return prune_env_sources
-        # File-backed singletons (device-code OAuth, claude_code) and Pilotage
+        # File-backed singletons (device-code OAuth) and Pilotage
         # PKCE should disappear from the pool when their backing file is gone.
         return (
             is_borrowed_credential_source(entry.source, entry.provider)
@@ -2252,8 +2168,6 @@ def load_pool(provider: str) -> CredentialPool:
             singleton_sources | env_sources,
             prune_env_sources=False,
         )
-        changed |= _normalize_pool_priorities(provider, entries)
-
     if changed:
         new_ids = {entry.id for entry in entries}
         write_credential_pool(

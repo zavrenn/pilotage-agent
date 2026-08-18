@@ -736,7 +736,7 @@ def _has_any_provider_configured() -> bool:
 
     # Determine whether Pilotage itself has been explicitly configured (model
     # in config that isn't the hardcoded default). Used below to gate external
-    # tool credentials (Claude Code, Codex CLI) that shouldn't silently skip
+    # tool credentials (Codex CLI) that shouldn't silently skip
     # the setup wizard on a fresh install.
     from pilotage_cli.config import DEFAULT_CONFIG
 
@@ -758,16 +758,13 @@ def _has_any_provider_configured() -> bool:
     _has_pilotage_config = _model_name and _model_name != _DEFAULT_MODEL
 
     # Check env vars (may be set by .env or shell).
-    # OPENAI_BASE_URL alone counts — local models (vLLM, llama.cpp, etc.)
-    # often don't require an API key.
+    # OPENAI_BASE_URL alone counts — a custom endpoint may not require an
+    # API key.
     from pilotage_cli.auth import PROVIDER_REGISTRY
 
     # Collect all provider env vars
     provider_env_vars = {
-        "OPENROUTER_API_KEY",
         "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_TOKEN",
         "OPENAI_BASE_URL",
     }
     for pconfig in PROVIDER_REGISTRY.values():
@@ -797,7 +794,7 @@ def _has_any_provider_configured() -> bool:
     # while the PROVIDER_REGISTRY sweep below spawns subprocesses (gh) and can
     # take 15-20s — long enough that desktop setup.status calls time out.
 
-    # Check for Nous Portal OAuth credentials
+    # Check for OAuth credentials
     auth_file = get_pilotage_home() / "auth.json"
     if auth_file.exists():
         try:
@@ -823,7 +820,7 @@ def _has_any_provider_configured() -> bool:
         if cfg_provider or cfg_base_url or cfg_api_key:
             return True
 
-    # Check provider-specific auth fallbacks (for example, Copilot via gh auth).
+    # Check provider-specific auth fallbacks.
     try:
         for provider_id, pconfig in PROVIDER_REGISTRY.items():
             if pconfig.auth_type != "api_key":
@@ -2185,7 +2182,7 @@ _AUX_TASKS: list[tuple[str, str, str]] = [
     ("MCP", "MCP", "MCP tool reasoning"),
     ("title_generation", "Title generation", "session titles"),
     ("memory_query_rewrite", "Memory query rewrite", "memory retrieval queries"),
-    ("tts_audio_tags", "TTS audio tags", "Gemini TTS tag insertion"),
+    ("tts_audio_tags", "TTS audio tags", "TTS tag insertion"),
     ("profile_describer", "Profile describer", "auto profile descriptions"),
 ]
 
@@ -2311,9 +2308,9 @@ def _aux_config_menu() -> None:
         print()
         print("  Side tasks (vision, compression, web extraction, etc.) default")
         print('  to your main chat model.  "auto" means "use my main model" —')
-        print("  Pilotage only falls back to a lightweight backend (OpenRouter,")
-        print("  Nous Portal) if the main model is unavailable.  Override a")
-        print("  task below if you want it pinned to a specific provider/model.")
+        print("  Pilotage only falls back to a lightweight backend if the")
+        print("  main model is unavailable.  Override a task below if you")
+        print("  want it pinned to a specific provider/model.")
         print()
 
         # Build the task menu with current settings inline
@@ -5330,7 +5327,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "approvals", "auth", "backup", "bundles", "checkpoints", "completion",
         "config", "cron", "debug", "doctor",
-        "dump", "fallback", "gateway", "hooks", "import",
+        "dump", "gateway", "hooks", "import",
         "login", "logout", "logs", "memory",
         "model", "pairing", "pause", "plugins", "profile",
         "prompt-size",
@@ -5841,42 +5838,6 @@ def main():
     # model command  (parser built in pilotage_cli/subcommands/model.py)
     # =========================================================================
     build_model_parser(subparsers, cmd_model=cmd_model)
-
-    # =========================================================================
-    # fallback command — manage the fallback provider chain
-    # =========================================================================
-    from pilotage_cli.fallback_cmd import cmd_fallback
-
-    fallback_parser = subparsers.add_parser(
-        "fallback",
-        help="Manage fallback providers (tried when the primary model fails)",
-        description=(
-            "Manage the fallback provider chain.  Fallback providers are tried "
-            "in order when the primary model fails with rate-limit, overload, or "
-            "connection errors.  See: "
-            ""
-        ),
-    )
-    fallback_subparsers = fallback_parser.add_subparsers(dest="fallback_command")
-    fallback_subparsers.add_parser(
-        "list",
-        aliases=["ls"],
-        help="Show the current fallback chain (default when no subcommand)",
-    )
-    fallback_subparsers.add_parser(
-        "add",
-        help="Pick a provider + model (same picker as `pilotage model`) and append to the chain",
-    )
-    fallback_subparsers.add_parser(
-        "remove",
-        aliases=["rm"],
-        help="Pick an entry to delete from the chain",
-    )
-    fallback_subparsers.add_parser(
-        "clear",
-        help="Remove all fallback entries",
-    )
-    fallback_parser.set_defaults(func=cmd_fallback)
 
     # =========================================================================
     # secrets command — external secret managers (Bitwarden, 1Password)

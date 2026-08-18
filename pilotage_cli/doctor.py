@@ -34,30 +34,8 @@ from pilotage_cli.models import _PILOTAGE_USER_AGENT
 
 
 _PROVIDER_ENV_HINTS = (
-    "DEEPINFRA_API_KEY",
-    "OPENROUTER_API_KEY",
     "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_TOKEN",
     "OPENAI_BASE_URL",
-    "GLM_API_KEY",
-    "ZAI_API_KEY",
-    "Z_AI_API_KEY",
-    "GMI_API_KEY",
-    "FIREWORKS_API_KEY",
-    "ACTUAL_API_KEY",
-    "ACTUAL_BASE_URL",
-    "MINIMAX_API_KEY",
-    "MINIMAX_CN_API_KEY",
-    "KILOCODE_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "DASHSCOPE_API_KEY",
-    "HF_TOKEN",
-    "AI_GATEWAY_API_KEY",
-    "OPENCODE_ZEN_API_KEY",
-    "OPENCODE_GO_API_KEY",
-    "XIAOMI_API_KEY",
-    "TOKENHUB_API_KEY",
 )
 
 
@@ -78,12 +56,7 @@ def _system_package_install_cmd(pkg: str) -> str:
 
 def _sqlite_upgrade_hint(install_method: str | None = None) -> str:
     """Return an actionable SQLite upgrade hint for this install layout."""
-    method = install_method or detect_install_method(PROJECT_ROOT)
-    if method == "docker":
-        command = recommended_update_command_for_method(method)
-        action = f"run `{command}`, then recreate all Pilotage containers"
-    else:
-        action = "run `pilotage update`"
+    action = "run `pilotage update`"
     return (
         f"({action}; fixed versions: 3.51.3+ / 3.50.7 / 3.44.6 — "
         "see https://sqlite.org/wal.html#walresetbug)"

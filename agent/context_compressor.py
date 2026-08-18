@@ -143,8 +143,8 @@ LEGACY_SUMMARY_PREFIX = "[CONTEXT SUMMARY]:"
 # (agent/transports/chat_completions.py convert_messages and the summary-path
 # mirror in agent/chat_completion_helpers.py) strip every top-level message
 # key starting with "_" before the request leaves the process. Strict
-# OpenAI-compatible gateways (Fireworks, Mistral, Moonshot/Kimi, opencode-go)
-# reject payloads carrying unknown keys with "Extra inputs are not permitted",
+# OpenAI-compatible gateways reject payloads carrying unknown keys with
+# "Extra inputs are not permitted",
 # poisoning every subsequent request in the session — a bare key like
 # "is_compressed_summary" would reach the wire and trip exactly that.
 COMPRESSED_SUMMARY_METADATA_KEY = "_compressed_summary"
@@ -202,8 +202,8 @@ def _fresh_compaction_message_copy(msg: Dict[str, Any]) -> Dict[str, Any]:
 def _template_visible_role(message: Any) -> Optional[str]:
     """Role as counted by strict chat-template alternation checks.
 
-    Mistral-family templates (Devstral, Mistral Small 3.x, Magistral)
-    enforce user/assistant alternation at render time but EXEMPT the tool
+    Some chat templates enforce user/assistant alternation at render
+    time but EXEMPT the tool
     flow from the check: ``tool`` results and assistant messages carrying
     ``tool_calls`` are skipped. A summary role chosen against the *literal*
     neighbouring roles can therefore still violate alternation as the
@@ -211,8 +211,8 @@ def _template_visible_role(message: Any) -> Optional[str]:
     ``[user, assistant(tool_calls), tool]``, so the literal last role is
     ``tool`` and the summary is pinned to ``role="user"`` -- but the last
     role the template counts is ``user``, the template sees user -> user,
-    and llama.cpp / Mistral-hosted backends reject the ENTIRE request with
-    a Jinja alternation error (HTTP 500). Because the summary persists in
+    and such backends reject the ENTIRE request with a Jinja alternation
+    error (HTTP 500). Because the summary persists in
     the stored conversation, every retry replays the same poisoned history
     and the session is unrecoverable.
 
@@ -772,10 +772,8 @@ def _collect_protected_skill_names(
 # Chars per token rough estimate
 _CHARS_PER_TOKEN = 4
 # Flat token cost per attached image part.  Real cost varies by provider and
-# dimensions (Anthropic ≈ width×height/750, GPT-4o up to ~1700 for
-# high-detail 2048×2048, Gemini 258/tile), but 1600 is a realistic ceiling
-# that keeps compression budgeting honest for multi-image conversations.
-# Matches Claude Code's IMAGE_TOKEN_ESTIMATE constant.
+# dimensions, but 1600 is a realistic ceiling that keeps compression
+# budgeting honest for multi-image conversations.
 _IMAGE_TOKEN_ESTIMATE = 1600
 # Same figure expressed in the char-budget currency the rest of the
 # compressor speaks in.  Used when accumulating message "content length"
@@ -887,7 +885,7 @@ def _content_length_for_budget(raw_content: Any) -> int:
 
     Plain strings: ``len(content)``. Multimodal lists: sum of text-part
     ``len(text)`` plus a flat ``_IMAGE_CHAR_EQUIVALENT`` per image part
-    (``image_url`` / ``input_image`` / Anthropic-style ``image``). This
+    (``image_url`` / ``input_image`` / native ``image``). This
     keeps the compressor from treating a turn with 5 attached images as
     near-zero tokens just because the text part is empty.
     """
@@ -949,9 +947,8 @@ _REPLAY_BUDGET_KEYS = (
 # message items are required for prefix-cache continuity).  The remaining
 # generic thinking-text keys (``reasoning`` / ``reasoning_content``) are
 # replayed for at most the NEWEST assistant turn on non-Codex transports —
-# Anthropic strips all-but-newest at convert time, Bedrock Converse never
-# replays thinking at all, and strict chat-completions providers either
-# reject the field or receive a one-space echo pad. Charging them
+# strict chat-completions providers either reject the field or receive a
+# one-space echo pad. Charging them
 # on every message spent 19-24% of the tail budget on bytes that provably
 # never reach the wire, so the tail cut landed early and each compaction
 # discarded more real transcript than configured.
@@ -980,8 +977,8 @@ def _reasoning_details_text_chars(value: Any) -> int:
     """Textual thinking chars inside a ``reasoning_details`` envelope.
 
     ``reasoning_details`` carries provider thinking blocks: the actual
-    thinking TEXT plus opaque signed/base64 envelope blobs (Anthropic
-    ``signature``, redacted ``data``, encrypted payloads).  The envelope is
+    thinking TEXT plus opaque signed/base64 envelope blobs (``signature``,
+    redacted ``data``, encrypted payloads).  The envelope is
     never billed at anything near chars/4 by the provider and — on every
     transport except Codex Responses — is replayed for at most the newest
     assistant turn, so charging it on every message inflated the tail-budget
@@ -1060,7 +1057,7 @@ def _estimate_msg_budget_tokens(msg: dict, charge_stale_thinking: bool = True) -
     # base64 envelope second site; mirrors the preflight estimator's
     # exclusion in model_metadata).  When the same thinking text already rides
     # in ``reasoning``/``reasoning_content`` (measured byte-identical on
-    # Anthropic-wire sessions), skip it here entirely so the prose is not
+    # some wires), skip it here entirely so the prose is not
     # charged twice on top of the envelope exclusion.
     if not (msg.get("reasoning") or msg.get("reasoning_content")):
         tokens += (
@@ -1162,9 +1159,9 @@ def _truncate_tool_call_args_json(args: str, head_chars: int = 200) -> str:
         {"path": "/foo/bar", "content": "# long markdown
         ...[truncated]
 
-    i.e. an unterminated string and a missing closing brace. MiniMax, for
-    example, rejects this with ``invalid function arguments json string``
-    and the session gets stuck re-sending the same broken history on every
+    i.e. an unterminated string and a missing closing brace. Providers
+    reject this with ``invalid function arguments json string`` and the
+    session gets stuck re-sending the same broken history on every
     turn. See for the observed loop.
 
     This helper parses the arguments, shrinks long string leaves inside the
@@ -1204,7 +1201,7 @@ def _is_image_part(part: Any) -> bool:
     Recognizes all three shapes the agent handles:
       - OpenAI chat.completions: ``{"type": "image_url", "image_url": ...}``
       - OpenAI Responses API:    ``{"type": "input_image", "image_url": "..."}``
-      - Anthropic native:        ``{"type": "image", "source": {...}}``
+      - Native image block:      ``{"type": "image", "source": {...}}``
     """
     if not isinstance(part, dict):
         return False
@@ -1557,8 +1554,8 @@ def resolve_model_threshold(
     """Resolve the effective compression threshold for a given model.
 
     ``model_thresholds`` maps substring keys to override fractions.  The
-    longest matching key wins (so ``glm-5.2-1M`` beats ``glm-5.2`` when the
-    model is ``glm-5.2-1M``).  When no override matches, or when
+    longest matching key wins (so ``gpt-5.2-1M`` beats ``gpt-5.2`` when the
+    model is ``gpt-5.2-1M``).  When no override matches, or when
     ``model_thresholds`` is empty/None, ``default`` is returned unchanged.
 
     This is a module-level helper so plugin context engines (e.g. LCM) can
@@ -3901,7 +3898,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             focus_topic: Optional focus string for guided compression.  When
                 provided, the summariser prioritises preserving information
                 related to this topic and is more aggressive about compressing
-                everything else.  Inspired by Claude Code's ``/compact``.
+                everything else.
 
         Returns None if all attempts fail — the caller should drop
         the middle turns without a summary rather than inject a useless
@@ -4194,8 +4191,8 @@ This compaction should PRIORITISE preserving all information related to the focu
                 # NO max_tokens: the output cap must never truncate a summary.
                 # ``summary_budget`` is prompt-level guidance only ("Target ~N
                 # tokens" above). Most OpenAI-compatible wires already omit the
-                # param (see _build_call_kwargs), but the Anthropic Messages
-                # wire and NVIDIA NIM forward it — a hard cap there cut
+                # param (see _build_call_kwargs), but some wires forward
+                # it — a hard cap there cut
                 # summaries mid-section (thinking models burn the cap on
                 # reasoning first), producing truncated/thinking-only
                 # summaries and compaction loops. Omitting lets the adapter
@@ -4250,11 +4247,11 @@ This compaction should PRIORITISE preserving all information related to the focu
                 content = message.get("content")
             else:
                 content = getattr(message, "content", message)
-            # Handle cases where content is not a string (e.g., dict from llama.cpp)
+            # Handle cases where content is not a string (e.g. a dict)
             if not isinstance(content, str):
                 content = str(content) if content else ""
-            # Some OpenAI-compatible proxies (e.g. cmkey.cn, one-api channels)
-            # return a well-formed HTTP 200 with an empty or whitespace-only
+            # Some OpenAI-compatible proxies return a well-formed HTTP 200
+            # with an empty or whitespace-only
             # ``content`` instead of an error or empty ``choices``. That payload
             # passes ``_validate_llm_response`` (a ``message`` exists), so it
             # reaches here and would otherwise be stored as a prefix-only
@@ -4270,8 +4267,8 @@ This compaction should PRIORITISE preserving all information related to the focu
                     f"model={self.summary_model or self.model})"
                 )
             # Strip reasoning blocks the summarizer model may have emitted
-            # (<think>...</think> etc. from thinking models like MiniMax,
-            # DeepSeek, QwQ). Without this the trace is stored in
+            # (<think>...</think> etc. from thinking models). Without this
+            # the trace is stored in
             # _previous_summary, injected into the conversation, AND fed back
             # into every subsequent iterative-update prompt — compounding
             # token bloat across compactions. Mirrors title_generator.py.
@@ -5275,7 +5272,7 @@ This compaction should PRIORITISE preserving all information related to the focu
             if isinstance(content, str) and content.strip():
                 return i
             if isinstance(content, list):
-                # Multimodal / Anthropic-style content: look for any
+                # Multimodal / block-style content: look for any
                 # text block with non-empty text.
                 for part in content:
                     if isinstance(part, dict):
@@ -6459,7 +6456,7 @@ This compaction should PRIORITISE preserving all information related to the focu
             focus_topic: Optional focus string for guided compression.  When
                 provided, the summariser will prioritise preserving information
                 related to this topic and be more aggressive about compressing
-                everything else.  Inspired by Claude Code's ``/compact``.
+                everything else.
             force: If True, clear any active summary-failure cooldown before
                 running so a manual ``/compress`` can retry immediately after
                 an auto-compression abort, and bypass the pre-LLM feasibility
@@ -6966,14 +6963,14 @@ This compaction should PRIORITISE preserving all information related to the focu
         # reads the assembled (post-strip) tail_messages — a stripped stale
         # handoff must not influence alternation-safe role selection.
         # Both are TEMPLATE-VISIBLE roles (``_template_visible_role``), not the
-        # literal list neighbours: strict Mistral-style templates skip tool
-        # results and assistant tool-call messages when enforcing
-        # user/assistant alternation, so the summary must alternate against
-        # the nearest message the template actually counts. Selecting against
-        # the literal neighbour (previously ``compressed[-1]``) emitted the
+        # literal list neighbours: strict chat templates skip tool results
+        # and assistant tool-call messages when enforcing user/assistant
+        # alternation, so the summary must alternate against the nearest
+        # message the template actually counts. Selecting against the
+        # literal neighbour (previously ``compressed[-1]``) emitted the
         # summary as role="user" behind a ``[user, assistant(tool_calls),
-        # tool]`` head — which every Mistral-strict backend rejects with a
-        # Jinja alternation 500, permanently poisoning the session.
+        # tool]`` head — which strict backends reject with a Jinja
+        # alternation 500, permanently poisoning the session.
         last_head_role: Optional[str] = "user"
         if compressed:
             last_head_role = next(
@@ -7006,10 +7003,10 @@ This compaction should PRIORITISE preserving all information related to the focu
             )
         # When the only protected head message is the system prompt, the
         # summary becomes the first *visible* message in the API request
-        # (most adapters — Anthropic, Bedrock — send the system prompt as
-        # a separate ``system`` parameter, not inside ``messages[]``).
-        # Anthropic unconditionally rejects requests whose first message
-        # is not role=user, so we must pin the summary to "user" and
+        # (some adapters send the system prompt as a separate ``system``
+        # parameter, not inside ``messages[]``).  Those wires reject
+        # requests whose first message is not role=user, so we must pin
+        # the summary to "user" and
         # prevent the flip logic below from reverting it.
         _force_user_leading = compress_start == 0 or last_head_role == "system"
         # Zero-user-turn guard. The guard above only fires
@@ -7022,8 +7019,8 @@ This compaction should PRIORITISE preserving all information related to the focu
         # one-shot ``pilotage chat -q`` run seeded with a single short
         # prompt followed by nothing but
         # assistant/tool turns — that leaves the compressed transcript with
-        # ZERO user-role messages. OpenAI-compatible backends (vLLM/Qwen)
-        # reject such a request with a non-retryable
+        # ZERO user-role messages. Some OpenAI-compatible backends reject
+        # such a request with a non-retryable
         # ``400 No user query found in messages``, crashing the worker with no
         # possible recovery (every resume replays the same poisoned history).
         # If no user-role message survives in either the protected head or the
@@ -7129,7 +7126,8 @@ This compaction should PRIORITISE preserving all information related to the focu
                 old_content = msg.get("content", "")
                 if _force_user_leading and summary_role == "user":
                     # The summary must be part of the first user-visible
-                    # message for Anthropic/Bedrock, but the real tail request
+                    # message on system-parameter wires, but the real tail
+                    # request
                     # still has to appear *after* the summary boundary.
                     prefix = summary + "\n\n" + _SUMMARY_END_MARKER + "\n\n"
                     msg["content"] = _append_text_to_content(

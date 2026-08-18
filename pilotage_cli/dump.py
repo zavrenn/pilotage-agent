@@ -255,10 +255,6 @@ def _config_overrides(config: dict) -> dict[str, str]:
     if user_toolsets != default_toolsets:
         overrides["toolsets"] = str(user_toolsets)
 
-    # Fallback providers
-    fallbacks = config.get("fallback_providers", [])
-    if fallbacks:
-        overrides["fallback_providers"] = str(fallbacks)
 
     return overrides
 

@@ -10,10 +10,9 @@ fork inherits the cached prompt verbatim.
 Three tiers are joined with ``\\n\\n``:
 
 * ``stable``   — identity (SOUL.md or DEFAULT_AGENT_IDENTITY), tool
-  guidance, computer-use guidance, nous subscription block, tool-use
-  enforcement guidance + per-model operational guidance,
-  alibaba model-name workaround, environment hints, coding guidance,
-  platform hints.
+  guidance, computer-use guidance, subscription block, tool-use
+  enforcement guidance + per-model operational guidance, environment
+  hints, coding guidance, platform hints.
 * ``context``  — caller-supplied ``system_message`` plus context files
   (AGENTS.md / .cursorrules / etc.) discovered under ``TERMINAL_CWD``,
   plus the session's coding-workspace snapshot.
@@ -33,7 +32,6 @@ from typing import Any, Dict, List, Optional
 
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY,
-    GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     PILOTAGE_AGENT_HELP_GUIDANCE,
     MEMORY_GUIDANCE,
     OPENAI_MODEL_EXECUTION_GUIDANCE,
@@ -420,10 +418,6 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         if _inject:
             stable_parts.append(TOOL_USE_ENFORCEMENT_GUIDANCE)
             _model_lower = (agent.model or "").lower()
-            # Google model operational guidance (conciseness, absolute
-            # paths, parallel tool calls, verify-before-edit, etc.)
-            if "gemini" in _model_lower or "gemma" in _model_lower:
-                stable_parts.append(GOOGLE_MODEL_OPERATIONAL_GUIDANCE)
             # OpenAI GPT/Codex execution discipline (tool persistence,
             # prerequisite checks, verification, anti-hallucination).
             if "gpt" in _model_lower or "codex" in _model_lower:
@@ -459,20 +453,6 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         )
     else:
         skills_prompt = ""
-
-    # Alibaba Coding Plan API always returns "glm-4.7" as model name regardless
-    # of the requested model. Inject explicit model identity into the system prompt
-    # so the agent can correctly report which model it is (workaround for API bug).
-    # Stable for the lifetime of an agent instance — model and provider are fixed
-    # at construction time.
-    if agent.provider == "alibaba":
-        _model_short = agent.model.split("/")[-1] if "/" in agent.model else agent.model
-        stable_parts.append(
-            f"You are powered by the model named {_model_short}. "
-            f"The exact model ID is {agent.model}. "
-            f"When asked what model you are, always answer based on this information, "
-            f"not on any model name returned by the API."
-        )
 
     # Environment hints (WSL, Termux, etc.) — tell the agent about the
     # execution environment so it can translate paths and adapt behavior.

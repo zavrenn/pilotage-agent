@@ -978,68 +978,6 @@ def _compression_deferred_result(
     }
 
 
-def _rewrite_system_content_blocks(system_message: dict, effective: str) -> bool:
-    """Rewrite a cache-decorated system message in place, keeping its blocks.
-
-    ``apply_prompt_cache_control`` runs once per call block, *before* the
-    retry loop, and splits the system prompt into ``[static prefix, volatile
-    tail]`` text blocks carrying the cache_control breakpoints. Assigning a bare
-    string over that list drops both breakpoints, so the failover retry ships
-    the whole system prompt uncached and re-bills it in full.
-
-    ``rewrite_prompt_model_identity`` only touches the LAST ``Model:`` /
-    ``Provider:`` lines, and those live in the volatile tail — so the static
-    prefix stays byte-identical and its cache entry keeps matching. Returns
-    False when the shape is not one we can safely patch, so the caller falls
-    back to the plain-string assignment.
-    """
-    content = system_message.get("content")
-    if not isinstance(content, list) or not content:
-        return False
-    if not all(
-        isinstance(part, dict) and part.get("type") == "text" for part in content
-    ):
-        return False
-    if len(content) == 1:
-        content[0]["text"] = effective
-        return True
-    if len(content) == 2:
-        head = content[0].get("text") or ""
-        if head and effective.startswith(head):
-            tail = effective[len(head):]
-            if tail:
-                content[1]["text"] = tail
-                return True
-    return False
-
-
-def _sync_failover_system_message(agent, api_messages, active_system_prompt):
-    """Refresh the in-flight system message after a provider failover.
-
-    ``try_activate_fallback`` rewrites the ``Model:``/``Provider:`` identity
-    lines on ``agent._cached_system_prompt`` (see
-    ``rewrite_prompt_model_identity``) so the agent reports the model that is
-    actually answering.  But the current call block's ``api_messages`` were
-    built from the pre-failover prompt, and the retry loop rebuilds
-    ``api_kwargs`` from that list each iteration — without this sync the
-    whole turn (and every gateway turn, since fallback re-activates per
-    message while the primary is down) ships the stale identity.
-
-    Mutates ``api_messages[0]`` in place and returns the prompt to use as
-    ``active_system_prompt`` for subsequent call-block rebuilds.
-    """
-    sp = getattr(agent, "_cached_system_prompt", None)
-    if not isinstance(sp, str) or not sp:
-        return active_system_prompt
-    if api_messages and api_messages[0].get("role") == "system":
-        effective = sp
-        if agent.ephemeral_system_prompt:
-            effective = (effective + "\n\n" + agent.ephemeral_system_prompt).strip()
-        if not _rewrite_system_content_blocks(api_messages[0], effective):
-            api_messages[0]["content"] = effective
-    return sp
-
-
 def _apply_context_engine_selection(
     agent: Any,
     api_messages: List[Dict[str, Any]],
@@ -2210,8 +2148,6 @@ def run_conversation(
                             "call_role": (
                                 "delegated"
                                 if getattr(agent, "is_subagent", False)
-                                else "fallback"
-                                if int(getattr(agent, "_fallback_index", 0) or 0) > 0
                                 else "primary"
                             ),
                             "retry_count": retry_count,
@@ -2385,20 +2321,6 @@ def run_conversation(
                     # upstream server error, or malformed response.
                     retry_count += 1
                     
-                    # Eager fallback: empty/malformed responses are a common
-                    # rate-limit symptom.  Switch to fallback immediately
-                    # rather than retrying with extended backoff.
-                    if agent._fallback_index < len(agent._fallback_chain):
-                        agent._buffer_status("⚠️ Empty/malformed response — switching to fallback...")
-                    if agent._try_activate_fallback():
-                        active_system_prompt = _sync_failover_system_message(
-                            agent, api_messages, active_system_prompt)
-                        retry_count = 0
-                        compression_attempts = 0
-                        _retry.primary_recovery_attempted = False
-                        _retry.restart_with_rebuilt_messages = True
-                        break
-
                     # Check for error field in response (some providers include this)
                     error_msg = "Unknown"
                     provider_name = "Unknown"
@@ -2456,17 +2378,6 @@ def run_conversation(
                     agent._buffer_vprint(f"   ⏱️  {_failure_hint}")
                     
                     if retry_count >= max_retries:
-                        # Try fallback before giving up
-                        if agent._has_pending_fallback():
-                            agent._buffer_status(f"⚠️ Max retries ({max_retries}) for invalid responses — trying fallback...")
-                        if agent._try_activate_fallback():
-                            active_system_prompt = _sync_failover_system_message(
-                                agent, api_messages, active_system_prompt)
-                            retry_count = 0
-                            compression_attempts = 0
-                            _retry.primary_recovery_attempted = False
-                            _retry.restart_with_rebuilt_messages = True
-                            break
                         # Terminal — flush buffered retry trace so user sees what happened.
                         agent._flush_status_buffer()
                         agent._emit_status(f"❌ Max retries ({max_retries}) exceeded for invalid responses. Giving up.")
@@ -2618,20 +2529,6 @@ def run_conversation(
                         agent.thinking_callback("")
 
                     # Deterministic for the unchanged prompt — never retry.
-                    # Try a configured fallback once (a different model may not
-                    # refuse); otherwise surface the refusal terminally.
-                    if agent._has_pending_fallback():
-                        agent._buffer_status(
-                            "⚠️ Model declined to respond (safety refusal) — trying fallback..."
-                        )
-                    if agent._try_activate_fallback():
-                        active_system_prompt = _sync_failover_system_message(
-                            agent, api_messages, active_system_prompt)
-                        retry_count = 0
-                        compression_attempts = 0
-                        _retry.primary_recovery_attempted = False
-                        _retry.restart_with_rebuilt_messages = True
-                        break
 
                     agent._flush_status_buffer()
                     _refusal_log = (
@@ -2762,61 +2659,6 @@ def run_conversation(
 
                     if agent.api_mode == "chat_completions":
                         assistant_message = _trunc_msg
-                        # ── Content-filter stream stall → fallback ──
-                        # When the provider's output-layer safety filter (e.g.
-                        # Provider safety-filter codes, portal
-                        # content_filter) kills the stream mid-delivery, the
-                        # raw error was classified at the swallow point and the
-                        # stub tagged ``_content_filter_terminated``.  This
-                        # filter is content-deterministic — continuation
-                        # retries against the SAME primary just re-hit it and
-                        # burn paid attempts (the loop used to give up with
-                        # "Response remained truncated after 3 continuation
-                        # attempts" and never consult the fallback chain).
-                        # Escalate to the configured fallback BEFORE retrying.
-                        _cf_terminated = getattr(
-                            response, "_content_filter_terminated", False
-                        )
-                        if (
-                            _cf_terminated
-                            and agent._fallback_index < len(agent._fallback_chain)
-                        ):
-                            agent._vprint(
-                                f"{agent.log_prefix}🛡️  Content filter terminated "
-                                f"stream — activating fallback provider...",
-                                force=True,
-                            )
-                            agent._emit_status(
-                                "Content filter terminated stream; switching to fallback..."
-                            )
-                            if agent._try_activate_fallback():
-                                # Roll the partial content (if any was already
-                                # appended in a prior continuation pass) back to
-                                # the last clean turn so the fallback provider
-                                # gets a coherent continuation point.
-                                if truncated_response_parts:
-                                    messages = agent._get_messages_up_to_last_assistant(messages)
-                                # Unmark survivors: their text left the stitched partial.
-                                for _frag in messages:
-                                    if isinstance(_frag, dict):
-                                        _frag.pop("_length_continuation_fragment", None)
-                                        _frag.pop("_length_continuation_nudge", None)
-                                agent._session_messages = messages
-                                length_continue_retries = 0
-                                truncated_response_parts = []
-                                retry_count = 0
-                                compression_attempts = 0
-                                _retry.primary_recovery_attempted = False
-                                _retry.restart_with_rebuilt_messages = True
-                                break
-                            # No fallback available — fall through to normal
-                            # continuation (best-effort, may loop).
-                            agent._vprint(
-                                f"{agent.log_prefix}⚠️  No fallback provider "
-                                f"configured — retrying with same provider "
-                                f"(may re-hit filter)...",
-                                force=True,
-                            )
                         if assistant_message is not None and not _trunc_has_tool_calls:
                             length_continue_retries += 1
                             # An EMPTY partial-stream stub (stream dropped
@@ -3865,12 +3707,8 @@ def run_conversation(
                         "compaction_disabled": True,
                     }
 
-                # Eager fallback for rate-limit errors (429 or quota exhaustion)
-                # and transport errors (connection failure / timeout / provider
-                # overloaded).  Rate limits and billing: switch immediately —
-                # the primary provider won't recover within the retry window.
-                # Transport errors: allow 1 retry first (transient hiccups
-                # recover), then fall back if the provider is truly unreachable.
+                # Rate limits / billing are terminal for the turn; transport
+                # errors get one retry first (transient hiccups recover).
                 is_rate_limited = classified.reason in {
                     FailoverReason.rate_limit,
                     FailoverReason.billing,
@@ -3879,70 +3717,17 @@ def run_conversation(
                     FailoverReason.timeout,
                     FailoverReason.overloaded,
                 }
-                _should_fallback = (
-                    is_rate_limited
-                    or (_is_transport_failure and retry_count >= 2)
-                )
-                if _should_fallback and agent._fallback_index < len(agent._fallback_chain):
-                    # Don't eagerly fallback if credential pool rotation may
-                    # still recover.  See _pool_may_recover_from_rate_limit
-                    # for the single-credential-pool exception.
-                    pool_may_recover = _ra()._pool_may_recover_from_rate_limit(
+                if is_rate_limited or (_is_transport_failure and retry_count >= 2):
+                    # Stay quiet if credential pool rotation may still recover.
+                    # See _pool_may_recover_from_rate_limit for the
+                    # single-credential-pool exception.
+                    if not _ra()._pool_may_recover_from_rate_limit(
                         agent._credential_pool,
-                    )
-                    if not pool_may_recover:
-                        if classified.reason == FailoverReason.billing:
-                            agent._buffer_status(
-                                "⚠️ Billing or credits exhausted — switching to fallback provider..."
-                            )
-                        elif _is_transport_failure:
-                            agent._buffer_status(
-                                "⚠️ Provider unreachable — switching to fallback provider..."
-                            )
+                    ):
+                        if _is_transport_failure:
+                            agent._buffer_status("⚠️ Provider unreachable.")
                         else:
-                            agent._buffer_status("⚠️ Rate limited — switching to fallback provider...")
-                        if agent._try_activate_fallback(reason=classified.reason):
-                            active_system_prompt = _sync_failover_system_message(
-                                agent, api_messages, active_system_prompt)
-                            retry_count = 0
-                            compression_attempts = 0
-                            _retry.primary_recovery_attempted = False
-                            _retry.restart_with_rebuilt_messages = True
-                            break
-
-                # ── Auth-failure provider failover ───────────────────────
-                # A 401/403 that survives the per-provider credential-refresh
-                # attempt above (each guarded by its own
-                # ``*_auth_retry_attempted`` flag) means the active provider's
-                # credential or endpoint is broken in a way refreshing can't
-                # fix (revoked OAuth, blocked/expired key, an account pinned to
-                # a dead/staging endpoint). Previously the loop only printed
-                # "switch providers manually" advice and fell through, so a
-                # user with a configured fallback chain kept thrashing on the
-                # same dead credential every turn instead of failing over.
-                # Escalate to the fallback chain here, mirroring the rate-
-                # limit/billing failover above. When no fallback is configured
-                # (or the chain is exhausted), _try_activate_fallback returns
-                # False and we fall through to the existing terminal handling
-                # + provider-specific troubleshooting guidance unchanged.
-                if (
-                    classified.is_auth
-                    and not _retry.auth_failover_attempted
-                    and agent._fallback_index < len(agent._fallback_chain)
-                ):
-                    _retry.auth_failover_attempted = True
-                    agent._buffer_status(
-                        "🔐 Authentication failed and could not be refreshed — "
-                        "switching to fallback provider..."
-                    )
-                    if agent._try_activate_fallback(reason=classified.reason):
-                        active_system_prompt = _sync_failover_system_message(
-                            agent, api_messages, active_system_prompt)
-                        retry_count = 0
-                        compression_attempts = 0
-                        _retry.primary_recovery_attempted = False
-                        _retry.restart_with_rebuilt_messages = True
-                        break
+                            agent._buffer_status("⚠️ Rate limited.")
 
                 is_payload_too_large = (
                     classified.reason == FailoverReason.payload_too_large
@@ -4381,27 +4166,6 @@ def run_conversation(
                 ) and not is_context_length_error
 
                 if is_client_error:
-                    # Try fallback before aborting — a different provider may
-                    # not have the same issue (rate limit, auth, etc.). Only
-                    # announce the attempt when a fallback chain actually
-                    # exists; otherwise "trying fallback..." is a lie and the
-                    # session looks like it's recovering when it's about to
-                    # abort silently.
-                    if agent._has_pending_fallback():
-                        if classified.reason == FailoverReason.content_policy_blocked:
-                            agent._buffer_status("⚠️ Provider safety filter blocked this request — trying fallback...")
-                        elif classified.reason == FailoverReason.ssl_cert_verification:
-                            agent._buffer_status("⚠️ TLS certificate verification failed — trying fallback...")
-                        else:
-                            agent._buffer_status(f"⚠️ Non-retryable error (HTTP {status_code}) — trying fallback...")
-                    if agent._try_activate_fallback():
-                        active_system_prompt = _sync_failover_system_message(
-                            agent, api_messages, active_system_prompt)
-                        retry_count = 0
-                        compression_attempts = 0
-                        _retry.primary_recovery_attempted = False
-                        _retry.restart_with_rebuilt_messages = True
-                        break
                     if api_kwargs is not None:
                         agent._dump_api_request_debug(
                             api_kwargs, reason="non_retryable_client_error", error=api_error,
@@ -4573,25 +4337,8 @@ def run_conversation(
                     ):
                         _retry.primary_recovery_attempted = True
                         retry_count = 0
-                        # Primary transport recovery starts a fresh attempt
-                        # cycle. Re-open fallback state so a follow-on 429 can
-                        # still activate fallback_providers after stale
-                        # pre-recovery fallback/credential-pool bookkeeping.
                         _retry.has_retried_429 = False
-                        agent._fallback_index = 0
-                        agent._fallback_activated = False
                         continue
-                    # Try fallback before giving up entirely
-                    if agent._has_pending_fallback():
-                        agent._buffer_status(f"⚠️ Max retries ({max_retries}) exhausted — trying fallback...")
-                    if agent._try_activate_fallback():
-                        active_system_prompt = _sync_failover_system_message(
-                            agent, api_messages, active_system_prompt)
-                        retry_count = 0
-                        compression_attempts = 0
-                        _retry.primary_recovery_attempted = False
-                        _retry.restart_with_rebuilt_messages = True
-                        break
                     # Terminal — flush buffered retry/fallback trace.
                     agent._flush_status_buffer()
                     _final_summary = agent._summarize_api_error(api_error)
@@ -6062,47 +5809,6 @@ def run_conversation(
                                 )
                         continue
 
-                    # ── Exhausted retries — try fallback provider ──
-                    # Before giving up with "(empty)", attempt to
-                    # switch to the next provider in the fallback
-                    # chain.  This covers the case where a model
-                    # consistently returns empty
-                    # due to context degradation or provider issues.
-                    if _truly_empty and agent._fallback_chain:
-                        logger.warning(
-                            "Empty response after %d retries — "
-                            "attempting fallback (model=%s, provider=%s)",
-                            agent._empty_content_retries, agent.model,
-                            agent.provider,
-                        )
-                        agent._buffer_status(
-                            "⚠️ Model returning empty responses — "
-                            "switching to fallback provider..."
-                        )
-                        if agent._try_activate_fallback():
-                            active_system_prompt = _sync_failover_system_message(
-                                agent, api_messages, active_system_prompt)
-                            agent._empty_content_retries = 0
-                            agent._buffer_status(
-                                f"↻ Switched to fallback: {agent.model} "
-                                f"({agent.provider})"
-                            )
-                            logger.info(
-                                "Fallback activated after empty responses: "
-                                "now using %s on %s",
-                                agent.model, agent.provider,
-                            )
-                            # This site sits directly in the OUTER iteration
-                            # loop (not the retry loop), so `continue` already
-                            # restarts the iteration and re-runs the pre-API
-                            # preflight against the fallback's context window
-                            # A `break` here would exit the outer
-                            # loop and end the turn without ever calling the
-                            # fallback. Clear the preflight block so the
-                            # re-run isn't skipped.
-                            _preflight_compression_blocked = False
-                            continue
-
                     # Exhausted retries and fallback chain (or no
                     # fallback configured).  Fall through to the
                     # "(empty)" terminal.
@@ -6136,15 +5842,12 @@ def run_conversation(
                     else:
                         logger.warning(
                             "Empty response (no content or reasoning) "
-                            "after %d retries. No fallback available. "
-                            "model=%s provider=%s",
+                            "after %d retries. model=%s provider=%s",
                             agent._empty_content_retries, agent.model,
                             agent.provider,
                         )
                         agent._emit_status(
-                            "❌ Model returned no content after all retries"
-                            + (" and fallback attempts." if agent._fallback_chain else
-                               ". No fallback providers configured.")
+                            "❌ Model returned no content after all retries."
                         )
 
                     # Deliver a labeled reasoning excerpt instead of a bare
@@ -6153,19 +5856,17 @@ def run_conversation(
                     # assistant message above keeps the "(empty)" sentinel
                     # (its replay semantics prevent empty-response loops),
                     # and raw chain-of-thought is never promoted to a normal
-                    # answer earlier in the ladder — prefill continuation,
-                    # empty-content retries, and provider fallback all run
-                    # first. Only at this terminal, where the alternative is
-                    # returning nothing, is showing the model's own reasoning
-                    # (clearly labeled as such) strictly more useful.
-                    # Idea credit: (@ligl0325).
+                    # answer earlier in the ladder — prefill continuation and
+                    # empty-content retries both run first. Only at this
+                    # terminal, where the alternative is returning nothing, is
+                    # showing the model's own reasoning (clearly labeled as
+                    # such) strictly more useful.
                     if reasoning_text:
                         final_response = (
                             "⚠️ The model produced only internal reasoning and "
-                            "no final answer, despite retries"
-                            + (" and fallback" if agent._fallback_chain else "")
-                            + ". Its last reasoning, which may contain the "
-                            "answer:\n\n" + reasoning_preview
+                            "no final answer, despite retries. Its last "
+                            "reasoning, which may contain the answer:"
+                            "\n\n" + reasoning_preview
                         )
                     else:
                         final_response = "(empty)"
@@ -6174,11 +5875,6 @@ def run_conversation(
                 # Reset retry counter/signature on successful content
                 agent._empty_content_retries = 0
                 agent._thinking_prefill_retries = 0
-                # Successful content reached — surface the one-shot fallback
-                # switch notice (if a fallback activated this turn) before
-                # dropping the noisy retry buffer, so a provider/model switch
-                # stays visible even when the fallback succeeds.
-                agent._emit_pending_fallback_notice()
                 agent._clear_status_buffer()
 
                 from agent.agent_runtime_helpers import (

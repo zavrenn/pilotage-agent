@@ -1628,7 +1628,6 @@ def check_compression_model_feasibility(agent: Any) -> None:
     try:
         from agent.auxiliary_client import (
             _resolve_task_provider_model,
-            _try_configured_fallback_for_unavailable_client,
             get_text_auxiliary_client,
         )
         from agent.model_metadata import (
@@ -1648,15 +1647,6 @@ def check_compression_model_feasibility(agent: Any) -> None:
             "compression",
             main_runtime=agent._current_main_runtime(),
         )
-        if client is None or not aux_model:
-            fb_client, fb_model, fb_label = _try_configured_fallback_for_unavailable_client(
-                "compression",
-                _aux_cfg_provider,
-            )
-            if fb_client is not None and fb_model:
-                client, aux_model = fb_client, fb_model
-                if "(" in fb_label and fb_label.endswith(")"):
-                    _aux_cfg_provider = fb_label.rsplit("(", 1)[1][:-1]
         if client is None or not aux_model:
             if _aux_cfg_provider and _aux_cfg_provider != "auto":
                 msg = (

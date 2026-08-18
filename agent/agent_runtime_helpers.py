@@ -12,8 +12,7 @@ Methods covered:
 * ``strip_think_blocks`` — remove inline reasoning from stored content
 * ``recover_with_credential_pool`` — rotate pool entries on 429
 * ``try_recover_primary_transport`` — re-create OpenAI client after rate-limit
-* ``drop_thinking_only_and_merge_users`` — Anthropic-style cleanup
-* ``restore_primary_runtime`` — un-do fallback activation
+* ``drop_thinking_only_and_merge_users`` — thinking-turn cleanup
 * ``extract_reasoning`` — pull reasoning fields out of API responses
 * ``dump_api_request_debug`` — write request body for post-mortem
 * ``create_openai_client`` — build the per-agent OpenAI SDK client
@@ -45,10 +44,9 @@ logger = logging.getLogger(__name__)
 
 
 # Max consecutive successful credential-pool token refreshes of the SAME entry
-# on a persistent auth failure before we give up and let the fallback chain
-# activate. A single-entry OAuth pool can re-mint a fresh token indefinitely
-# even when the upstream keeps rejecting it, so without this cap the retry loop
-# spins forever and never reaches ``_try_activate_fallback``. See.
+# on a persistent auth failure before we give up. A single-entry OAuth pool can
+# re-mint a fresh token indefinitely even when the upstream keeps rejecting it,
+# so without this cap the retry loop spins forever.
 _MAX_AUTH_REFRESH_ATTEMPTS = 2
 
 
@@ -549,7 +547,7 @@ def note_turn_persisted(agent):
 def repair_message_sequence(agent, messages: List[Dict]) -> int:
     """Collapse malformed role-alternation left in the live history.
 
-    Providers (OpenAI, OpenRouter, Anthropic) expect strict alternation:
+    Providers expect strict alternation:
     after the system message, user/tool alternates with assistant, with
     no two consecutive user messages and no tool-result that doesn't
     follow an assistant-with-tool_calls. Violations cause silent empty
@@ -565,7 +563,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
       0. Consecutive ``assistant`` messages with no intervening
          ``tool``/``user`` turn — merged into a single assistant turn
          (union of ``tool_calls``, concatenated ``content``). Strict
-         OpenAI-compatible providers (DeepSeek v4, Moonshot/Kimi) reject
+         OpenAI-compatible providers reject
          a history where an ``assistant`` message carrying ``tool_calls``
          is immediately followed by another ``assistant`` message instead
          of its ``tool`` results — HTTP 400 "An assistant message with
@@ -653,8 +651,8 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
                 # Neither turn carries tool calls, but the surviving turn may
                 # still carry a stale ``tool_calls: []`` from the earlier
                 # message.  An empty array is semantically "no tool calls",
-                # yet strict OpenAI-compatible providers (DeepSeek v4,
-                # Moonshot/Kimi) reject it with HTTP 400 ("Invalid
+                # yet strict OpenAI-compatible providers reject it with
+                # HTTP 400 ("Invalid
                 # 'messages[N].tool_calls': empty array...").  Drop the key
                 # HERE, at the source: ``sanitize_api_messages`` only fixes
                 # the per-call wire copy, so a ``[]`` left on the repaired
@@ -701,7 +699,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
     # made a valid tool result look orphaned whenever the assistant
     # tool_call carried a distinct ``call_id`` (or only ``call_id``); the
     # pass then dropped it, leaving the assistant tool_call unanswered and
-    # producing an HTTP 400 on strict providers (DeepSeek, Kimi). Matching
+    # producing an HTTP 400 on strict providers. Matching
     # on the *superset* of both keys achieves the same tolerance as
     # ``_get_tool_call_id_static``'s ``call_id || id`` — a match set must
     # accept every legitimate reference, not just the canonical one.
@@ -729,8 +727,8 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
                 # Consume the id so a SECOND tool result carrying the same
                 # tool_call_id (duplicate from a retry/crash/session-resume
                 # glitch) falls into the drop branch below instead of being
-                # replayed — strict providers (DeepSeek) reject a duplicate
-                # tool_call_id with HTTP 400. Credit:.
+                # replayed — strict providers reject a duplicate
+                # tool_call_id with HTTP 400.
                 known_tool_ids.discard(tc_id)
             else:
                 repairs += 1
@@ -828,25 +826,25 @@ def strip_think_blocks(agent, content: str) -> str:
       1. Closed tag pairs (`` <think>… ``) — the common path when
          the provider emits complete reasoning blocks.
       2. Unterminated open tag at a block boundary (start of text or
-         after a newline) — e.g. MiniMax M2.7 / NIM endpoints where the
-         closing tag is dropped.  Everything from the open tag to end
+         after a newline) — endpoints where the closing tag is
+         dropped.  Everything from the open tag to end
          of string is stripped.  The block-boundary check mirrors
          ``gateway/stream_consumer.py``'s filter so models that mention
          `` <think>`` in prose aren't over-stripped.
       3. Stray orphan open/close tags that slip through.
       4. Tag variants: `` <think>``, ``<thinking>``, ``<reasoning>``,
-         ``<REASONING_SCRATCHPAD>``, ``<thought>`` (Gemma 4), all
+         ``<REASONING_SCRATCHPAD>``, ``<thought>``, all
          case-insensitive.
 
     Additionally strips standalone tool-call XML blocks that some open
-    models (notably Gemma variants on OpenRouter) emit inside assistant
+    models emit inside assistant
     content instead of via the structured ``tool_calls`` field:
       * ``<tool_call>…</tool_call>``
       * ``<tool_calls>…</tool_calls>``
       * ``<tool_result>…</tool_result>``
       * ``<function_call>…</function_call>``
       * ``<function_calls>…</function_calls>``
-      * ``<function name="…">…</function>`` (Gemma style)
+      * ``<function name="…">…</function>``
     Ported from openclaw/. The ``<function>`` variant is
     boundary-gated (only strips when the tag sits at start-of-line or
     after punctuation and carries a ``name="..."`` attribute) so prose
@@ -855,15 +853,15 @@ def strip_think_blocks(agent, content: str) -> str:
     if not content:
         return ""
     # Coerce non-string content to text before any regex runs.  Providers
-    # that return assistant ``content`` as a list of blocks (Anthropic via
-    # OpenRouter emits ``[{"type":"text",...}, {"type":"thinking",...}]``) or
+    # that return assistant ``content`` as a list of blocks (e.g.
+    # ``[{"type":"text",...}, {"type":"thinking",...}]``) or
     # as a dict flow into this shared helper from several callers — most
     # notably ``_interim_assistant_visible_text`` reading a *stored* history
     # message whose content was persisted as a list.  A raw list/dict reaching
     # ``re.sub`` below raises ``TypeError: expected string or bytes-like
     # object, got 'list'``, which the outer conversation loop swallows and
-    # retries forever (observed as an infinite "preparing terminal…" loop on
-    # Anthropic models via OpenRouter).  Flatten here so every caller is safe.
+    # retries forever (observed as an infinite "preparing terminal…" loop).
+    # Flatten here so every caller is safe.
     if not isinstance(content, str):
         if isinstance(content, list):
             _parts: list[str] = []
@@ -897,7 +895,7 @@ def strip_think_blocks(agent, content: str) -> str:
     #     a literal <tool_call> in prose is already vanishingly rare.
     for _pattern in _TOOL_CALL_BLOCK_PATTERNS:
         content = _pattern.sub('', content)
-    # 1c. <function name="...">...</function> — Gemma-style standalone
+    # 1c. <function name="...">...</function> — standalone
     #     tool call. Only strip when the tag sits at a block boundary
     #     (start of text, after a newline, or after sentence-ending
     #     punctuation) AND carries a name="..." attribute. This keeps
@@ -905,8 +903,8 @@ def strip_think_blocks(agent, content: str) -> str:
     content = _NAMED_FUNCTION_BLOCK_PATTERN.sub('', content)
     # 2. Unterminated reasoning block — open tag at a block boundary
     #    (start of text, or after a newline) with no matching close.
-    # Strip from the tag to end of string. Fixes /
-    #    (MiniMax M2.7 leaking raw reasoning into assistant content).
+    #    Strip from the tag to end of string — stops raw reasoning
+    #    leaking into assistant content.
     content = _UNTERMINATED_REASONING_BLOCK_PATTERN.sub('', content)
     # 3. Stray orphan open/close tags that slipped through.
     content = _ORPHAN_REASONING_TAG_PATTERN.sub('', content)
@@ -957,8 +955,7 @@ def recover_with_credential_pool(
     `classified_reason` lets the recovery path honor the structured error
     classifier instead of relying only on raw HTTP codes. This matters for
     providers that surface billing/rate-limit/auth conditions under a
-    different status code, such as Anthropic returning HTTP 400 for
-    "out of extra usage".
+    different status code, such as an HTTP 400 for "out of extra usage".
 
     """
     pool = agent._credential_pool
@@ -1047,8 +1044,8 @@ def recover_with_credential_pool(
         if _credential_id:
             kwargs["credential_id"] = _credential_id
         # Hand the pool the classified semantics, not just the status. A
-        # billing 403 (OpenRouter "key limit exceeded", xAI spending limit)
-        # and an edge-throttle 403 are the same number but need opposite
+        # billing 403 ("key limit exceeded", spending limit) and an
+        # edge-throttle 403 are the same number but need opposite
         # cooldowns — the pool can only tell them apart if we say which.
         # ``effective_reason`` is resolved below; this closure runs after.
         if effective_reason is not None:
@@ -1234,9 +1231,6 @@ def try_recover_primary_transport(
     back.  This is most useful for direct endpoints where a TCP-level
     hiccup does not mean the provider is down.
     """
-    if agent._fallback_activated:
-        return False
-
     # Only for transient transport errors
     error_type = type(api_error).__name__
     if error_type not in _TRANSIENT_TRANSPORT_ERRORS:
@@ -1312,8 +1306,8 @@ def drop_thinking_only_and_merge_users(
       and makes future turns see model output the model didn't emit.
     - Dropping the turn preserves honesty; merging adjacent user messages
       preserves the provider's role-alternation invariant.
-    - This is the pattern used by Claude Code's ``normalizeMessagesForAPI``
-      (filterOrphanedThinkingOnlyMessages + mergeAdjacentUserMessages).
+    - Orphaned thinking-only turns are filtered and adjacent user
+      messages merged.
     """
     if not messages:
         return messages
@@ -1388,256 +1382,6 @@ def drop_thinking_only_and_merge_users(
 
 
 
-def restore_primary_runtime(agent) -> bool:
-    """Restore the primary runtime at the start of a new turn.
-
-    In long-lived CLI sessions a single AIAgent instance spans multiple
-    turns.  Without restoration, one transient failure pins the session
-    to the fallback provider for every subsequent turn.  Calling this at
-    the top of ``run_conversation()`` makes fallback turn-scoped.
-
-    The gateway caches agents across messages (``_agent_cache`` in
-    ``gateway/run.py``), so this restoration IS needed there too.
-    """
-    if not agent._fallback_activated:
-        # Reset the chain index even when no fallback was activated this
-        # turn.  Without this, a turn where _try_activate_fallback() was
-        # called but returned False (chain exhausted or provider not
-        # configured) leaves _fallback_index >= len(_fallback_chain) while
-        # _fallback_activated stays False.  The next turn skips this block
-        # entirely, stranding the index and silently blocking all future
-        # fallback attempts for the session. Fixes.
-        agent._fallback_index = 0
-        return False
-
-    if getattr(agent, "_rate_limited_until", 0) > time.monotonic():
-        return False  # primary still in rate-limit cooldown, stay on fallback
-
-    # ── Reset-aware gate ──
-    # The 60s ``_rate_limited_until`` cooldown covers transient rate limits,
-    # but subscription-style providers (Claude Pro/Max 5-hour windows, ChatGPT
-    # weekly limits) report reset times hours or days away.  The credential
-    # pool already stores those timestamps (``last_error_reset_at``); until
-    # the earliest one elapses, every restore attempt is a *guaranteed*
-    # failure that costs two prompt-cache invalidations per turn (switch to
-    # primary, fail, switch back to fallback) and re-marshals the full
-    # context each way.  Skip the restore while the pool says nobody can
-    # serve, and come back the moment the reset time passes.
-    #
-    # Fail-open by design: any error (unreadable auth store, legacy pool
-    # adapter without ``next_available_at``) falls through to the existing
-    # every-turn retry.  A pool with no reset info returns ``None`` and also
-    # falls through — this gate only ever *adds* skips for provably
-    # limited windows, so recovery can never be later than it is today.
-    #
-    # When the attached pool belongs to the fallback provider (cross-provider
-    # fallback rebinds it), the primary pool is loaded here and handed to the
-    # pool-rebind block below via ``prefetched_primary_pool`` so the load
-    # happens at most once per restore.
-    prefetched_primary_pool = None
-    try:
-        primary_provider = str(
-            (agent._primary_runtime or {}).get("provider") or ""
-        ).strip().lower()
-        pool = getattr(agent, "_credential_pool", None)
-        if not credential_pool_matches_provider(
-            pool,
-            primary_provider,
-            base_url=str((agent._primary_runtime or {}).get("base_url") or ""),
-        ):
-            from agent.credential_pool import load_pool
-
-            prefetched_primary_pool = (
-                load_pool(primary_provider) if primary_provider else None
-            )
-            pool = prefetched_primary_pool
-        next_at = getattr(pool, "next_available_at", lambda: None)()
-        if next_at is not None and next_at > time.time():
-            if not getattr(agent, "_restore_wait_logged", False):
-                agent._restore_wait_logged = True
-                logger.info(
-                    "Primary %s rate-limited until %s; staying on fallback "
-                    "%s/%s until the reset elapses",
-                    primary_provider or "?",
-                    datetime.fromtimestamp(next_at).isoformat(timespec="seconds"),
-                    agent.provider,
-                    agent.model,
-                )
-            return False
-    except Exception:
-        logger.debug(
-            "Reset-aware restore gate failed; falling back to per-turn retry",
-            exc_info=True,
-        )
-    agent._restore_wait_logged = False
-
-    rt = agent._primary_runtime
-    try:
-        # ── Core runtime state ──
-        agent.model = rt["model"]
-        agent.provider = rt["provider"]
-        agent.requested_provider = rt.get("requested_provider", agent.provider)
-        agent.base_url = rt["base_url"]           # setter updates _base_url_lower
-        agent.api_mode = rt["api_mode"]
-        if hasattr(agent, "_transport_cache"):
-            agent._transport_cache.clear()
-        agent.api_key = rt["api_key"]
-        agent._client_kwargs = dict(rt["client_kwargs"])
-
-        # ── Rebuild client for the primary provider ──
-        agent.client = agent._create_openai_client(
-            dict(rt["client_kwargs"]),
-            reason="restore_primary",
-            shared=True,
-        )
-
-        # ── Restore context engine state ──
-        cc = agent.context_compressor
-        cc.update_model(
-            model=rt["compressor_model"],
-            context_length=rt["compressor_context_length"],
-            base_url=rt["compressor_base_url"],
-            api_key=rt["compressor_api_key"],
-            provider=rt["compressor_provider"],
-            api_mode=rt.get("compressor_api_mode", ""),
-        )
-
-        # ── Rebind and re-select the primary credential pool ──
-        # A cross-provider fallback attaches the fallback provider's pool. The
-        # runtime fields above restore the primary, but leaving that pool in
-        # place makes the next primary 401/429 hit the provider-mismatch guard
-        # and disables credential rotation. Reload the primary pool first; if
-        # auth storage is temporarily unreadable, clear the mismatched pool.
-        primary_provider = str(rt.get("provider") or "").strip().lower()
-        pool = getattr(agent, "_credential_pool", None)
-        pool_provider = str(getattr(pool, "provider", "") or "").strip().lower()
-        pool_matches_primary = pool_provider == primary_provider
-        if (
-            primary_provider == "custom"
-            and pool_provider.startswith("custom:")
-        ):
-            try:
-                from agent.credential_pool import get_custom_provider_pool_key
-
-                primary_key = (
-                    get_custom_provider_pool_key(str(rt.get("base_url") or "")) or ""
-                ).strip().lower()
-                pool_matches_primary = bool(primary_key) and primary_key == pool_provider
-            except Exception:
-                pool_matches_primary = False
-        if pool is not None and pool_provider and not pool_matches_primary:
-            agent._credential_pool = None
-            agent._credential_pool_entry_id = None
-            try:
-                if prefetched_primary_pool is not None:
-                    # Reuse the pool the reset-aware gate already loaded for
-                    # this restore — avoids a second disk read of auth.json.
-                    agent._credential_pool = prefetched_primary_pool
-                else:
-                    from agent.credential_pool import load_pool
-
-                    agent._credential_pool = load_pool(primary_provider)
-            except Exception as exc:
-                logger.warning(
-                    "Restore could not reload primary credential pool for %s: %s",
-                    primary_provider,
-                    exc,
-                )
-
-        # The snapshot's api_key was captured at construction time.  Across
-        # turns the pool may have rotated (token revocation, billing/rate-limit
-        # exhaustion, cooldown), leaving the snapshot key stale.  Restoring it
-        # blindly re-fails on the first request and burns through the remaining
-        # pool entries before cross-provider fallback even gets a chance.  Ask
-        # the pool for its current best entry and swap the live credential in.
-        # When the pool is absent, empty, or the entry has no usable key, we
-        # keep the snapshot key (the existing behavior). Fixes.
-        agent._credential_pool_entry_id = None
-        pool = getattr(agent, "_credential_pool", None)
-        if pool is not None and pool.has_available():
-            entry = pool.select()
-            if entry is not None:
-                entry_provider = str(getattr(entry, "provider", "") or "").strip().lower()
-                entry_matches_primary = entry_provider == primary_provider
-                # Custom endpoints all carry the generic ``custom`` provider on
-                # the agent while the pool entry is keyed ``custom:<name>`` (see
-                # CUSTOM_POOL_PREFIX). Resolve the primary's base_url to its
-                # ``custom:<name>`` key via the canonical helper and compare
-                # against the entry's key — this mirrors the sibling guard in
-                # ``recover_with_credential_pool`` (see above) and correctly
-                # disambiguates multiple custom providers that share one gateway
-                # base_url. Fixes.
-                from agent.credential_pool import CUSTOM_POOL_PREFIX
-                if (
-                    primary_provider == "custom"
-                    and entry_provider.startswith(CUSTOM_POOL_PREFIX)
-                ):
-                    entry_matches_primary = False
-                    try:
-                        from agent.credential_pool import get_custom_provider_pool_key
-                        primary_base_url = str(rt.get("base_url") or "").strip()
-                        primary_key = (
-                            get_custom_provider_pool_key(primary_base_url) or ""
-                        ).strip().lower()
-                        entry_matches_primary = bool(primary_key) and primary_key == entry_provider
-                    except Exception:
-                        entry_matches_primary = False
-
-                entry_key = (
-                    getattr(entry, "runtime_api_key", None)
-                    or getattr(entry, "access_token", "")
-                )
-                if entry_key and entry_matches_primary:
-                    # ``_swap_credential`` rebuilds the OpenAI/Anthropic client,
-                    # reapplies base-url-scoped headers, and carries the
-                    # accumulated base_url / OAuth-detection fixes.
-                    agent._swap_credential(entry)
-                    logger.info(
-                        "Restore re-selected pool entry %s (%s)",
-                        getattr(entry, "id", "?"),
-                        getattr(entry, "label", "?"),
-                    )
-                elif entry_key:
-                    logger.info(
-                        "Restore skipped pool entry %s (%s): provider %s does not match primary provider %s",
-                        getattr(entry, "id", "?"),
-                        getattr(entry, "label", "?"),
-                        entry_provider or "?",
-                        primary_provider or "?",
-                    )
-
-        # ── Restore reasoning_config if it was saved ──
-        # switch_model saves reasoning_config in _primary_runtime. If the
-        # snapshot predates that (older sessions), keep the current value.
-        saved_reasoning = rt.get("reasoning_config")
-        if saved_reasoning is not None:
-            agent.reasoning_config = dict(saved_reasoning)
-
-        # ── Reset fallback chain for the new turn ──
-        agent._fallback_activated = False
-        agent._fallback_index = 0
-        agent._rate_limit_backoff_count = 0  # reset exponential backoff counter
-
-        # Reset the stale-call circuit breaker: the streak measured
-        # the FALLBACK provider we're leaving; the restored primary deserves
-        # a fresh stream attempt before the breaker can trip again.
-        from agent.chat_completion_helpers import _reset_stale_streak
-        _reset_stale_streak(agent)
-
-        # Undo the fallback's identity rewrite so the prompt is
-        # byte-identical to the stored copy again (prefix cache match).
-        from agent.chat_completion_helpers import rewrite_prompt_model_identity
-        rewrite_prompt_model_identity(agent, rt["model"], rt["provider"])
-
-        logger.info(
-            "Primary runtime restored for new turn: %s (%s)",
-            agent.model, agent.provider,
-        )
-        return True
-    except Exception as e:
-        logger.warning("Failed to restore primary runtime: %s", e)
-        return False
-
 # Which error types indicate a transient transport failure worth
 # one more attempt with a rebuilt client / connection pool.
 _TRANSIENT_TRANSPORT_ERRORS = frozenset({
@@ -1652,10 +1396,10 @@ def extract_reasoning(agent, assistant_message) -> Optional[str]:
     """
     Extract reasoning/thinking content from an assistant message.
     
-    OpenRouter and various providers can return reasoning in multiple formats:
-    1. message.reasoning - Direct reasoning field (DeepSeek, Qwen, etc.)
-    2. message.reasoning_content - Alternative field (Moonshot AI, Novita, etc.)
-    3. message.reasoning_details - Array of {type, summary, ...} objects (OpenRouter unified)
+    Providers can return reasoning in multiple formats:
+    1. message.reasoning - Direct reasoning field
+    2. message.reasoning_content - Alternative field
+    3. message.reasoning_details - Array of {type, summary, ...} objects
     
     Args:
         assistant_message: The assistant message object from the API response
@@ -1675,7 +1419,7 @@ def extract_reasoning(agent, assistant_message) -> Optional[str]:
         if assistant_message.reasoning_content not in reasoning_parts:
             reasoning_parts.append(assistant_message.reasoning_content)
     
-    # Check reasoning_details array (OpenRouter unified format)
+    # Check reasoning_details array
     # Format: [{"type": "reasoning.summary", "summary": "...", ...}, ...]
     if hasattr(assistant_message, 'reasoning_details') and assistant_message.reasoning_details:
         for detail in assistant_message.reasoning_details:
@@ -1695,12 +1439,10 @@ def extract_reasoning(agent, assistant_message) -> Optional[str]:
     # to inline extraction when no structured reasoning was found.
     content = getattr(assistant_message, "content", None)
     if not reasoning_parts and isinstance(content, list):
-        # DeepSeek V4 Pro (and compatible providers) return content as a
-        # list of typed blocks, e.g.:
+        # Some providers return content as a list of typed blocks, e.g.:
         #   [{"type": "thinking", "thinking": "..."}, {"type": "output", ...}]
         # Without this branch the thinking text is silently dropped and the
         # next turn fails with HTTP 400 ("thinking must be passed back").
-        # Refs.
         for block in content:
             if isinstance(block, dict) and block.get("type") == "thinking":
                 thinking_text = block.get("thinking") or block.get("text") or ""
@@ -1868,9 +1610,8 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # Delegate all rate-limit / 5xx retry to pilotage's outer conversation loop,
     # which honors Retry-After and applies adaptive/jittered backoff. The OpenAI
     # SDK default (max_retries=2) uses its own 1-2s backoff that ignores
-    # Retry-After and double-retries inside our loop — the same deadlock the
-    # Anthropic clients hit. This is the single chokepoint every primary
-    # OpenAI/aggregator client passes through (init, switch_model, recovery,
+    # Retry-After and double-retries inside our loop. This is the single
+    # chokepoint every primary client passes through (init, switch_model, recovery,
     # restore, request-scoped); auxiliary_client builds its own clients and keeps
     # SDK retries because it is NOT wrapped by the conversation loop.
     client_kwargs.setdefault("max_retries", 0)
@@ -1893,19 +1634,14 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     ``model_switch.switch_model()`` has resolved credentials and
     validated the model.  This method performs the actual runtime
     swap: rebuilding clients, updating caching flags, and refreshing
-    the context compressor.
-
-    The implementation mirrors ``_try_activate_fallback()`` for the
-    client-swap logic but also updates ``_primary_runtime`` so the
-    change persists across turns (unlike fallback which is
-    turn-scoped).
+    the context compressor.  ``_primary_runtime`` is updated too, so the
+    change persists across turns.
     """
     from pilotage_cli.providers import determine_api_mode
 
     # ── Determine api_mode if not provided ──
-    # Pass model so dual-wire providers (Nous Portal anthropic/* → Messages)
-    # resolve correctly; without it determine_api_mode falls back to the
-    # openai_chat overlay default.
+    # Pass model so dual-wire providers resolve correctly; without it
+    # determine_api_mode falls back to the openai_chat overlay default.
     if not api_mode:
         api_mode = determine_api_mode(new_provider, base_url, model=new_model)
 
@@ -1914,10 +1650,10 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     old_provider = agent.provider
 
     # ── Snapshot all fields the swap+rebuild can mutate ──
-    # If the rebuild raises (bad API key, network error, build_anthropic_client
+    # If the rebuild raises (bad API key, network error, client-build
     # failure, etc.) we restore these atomically so the agent isn't left with a
     # new model/provider name paired with the OLD client — that mismatch causes
-    # HTTP 400s like "claude-sonnet-4-6 is not supported on openai-codex" on the
+    # HTTP 400s like "model X is not supported on openai-codex" on the
     # next turn.  Callers in cli.py / gateway/run.py / tui_gateway/server.py
     # catch the re-raised exception and show the user a warning; without this
     # rollback the warning is misleading because the swap partially succeeded.
@@ -1972,8 +1708,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         # Use the new base_url when provided. When it's empty AND the
         # provider is actually changing, do NOT fall back to the current
         # (old provider's) URL — that silently pairs the new provider label
-        # with the previous provider's endpoint (e.g. new_provider=minimax
-        # paired with the leftover api.githubcopilot.com URL), and every
+        # with the previous provider's endpoint, and every
         # request after the switch 400s at the wrong host. This mismatched
         # pair also gets snapshotted into _primary_runtime below, so it
         # keeps re-applying on every subsequent turn until a full restart.
@@ -2052,10 +1787,9 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         _sm_timeout = get_provider_request_timeout(agent.provider, agent.model)
         if _sm_timeout is not None:
             agent._client_kwargs["timeout"] = _sm_timeout
-        # Reapply provider-specific headers (e.g. OpenRouter HTTP-Referer,
-        # X-Title) that were lost when _client_kwargs was rebuilt from
-        # scratch.  Without this, model switches clear attribution headers
-        # and OpenRouter logs show "Unknown" for subsequent requests.
+        # Reapply provider-specific headers that were lost when
+        # _client_kwargs was rebuilt from scratch.  Without this, model
+        # switches clear attribution headers.
         agent._apply_client_headers_for_base_url(effective_base)
         agent.client = agent._create_openai_client(
             dict(agent._client_kwargs),
@@ -2183,28 +1917,6 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         "compressor_api_mode": getattr(_cc, "api_mode", agent.api_mode) if _cc else agent.api_mode,
         "compressor_threshold_tokens": _cc.threshold_tokens if _cc else 0,
     }
-
-    # ── Reset fallback state ──
-    agent._fallback_activated = False
-    agent._fallback_index = 0
-
-    # When the user deliberately swaps primary providers (e.g. openrouter
-    # → anthropic), drop any fallback entries that target the OLD primary
-    # or the NEW one.  The chain was seeded from config at agent init for
-    # the original provider — without pruning, a failed turn on the new
-    # primary silently re-activates the provider the user just rejected,
-    # which is exactly what was reported during TUI v2 blitz testing
-    # ("switched to anthropic, tui keeps trying openrouter").
-    old_norm = (old_provider or "").strip().lower()
-    new_norm = (new_provider or "").strip().lower()
-    fallback_chain = list(getattr(agent, "_fallback_chain", []) or [])
-    if old_norm and new_norm and old_norm != new_norm:
-        fallback_chain = [
-            entry for entry in fallback_chain
-            if (entry.get("provider") or "").strip().lower() not in {old_norm, new_norm}
-        ]
-    agent._fallback_chain = fallback_chain
-    agent._fallback_model = fallback_chain[0] if fallback_chain else None
 
     logger.info(
         "Model switched in-place: %s (%s) -> %s (%s)",
@@ -2459,7 +2171,7 @@ def repair_tool_call(agent, tool_name: str) -> str | None:
     2. Lowercase + hyphens/spaces -> underscores.
     3. CamelCase -> snake_case (TodoTool -> todo_tool).
     4. Strip trailing ``_tool`` / ``-tool`` / ``tool`` suffix that
-       Claude-style models sometimes tack on (TodoTool_tool ->
+       models sometimes tack on (TodoTool_tool ->
        TodoTool -> Todo -> todo). Applied twice so double-tacked
        suffixes like ``TodoTool_tool`` reduce all the way.
     5. Fuzzy match (difflib, cutoff=0.7).
@@ -2605,9 +2317,8 @@ def repair_empty_non_final_messages(
 
     Root-cause context: a stream that dies with 0 recovered characters (peer
     reset, stall-kill) could persist an assistant turn with ``content=None``
-    and no tool_calls. The Anthropic message schema — and the litellm/Bedrock
-    proxies in front of it — reject ANY request whose transcript contains an
-    empty non-final message:
+    and no tool_calls. Strict message schemas reject ANY request whose
+    transcript contains an empty non-final message:
 
         "all messages must have non-empty content except for the optional
          final assistant message"  (HTTP 400 INVALID_REQUEST_BODY)
@@ -2699,9 +2410,9 @@ def sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     # An assistant message carrying ``tool_calls: []`` (an empty array) — or a
     # non-list value under the key — is semantically identical to an assistant
     # message with no tool calls, but strict OpenAI-compatible providers reject
-    # the empty array outright: DeepSeek v4 returns HTTP 400 "Invalid
+    # the empty array outright with HTTP 400 "Invalid
     # 'messages[N].tool_calls': empty array. Expected an array with minimum
-    # length 1, but got an empty array instead." (, follow-up to).
+    # length 1, but got an empty array instead."
     # Empty arrays reach here from session resume, host-fed histories, or the
     # consecutive-assistant merge in ``repair_message_sequence`` (which
     # preserves a pre-existing ``[]`` on the surviving turn). This is the final
@@ -2827,7 +2538,7 @@ def sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
             len(missing_results),
         )
 
-    # 3. Deduplicate tool_call_ids. Strict providers (DeepSeek) reject a
+    # 3. Deduplicate tool_call_ids. Strict providers reject a
     # payload where the same tool_call_id appears more than once with HTTP 400
     # "Duplicate value for 'tool_call_id'". Duplicates can arise from
     # retries, crash/resume glitches, or a compression window that re-emits a
@@ -3037,28 +2748,25 @@ def copy_reasoning_content_for_api(agent, source_msg: dict, api_msg: dict) -> No
 def reapply_reasoning_echo_for_provider(agent, api_messages: list) -> int:
     """Re-pad (or strip) assistant turns' reasoning_content for the active provider.
 
-    ``api_messages`` is built once, before the retry loop, while the *primary*
-    provider is active.  A mid-conversation fallback can then switch providers,
-    so the reasoning fields baked into ``api_messages`` are shaped for the
-    *prior* provider and must be reconciled against the *current* one:
+    ``api_messages`` is built once, before the retry loop, while the *prior*
+    model is active.  A mid-conversation ``/model`` switch can then change
+    providers, so the reasoning fields baked into ``api_messages`` must be
+    reconciled against the *current* one:
 
-    * Switching TO a require-side provider (DeepSeek / Kimi / MiMo thinking
-      mode): assistant turns built when the prior provider did NOT need the
-      echo-back go out without ``reasoning_content`` and the new provider
-      rejects them with HTTP 400 ("The reasoning_content in the thinking mode
-      must be passed back").  Re-apply the pad.
+    * Switching TO a require-side provider (thinking mode): assistant turns
+      built when the prior provider did NOT need the echo-back go out
+      without ``reasoning_content`` and the new provider rejects them with
+      HTTP 400 ("The reasoning_content in the thinking mode must be passed
+      back").  Re-apply the pad.
 
-    * Switching TO a strict provider that rejects the field (Mistral,
-      Cerebras, Groq, SambaNova, …): assistant turns built under a reasoning
-      primary carry a ``reasoning_content`` pad (often a single space ``" "``),
-      and the strict provider rejects it with HTTP 400/422 ("Extra inputs are
-      not permitted").  Strip the field.  This is the exact cross-provider
-      fallback bug from — a DeepSeek primary pads history with ``" "``,
-      the request falls back to Mistral, and Mistral 422s on the stale pad.
+    * Switching TO a strict provider that rejects the field: assistant turns
+      built under a reasoning primary carry a ``reasoning_content`` pad
+      (often a single space ``" "``), and the strict provider rejects it
+      with HTTP 400/422 ("Extra inputs are not permitted").  Strip the field.
 
     Calling this immediately before building the request kwargs reconciles the
     fields against the *current* provider.  It is idempotent and safe to call
-    every iteration; it covers every fallback path.
+    every iteration.
 
     Returns the number of assistant turns whose reasoning_content was added or
     removed.
@@ -3271,8 +2979,8 @@ def extract_api_error_context(error: Exception) -> Dict[str, Any]:
             context["reason"] = reason.strip()
         message = payload.get("message") or payload.get("error_description")
         if not message and isinstance(payload.get("error"), str):
-            # xAI uses a top-level string ``error`` beside a structured
-            # ``code`` (for example personal-team-blocked:spending-limit).
+            # Some providers use a top-level string ``error`` beside a
+            # structured ``code``.
             message = payload.get("error")
         if isinstance(message, str) and message.strip():
             context["message"] = message.strip()
@@ -3387,7 +3095,7 @@ def apply_pending_steer_to_tool_results(agent, messages: list, num_tool_msgs: in
     marker = format_steer_marker(steer_text)
     existing_content = messages[target_idx].get("content", "")
     if not isinstance(existing_content, str):
-        # Anthropic multimodal content blocks — preserve them and append
+        # Multimodal content blocks — preserve them and append
         # a text block at the end.
         try:
             blocks = list(existing_content) if existing_content else []
@@ -3478,7 +3186,6 @@ __all__ = [
     "recover_with_credential_pool",
     "try_recover_primary_transport",
     "drop_thinking_only_and_merge_users",
-    "restore_primary_runtime",
     "extract_reasoning",
     "dump_api_request_debug",
     "create_openai_client",

@@ -28,7 +28,7 @@ class ToolCall:
     protocol-aware code reads:
 
     * Codex: ``{"call_id": "call_XXX", "response_item_id": "fc_XXX"}``
-    * Gemini: ``{"extra_content": {"google": {"thought_signature": "..."}}}``
+    * Reasoning models: ``{"extra_content": {...thought_signature...}}``
     * Others: ``None``
     """
 
@@ -63,9 +63,9 @@ class ToolCall:
 
     @property
     def extra_content(self) -> dict[str, Any] | None:
-        """Gemini extra_content (thought_signature) from provider_data.
+        """Opaque per-tool-call extra_content from provider_data.
 
-        Gemini 3 thinking models attach ``extra_content`` with a
+        Some thinking models attach ``extra_content`` with a
         ``thought_signature`` to each tool call.  This signature must be
         replayed on subsequent API calls — without it the API rejects the
         request with HTTP 400.  The chat_completions transport stores this
@@ -96,7 +96,7 @@ class NormalizedResponse:
 
     Response-level ``provider_data`` examples:
 
-    * Anthropic: ``{"reasoning_details": [...]}``
+    * Chat completions: ``{"reasoning_details": [...]}``
     * Codex: ``{"codex_reasoning_items": [...], "codex_message_items": [...]}``
     * Others: ``None``
     """
@@ -120,18 +120,6 @@ class NormalizedResponse:
     def reasoning_details(self):
         pd = self.provider_data or {}
         return pd.get("reasoning_details")
-
-    @property
-    def anthropic_content_blocks(self):
-        """Verbatim, order-preserving Anthropic content blocks for a turn.
-
-        Present only when an Anthropic turn interleaves signed thinking with
-        tool_use — the one shape the parallel reasoning_details + tool_calls
-        lists reconstruct in the wrong order, invalidating thinking-block
-        signatures on replay. See agent/transports/anthropic.py.
-        """
-        pd = self.provider_data or {}
-        return pd.get("anthropic_content_blocks")
 
     @property
     def codex_reasoning_items(self):

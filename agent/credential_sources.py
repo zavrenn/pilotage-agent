@@ -3,11 +3,7 @@
 Pilotage seeds its credential pool from many places:
 
     env:<VAR>     — os.environ / ~/.pilotage/.env
-    claude_code   — ~/.claude/.credentials.json
-    pilotage_pkce   — ~/.pilotage/.anthropic_oauth.json
     device_code   — auth.json providers.<provider> (openai-codex, ...)
-    qwen-cli      — ~/.qwen/oauth_creds.json
-    gh_cli        — gh auth token
     config:<name> — custom_providers config entry
     model_config  — model.api_key when model.provider == "custom"
     manual        — user ran `pilotage auth add`
@@ -21,7 +17,6 @@ unify here is **removal**:
 Before this module, every source had an ad-hoc removal branch in
 ``auth_remove_command``, and several sources had no branch at all — so
 ``auth remove`` silently reverted on the next ``load_pool()`` call for
-qwen-cli, pilotage_pkce, copilot gh_cli, and
 custom-config sources.
 
 Now every source registers a ``RemovalStep`` that does exactly three things
@@ -56,12 +51,12 @@ class RemovalResult:
 
     Attributes:
         cleaned: Short strings describing external state that was actually
-            mutated (``"Cleared XAI_API_KEY from .env"``,
+            mutated (``"Cleared OPENAI_API_KEY from .env"``,
             ``"Cleared openai-codex OAuth tokens from auth store"``).
             Printed as plain lines to the user.
         hints: Diagnostic lines ABOUT state the user may need to clean up
             themselves or is deliberately left intact (shell-exported env
-            var, Claude Code credential file we don't delete, etc.).
+            var, external credential file we don't delete, etc.).
             Printed as plain lines to the user.  Always non-destructive.
         suppress: Whether to call ``suppress_credential_source`` after
             cleanup so future ``load_pool`` calls skip this source.
@@ -80,11 +75,11 @@ class RemovalStep:
     """How to remove one specific credential source cleanly.
 
     Attributes:
-        provider: Provider pool key (``"xai"``, ``"anthropic"``, ...).
+        provider: Provider pool key (``"openai"``, ``"openai-codex"``, ...).
             Special value ``"*"`` means "matches any provider" — used for
             sources like ``manual`` that aren't provider-specific.
         source_id: Source identifier as it appears in
-            ``PooledCredential.source``.  May be a literal (``"claude_code"``)
+            ``PooledCredential.source``.  May be a literal (``"device_code"``)
             or a prefix pattern matched via ``match_fn``.
         match_fn: Optional predicate overriding literal ``source_id``
             matching.  Gets the removed entry's source string.  Used for
@@ -199,34 +194,6 @@ def _remove_env_source(provider: str, removed) -> RemovalResult:
     return result
 
 
-def _remove_claude_code(provider: str, removed) -> RemovalResult:
-    """~/.claude/.credentials.json is owned by Claude Code itself.
-
-    We don't delete it — the user's Claude Code install still needs to
-    work.  We just suppress it so Pilotage stops reading it.
-    """
-    return RemovalResult(hints=[
-        "Suppressed claude_code credential — it will not be re-seeded.",
-        "Note: Claude Code credentials still live in ~/.claude/.credentials.json",
-        "Run `pilotage auth add anthropic` to re-enable if needed.",
-    ])
-
-
-def _remove_pilotage_pkce(provider: str, removed) -> RemovalResult:
-    """~/.pilotage/.anthropic_oauth.json is ours — delete it outright."""
-    from pilotage_constants import get_pilotage_home
-
-    result = RemovalResult()
-    oauth_file = get_pilotage_home() / ".anthropic_oauth.json"
-    if oauth_file.exists():
-        try:
-            oauth_file.unlink()
-            result.cleaned.append("Cleared Pilotage Anthropic OAuth credentials")
-        except OSError as exc:
-            result.hints.append(f"Could not delete {oauth_file}: {exc}")
-    return result
-
-
 def _clear_auth_store_provider(provider: str) -> bool:
     """Delete auth_store.providers[provider].  Returns True if deleted."""
     from pilotage_cli.auth import (
@@ -283,35 +250,6 @@ def _remove_codex_device_code(provider: str, removed) -> RemovalResult:
 
 
 
-def _remove_copilot_gh(provider: str, removed) -> RemovalResult:
-    """Copilot token comes from `gh auth token` or COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN.
-
-    Copilot is special: the same token can be seeded as multiple source
-    entries (gh_cli from ``_seed_from_singletons`` plus env:<VAR> from
-    ``_seed_from_env``), so removing one entry without suppressing the
-    others lets the duplicates resurrect.  We suppress ALL known copilot
-    sources here so removal is stable regardless of which entry the
-    user clicked.
-
-    We don't touch the user's gh CLI or shell state — just suppress so
-    Pilotage stops picking the token up.
-    """
-    # Suppress ALL copilot source variants up-front so no path resurrects
-    # the pool entry.  The central dispatcher in auth_remove_command will
-    # ALSO suppress removed.source, but it's idempotent so double-calling
-    # is harmless.
-    from pilotage_cli.auth import suppress_credential_source
-    suppress_credential_source(provider, "gh_cli")
-    for env_var in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
-        suppress_credential_source(provider, f"env:{env_var}")
-
-    return RemovalResult(hints=[
-        "Suppressed all copilot token sources (gh_cli + env vars) — they will not be re-seeded.",
-        "Note: Your gh CLI / shell environment is unchanged.",
-        "Run `pilotage auth add copilot` to re-enable if needed.",
-    ])
-
-
 def _remove_custom_config(provider: str, removed) -> RemovalResult:
     """Custom provider pools are seeded from custom_providers config or
     model.api_key.  Both are in config.yaml — modifying that from here
@@ -330,32 +268,13 @@ def _register_all_sources() -> None:
     """Called once on module import.
 
     ORDER MATTERS — ``find_removal_step`` returns the first match.  Put
-    provider-specific steps before the generic ``env:*`` step so that e.g.
-    copilot's ``env:GH_TOKEN`` goes through the copilot removal (which
-    doesn't touch the user's shell), not the generic env-var removal
-    (which would try to clear .env).
+    provider-specific steps before the generic ``env:*`` step.
     """
-    register(RemovalStep(
-        provider="copilot", source_id="gh_cli",
-        match_fn=lambda src: src == "gh_cli" or src.startswith("env:"),
-        remove_fn=_remove_copilot_gh,
-        description="gh auth token / COPILOT_GITHUB_TOKEN / GH_TOKEN",
-    ))
     register(RemovalStep(
         provider="*", source_id="env:",
         match_fn=lambda src: src.startswith("env:"),
         remove_fn=_remove_env_source,
-        description="Any env-seeded credential (DEEPSEEK_API_KEY, etc.)",
-    ))
-    register(RemovalStep(
-        provider="anthropic", source_id="claude_code",
-        remove_fn=_remove_claude_code,
-        description="~/.claude/.credentials.json",
-    ))
-    register(RemovalStep(
-        provider="anthropic", source_id="pilotage_pkce",
-        remove_fn=_remove_pilotage_pkce,
-        description="~/.pilotage/.anthropic_oauth.json",
+        description="Any env-seeded credential (OPENAI_API_KEY, etc.)",
     ))
     register(RemovalStep(
         provider="openai-codex", source_id="device_code",

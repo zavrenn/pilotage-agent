@@ -243,8 +243,8 @@ def get_optional_skills_dir(default: Path | None = None) -> Path:
 def get_optional_mcps_dir(default: Path | None = None) -> Path:
     """Return the optional-mcps directory, honoring package-manager wrappers.
 
-    Mirrors :func:`get_optional_skills_dir` for the MCP catalog (Nous-approved
-    Model Context Protocol servers shipped with the repo but disabled by
+    Mirrors :func:`get_optional_skills_dir` for the MCP catalog (Model
+    Context Protocol servers shipped with the repo but disabled by
     default). Packaged installs may ship ``optional-mcps`` outside the Python
     package tree and expose it via ``PILOTAGE_OPTIONAL_MCPS``.
     """
@@ -1183,26 +1183,26 @@ def _canonical_model_variants(model: str) -> list[str]:
     """Generate bounded spelling variants for tolerant override matching.
 
     Model names mix two types of separators:
-    - **Word separators**: dashes between words (``claude-opus``)
+    - **Word separators**: dashes between words (``gpt-codex``)
     - **Version separators**: dots or dashes between version digits (``4.5``, ``4-5``)
 
     The tricky case is that ``.`` appears in BOTH roles (word sep in some
     spellings, version sep in others), so a blanket ``.replace('.', '-')``
     is lossy — it collapses version dots into dashes and no later step
-    recovers the canonical form (``claude-opus-4.5``).
+    recovers the canonical form (``gpt-codex-5.1``).
 
     Strategy: generate a small set of base forms, then apply version-dot
     recovery to EACH of them. This ensures symmetry:
-    ``claude-opus-4.5``, ``claude-opus-4-5``, and ``claude-opus.4.5`` all
+    ``gpt-codex-5.1``, ``gpt-codex-5-1``, and ``gpt-codex.5.1`` all
     produce the same variant set.
 
     Steps:
     1. Exact input
     2. Dots/dashes cross-substitution on the entire string
     3. Version-dot recovery applied to ALL derivatives
-    4. Strip provider/aggregator prefix → bare model variants
+    4. Strip provider prefix → bare model variants
     5. Apply version-dot recovery to bare derivatives
-    6. Prepend known provider/aggregator prefixes
+    6. Prepend known provider prefixes
 
     Duplicates removed in insertion order (exact always wins).
     """
@@ -1239,32 +1239,17 @@ def _canonical_model_variants(model: str) -> list[str]:
     # Split by / to handle provider prefix
     parts = model.split('/')
 
-    # 4. Bare model variants (strip provider/aggregator prefix)
+    # 4. Bare model variants (strip provider prefix)
     if len(parts) >= 2:
         bare = parts[-1]
         _add_with_derivatives(bare)
 
-    # Strip aggregator only (3+ parts)
-    # e.g. "openrouter/anthropic/claude-opus-4.5" → "anthropic/claude-opus-4.5"
-    if len(parts) >= 3:
-        _add_with_derivatives('/'.join(parts[1:]))
-
     # 5. Prepend known provider prefixes to bare variants
-    known_providers = (
-        'anthropic', 'openai', 'google', 'openrouter', 'groq', 'mistral',
-        'cohere', 'perplexity', 'together', 'fireworks', 'deepseek',
-    )
+    known_providers = ('openai',)
     bare_variants = [v for v in variants if '/' not in v]
     for v in bare_variants:
         for provider in known_providers:
             _add(f"{provider}/{v}")
-
-    # Prepend aggregator to single-slash variants
-    single_slash_variants = [v for v in variants if v.count('/') == 1]
-    known_aggregators = ('openrouter', 'opencode', 'fireworks', 'groq', 'together')
-    for v in single_slash_variants:
-        for agg in known_aggregators:
-            _add(f"{agg}/{v}")
 
     return variants
 
@@ -1569,12 +1554,6 @@ def apply_ipv4_preference(force: bool = False) -> None:
 PARTIAL_STREAM_STUB_ID = "partial-stream-stub"
 
 FINISH_REASON_LENGTH = "length"
-
-
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_MODELS_URL = f"{OPENROUTER_BASE_URL}/models"
-
-AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1"
 
 
 # ─── Venv layout ─────────────────────────────────────────────────────────────

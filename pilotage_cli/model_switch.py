@@ -205,51 +205,6 @@ def _bare_custom_provider_def(current_base_url: str) -> Optional[ProviderDef]:
 
 
 # ---------------------------------------------------------------------------
-# Opaque internal model-ID display
-# ---------------------------------------------------------------------------
-# Some proxies (notably Palantir Foundry's LLM-proxy) identify models by
-# resource-instance IDs that are deeply nested, verbose, and pure noise to
-# read in CLI status output, e.g.:
-#
-#   ri.language-model-service..language-model.anthropic-claude-4-7-opus
-#
-# The provider_label (e.g. "palantir-claude46") already carries the routing
-# context, so the only useful information left in the opaque ID is the
-# trailing slug. Strip the boilerplate prefix for *display* — never for
-# wire-side comparison, persistence, config writes, alias lookup, or
-# anything that round-trips back into the API.
-#
-# Match by substring on a known prefix so we never accidentally truncate
-# a legitimate model name that happens to contain dots.
-
-_OPAQUE_MODEL_PREFIXES: tuple[str, ...] = (
-    "ri.language-model-service..language-model.",
-)
-
-
-def format_model_for_display(model_name: str) -> str:
-    """Return a human-friendly form of *model_name* for CLI status output.
-
-    Strips known opaque proxy prefixes (Palantir Foundry's
-    ``ri.language-model-service..language-model.*``) and returns the
-    trailing slug. Falls through to the original string for everything
-    else, so real model IDs (``claude-4-7-opus-20260101``,
-    ``gpt-5-4``, ``meta-llama/Llama-3.3-70B-Instruct``) are untouched.
-
-    This is a DISPLAY-ONLY helper. Do NOT use the return value for any
-    wire-side operation — the proxy expects the full opaque ID, and
-    callers that compare or persist must keep the original.
-    """
-    if not model_name:
-        return model_name
-    for prefix in _OPAQUE_MODEL_PREFIXES:
-        if model_name.startswith(prefix):
-            tail = model_name[len(prefix):]
-            return tail if tail else model_name
-    return model_name
-
-
-# ---------------------------------------------------------------------------
 # Model aliases -- short names -> (vendor, family) with NO version numbers.
 # Resolved dynamically against the live models.dev catalog.
 # ---------------------------------------------------------------------------
@@ -805,12 +760,12 @@ def _model_sort_key(model_id: str, prefix: str) -> tuple:
     suffix = suffix_buf.lower().strip("-_.")
     suffix = suffix.strip()
 
-    # Split out YYYYMMDD date stamps (e.g. claude-opus-4-20250514): they are
+    # Split out YYYYMMDD date stamps (e.g. gpt-5-codex-20250514): they are
     # snapshot markers, not version components, and would otherwise dwarf
     # real point versions (20250514 > 8).  Kept as a trailing tiebreaker so
     # bare IDs sort before their dated snapshots, and newer snapshots before
     # older ones.  The 19_000_101 threshold reclassifies only 8-digit stamps,
-    # so shorter numeric components (mistral-large-2411, gpt-4-0613) keep
+    # so shorter numeric components (gpt-4-0613) keep
     # their current behavior.
     version_nums: list[float] = []
     date_stamp = 0.0
@@ -2594,15 +2549,12 @@ def list_authenticated_providers(
         # multiple keyed providers pointing at the same endpoint with the
         # same credential and wire-protocol collapse into one picker row.
         # Mirrors section-4's grouping for ``custom_providers:`` lists.
-        # Concrete case: a Palantir Foundry Anthropic-proxy with two
-        # configured models (claude-4.6 + claude-4.7) — both share the same
-        # api/key_env/api_mode and used to produce two near-duplicate rows
-        # labelled "Palantir Claude 4.6 Opus" and "Palantir Claude 4.7 Opus";
-        # now they appear as a single "Palantir Claude" row with both models
-        # in the dropdown. Same-host entries with different ``key_env`` or
-        # ``api_mode`` (e.g. an OpenAI-compat gpt-5.4 alongside the Anthropic
-        # claude-4.7 on the same Palantir host) keep distinct rows since
-        # the wire protocol differs.
+        # Concrete case: one proxy host with two configured models — both
+        # share the same api/key_env/api_mode and used to produce two
+        # near-duplicate rows; now they appear as a single row with both
+        # models in the dropdown. Same-host entries with different
+        # ``key_env`` or ``api_mode`` keep distinct rows since the wire
+        # protocol differs.
         from collections import OrderedDict as _OD3
 
         from pilotage_cli.config import is_provider_enabled
@@ -2662,8 +2614,8 @@ def list_authenticated_providers(
                     entry_models.append(model_id)
 
             if group_key not in ep_groups:
-                # Strip per-model suffix so "Palantir Claude 4.7 Opus" becomes
-                # "Palantir Claude". Em dash and " - " are the separators
+                # Strip the per-model suffix so "Acme GPT 5 Codex" becomes
+                # "Acme GPT". Em dash and " - " are the separators
                 # Pilotage's own writer uses (mirrors section-4 grouping).
                 grp_display = display_name
                 for sep in ("—", " - "):
@@ -2671,7 +2623,7 @@ def list_authenticated_providers(
                         grp_display = grp_display.split(sep)[0].strip()
                         break
                 # Drop trailing numeric/version tokens that distinguish per-model
-                # entries ("Palantir Claude 4.7 Opus" → "Palantir Claude").
+                # entries ("Acme GPT 5 Codex" → "Acme GPT").
                 # Keeps the row label short; the model dropdown carries the
                 # per-version detail. Heuristic: split at the first token whose
                 # stripped form contains a digit; keep the prefix only if it
@@ -2817,8 +2769,8 @@ def list_authenticated_providers(
             seen_slugs.update(_ep_aliases)
             # Record (display_name, api_url) for each raw entry that joined
             # this group so section-4's _section3_emitted_pairs dedup can
-            # match per-model custom_providers rows ("Palantir Claude 4.7 Opus")
-            # even though we collapsed the group label to "Palantir Claude".
+            # match per-model custom_providers rows ("Acme GPT 5 Codex")
+            # even though we collapsed the group label to "Acme GPT".
             _url_norm_for_pair = str(api_url).strip().rstrip("/").lower()
             for _raw_name in grp.get("raw_names") or [display_name]:
                 _pair = (
@@ -2906,8 +2858,8 @@ def list_authenticated_providers(
         # separate so picker selection cannot route through the wrong
         # credential/mode pair. The display prefix (text before " — " /
         # " - ") is included so intentionally distinct providers sharing an
-        # endpoint (e.g. a proxy fronting cerebras, groq and perplexity at
-        # a single base_url) each get their own picker row instead of
+        # endpoint (e.g. one proxy fronting several upstreams at a single
+        # base_url) each get their own picker row instead of
         # collapsing into one. Per-model suffix entries that share the same
         # prefix ("<endpoint> — A", "<endpoint> — B") still group together.
         groups: "OrderedDict[tuple, dict]" = OrderedDict()

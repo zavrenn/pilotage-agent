@@ -148,7 +148,7 @@ def _strip_yaml_frontmatter(content: str) -> str:
 # =========================================================================
 
 DEFAULT_AGENT_IDENTITY = (
-    "You are Pilotage Agent, an intelligent AI assistant created by Nous Research. "
+    "You are Pilotage Agent, an intelligent AI assistant. "
     "You are helpful, knowledgeable, and direct. You assist users with a wide "
     "range of tasks including answering questions, writing and editing code, "
     "analyzing information, creative work, and executing actions via your tools. "
@@ -158,7 +158,7 @@ DEFAULT_AGENT_IDENTITY = (
 )
 
 PILOTAGE_AGENT_HELP_GUIDANCE = (
-    "You run on Pilotage Agent (by Nous Research). When the user needs help with "
+    "You run on Pilotage Agent. When the user needs help with "
     "Pilotage itself — configuring, setting up, using, extending, or troubleshooting "
     "it — or when you need to understand your own features, tools, or capabilities, "
     "the documentation at is your "
@@ -197,18 +197,9 @@ SESSION_SEARCH_GUIDANCE = (
     "asking them to repeat themselves."
 )
 
-# NOTE: the opening sentence is worded deliberately. Anthropic's
-# server-side content filter rejects the previous phrasing ("After completing a
-# complex task (5+ tool calls), fixing a tricky error, or discovering a
-# non-trivial workflow, save the approach as a skill with skill_manage so you
-# can reuse it next time.") on subscription OAuth credentials, and surfaces that
-# rejection as a billing-shaped HTTP 400 ("You're out of extra usage"), which
-# sends users to buy quota they do not need. Bisected against the live API: that
-# sentence alone reproduces the 400 and removing it alone clears it; size and
-# the system[0] identity gate were both ruled out. The reword is empirically
-# validated, not understood — if you rewrite this sentence, re-verify against a
-# subscription OAuth token, not an sk-ant-api… key, which does not hit the
-# filter.
+# NOTE: the opening sentence is worded deliberately — an earlier, longer
+# phrasing tripped a provider-side content filter that surfaced as a
+# billing-shaped HTTP 400. Re-verify against the live API before rewording.
 SKILLS_GUIDANCE = (
     "When you work out a non-trivial workflow, record it with skill_manage "
     "for future reuse.\n"
@@ -239,7 +230,7 @@ TOOL_USE_ENFORCEMENT_GUIDANCE = (
 
 # Model name substrings that trigger tool-use enforcement guidance.
 # Add new patterns here when a model family needs explicit steering.
-TOOL_USE_ENFORCEMENT_MODELS = ("gpt", "codex", "gemini", "gemma", "glm", "qwen", "deepseek")
+TOOL_USE_ENFORCEMENT_MODELS = ("gpt", "codex")
 
 # Universal "finish the job" guidance — applied to ALL models, not gated
 # by model family.  Addresses two cross-model failure modes:
@@ -251,8 +242,8 @@ TOOL_USE_ENFORCEMENT_MODELS = ("gpt", "codex", "gemini", "gemma", "glm", "qwen",
 #   2. Fabricating output when a real path is blocked.  When `pip` or a
 #      tool fails, some models will synthesize plausible-looking results
 #      (fake addresses, fake JSON, fake numbers) instead of reporting
-#      the blocker.  (Observed on DeepSeek v4-flash on the same task:
-#      pushed through PEP-668 wall, then returned fabricated listings.)
+#      the blocker.  (Observed on the same task: pushed through a
+#      PEP-668 wall, then returned fabricated listings.)
 #
 # Short on purpose.  This block is shipped to every user, every session,
 # in the cached system prompt — token cost is paid once at install and
@@ -288,10 +279,7 @@ TASK_COMPLETION_GUIDANCE = (
 # file ops when their targets don't overlap — see
 # run_agent._execute_tool_calls / tool_dispatch_helpers). The missing piece
 # was telling the *model* to emit those calls together in the first place.
-# Until now the only batching steer in the prompt lived in
-# GOOGLE_MODEL_OPERATIONAL_GUIDANCE — Gemini/Gemma got it, every other model
-# got nothing. This block makes the steer universal; the now-redundant
-# Google-only bullet has been dropped so no model receives it twice.
+# This block makes the steer universal.
 #
 # Short on purpose — shipped in the cached system prompt to every user, every
 # session. Token cost is paid once at install and amortised across all
@@ -378,31 +366,6 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
     "- If you must proceed with incomplete information, label assumptions explicitly.\n"
     "</missing_context>"
 )
-
-# Gemini/Gemma-specific operational guidance, adapted from OpenCode's gemini.txt.
-# Injected alongside TOOL_USE_ENFORCEMENT_GUIDANCE when the model is Gemini or Gemma.
-GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
-    "# Google model operational directives\n"
-    "Follow these operational rules strictly:\n"
-    "- **Absolute paths:** Always construct and use absolute file paths for all "
-    "file system operations. Combine the project root with relative paths.\n"
-    "- **Verify first:** Use read_file/search_files to check file contents and "
-    "project structure before making changes. Never guess at file contents.\n"
-    "- **Dependency checks:** Never assume a library is available. Check "
-    "package.json, requirements.txt, Cargo.toml, etc. before importing.\n"
-    "- **Conciseness:** Keep explanatory text brief — a few sentences, not "
-    "paragraphs. Focus on actions and results over narration.\n"
-    # Parallel-tool-call steering now lives in the universal
-    # PARALLEL_TOOL_CALL_GUIDANCE block (injected for all models), so it is no
-    # longer duplicated here — keeping it would send Gemini/Gemma the same
-    # instruction twice.
-    "- **Non-interactive commands:** Use flags like -y, --yes, --non-interactive "
-    "to prevent CLI tools from hanging on prompts.\n"
-    "- **Keep going:** Work autonomously until the task is fully resolved. "
-    "Don't stop with a plan — execute it.\n"
-)
-
-
 
 # ---------------------------------------------------------------------------
 # Mid-turn steering (/steer) — out-of-band user messages
@@ -1610,8 +1573,7 @@ def _load_pilotage_md(cwd_path: Path, context_length: Optional[int] = None) -> s
 def _agents_md_directory_chain(cwd_path: Path) -> List[Path]:
     """Directories to check for AGENTS.md: git root first, cwd last.
 
-    Ported from superagent-ai/grok-cli ``src/utils/instructions.ts``
-    (``directoryChain``): the chain runs from the git repository root down
+    The chain runs from the git repository root down
     through every intermediate directory to *cwd*, so deeper directories can
     add more specific guidance that appears later (and therefore takes
     precedence) in the merged prompt.  Without a git root — or when *cwd*
@@ -1689,25 +1651,6 @@ def _load_agents_md(cwd_path: Path, context_length: Optional[int] = None) -> str
     )
 
 
-def _load_claude_md(cwd_path: Path, context_length: Optional[int] = None) -> str:
-    """CLAUDE.md / claude.md — cwd only."""
-    for name in ["CLAUDE.md", "claude.md"]:
-        candidate = cwd_path / name
-        if candidate.exists():
-            try:
-                content = candidate.read_text(encoding="utf-8").strip()
-                if content:
-                    content = _scan_context_content(content, name)
-                    result = f"## {name}\n\n{content}"
-                    return _truncate_content(
-                        result, "CLAUDE.md", context_length=context_length,
-                        read_path=str(candidate),
-                    )
-            except Exception as e:
-                logger.debug("Could not read %s: %s", candidate, e)
-    return ""
-
-
 def _load_cursorrules(cwd_path: Path, context_length: Optional[int] = None) -> str:
     """.cursorrules + .cursor/rules/*.mdc — cwd only."""
     cursorrules_content = ""
@@ -1753,8 +1696,7 @@ def build_context_files_prompt(
     Priority (first found wins — only ONE project context type is loaded):
       1. .pilotage.md / PILOTAGE.md  (walk to git root)
       2. AGENTS.md / agents.md   (merged chain: git root → cwd)
-      3. CLAUDE.md / claude.md   (cwd only)
-      4. .cursorrules / .cursor/rules/*.mdc  (cwd only)
+      3. .cursorrules / .cursor/rules/*.mdc  (cwd only)
 
     SOUL.md from PILOTAGE_HOME is independent and always included when present.
 
@@ -1802,7 +1744,6 @@ def build_context_files_prompt(
         project_context = (
             _load_pilotage_md(cwd_path, context_length)
             or _load_agents_md(cwd_path, context_length)
-            or _load_claude_md(cwd_path, context_length)
             or _load_cursorrules(cwd_path, context_length)
         )
     if project_context:

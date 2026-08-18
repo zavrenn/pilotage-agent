@@ -53,15 +53,14 @@ def _backup_corrupt_config(config_path: Path) -> Optional[Path]:
     ``config.yaml``), the broken-but-recoverable content is gone for good.
 
     This snapshots the corrupted file to ``config.yaml.corrupt.<ts>.bak`` so
-    the user can diff/repair it. Unlike Gemini CLI's policy-file recovery
-    (which resets the live file to a clean state), we deliberately leave
-    ``config.yaml`` in place: pilotage never silently mutates the user's config,
+    the user can diff/repair it. We deliberately leave ``config.yaml`` in
+    place: pilotage never silently mutates the user's config,
     and leaving it means a hand-fixed file is re-read on the next load. The
     backup is best-effort — any failure (permissions, symlink, disk full) is
     swallowed so config loading is never blocked by backup problems.
 
     Returns the backup path on success, else ``None``. Symlinks are not
-    followed/copied (mirrors the Gemini lstat guard) to avoid
+    followed/copied (lstat guard) to avoid
     clobbering whatever a malicious/misconfigured symlink points at.
     """
     try:
@@ -211,8 +210,8 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     # Git
     "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_SHELL",
     # Pilotage runtime location — never via dashboard env writer.
-    # NOT a PILOTAGE_* blanket: integration credentials (PILOTAGE_GEMINI_*,
-    # PILOTAGE_MEM0_*, PILOTAGE_HONCHO_*, ...) ARE allowed.
+    # NOT a PILOTAGE_* blanket: integration credentials (PILOTAGE_MEM0_*,
+    # PILOTAGE_HONCHO_*, ...) ARE allowed.
     "PILOTAGE_HOME", "PILOTAGE_PROFILE", "PILOTAGE_CONFIG", "PILOTAGE_ENV",
 })
 
@@ -263,7 +262,6 @@ _CONFIG_LOCK = threading.RLock()
 # (managed by setup/provider flows directly).
 _EXTRA_ENV_KEYS = frozenset({
     "OPENAI_API_KEY", "OPENAI_BASE_URL",
-    "ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN",
     "TELEGRAM_HOME_CHANNEL", "TELEGRAM_HOME_CHANNEL_NAME",
     "TERMINAL_ENV", "TERMINAL_SSH_KEY", "TERMINAL_SSH_PORT",
     # PILOTAGE_TOOL_PROGRESS_MODE is deprecated (replaced by display.tool_progress
@@ -297,10 +295,9 @@ def _install_method_project_root(project_root: Optional[Path] = None) -> Path:
     """Resolve the directory that holds the *running code* (the install tree).
 
     This is the parent of ``pilotage_cli/`` — i.e. the git checkout for source
-    installs, ``/opt/pilotage`` inside the published image. It is a property of
-    the running interpreter, NOT of ``$PILOTAGE_HOME``, which is why a
-    code-scoped stamp here is immune to two installs sharing one data
-    directory.
+    installs. It is a property of the running interpreter, NOT of
+    ``$PILOTAGE_HOME``, which is why a code-scoped stamp here is immune to
+    two installs sharing one data directory.
     """
     if project_root is not None:
         return project_root
@@ -308,49 +305,21 @@ def _install_method_project_root(project_root: Optional[Path] = None) -> Path:
 
 
 def detect_install_method(project_root: Optional[Path] = None) -> str:
-    """Detect how Pilotage was installed: 'docker', 'git', or 'unknown'.
+    """Detect how Pilotage was installed: 'git' or 'unknown'.
 
     Resolution order:
     1. Code-scoped stamp ``<install tree>/.install_method`` (next to the
        running code) — the authoritative marker.
-    2. Legacy home-scoped stamp ``$PILOTAGE_HOME/.install_method`` — read for
-       backward compatibility, but a ``docker`` value is IGNORED when we are
-       not actually running inside a container (see below).
+    2. Legacy home-scoped stamp ``$PILOTAGE_HOME/.install_method``.
     3. .git directory presence -> 'git'
     4. Fallback -> 'unknown'
 
-    Why the stamp is code-scoped, not home-scoped (issue: shared ``~/.pilotage``)
-    --------------------------------------------------------------------------
-    The install method describes *the binary that is running*, but
-    ``$PILOTAGE_HOME`` is a shared DATA directory — the Docker docs deliberately
-    bind-mount it (``~/.pilotage:/opt/data``) so config/sessions/memory persist
-    and can be shared with a host-side Desktop/CLI install. When a
-    containerised gateway and a host install share one ``$PILOTAGE_HOME``, a
-    home-scoped stamp is a single slot describing two different installs:
-    the container stamps ``docker`` on every boot, the host install then reads
-    ``docker`` and ``pilotage update`` refuses to run ("doesn't apply inside the
-    Docker container") even though the host binary is a perfectly updatable
-    git/pip install. Scoping the stamp to the install tree gives each install
-    its own truthful marker.
-
-    Self-healing for already-poisoned homes: a legacy ``docker`` value in the
-    home-scoped stamp is only honoured when we are genuinely in a container.
-    On a host install that read a contaminating ``docker`` stamp, we fall
-    through to managed/.git detection instead — so existing shared-home
-    setups recover without the user touching anything.
-
-    Note: running inside a container is NOT treated as "docker" on its own.
-    The supported installs self-identify via the code-scoped stamp:
-      - the curl installer (scripts/install.sh, the README/website install
-        command) git-clones the repo and stamps ``git`` next to the code;
-      - the published ``nousresearch/pilotage-agent`` image bakes a ``docker``
-        stamp into ``/opt/pilotage`` at build time.
-    An unsupported manual install dropped into a container (no stamp) falls
-    through to the ``.git`` checks and behaves like any off-path install.
-    See.
+    The stamp is code-scoped, not home-scoped, because the install method
+    describes *the binary that is running* while ``$PILOTAGE_HOME`` is a
+    shared DATA directory that two installs may point at.
     """
     root = _install_method_project_root(project_root)
-    supported_methods = {"docker", "git", "unknown"}
+    supported_methods = {"git", "unknown"}
 
     # 1. Code-scoped stamp — authoritative, immune to shared $PILOTAGE_HOME.
     try:
@@ -360,10 +329,7 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
     except OSError:
         pass
 
-    # 2. Legacy home-scoped stamp — back-compat. Ignore a ``docker`` value
-    #    when we are not actually containerised: that is the signature of a
-    #    host install whose shared $PILOTAGE_HOME was stamped by a co-located
-    #    container, and honouring it wrongly blocks ``pilotage update``.
+    # 2. Legacy home-scoped stamp — back-compat.
     try:
         method = (
             (get_pilotage_home() / ".install_method")
@@ -371,7 +337,7 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
             .strip()
             .lower()
         )
-        if method in supported_methods and not (method == "docker" and not _running_in_container()):
+        if method in supported_methods:
             return method
     except OSError:
         pass
@@ -390,16 +356,6 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
         except OSError:
             pass
     return "unknown"
-
-
-def _running_in_container() -> bool:
-    """Thin wrapper around ``pilotage_constants.is_container`` (import-safe)."""
-    try:
-        from pilotage_constants import is_container
-
-        return is_container()
-    except Exception:
-        return False
 
 
 def stamp_install_method(method: str, project_root: Optional[Path] = None) -> None:
@@ -425,8 +381,6 @@ def stamp_install_method(method: str, project_root: Optional[Path] = None) -> No
 
 def recommended_update_command_for_method(method: str) -> str:
     """Return the update command or guidance for a given install method."""
-    if method == "docker":
-        return "docker pull nousresearch/pilotage-agent:latest"
     return "pilotage update"
 
 
@@ -434,58 +388,6 @@ def recommended_update_command() -> str:
     """Return the best update command for the current installation."""
     method = detect_install_method(get_project_root())
     return recommended_update_command_for_method(method)
-
-
-# Long-form text for ``pilotage update`` / ``--check`` when running inside the
-# Docker image.  Surfaced by ``cmd_update`` and ``_cmd_update_check`` in
-# pilotage_cli/main.py; lives here so the wording stays consistent and we
-# don't grow two slightly-different copies.
-#
-# Why this matters:
-#   - The published image excludes ``.git`` (see .dockerignore), so the
-#     git-based update path can never succeed inside the container.
-#   - The pre-existing fallback message ("✗ Not a git repository. Please
-#     reinstall: curl ... install.sh") is actively misleading inside Docker
-#     — that script installs a *new* host-side Pilotage, it doesn't update
-#     the running container.
-#   - The right action is ``docker pull`` + restart the container; this
-#     helper spells that out, with notes on tag pinning and config
-#     persistence so users don't get blindsided.
-_DOCKER_UPDATE_MESSAGE = """\
-✗ ``pilotage update`` doesn't apply inside the Docker container.
-
-Pilotage Agent runs as a published image (nousresearch/pilotage-agent), not a
-git checkout — the container has no working tree to pull into.  Update by
-pulling a fresh image and restarting your container instead:
-
-  docker pull nousresearch/pilotage-agent:latest
-  # then restart whatever started the container, e.g.:
-  docker compose up -d --force-recreate pilotage-agent
-  # or, for ad-hoc runs, exit the current container and `docker run` again
-
-Verify the new version after restart:
-  docker run --rm nousresearch/pilotage-agent:latest --version
-
-Notes:
-  • If you pinned a specific tag (e.g. ``:v0.14.0``) the ``:latest`` tag
-    won't move your container — pull the newer tag you actually want, or
-    switch to ``:latest`` / ``:main`` for rolling updates.  See available
-    tags
-  • Your config and session history live under ``$PILOTAGE_HOME`` (``/opt/data``
-    in the container, typically bind-mounted from the host) and persist
-    across image upgrades — re-pulling doesn't lose any state.
-  • Running a fork?  Build your own image with this repo's ``Dockerfile``
-    and replace the ``docker pull`` step with your build/push pipeline."""
-
-
-def format_docker_update_message() -> str:
-    """Return the user-facing message for ``pilotage update`` inside Docker.
-
-    Centralised so ``cmd_update`` (the apply path) and ``_cmd_update_check``
-    (the dry-run path) share the same wording.  See ``_DOCKER_UPDATE_MESSAGE``
-    above for the full rationale.
-    """
-    return _DOCKER_UPDATE_MESSAGE
 
 
 # =============================================================================
@@ -720,7 +622,7 @@ ENV_VARS_BY_VERSION: Dict[int, List[str]] = {
 
 # Required environment variables with metadata for migration prompts.
 # LLM provider is required but handled in the setup wizard's provider
-# selection step (Nous Portal / OpenRouter / Custom endpoint), so this
+# selection step (OpenAI / Custom endpoint), so this
 # dict is intentionally empty — no single env var is universally required.
 REQUIRED_ENV_VARS = {}
 
@@ -916,7 +818,7 @@ def _is_env_config_key(key: str) -> bool:
         return False
     key_upper = key.upper()
     api_keys = [
-        'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'VOICE_TOOLS_OPENAI_KEY',
+        'OPENAI_API_KEY', 'VOICE_TOOLS_OPENAI_KEY',
         'EXA_API_KEY', 'PARALLEL_API_KEY', 'FIRECRAWL_API_KEY', 'FIRECRAWL_API_URL',
         'FIRECRAWL_GATEWAY_URL', 'TOOL_GATEWAY_DOMAIN', 'TOOL_GATEWAY_SCHEME',
         'TOOL_GATEWAY_USER_TOKEN', 'TAVILY_API_KEY',
@@ -1696,7 +1598,6 @@ def check_config_version() -> Tuple[int, int]:
 # absent from DEFAULT_CONFIG (omitted when unused / alternate schema forms).
 _EXTRA_KNOWN_ROOT_KEYS = {
     "custom_providers",  # legacy list form; modern equivalent is providers: {}
-    "fallback_model",    # optional single dict or chain list; omitted when disabled
     "mcp_servers",       # MCP server definitions written by setup/tools flows
     # Roots read from the raw user YAML (or written by our own flows) that are
     # intentionally absent from DEFAULT_CONFIG:
@@ -1805,62 +1706,6 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
                         f"custom_providers[{i}] is missing 'base_url' field",
                         "Add the API endpoint URL, e.g.: base_url: https://api.example.com/v1",
                     ))
-
-    # ── fallback_model: single dict OR list of dicts (chain) ─────────────
-    fb = config.get("fallback_model")
-    if fb is not None:
-        if isinstance(fb, list):
-            # Chain fallback — validate each entry
-            for i, entry in enumerate(fb):
-                if not isinstance(entry, dict):
-                    issues.append(ConfigIssue(
-                        "error",
-                        f"fallback_model[{i}] should be a dict, got {type(entry).__name__}",
-                        "Each entry needs provider + model",
-                    ))
-                else:
-                    if not entry.get("provider"):
-                        issues.append(ConfigIssue(
-                            "warning",
-                            f"fallback_model[{i}] is missing 'provider' field",
-                            "Add: provider: openrouter (or another provider)",
-                        ))
-                    if not entry.get("model"):
-                        issues.append(ConfigIssue(
-                            "warning",
-                            f"fallback_model[{i}] is missing 'model' field",
-                            "Add: model: <model-name>",
-                        ))
-        elif not isinstance(fb, dict):
-            issues.append(ConfigIssue(
-                "error",
-                f"fallback_model should be a dict with 'provider' and 'model', got {type(fb).__name__}",
-                "Change to:\n"
-                "  fallback_model:\n"
-                "    provider: openrouter\n"
-                "    model: anthropic/claude-sonnet-4",
-            ))
-        elif fb:
-            if not fb.get("provider"):
-                issues.append(ConfigIssue(
-                    "warning",
-                    "fallback_model is missing 'provider' field — fallback will be disabled",
-                    "Add: provider: openrouter (or another provider)",
-                ))
-            if not fb.get("model"):
-                issues.append(ConfigIssue(
-                    "warning",
-                    "fallback_model is missing 'model' field — fallback will be disabled",
-                    "Add: model: anthropic/claude-sonnet-4 (or another model)",
-                ))
-
-    # ── Check for fallback_model accidentally nested inside custom_providers ──
-    if isinstance(cp, dict) and "fallback_model" not in config and "fallback_model" in (cp or {}):
-        issues.append(ConfigIssue(
-            "error",
-            "fallback_model appears inside custom_providers instead of at root level",
-            "Move fallback_model to the top level of config.yaml (no indentation)",
-        ))
 
     # ── model section: should exist when custom_providers is configured ──
     model_cfg = config.get("model")
@@ -2588,7 +2433,8 @@ def _normalize_root_model_keys(config: Dict[str, Any]) -> Dict[str, Any]:
     intuitive name OpenAI-SDK / LiteLLM users reach for, and ``pilotage config set``
     blindly accepts any dotted key — so ``model.api_base`` got written, confirmed,
     and then silently ignored by the runtime resolver (which reads only
-    ``model.base_url``), causing requests to fall back to OpenRouter. We migrate
+    ``model.base_url``), causing requests to route through the wrong
+    endpoint. We migrate
     the alias to the canonical key (fallback-only — never override an explicit
     ``base_url``) and drop the alias so it can't confuse later loads.
 
@@ -3337,28 +3183,6 @@ _SECURITY_COMMENT = """
 #   tirith_fail_open: true
 """
 
-_FALLBACK_COMMENT = """
-# ── Fallback Model ────────────────────────────────────────────────────
-# Automatic provider failover when primary is unavailable.
-# Uncomment and configure to enable. Triggers on rate limits (429),
-# overload (529), service errors (503), or connection failures.
-#
-# Supported providers:
-#   openrouter   (OPENROUTER_API_KEY)  — routes to any model
-#   openai-codex (OAuth — pilotage auth) — OpenAI Codex
-#   nous         (OAuth — pilotage auth) — Nous Portal
-#   zai          (ZAI_API_KEY)         — Z.AI / GLM
-#   minimax      (MINIMAX_API_KEY)     — MiniMax
-#   minimax-cn   (MINIMAX_CN_API_KEY)  — MiniMax (China)
-#
-# For custom OpenAI-compatible endpoints, add base_url and key_env.
-#
-# fallback_model:
-#   provider: openrouter
-#   model: anthropic/claude-sonnet-4
-"""
-
-
 _COMMENTED_SECTIONS = """
 # ── Security ──────────────────────────────────────────────────────────
 # Secret redaction is ON by default. Set to false to pass tool output,
@@ -3367,24 +3191,6 @@ _COMMENTED_SECTIONS = """
 # security:
 #   redact_secrets: true
 
-# ── Fallback Model ────────────────────────────────────────────────────
-# Automatic provider failover when primary is unavailable.
-# Uncomment and configure to enable. Triggers on rate limits (429),
-# overload (529), service errors (503), or connection failures.
-#
-# Supported providers:
-#   openrouter   (OPENROUTER_API_KEY)  — routes to any model
-#   openai-codex (OAuth — pilotage auth) — OpenAI Codex
-#   nous         (OAuth — pilotage auth) — Nous Portal
-#   zai          (ZAI_API_KEY)         — Z.AI / GLM
-#   minimax      (MINIMAX_API_KEY)     — MiniMax
-#   minimax-cn   (MINIMAX_CN_API_KEY)  — MiniMax (China)
-#
-# For custom OpenAI-compatible endpoints, add base_url and key_env.
-#
-# fallback_model:
-#   provider: openrouter
-#   model: anthropic/claude-sonnet-4
 """
 
 
@@ -3482,14 +3288,6 @@ def save_config(
         sec = normalized.get("security", {})
         if not sec or sec.get("redact_secrets") is None:
             parts.append(_SECURITY_COMMENT)
-        fb = normalized.get("fallback_model", {})
-        fb_is_valid = False
-        if isinstance(fb, list):
-            fb_is_valid = any(isinstance(e, dict) and e.get("provider") and e.get("model") for e in fb)
-        elif isinstance(fb, dict):
-            fb_is_valid = bool(fb.get("provider") and fb.get("model"))
-        if not fb_is_valid:
-            parts.append(_FALLBACK_COMMENT)
 
         atomic_yaml_write(
             config_path,
@@ -3925,13 +3723,6 @@ def remove_env_value(key: str) -> bool:
     return found
 
 
-def save_anthropic_oauth_token(value: str, save_fn=None):
-    """Persist an Anthropic OAuth/setup token and clear the API-key slot."""
-    writer = save_fn or save_env_value
-    writer("ANTHROPIC_TOKEN", value)
-    writer("ANTHROPIC_API_KEY", "")
-
-
 def save_env_value_secure(key: str, value: str) -> Dict[str, Any]:
     # Route through the unified credential lifecycle so a rotation via the
     # secret-capture path also refreshes any config.yaml mirror of the old
@@ -4155,7 +3946,7 @@ def show_config():
     print(color("◆ API Keys", Colors.CYAN, Colors.BOLD))
     
     keys = [
-        ("OPENROUTER_API_KEY", "OpenRouter"),
+        ("OPENAI_API_KEY", "OpenAI"),
         ("VOICE_TOOLS_OPENAI_KEY", "OpenAI (STT/TTS)"),
         ("EXA_API_KEY", "Exa"),
         ("PARALLEL_API_KEY", "Parallel"),
@@ -4637,7 +4428,7 @@ def _default_value_for_key(dotted_key: str):
 # child keys ("dictionary-shaped" config: the schema declares the dict but the
 # user populates its keys). Schema validation accepts ANY path below these
 # without deep checking, so users can set e.g. ``mcp_servers.my-server.command``
-# or ``providers.openrouter.api_key`` without us needing to know server names.
+# or ``providers.<name>.api_key`` without us needing to know server names.
 _OPEN_DICT_TOP_LEVEL_KEYS = frozenset({
     "providers",
     "credential_pool_strategies",
@@ -5141,9 +4932,8 @@ def config_command(args):
             print("Usage: pilotage config set [--force] <key> <value>")
             print()
             print("Examples:")
-            print("  pilotage config set model anthropic/claude-sonnet-4")
-            print("  pilotage config set terminal.backend docker")
-            print("  pilotage config set OPENROUTER_API_KEY sk-or-...")
+            print("  pilotage config set model gpt-5-codex")
+            print("  pilotage config set OPENAI_API_KEY sk-...")
             print()
             print("  --force: skip the unknown-key notice for unrecognized keys,")
             print("           and allow a scalar to replace a whole mapping section")
@@ -5157,8 +4947,7 @@ def config_command(args):
             print()
             print("Examples:")
             print("  pilotage config unset model")
-            print("  pilotage config unset terminal.backend")
-            print("  pilotage config unset OPENROUTER_API_KEY")
+            print("  pilotage config unset OPENAI_API_KEY")
             sys.exit(1)
         unset_config_value(key)
     

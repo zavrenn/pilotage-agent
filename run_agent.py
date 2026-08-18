@@ -292,7 +292,7 @@ def _pool_may_recover_from_rate_limit(pool) -> bool:
     retrying against the same exhausted quota — the daily-quota 429 will recur
     immediately, and the retry budget is burned.
 
-    In that case we must fall back to the configured ``fallback_model``
+    In that case the turn cannot proceed
     instead.  Returns True only when rotation has somewhere to go.
 
     See issues and.
@@ -450,7 +450,6 @@ class AIAgent:
         session_db=None,
         parent_session_id: str = None,
         iteration_budget: "IterationBudget" = None,
-        fallback_model: Dict[str, Any] = None,
         credential_pool=None,
         checkpoints_enabled: bool = False,
         checkpoint_max_snapshots: int = 20,
@@ -527,7 +526,6 @@ class AIAgent:
             session_db=session_db,
             parent_session_id=parent_session_id,
             iteration_budget=iteration_budget,
-            fallback_model=fallback_model,
             credential_pool=credential_pool,
             checkpoints_enabled=checkpoints_enabled,
             checkpoint_max_snapshots=checkpoint_max_snapshots,
@@ -1019,40 +1017,13 @@ class AIAgent:
         except Exception:
             pass
 
-    def _emit_pending_fallback_notice(self) -> None:
-        """Surface the one-shot fallback-switch notice on successful recovery.
-
-        A provider/model switch is a durable state change operators must see,
-        unlike transient retry chatter that ``_clear_status_buffer`` drops.
-        ``try_activate_fallback`` records the switch in
-        ``self._pending_fallback_notice``; this emits it exactly once via
-        ``_emit_status`` and then clears it, so a successful fallback still
-        produces one visible notice.  On terminal failure the buffered switch
-        line is flushed instead (and this notice discarded) — see
-        ``_flush_status_buffer`` — so the user always sees the switch once.
-        """
-        try:
-            notice = getattr(self, "_pending_fallback_notice", None)
-            if notice:
-                # Clear before emitting so a (swallowed) callback error can't
-                # leave the notice set for a stale re-emit on a later turn.
-                self._pending_fallback_notice = None
-                self._emit_status(notice)
-        except Exception:
-            # Never break the conversation loop on a notice hiccup.
-            pass
-
     def _flush_status_buffer(self) -> None:
         """Emit buffered retry messages — call on terminal failure.
 
-        Surfaces the full retry/fallback trace so the user can see what
-        was tried before the turn gave up.
+        Surfaces the full retry trace so the user can see what was tried
+        before the turn gave up.
         """
         try:
-            # The buffered trace already carries the fallback switch line, so
-            # drop any one-shot fallback notice to avoid a stale duplicate
-            # leaking into a later successful turn.
-            self._pending_fallback_notice = None
             buf = getattr(self, "_retry_status_buffer", None)
             if not buf:
                 return
@@ -4824,8 +4795,6 @@ class AIAgent:
         """
         if self.api_mode != "chat_completions":
             return False
-        if getattr(self, "_fallback_activated", False):
-            return False
         try:
             from agent.credential_pool import get_env_prefer_dotenv
             from pilotage_cli.auth import PROVIDER_REGISTRY
@@ -5611,29 +5580,6 @@ class AIAgent:
         from agent.chat_completion_helpers import interruptible_streaming_api_call
         return interruptible_streaming_api_call(self, api_kwargs, on_first_delta=on_first_delta)
 
-    def _try_activate_fallback(self, reason: "FailoverReason | None" = None) -> bool:
-        """Forwarder — see ``agent.chat_completion_helpers.try_activate_fallback``."""
-        from agent.chat_completion_helpers import try_activate_fallback
-        return try_activate_fallback(self, reason)
-
-    def _has_pending_fallback(self) -> bool:
-        """Whether a fallback provider is actually available to switch to.
-
-        Used to gate user-facing "trying fallback..." status so we don't
-        announce a fallback that will never be attempted (the user has no
-        fallback chain configured).  Mirrors the early-return guard in
-        ``try_activate_fallback``.
-        """
-        chain = getattr(self, "_fallback_chain", None) or []
-        index = getattr(self, "_fallback_index", 0)
-        return index < len(chain)
-
-    # ── Per-turn primary restoration ─────────────────────────────────────
-
-    def _restore_primary_runtime(self) -> bool:
-        """Forwarder — see ``agent.agent_runtime_helpers.restore_primary_runtime``."""
-        from agent.agent_runtime_helpers import restore_primary_runtime
-        return restore_primary_runtime(self)
 
     def _try_recover_primary_transport(
         self, api_error: Exception, *, retry_count: int, max_retries: int,
@@ -5693,7 +5639,7 @@ class AIAgent:
 
     def _describe_image_for_anthropic_fallback(self, image_url: str, role: str) -> str:
         cache_key = hashlib.sha256(str(image_url or "").encode("utf-8")).hexdigest()
-        cached = self._anthropic_image_fallback_cache.get(cache_key)
+        cached = self._image_text_fallback_cache.get(cache_key)
         if cached:
             return cached
 
@@ -5739,7 +5685,7 @@ class AIAgent:
                 f"\n[If you need a closer look, use vision_analyze with image_url: {vision_source}]"
             )
 
-        self._anthropic_image_fallback_cache[cache_key] = note
+        self._image_text_fallback_cache[cache_key] = note
         return note
 
     def _model_supports_vision(self) -> bool:

@@ -65,7 +65,6 @@ from agent.turn_context import (
     compression_made_progress,
 )
 from pilotage_cli.config import cfg_get
-from pilotage_cli.fallback_config import get_fallback_chain
 
 # --- Agent cache tuning ---------------------------------------------------
 # Bounds the per-session AIAgent cache to prevent unbounded growth in
@@ -1188,11 +1187,10 @@ def build_resume_recovery_note(
 #     ``_copy_reasoning_content_for_api`` promotes ``reasoning`` →
 #     ``reasoning_content`` at send time, but only when the strings happen to
 #     match.  Carrying the original ``reasoning_content`` verbatim avoids
-#     reconstruction loss for providers that return them as distinct fields
-#     (DeepSeek/Kimi/Moonshot thinking modes).
+#     reconstruction loss for providers that return them as distinct
+#     fields in thinking modes.
 #   * ``reasoning_details``: opaque structured array (signature,
-#     encrypted_content) used by OpenRouter/Anthropic to maintain reasoning
-#     continuity across turns.
+#     encrypted_content) used to maintain reasoning continuity across turns.
 #   * ``codex_reasoning_items``: encrypted reasoning blobs for the OpenAI
 #     Codex Responses API.
 #   * ``codex_message_items``: exact assistant message items with ``phase``.
@@ -1232,8 +1230,8 @@ def _build_replay_entry(
 
     Empty values: most fields are dropped when falsy (matching the original
  behaviour) since an empty list/string for those carries no
-    information.  The exception is ``reasoning_content``: DeepSeek/Kimi
-    thinking-mode replay treats an empty string as a meaningful sentinel
+    information.  The exception is ``reasoning_content``: thinking-mode
+    replay treats an empty string as a meaningful sentinel
     that ``_copy_reasoning_content_for_api`` upgrades to a single space.
     Dropping it here would make the gateway send no ``reasoning_content``
     at all on the next turn, which can cause HTTP 400 from strict thinking
@@ -2564,9 +2562,6 @@ def _resolve_runtime_agent_kwargs() -> dict:
             logger.warning("Primary provider rate-limited (429): %s — trying fallback", auth_exc)
         else:
             logger.warning("Primary provider auth failed: %s — trying fallback", auth_exc)
-        fb_config = _try_resolve_fallback_provider()
-        if fb_config is not None:
-            return fb_config
         raise RuntimeError(format_runtime_provider_error(auth_exc)) from auth_exc
     except Exception as exc:
         raise RuntimeError(format_runtime_provider_error(exc)) from exc
@@ -2641,54 +2636,6 @@ def _credential_pool_for_provider(provider: Optional[str]):
             exc_info=True,
         )
         return None
-
-
-def _try_resolve_fallback_provider() -> dict | None:
-    """Attempt to resolve credentials from the fallback_model/fallback_providers config."""
-    from pilotage_cli.runtime_provider import resolve_runtime_provider
-    try:
-        # Canonical gateway loader: managed overlay + ${VAR} expansion +
-        # root-model normalization now reach the fallback chain too (a raw
-        # read here used to miss administrator-pinned fallback_providers).
-        cfg = _load_gateway_runtime_config()
-        fb_list = get_fallback_chain(cfg)
-        if not fb_list:
-            return None
-        for entry in fb_list:
-            try:
-                from pilotage_cli.fallback_config import resolve_entry_api_key
-
-                runtime = resolve_runtime_provider(
-                    requested=entry.get("provider"),
-                    explicit_base_url=entry.get("base_url"),
-                    explicit_api_key=resolve_entry_api_key(entry),
-                )
-                # Log the literal `provider` key from config, not the resolved
-                # runtime category — an Ollama fallback resolves through the
-                # OpenAI-compatible path and would otherwise be logged as
-                # "openrouter", contradicting the operator's config.
-                logger.info(
-                    "Fallback provider resolved: %s model=%s",
-                    entry.get("provider") or runtime.get("provider"),
-                    entry.get("model"),
-                )
-                return {
-                    "api_key": runtime.get("api_key"),
-                    "base_url": runtime.get("base_url"),
-                    "provider": runtime.get("provider"),
-                    "requested_provider": runtime.get("requested_provider"),
-                    "api_mode": runtime.get("api_mode"),
-                    "command": runtime.get("command"),
-                    "args": list(runtime.get("args") or []),
-                    "credential_pool": runtime.get("credential_pool"),
-                    "model": entry.get("model"),
-                }
-            except Exception as fb_exc:
-                logger.debug("Fallback entry %s failed: %s", entry.get("provider"), fb_exc)
-                continue
-    except Exception:
-        pass
-    return None
 
 
 def _event_media_type_at(event, index: int) -> str:
@@ -4981,18 +4928,6 @@ class TurnRunner:
                         logger.debug("Reusing cached agent for session %s", ctx.session_key)
                         reused_cached_agent = True
 
-        # Lock released — refresh the fallback chain from disk for the
-        # reused agent OUTSIDE the cache lock (config.yaml read is disk
-        # I/O; the idle-sweep watcher contends on this lock and stalls
-        # Discord heartbeats — same reasoning as). A chain
-        # configured after this agent was cached (or after gateway start)
-        # must reach the next turn. Per-session turn
-        # serialization (_running_agents) keeps this safe post-lock.
-        if reused_cached_agent and agent is not None:
-            self._runner._apply_fallback_chain_to_agent(
-                agent, self._runner._refresh_fallback_model(),
-            )
-
         # Lock released — now schedule cleanup of any cross-process-evicted
         # agent on a daemon thread so memory-provider shutdown / socket
         # teardown never blocks the gateway event loop or the cache lock
@@ -5040,8 +4975,6 @@ class TurnRunner:
                 thread_id=ctx.source.thread_id,
                 gateway_session_key=ctx.session_key,
                 session_db=getattr(self._runner._session_db, "_db", self._runner._session_db),
-                # Reload from disk — do not reuse the startup snapshot.
-                fallback_model=self._runner._refresh_fallback_model(),
                 skip_context_files=skip_context_files,
                 # Keep the persona even with minimal context: soul identity is
                 # a single small file, not part of the expensive walk.
@@ -6082,7 +6015,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         self._restart_drain_timeout = self._load_restart_drain_timeout()
         self._restart_after_turn_timeout = self._load_restart_after_turn_timeout()
         self._cron_drain_timeout = self._load_cron_drain_timeout()
-        self._fallback_model = self._load_fallback_model()
 
         # Wire process registry into session store for reset protection.
         # A background process older than the configured threshold (default 24h,
@@ -6246,7 +6178,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         # Cache AIAgent instances per session to preserve prompt caching.
         # Without this, a new AIAgent is created per message, rebuilding the
         # system prompt (including memory) every turn — breaking prefix cache
-        # and costing ~10x more on providers with prompt caching (Anthropic).
+        # and costing ~10x more on providers with prompt caching.
         # Key: session_key, Value: (AIAgent, config_signature_str)
         #
         # OrderedDict so _enforce_agent_cache_cap() can pop the least-recently-
@@ -7262,9 +7194,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         """Build the effective model/runtime config for a single turn.
 
         Always uses the session's primary model/provider.  If `/fast` is
-        enabled and the model supports Priority Processing / Anthropic fast
-        mode, attach `request_overrides` so the API call is marked
-        accordingly.
+        enabled and the model supports priority processing, attach
+        `request_overrides` so the API call is marked accordingly.
         """
         from pilotage_cli.models import resolve_fast_mode_overrides
 
@@ -7326,7 +7257,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
             "provider": getattr(agent, "provider", None),
             "base_url": getattr(agent, "base_url", None),
             "api_mode": getattr(agent, "api_mode", None),
-            "fallback_active": bool(getattr(agent, "_fallback_activated", False)),
         }
         runtime = {k: v for k, v in runtime.items() if v not in (None, "")}
 
@@ -8472,108 +8402,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
             )
             return "concise"
         return mode
-
-    @staticmethod
-    def _load_fallback_model() -> list | None:
-        """Load fallback provider chain from config.yaml.
-
-        Returns the merged effective chain from ``fallback_providers`` plus any
-        legacy ``fallback_model`` entries. ``fallback_providers`` stays first
-        when both keys are present.
-        """
-        try:
-            # Canonical gateway loader (fail-open): managed overlay + ${VAR}
-            # expansion now apply to the fallback chain too.
-            cfg = _load_gateway_runtime_config()
-            fb = get_fallback_chain(cfg)
-            if fb:
-                return fb
-        except Exception:
-            pass
-        return None
-
-    def _refresh_fallback_model(self) -> list | None:
-        """Re-read fallback_providers from disk for the next agent create/reuse.
-
-        Cron already does this per job via ``get_fallback_chain``; the gateway
-        previously froze ``self._fallback_model`` at process start, so a chain
-        configured (or changed) after ``pilotage gateway`` was running never
-        reached messaging sessions even though the same process's cron jobs
-        fell back correctly. Fixes.
-
-        A TRANSIENT read/parse failure (user mid-edit of config.yaml with a
-        non-atomic write) keeps the last known-good chain instead of wiping a
-        cached agent's working fallback for that turn.  Only a successful read
-        that genuinely lacks the key clears the chain.
-        """
-        try:
-            from pilotage_cli.config import read_user_config_raw
-            cfg_path = _pilotage_home / "config.yaml"
-            if not cfg_path.exists():
-                self._fallback_model = None
-                return self._fallback_model
-            # Raw primitive (raises on parse failure) is required here: the
-            # canonical fail-open loader would return {} on a torn mid-edit
-            # write and WIPE the last known-good chain. The overlay/expansion
-            # below fixes the managed-scope/${VAR} drift without losing that.
-            cfg = read_user_config_raw(cfg_path)
-            try:
-                from pilotage_cli import managed_scope
-                cfg = managed_scope.apply_managed_overlay(cfg)
-            except Exception:
-                pass
-            try:
-                from pilotage_cli.config import _expand_env_vars
-                expanded = _expand_env_vars(cfg)
-                if isinstance(expanded, dict):
-                    cfg = expanded
-            except Exception:
-                pass
-        except Exception:
-            # Transient failure — keep last known-good chain.
-            logger.debug(
-                "fallback_providers refresh: config.yaml read failed; "
-                "keeping last known-good chain", exc_info=True,
-            )
-            return self._fallback_model
-        self._fallback_model = get_fallback_chain(cfg) or None
-        return self._fallback_model
-
-    @staticmethod
-    def _apply_fallback_chain_to_agent(agent: Any, chain: list | None) -> None:
-        """Keep a cached agent's fallback chain aligned with current config.
-
-        Skips rewrite while a cooldown is holding the agent on an already-
-        activated fallback provider — ``restore_primary_runtime`` owns that
-        turn-scoped lifecycle. When primary is active (or cooldown expired),
-        replace the chain so mid-uptime ``fallback_providers`` edits take
-        effect without requiring a gateway restart.
-        """
-        if agent is None:
-            return
-        new_chain = list(chain or [])
-        rate_limited_until = getattr(agent, "_rate_limited_until", 0) or 0
-        if (
-            getattr(agent, "_fallback_activated", False)
-            and rate_limited_until > time.monotonic()
-        ):
-            return
-        old_chain = list(getattr(agent, "_fallback_chain", []) or [])
-        agent._fallback_chain = new_chain
-        agent._fallback_model = new_chain[0] if new_chain else None
-        if not getattr(agent, "_fallback_activated", False):
-            agent._fallback_index = 0
-        # A config edit signals the user changed something — drop the
-        # session-scoped unavailability memo so re-configured entries
-        # (e.g. credentials added mid-uptime for a previously-failing
-        # provider) get retried instead of staying suppressed for the
-        # cached agent's lifetime.  Only on actual content change, so
-        # the per-message no-op refresh keeps the memo's rate-limiting
-        # benefit.
-        if new_chain != old_chain:
-            unavailable = getattr(agent, "_unavailable_fallback_keys", None)
-            if unavailable:
-                unavailable.clear()
 
     def _snapshot_running_agents(self) -> Dict[str, Any]:
         return {
@@ -15514,8 +15342,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         _cmd_def = _resolve_cmd(command) if command else None
         canonical = _cmd_def.name if _cmd_def else command
 
-        # Expand alias quick commands before built-in dispatch so targets like
-        # /model openai/gpt-5.5 --provider openrouter reach the /model handler.
+        # Expand alias quick commands before built-in dispatch so targets
+        # like /model gpt-5.5 reach the /model handler.
         # Preserve built-in precedence; aliases only need early handling when
         # the typed command is not already known.
         if command and _cmd_def is None:
@@ -15942,8 +15770,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
 
         # Skill slash commands: /skill-name loads the skill and sends to agent.
         # resolve_skill_command_key() handles the Telegram underscore/hyphen
-        # round-trip so /claude_code from Telegram autocomplete still resolves
-        # to the claude-code skill.
+        # round-trip so /my_skill from Telegram autocomplete still resolves
+        # to the my-skill skill.
         if command:
             # Skill bundles take precedence over individual skill commands —
             # /<bundle> loads multiple skills at once. Mirrors CLI dispatch.
@@ -16005,7 +15833,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
                     user_instruction = event.get_command_args().strip()
                     # Stacked slash-skill invocations: `/skill-a /skill-b do
                     # XYZ` loads every leading skill (up to 5), not just the
-                    # first. Inspired by Claude Code v2.1.199. Mirrors CLI.
+                    # first. Mirrors CLI.
                     try:
                         from agent.skill_commands import (
                             build_stacked_skill_invocation_message as _build_stacked,
@@ -16292,9 +16120,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
                 # Decide routing: native (attach pixels) vs text (vision_analyze
                 # pre-run + prepend description).  See agent/image_routing.py.
                 # Offload to a worker thread: the decision does blocking network
-                # I/O — a models.dev fetch on cache miss, and the Ollama
-                # ``/api/show`` capability probe for local servers — whose
-                # request timeout would otherwise stall the whole gateway event
+                # I/O — a models.dev fetch on cache miss — whose request
+                # timeout would otherwise stall the whole gateway event
                 # loop (every session) while a single image is routed.
                 _img_mode = await asyncio.to_thread(
                     self._decide_image_input_mode,
@@ -17292,7 +17119,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
             # normal context management during its tool loop with accurate
             # real token counts.  Having hygiene at 0.50 caused premature
             # compression on every turn in long gateway sessions.
-            _hyg_model = "anthropic/claude-sonnet-4.6"
+            _hyg_model = "gpt-5.2"
             _hyg_threshold_pct = 0.85
             _hyg_compression_enabled = True
             _hyg_hard_msg_limit = 5000
@@ -17463,7 +17290,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
                     # headroom (agent's own compressor runs at 50%).  A previous 1.4x
                     # multiplier tried to compensate by inflating the threshold, but
                     # 85% * 1.4 = 119% of context — which exceeds the model's limit
-                    # and prevented hygiene from ever firing for ~200K models (GLM-5).
+                    # and prevented hygiene from ever firing for ~200K models.
 
                 # Hard safety valve: force compression if message count is
                 # extreme, regardless of token estimates.  This breaks the
@@ -18906,7 +18733,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
             status_code = getattr(e, "status_code", None)
             _hist_len = len(history) if 'history' in locals() else 0
             if status_code == 401:
-                status_hint = " Check your API key or run `claude /login` to refresh OAuth credentials."
+                status_hint = " Check your API key or re-run `pilotage auth login` to refresh OAuth credentials."
             elif status_code == 402:
                 status_hint = " Your API balance or quota is exhausted. Check your provider dashboard."
             elif status_code == 429:
@@ -19082,7 +18909,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
 
         lines = [
             f"◆ Model: `{model}`",
-            f"◆ Provider: {provider or 'openrouter'}",
+            f"◆ Provider: {provider or 'openai'}",
             f"◆ Context: {ctx_display} tokens ({ctx_source})",
         ]
 
@@ -19789,7 +19616,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
                     thread_id=source.thread_id,
                     session_db=getattr(self._session_db, "_db", self._session_db),
                     # Reload from disk — do not reuse the startup snapshot.
-                    fallback_model=self._refresh_fallback_model(),
                 )
                 try:
                     return agent.run_conversation(
@@ -25724,8 +25550,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
             if _agent is not None and hasattr(_agent, 'model') and not _run_failed:
                 _cfg_model = _resolve_gateway_model()
                 # Normalize _cfg_model the same way AIAgent.__init__ does, so a
-                # vendor-prefixed config value (e.g. "deepseek/deepseek-v4-pro")
-                # matches the agent's stripped model ("deepseek-v4-pro") on
+                # vendor-prefixed config value (e.g. "openai/gpt-5.2")
+                # matches the agent's stripped model ("gpt-5.2") on
                 # native providers. Without this, _agent.model != _cfg_model is
                 # always true for vendor-prefixed config and the cached agent is
                 # evicted on every successful turn — destroying prompt caching.
@@ -26108,8 +25934,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         # them even if streaming had sent earlier partial output.
         #
         # Also never suppress when the final response is "(empty)" — this
-        # means the model failed to produce content after tool calls (common
-        # with mimo-v2-pro, GLM-5, etc.).  The stream consumer may have
+        # means the model failed to produce content after tool calls.
+        # The stream consumer may have
         # sent intermediate text ("Let me search for that…") alongside the
         # tool call, setting already_sent=True, but that text is NOT the
         # final answer.  Suppressing delivery here leaves the user staring

@@ -1,8 +1,8 @@
 """
 Multi-provider authentication system for Pilotage Agent.
 
-Supports OAuth device code flows (Nous Portal, future: OpenAI Codex) and
-traditional API key providers (OpenRouter, custom endpoints). Auth state
+Supports OAuth device code flows (OpenAI Codex) and traditional API key
+providers (OpenAI, custom endpoints). Auth state
 is persisted in ~/.pilotage/auth.json with cross-process file locking.
 
 Architecture:
@@ -11,9 +11,6 @@ Architecture:
 - resolve_provider() picks the active provider via priority chain
 - resolve_*_runtime_credentials() handles token refresh and runtime keys
 - logout_command() is the CLI entry point for clearing auth
-
-Nous authentication paths:
-- Invoke JWT (preferred): use a scoped access_token directly for inference.
 """
 
 from __future__ import annotations
@@ -87,7 +84,7 @@ from pilotage_cli.config import (
     read_raw_config,
     require_readable_config_before_write,
 )
-from pilotage_constants import OPENROUTER_BASE_URL, secure_parent_dir
+from pilotage_constants import secure_parent_dir
 from agent.credential_persistence import sanitize_borrowed_credential_payload
 from utils import atomic_replace, atomic_yaml_write, env_float, is_truthy_value
 
@@ -169,7 +166,7 @@ class ProviderConfig:
     """Describes a known inference provider."""
     id: str
     name: str
-    auth_type: str  # "oauth_device_code", "oauth_external", "oauth_minimax", or "api_key"
+    auth_type: str  # "oauth_device_code", "oauth_external", or "api_key"
     portal_base_url: str = ""
     inference_base_url: str = ""
     client_id: str = ""
@@ -208,10 +205,10 @@ try:
             continue
         if _pp.auth_type != "api_key" or not _pp.env_vars:
             continue
-        # Skip providers that need custom token resolution or are special-cased
-        # elsewhere (copilot/zai have bespoke token refresh; custom is
-        # user-supplied and resolved outside the registry).
-        if _pp.name in {"copilot", "zai", "openrouter", "custom"}:
+        # Skip providers that need custom token resolution or are
+        # special-cased elsewhere (custom is user-supplied and resolved
+        # outside the registry).
+        if _pp.name == "custom":
             continue
         _api_key_vars = tuple(v for v in _pp.env_vars if not v.endswith("_BASE_URL") and not v.endswith("_URL"))
         _base_url_var = next((v for v in _pp.env_vars if v.endswith("_BASE_URL") or v.endswith("_URL")), None)
@@ -272,7 +269,7 @@ def _resolve_api_key_provider_secret(
         if has_usable_secret(val):
             return val, env_var
 
-    # Fallback: try credential pool (e.g. zai key stored via auth.json)
+    # Fallback: try credential pool (key stored via auth.json)
     try:
         from agent.credential_pool import load_pool
         pool = load_pool(provider_id)
@@ -287,180 +284,6 @@ def _resolve_api_key_provider_secret(
         pass
 
     return "", ""
-
-
-# =============================================================================
-# Z.AI Endpoint Detection
-# =============================================================================
-
-# Z.AI has separate billing for general vs coding plans, and global vs China
-# endpoints.  A key that works on one may return "Insufficient balance" on
-# another.  We probe at setup time and store the working endpoint.
-# Each entry lists candidate models to try in order — newer coding plan accounts
-# may only have access to recent models (glm-5.1, glm-5v-turbo) while older
-# ones still use glm-4.7.
-
-ZAI_ENDPOINTS = [
-    # (id, base_url, probe_models, label)
-    ("global",        "https://api.z.ai/api/paas/v4",        ["glm-5"],   "Global"),
-    ("cn",            "https://open.bigmodel.cn/api/paas/v4", ["glm-5"],   "China"),
-    ("coding-global", "https://api.z.ai/api/coding/paas/v4",  ["glm-5.2", "glm-5.1", "glm-5v-turbo", "glm-4.7"], "Global (Coding Plan)"),
-    ("coding-cn",     "https://open.bigmodel.cn/api/coding/paas/v4", ["glm-5.2", "glm-5.1", "glm-5v-turbo", "glm-4.7"], "China (Coding Plan)"),
-]
-
-
-def _probe_single_zai_endpoint(
-    api_key: str, endpoint: tuple, timeout: float,
-) -> Optional[Dict[str, str]]:
-    """Probe a single Z.AI endpoint. Returns endpoint info dict or None.
-
-    Preserves the per-endpoint candidate-model loop: endpoints carry a
-    ``probe_models`` LIST and each model is tried in order until one
-    succeeds (some plans only accept newer/older GLM slugs).
-    """
-    ep_id, base_url, probe_models, label = endpoint
-    for model in probe_models:
-        try:
-            resp = httpx.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "stream": False,
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "ping"}],
-                },
-                timeout=timeout,
-            )
-            if resp.status_code == 200:
-                logger.debug("Z.AI endpoint probe: %s (%s) model=%s OK", ep_id, base_url, model)
-                return {
-                    "id": ep_id,
-                    "base_url": base_url,
-                    "model": model,
-                    "label": label,
-                }
-            logger.debug("Z.AI endpoint probe: %s model=%s returned %s", ep_id, model, resp.status_code)
-        except Exception as exc:
-            logger.debug("Z.AI endpoint probe: %s model=%s failed: %s", ep_id, model, exc)
-    return None
-
-
-def detect_zai_endpoint(api_key: str, timeout: float = 8.0) -> Optional[Dict[str, str]]:
-    """Probe z.ai endpoints in parallel to find one that accepts this API key.
-
-    Returns {"id": ..., "base_url": ..., "model": ..., "label": ...} for the
-    first working endpoint (in ZAI_ENDPOINTS priority order), or None if all
-    fail.  For endpoints with multiple candidate models, each worker tries
-    its endpoint's models in order and returns the first that succeeds.
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    # No `with` block: a context manager would join ALL probe threads on
-    # exit, defeating the early return below. shutdown(wait=False) lets the
-    # surviving daemon-style probes drain in the background instead of
-    # blocking the caller on slow/unreachable endpoints.
-    pool = ThreadPoolExecutor(max_workers=len(ZAI_ENDPOINTS))
-    try:
-        futures = {
-            pool.submit(_probe_single_zai_endpoint, api_key, ep, timeout): ep[0]
-            for ep in ZAI_ENDPOINTS
-        }
-        by_id = {ep_id: f for f, ep_id in futures.items()}
-        results: Dict[str, Dict[str, str]] = {}
-        for future in as_completed(futures):
-            ep_id = futures[future]
-            try:
-                result = future.result()
-                if result is not None:
-                    results[ep_id] = result
-            except Exception:
-                pass
-            # Early exit in PRIORITY order: walk endpoints highest-priority
-            # first; if one has succeeded and every higher-priority probe
-            # has already finished (without success), no later completion
-            # can win — return now instead of waiting out slow endpoints
-            # (main's sequential loop also stopped at first success).
-            for ep in ZAI_ENDPOINTS:
-                if not by_id[ep[0]].done():
-                    break  # a higher-priority probe is still in flight
-                if ep[0] in results:
-                    return results[ep[0]]
-
-        # All probes finished: first match in priority order, if any.
-        for ep in ZAI_ENDPOINTS:
-            if ep[0] in results:
-                return results[ep[0]]
-        return None
-    finally:
-        pool.shutdown(wait=False)
-
-
-def _resolve_zai_base_url(api_key: str, default_url: str, env_override: str) -> str:
-    """Return the correct Z.AI base URL by probing endpoints.
-
-    If the user has explicitly set GLM_BASE_URL, that always wins.
-    Otherwise, probe the candidate endpoints to find one that accepts the
-    key.  The detected endpoint is cached in provider state (auth.json) keyed
-    on a hash of the API key so subsequent starts skip the probe.
-    """
-    if env_override:
-        return env_override
-
-    # No API key set → don't probe (would fire N×M HTTPS requests with an
-    # empty Bearer token, all returning 401).  This path is hit during
-    # auxiliary-client auto-detection when the user has no Z.AI credentials
-    # at all — the caller discards the result immediately, so the probe is
-    # pure latency for every AIAgent construction.
-    if not api_key:
-        return default_url
-
-    # Check provider-state cache for a previously-detected endpoint.
-    auth_store = _load_auth_store()
-    state = _load_provider_state(auth_store, "zai") or {}
-    cached = state.get("detected_endpoint")
-    if isinstance(cached, dict) and cached.get("base_url"):
-        key_hash = cached.get("key_hash", "")
-        if key_hash == hashlib.sha256(api_key.encode()).hexdigest()[:16]:
-            logger.debug("Z.AI: using cached endpoint %s", cached["base_url"])
-            return cached["base_url"]
-
-    # Probe — may take up to ~8s per endpoint.
-    detected = detect_zai_endpoint(api_key)
-    if detected and detected.get("base_url"):
-        # Persist the detection result keyed on the API key hash.
-        key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:16]
-        detected_endpoint = {
-            "base_url": detected["base_url"],
-            "endpoint_id": detected.get("id", ""),
-            "model": detected.get("model", ""),
-            "label": detected.get("label", ""),
-            "key_hash": key_hash,
-        }
-        # Persist failure (disk full, permissions, lock timeout) must not
-        # break resolution — detection already succeeded; worst case the
-        # next start re-probes.
-        try:
-            with _auth_store_lock():
-                # Reload auth_store under lock to avoid overwriting concurrent changes
-                auth_store = _load_auth_store()
-                state_under_lock = _load_provider_state(auth_store, "zai") or {}
-                state_under_lock["detected_endpoint"] = detected_endpoint
-                # set_active=False: this runs from credential-pool env seeding
-                # (agent/credential_pool.py) for ANY user with a Z.AI key in env,
-                # and caching a probe result must not flip their active provider.
-                _store_provider_state(auth_store, "zai", state_under_lock, set_active=False)
-                _save_auth_store(auth_store)
-        except Exception as exc:
-            logger.warning("Z.AI: could not persist detected endpoint (%s); will re-probe next start", exc)
-        logger.info("Z.AI: auto-detected endpoint %s (%s)", detected["label"], detected["base_url"])
-        return detected["base_url"]
-
-    logger.debug("Z.AI: probe failed, falling back to default %s", default_url)
-    return default_url
 
 
 # =============================================================================
@@ -715,7 +538,7 @@ def _file_lock(
     Reentrant per-thread via ``holder.depth``. Falls back to a depth-only
     guard when neither ``fcntl`` nor ``msvcrt`` is available (rare).
     Callers supply their own ``threading.local`` so independent locks
-    (e.g. profile auth.json vs shared Nous store) don't share reentrancy
+    (e.g. profile auth.json vs the global-root store) don't share reentrancy
     state — that would let one lock's reentrant acquisition silently skip
     the other's kernel-level flock.
     """
@@ -865,7 +688,7 @@ def _load_auth_store(auth_file: Optional[Path] = None) -> Dict[str, Any]:
 def _save_auth_store(auth_store: Dict[str, Any], target_path: Optional[Path] = None) -> Path:
     # target_path=None preserves the existing contract (write the active
     # store at _auth_file_path()). An explicit path lets callers persist a
-    # specific store — e.g. the global-root write-through for rotating xAI
+    # specific store — e.g. the global-root write-through for rotating
     # OAuth grants — reusing this function's atomic O_EXCL + 0o600
     # write so the root auth.json gets the same TOCTOU-safe treatment.
     auth_file = target_path if target_path is not None else _auth_file_path()
@@ -925,7 +748,7 @@ def _load_provider_state_with_source(
     Most callers only need the state, but refresh paths that rotate single-use
     OAuth refresh tokens must write the updated token chain back to the same
     store they read. In profile mode ``_load_provider_state`` can read a
-    global-root fallback state; persisting a rotated Nous refresh token only to
+    global-root fallback state; persisting a rotated refresh token only to
     the profile would leave the global/root store stale and cause the next
     process to replay an already-consumed refresh token.
     """
@@ -983,7 +806,7 @@ def _load_provider_state(auth_store: Dict[str, Any], provider_id: str) -> Option
     In profile mode, falls back to the global-root ``auth.json`` when the
     profile has no entry for ``provider_id``. This mirrors the per-provider
     shadowing already used by ``read_credential_pool``: workers spawned in a
-    profile can see providers (e.g. ``nous``) that were only authenticated at
+    profile can see providers that were only authenticated at
     global scope. Once the user runs ``pilotage auth login <provider>`` inside
     the profile, the profile state fully shadows the global state on the next
     read. See follow-up.
@@ -1373,8 +1196,8 @@ def get_provider_auth_state(provider_id: str) -> Optional[Dict[str, Any]]:
     are unchanged — they still target the profile only. This mirrors
     ``read_credential_pool``'s per-provider shadowing semantics so that
     ``_seed_from_singletons`` can reseed a profile's credential pool from
-    global-scope provider state (e.g. a globally-authenticated Anthropic
-    OAuth or Nous device-code session). See follow-up.
+    global-scope provider state (e.g. a globally-authenticated device-code
+    session).
     """
     auth_store = _load_auth_store()
     return _load_provider_state(auth_store, provider_id)
@@ -1392,12 +1215,10 @@ def is_provider_explicitly_configured(provider_id: str) -> bool:
     Checks:
       1. active_provider in auth.json matches
       2. model.provider in config.yaml matches
-      3. Provider-specific env vars are set (e.g. ANTHROPIC_API_KEY)
+      3. Provider-specific env vars are set (e.g. OPENAI_API_KEY)
 
-    This is used to gate auto-discovery of external credentials (e.g.
-    Claude Code's ~/.claude/.credentials.json) so they are never used
-    without the user's explicit choice. See for the same
-    pattern applied to the setup wizard gate.
+    This is used to gate auto-discovery of external credentials so they are
+    never used without the user's explicit choice.
     """
     normalized = (provider_id or "").strip().lower()
 
@@ -1422,10 +1243,9 @@ def is_provider_explicitly_configured(provider_id: str) -> bool:
     except Exception:
         pass
 
-    # 3. Check provider-specific env vars
-    # Exclude CLAUDE_CODE_OAUTH_TOKEN — it's set by external tools, not by
-    # the user explicitly configuring inference in Pilotage.
-    _IMPLICIT_ENV_VARS = {"CLAUDE_CODE_OAUTH_TOKEN"}
+    # 3. Check provider-specific env vars.  Vars set by external tools
+    # rather than by the user configuring Pilotage are excluded.
+    _IMPLICIT_ENV_VARS: set = set()
     pconfig = PROVIDER_REGISTRY.get(normalized)
     # Fallback to ProviderDef from models.dev catalog when the provider
     # isn't in the manually-maintained PROVIDER_REGISTRY.
@@ -1443,7 +1263,7 @@ def is_provider_explicitly_configured(provider_id: str) -> bool:
     # 4. Check persisted credential-pool entries that came from EXPLICIT flows
     # the user initiated inside Pilotage (manual add / device-code / PKCE), plus
     # env-backed pool entries. This intentionally excludes ambient borrowed
-    # sources like gh_cli / claude_code / qwen-cli.
+    # sources.
     try:
         for entry in read_credential_pool(normalized):
             if not isinstance(entry, dict):
@@ -1513,7 +1333,7 @@ def clear_provider_auth(provider_id: Optional[str] = None) -> bool:
 def deactivate_provider() -> None:
     """
     Clear active_provider in auth.json without deleting credentials.
-    Used when the user switches to a non-OAuth provider (OpenRouter, custom)
+    Used when the user switches to a non-OAuth provider (OpenAI, custom)
     so auto-resolution doesn't keep picking the OAuth provider.
     """
     with _auth_store_lock():
@@ -1803,8 +1623,7 @@ def _is_remote_session() -> bool:
 
 # Console/text-mode browsers that ``webbrowser`` will happily launch INSIDE
 # the terminal.  Opening one of these is worse than not opening anything —
-# it hijacks the user's TTY with an unusable text browser (the xAI OAuth
-# "Account Management" page rendered in w3m, reported May 2026) instead of
+# it hijacks the user's TTY with an unusable text browser instead of
 # letting them copy the URL to a real browser.  When the resolved browser is
 # one of these we refuse to auto-open and fall back to the print-the-URL
 # path, same as a remote session.
@@ -3152,8 +2971,7 @@ def _reset_config_provider() -> Path:
     model = config.get("model")
     if isinstance(model, dict):
         model["provider"] = "auto"
-        if "base_url" in model:
-            model["base_url"] = OPENROUTER_BASE_URL
+        model.pop("base_url", None)
     atomic_yaml_write(config_path, config, sort_keys=False)
     return config_path
 
@@ -3762,9 +3580,7 @@ def logout_command(args) -> None:
         if should_reset_config:
             _reset_config_provider()
         print(f"Logged out of {provider_name}.")
-        if should_reset_config and os.getenv("OPENROUTER_API_KEY"):
-            print("Pilotage will use OpenRouter for inference.")
-        elif should_reset_config:
+        if should_reset_config:
             print("Run `pilotage model` or configure an API key to use Pilotage.")
         else:
             print("Model provider configuration was unchanged.")

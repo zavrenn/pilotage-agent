@@ -1431,10 +1431,10 @@ def _normalized_runtime_url(value: Any) -> str:
 def _inherit_parent_base_url(parent_agent, fallback_base_url: Optional[str]) -> Optional[str]:
     """Return the base URL the parent is actually calling, not a stale attribute.
 
-    ``parent_agent.base_url`` can still carry a leftover OpenRouter URL from an
-    old config while the live OpenAI client in ``_client_kwargs`` already points
-    at local Ollama. Subagents must inherit the active endpoint or they 401
-    against OpenRouter with a dummy/local key.
+    ``parent_agent.base_url`` can still carry a stale URL from an old config
+    while the live OpenAI client in ``_client_kwargs`` already points
+    elsewhere. Subagents must inherit the active endpoint or they 401 with
+    the wrong key.
     """
     surface_url = _normalized_runtime_url(fallback_base_url)
     client_kwargs = getattr(parent_agent, "_client_kwargs", None)
@@ -1492,8 +1492,8 @@ def _build_child_agent(
 
     When override_* params are set (from delegation config), the child uses
     those credentials instead of inheriting from the parent.  This enables
-    routing subagents to a different provider:model pair (e.g. cheap/fast
-    model on OpenRouter while the parent runs on Nous Portal).
+    routing subagents to a different provider:model pair (e.g. a cheap/fast
+    model for the child while the parent runs the main model).
     """
     from run_agent import AIAgent
     import uuid as _uuid
@@ -1595,7 +1595,7 @@ def _build_child_agent(
         max_spawn_depth=max_spawn,
         child_depth=child_depth,
     )
-    # Extract parent's API key so subagents inherit auth (e.g. Nous Portal).
+    # Extract parent's API key so subagents inherit auth.
     parent_api_key = getattr(parent_agent, "api_key", None)
     if (not parent_api_key) and hasattr(parent_agent, "_client_kwargs"):
         parent_api_key = parent_agent._client_kwargs.get("api_key")
@@ -1647,7 +1647,7 @@ def _build_child_agent(
     effective_api_key = override_api_key or parent_api_key
     # Bug /: api_mode must NOT be inherited when the child uses a
     # different provider than the parent — each provider has its own API surface
-    # (e.g. MiniMax uses anthropic_messages, DeepSeek uses chat_completions).
+    # (e.g. a Responses-style endpoint vs chat_completions).
     # Inheriting the parent's mode causes 404 errors when the child routes to the
     # wrong endpoint.  Derive the mode from the target provider when it differs.
     #
@@ -1717,11 +1717,6 @@ def _build_child_agent(
     except Exception as exc:
         logger.debug("Could not load delegation reasoning_effort: %s", exc)
 
-    # Inherit the parent's fallback provider chain so subagents can recover
-    # from rate-limits and credential exhaustion exactly like the top-level
-    # agent does.  _fallback_chain is a list accepted by AIAgent's
-    # fallback_model parameter (which handles both list and dict forms).
-    parent_fallback = getattr(parent_agent, "_fallback_chain", None) or None
 
     child_max_tokens = (
         override_max_tokens
@@ -1781,7 +1776,6 @@ def _build_child_agent(
 
                 reasoning_config=child_reasoning,
                 prefill_messages=getattr(parent_agent, "prefill_messages", None),
-                fallback_model=parent_fallback,
                 enabled_toolsets=child_toolsets,
                 disabled_toolsets=child_disabled_toolsets,
                 quiet_mode=True,
@@ -2700,8 +2694,6 @@ def _run_single_child(
         # Runs only when a schema was attached at dispatch; schema-less
         # delegations take none of these branches and their result entry
         # stays byte-identical (wire-shape pinning).
-        # Pattern from: github/copilot-cli ctx.agent(prompt, {schema}) —
-        # PATTERN ONLY, no code copied.
         _output_schema = getattr(child, "_delegate_output_schema", None)
         _schema_valid: Optional[bool] = None
         _schema_errors: List[str] = []
@@ -3527,7 +3519,6 @@ def delegate_task(
     # unexpanded multi-word template markers, 1-task batches) before any
     # child is spawned.  The single-`goal` form is deliberately exempt —
     # short goals are valid there.  Duplicate goals are allowed (best-of-N).
-    # Inspired by: MoonshotAI/kimi-code agent-swarm.md validation rules (MIT).
     if tasks is not None and isinstance(tasks, list):
         batch_error = _validate_batch_tasks(task_list)
         if batch_error:
@@ -4176,8 +4167,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
     omitted, ``api_key`` is returned as ``None`` so ``_build_child_agent``
     inherits the parent agent's key (``effective_api_key = override_api_key or
     parent_api_key``). This lets providers that store their key outside
-    ``OPENAI_API_KEY`` (e.g. ``MINIMAX_API_KEY``, ``DASHSCOPE_API_KEY``) work
-    without a duplicate config entry.
+    ``OPENAI_API_KEY`` work without a duplicate config entry.
 
     Otherwise, if ``delegation.provider`` is configured, the full credential
     bundle (base_url, api_key, api_mode, provider) is resolved via the runtime
@@ -4195,30 +4185,19 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
     configured_api_key = str(cfg.get("api_key") or "").strip() or None
     configured_api_mode = str(cfg.get("api_mode") or "").strip().lower() or None
 
-    # Native-SDK providers (Vertex, Google GenAI) speak their own
-    # wire protocol — they cannot be reached via OpenAI chat_completions against
-    # a base_url. For these, always fall through to resolve_runtime_provider()
-    # so the proper SDK path is taken. The configured base_url is still
-    # forwarded through runtime-provider resolution when applicable.
-    _NATIVE_SDK_PROVIDERS = {"vertex", "google", "google-genai"}
-    _provider_lower = (configured_provider or "").strip().lower()
-    _is_native_sdk_provider = _provider_lower in _NATIVE_SDK_PROVIDERS
-
-    if configured_base_url and not _is_native_sdk_provider:
+    if configured_base_url:
         # When delegation.api_key is not set, return None so _build_child_agent
         # falls back to the parent agent's API key via the credential inheritance
         # path (effective_api_key = override_api_key or parent_api_key). This
         # lets providers that store their key in a non-OPENAI_API_KEY env var
-        # (e.g. MINIMAX_API_KEY, DASHSCOPE_API_KEY) work without requiring
-        # callers to duplicate the key under delegation.api_key.
+        # work without requiring callers to duplicate the key under
+        # delegation.api_key.
         api_key = configured_api_key  # None → inherited from parent in _build_child_agent
 
-        # Use the shared URL-based api_mode detector (same path the main agent's
-        # runtime resolver uses) so Anthropic-compatible direct endpoints with a
-        # /anthropic suffix — Azure AI Foundry, MiniMax, Zhipu GLM, LiteLLM
-        # proxies — pick the right transport automatically. Without this,
-        # subagents would default to chat_completions and hit 404s on endpoints
-        # that only speak the Anthropic Messages protocol. Fixes.
+        # Use the shared URL-based api_mode detector (same path the main
+        # agent's runtime resolver uses) so non-standard endpoints pick the
+        # right transport automatically. Without this, subagents would default
+        # to chat_completions and hit 404s.
         from pilotage_cli.runtime_provider import _detect_api_mode_for_url
 
         base_lower = configured_base_url.lower()
@@ -4265,8 +4244,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
         raise ValueError(
             f"Cannot resolve delegation provider '{configured_provider}': {exc}. "
             f"Check that the provider is configured (API key set, valid provider name), "
-            f"or set delegation.base_url/delegation.api_key for a direct endpoint. "
-            f"Available providers: openrouter, nous, zai, minimax."
+            f"or set delegation.base_url/delegation.api_key for a direct endpoint."
         ) from exc
 
     api_key = runtime.get("api_key", "")

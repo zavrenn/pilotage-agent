@@ -525,8 +525,6 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                     "call_role": (
                         "delegated"
                         if getattr(agent, "is_subagent", False)
-                        else "fallback"
-                        if int(getattr(agent, "_fallback_index", 0) or 0) > 0
                         else "primary"
                     ),
                     "retry_count": attempt,

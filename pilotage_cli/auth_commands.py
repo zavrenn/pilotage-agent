@@ -29,12 +29,11 @@ from agent.credential_pool import (
 )
 import pilotage_cli.auth as auth_mod
 from pilotage_cli.auth import PROVIDER_REGISTRY
-from pilotage_constants import OPENROUTER_BASE_URL
 from pilotage_cli.secret_prompt import masked_secret_prompt
 
 
 # Providers that support OAuth login in addition to API keys.
-_OAUTH_CAPABLE_PROVIDERS = {"anthropic", "openai-codex"}
+_OAUTH_CAPABLE_PROVIDERS = {"openai-codex"}
 
 
 def _get_custom_provider_names() -> list:
@@ -76,8 +75,6 @@ def _resolve_custom_provider_input(raw: str) -> str | None:
 
 def _normalize_provider(provider: str) -> str:
     normalized = (provider or "").strip().lower()
-    if normalized in {"or", "open-router"}:
-        return "openrouter"
     # Check if it matches a custom provider name
     custom_key = _resolve_custom_provider_input(normalized)
     if custom_key:
@@ -86,8 +83,6 @@ def _normalize_provider(provider: str) -> str:
 
 
 def _provider_base_url(provider: str) -> str:
-    if provider == "openrouter":
-        return OPENROUTER_BASE_URL
     if provider.startswith(CUSTOM_POOL_PREFIX):
         from agent.credential_pool import _get_custom_provider_config
 
@@ -161,7 +156,7 @@ def _format_exhausted_status(entry) -> str:
 
 def auth_add_command(args) -> None:
     provider = _normalize_provider(getattr(args, "provider", ""))
-    if provider not in PROVIDER_REGISTRY and provider != "openrouter" and not provider.startswith(CUSTOM_POOL_PREFIX):
+    if provider not in PROVIDER_REGISTRY and not provider.startswith(CUSTOM_POOL_PREFIX):
         raise SystemExit(f"Unknown provider: {provider}")
 
     requested_type = str(getattr(args, "auth_type", "") or "").strip().lower()
@@ -177,9 +172,8 @@ def auth_add_command(args) -> None:
 
     # Clear ALL suppressions for this provider — re-adding a credential is
     # a strong signal the user wants auth re-enabled.  This covers env:*
-    # (shell-exported vars), gh_cli (copilot), claude_code, qwen-cli,
-    # device_code (codex), etc.  One consistent re-engagement pattern.
-    # Matches the Codex device_code re-link pattern that predates this.
+    # (shell-exported vars) and device_code (codex).  One consistent
+    # re-engagement pattern.
     if not provider.startswith(CUSTOM_POOL_PREFIX):
         try:
             from pilotage_cli.auth import (
@@ -225,10 +219,8 @@ def auth_add_command(args) -> None:
             creds["tokens"]["access_token"],
             _oauth_default_label(provider, len(pool.entries()) + 1),
         )
-        # Add a distinct, self-contained pool entry per account (matching the
-        # qwen-oauth / minimax-oauth multi-account patterns, and the
-        # xai-oauth path below) instead of routing through the singleton
-        # ``_save_codex_tokens`` save path.
+        # Add a distinct, self-contained pool entry per account instead of
+        # routing through the singleton ``_save_codex_tokens`` save path.
         # The singleton round-trip collapsed every added account into the
         # latest login: a second ``pilotage auth add openai-codex`` overwrote
         # the first account's singleton-mirrored ``device_code`` entry rather
@@ -267,7 +259,6 @@ def auth_list_command(args) -> None:
     else:
         providers = sorted({
             *PROVIDER_REGISTRY.keys(),
-            "openrouter",
             *list_custom_pool_providers(),
         })
     for provider in providers:
@@ -335,7 +326,7 @@ def auth_reset_command(args) -> None:
 def auth_status_command(args) -> None:
     provider = _normalize_provider(getattr(args, "provider", "") or "")
     if not provider:
-        raise SystemExit("Provider is required. Example: `pilotage auth status nous`.")
+        raise SystemExit("Provider is required. Example: `pilotage auth status openai-codex`.")
     status = auth_mod.get_auth_status(provider)
     if not status.get("logged_in"):
         reason = status.get("error")
@@ -398,7 +389,7 @@ def _interactive_auth() -> None:
 
 def _pick_provider(prompt: str = "Provider") -> str:
     """Prompt for a provider name with auto-complete hints."""
-    known = sorted(set(list(PROVIDER_REGISTRY.keys()) + ["openrouter"]))
+    known = sorted(PROVIDER_REGISTRY.keys())
     custom_names = _get_custom_provider_names()
     if custom_names:
         custom_display = [name for name, _key, _provider_key in custom_names]
@@ -415,7 +406,7 @@ def _pick_provider(prompt: str = "Provider") -> str:
 
 def _interactive_add() -> None:
     provider = _pick_provider("Provider to add credential for")
-    if provider not in PROVIDER_REGISTRY and provider != "openrouter" and not provider.startswith(CUSTOM_POOL_PREFIX):
+    if provider not in PROVIDER_REGISTRY and not provider.startswith(CUSTOM_POOL_PREFIX):
         raise SystemExit(f"Unknown provider: {provider}")
 
     # For OAuth-capable providers, ask which type

@@ -51,18 +51,6 @@ _PROVIDER_STREAM_ERROR_FINISH_REASONS = {"error", "error_finish"}
 _PROVIDER_STREAM_SSE_FIELDS = {"event", "data", "id", "retry"}
 _PROVIDER_STREAM_ERROR_TEXT_LIMIT = 4096
 
-# When the fallback chain is fully exhausted on a non-rate-limit failure
-# (e.g. every provider returns a non-retryable client error like HTTP 400),
-# arm a short cooldown so the NEXT turn's restore_primary_runtime stays gated
-# and does not reset _fallback_index=0 to replay the entire chain again.
-# Without this, a client/gateway that re-submits immediately would re-marshal
-# the full (potentially 80k-token) context once per provider every turn and
-# can drive a constrained host into memory/swap exhaustion.  Rate-limit /
-# billing reasons keep their own 60s cooldown (set above); this is the
-# narrower non-rate-limit case. See.
-_FALLBACK_EXHAUSTED_COOLDOWN_S = 5.0
-
-
 def _context_thread_target(callback):
     """Bind a no-argument thread target to the caller's ContextVars."""
     context = contextvars.copy_context()
@@ -575,8 +563,8 @@ def _estimate_chunk_bytes(chunk: Any) -> int:
     estimate based on the delta payload lengths is plenty (2.1-2.4 µs, ~3x
     cheaper, and independent of model/pydantic field count). Chat Completions
     chunks are sized from their delta content/reasoning/tool-argument strings
-    plus a small framing constant; anything shape-unknown (Anthropic events,
-    stub providers) falls back to a flat constant so `bytes` stays monotonic
+    plus a small framing constant; anything shape-unknown (stub providers)
+    falls back to a flat constant so `bytes` stays monotonic
     and roughly proportional to traffic.
     """
     size = 40  # SSE/JSON framing floor per chunk
@@ -601,8 +589,8 @@ def _estimate_chunk_bytes(chunk: Any) -> int:
                             if isinstance(name, str):
                                 size += len(name)
         else:
-            # Non-chat-completions shapes (Anthropic events etc.): try the
-            # common text fields, else keep the framing floor.
+            # Non-chat-completions shapes: try the common text fields,
+            # else keep the framing floor.
             for attr in ("text", "partial_json"):
                 v = getattr(getattr(chunk, "delta", None), attr, None)
                 if isinstance(v, str):
@@ -643,8 +631,8 @@ def _codex_wait_notice_recovery(
 # 3+ days, each burning the full stale timeout × retries with no response).
 # The agent carries ``_consecutive_stale_streams``: incremented on every
 # stale kill, reset only when a call actually completes (or when the
-# provider is swapped — switch_model / try_activate_fallback /
-# restore_primary_runtime — since the streak measured the OLD provider).
+# provider is swapped — switch_model — since the streak measured
+# the OLD provider).
 # Past the give-up threshold, calls abort immediately with an actionable
 # error instead of re-waiting out the stale timeout.
 
@@ -733,11 +721,10 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
 
     Shared by the interrupt-worker path (``interruptible_api_call``) and the
     inline path (``direct_api_call``) so the per-api_mode dispatch — codex /
-    anthropic / OpenAI-compatible — lives in exactly one place.
+    OpenAI-compatible — lives in exactly one place.
 
-    ``make_client(reason, kind=...)`` builds the per-request client for the
-    codex / OpenAI-compatible (``kind="openai"``) and anthropic
-    (``kind="anthropic_messages"``) branches; the worker path uses it to
+    ``make_client(reason, kind=...)`` builds the per-request client; the
+    worker path uses it to
     register the client with its stranger-thread abort machinery, the inline
     path uses it to capture the client for its own ``finally`` close. All
     interrupt, abort, cancellation, and close semantics stay in the callers —
@@ -939,10 +926,7 @@ def direct_api_call(agent, api_kwargs: dict):
             return newly_stale
 
     def _make_client(reason: str, kind: str = "openai"):
-        # direct_api_call only runs for OpenAI-wire chat_completions cron
-        # requests (see should_use_direct_api_call), so the anthropic branch of
-        # the dispatch — the only caller that passes kind — is never reached
-        # here; the ``kind`` parameter exists purely for signature parity.
+        # ``kind`` exists purely for signature parity with the worker path.
         client = agent._create_request_openai_client(reason=reason, api_kwargs=api_kwargs)
         stale_before_dispatch = False
         with request_client_lock:
@@ -1114,9 +1098,8 @@ def interruptible_api_call(agent, api_kwargs: dict):
     _check_stale_giveup(agent)
 
     request_client_holder = {"client": None, "owner_tid": None}
-    # Transport kind of the registered request client ("openai" or
-    # "anthropic_messages") so _close_request_client_once routes to the right
-    # abort/close helpers.
+    # Transport kind of the registered request client so
+    # _close_request_client_once routes to the right abort/close helpers.
     request_client_kind = {"value": "openai"}
     request_client_lock = threading.Lock()
     # Request-local cancellation flag. Distinct from agent._interrupt_requested
@@ -1181,8 +1164,8 @@ def interruptible_api_call(agent, api_kwargs: dict):
         try:
             # _set_request_client registers each per-request client with the
             # stranger-thread abort machinery above; the shared dispatch helper
-            # builds it via this callback (openai- or anthropic-kind) so the
-            # interrupt / stale-call detectors can force-close the worker's
+            # builds it via this callback so the interrupt / stale-call
+            # detectors can force-close the worker's
             # connection without touching the shared client.
             result["response"] = _dispatch_nonstreaming_api_request(
                 agent,
@@ -1495,9 +1478,6 @@ def interruptible_api_call(agent, api_kwargs: dict):
                 agent, api_kwargs, _elapsed, _stale_timeout, hint=_silent_hint
             )
             try:
-                #: routes by client kind — anthropic now aborts the
-                # request-local client's sockets from this poll (stranger)
-                # thread instead of closing the shared _anthropic_client.
                 _close_request_client_once("stale_call_kill")
             except Exception:
                 pass
@@ -1532,10 +1512,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
             )
             # Force-close the in-flight worker-local HTTP connection to stop
             # token generation without poisoning the shared client used to
-            # seed future retries.: for anthropic this aborts the
-            # request-local client's sockets from this poll (stranger) thread
-            # rather than closing the shared _anthropic_client, which could
-            # release a TLS FD mid-SSL-BIO and corrupt an unrelated SQLite DB.
+            # seed future retries.
             try:
                 _close_request_client_once("interrupt_abort")
             except Exception:
@@ -1569,10 +1546,6 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
 
     if agent.api_mode == "codex_responses":
         _ct = agent._get_transport()
-        is_github_responses = (
-            base_url_host_matches(agent.base_url, "models.github.ai")
-            or base_url_host_matches(agent.base_url, "githubcopilot.com")
-        )
         is_codex_backend = (
             agent.provider == "openai-codex"
             or (
@@ -1589,7 +1562,6 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         _context_management = native_compaction_context_management(
             agent,
             is_codex_backend=is_codex_backend,
-            is_github_responses=is_github_responses,
         )
 
         return _ct.build_kwargs(
@@ -1604,9 +1576,7 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
             timeout=agent._resolved_api_call_timeout(),
             request_overrides=agent.request_overrides,
             provider=getattr(agent, "provider", None),
-            is_github_responses=is_github_responses,
             is_codex_backend=is_codex_backend,
-            github_reasoning_extra=None,
             replay_encrypted_reasoning=bool(
                 getattr(agent, "_codex_reasoning_replay_enabled", True)
             ),
@@ -1615,35 +1585,6 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
 
     # ── chat_completions (default) ─────────────────────────────────────
     _ct = agent._get_transport()
-
-    # Provider detection flags
-    _is_qwen = agent._is_qwen_portal()
-    _is_gh = (
-        base_url_host_matches(agent._base_url_lower, "models.github.ai")
-        or base_url_host_matches(agent._base_url_lower, "githubcopilot.com")
-    )
-    _is_nvidia = base_url_host_matches(agent._base_url_lower, "integrate.api.nvidia.com")
-    _is_tokenhub = base_url_host_matches(agent._base_url_lower, "tokenhub.tencentmaas.com")
-    _is_lmstudio = (agent.provider or "").strip().lower() == "lmstudio"
-
-    # Anthropic-compatible max-output fallback (last resort only — applied in
-    # build_kwargs *after* ephemeral/user/profile max_tokens, never overriding
-    # an explicit value).  Model-gated, not URL-gated: any chat-completions
-    # proxy serving a Claude/MiniMax/Qwen3 model needs max_tokens, because the
-    # Anthropic Messages API treats it as mandatory and proxies that omit it
-    # (NVIDIA, LiteLLM, vLLM, corporate gateways) default as low
-    # as 4096 output tokens — easily exhausted by thinking + large tool calls
-    # like write_file/patch.  OpenRouter/Nous were the only routes covered
-    # before; gating on _ANTHROPIC_OUTPUT_LIMITS membership covers them all.
-    _ant_max = None
-
-    # Qwen session metadata
-    _qwen_meta = None
-    if _is_qwen:
-        _qwen_meta = {
-            "sessionId": agent.session_id or "pilotage",
-            "promptId": str(uuid.uuid4()),
-        }
 
     # ── Provider profile path (registered providers) ───────────────────
     # Profiles handle per-provider quirks via hooks. When a profile is
@@ -1659,9 +1600,9 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         if _ephemeral_out is not None:
             agent._ephemeral_max_output_tokens = None
 
-        # Strip image parts for non-vision models that have provider profiles
-        # (e.g. DeepSeek, Kimi). The legacy path below already does this, but
-        # registered providers with profiles were bypassing the strip.
+        # Strip image parts for non-vision models that have provider
+        # profiles. The legacy path below already does this, but registered
+        # providers with profiles were bypassing the strip.
         api_messages = agent._prepare_messages_for_non_vision_model(api_messages)
 
         return _ct.build_kwargs(
@@ -1678,9 +1619,7 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
             session_id=getattr(agent, "session_id", None),
             cache_scope_id=_cache_scope_id,
             provider_profile=_profile,
-            anthropic_max_output=_ant_max,
             supports_reasoning=agent._supports_reasoning_extra_body(),
-            qwen_session_metadata=_qwen_meta,
         )
 
     # ── Legacy flag path ────────────────────────────────────────────
@@ -1707,18 +1646,8 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         session_id=getattr(agent, "session_id", None),
         cache_scope_id=_cache_scope_id,
         model_lower=(agent.model or "").lower(),
-        is_qwen_portal=_is_qwen,
-        is_github_models=_is_gh,
-        is_nvidia_nim=_is_nvidia,
-        is_tokenhub=_is_tokenhub,
-        is_lmstudio=_is_lmstudio,
         is_custom_provider=agent.provider == "custom",
-        qwen_prepare_fn=agent._qwen_prepare_chat_messages if _is_qwen else None,
-        qwen_prepare_inplace_fn=agent._qwen_prepare_chat_messages_inplace if _is_qwen else None,
-        qwen_session_metadata=_qwen_meta,
         supports_reasoning=agent._supports_reasoning_extra_body(),
-        github_reasoning_extra=None,
-        anthropic_max_output=_ant_max,
         provider_name=agent.provider,
     )
 
@@ -1762,8 +1691,8 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
             except Exception:
                 pass
 
-    # Sanitize surrogates from API response — some models (e.g. Kimi/GLM via Ollama)
-    # can return invalid surrogate code points that crash json.dumps() on persist.
+    # Sanitize surrogates from API response — some models can return
+    # invalid surrogate code points that crash json.dumps() on persist.
     _raw_content = flatten_message_text(getattr(assistant_message, "content", None))
     _san_content = _sanitize_surrogates(_raw_content)
     if reasoning_text:
@@ -1775,8 +1704,8 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     # inline-block fallback), so the raw tags in content are redundant.
     # Leaving them in place caused reasoning to leak to messaging
     # platforms, inflate context on subsequent turns
-    # observed 16% content-size reduction on a real MiniMax
-    # session), and pollute generated session titles.  One strip at the
+    # observed 16% content-size reduction on a real session), and pollute
+    # generated session titles.  One strip at the
     # storage boundary cleans content for every downstream consumer:
     # API replay, session transcript, gateway delivery, CLI display,
     # compression, title generation.
@@ -1820,27 +1749,22 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     if raw_reasoning_content is not None:
         msg["reasoning_content"] = _sanitize_surrogates(raw_reasoning_content)
     elif assistant_tool_calls and agent._needs_thinking_reasoning_pad():
-        # DeepSeek v4 thinking mode and Kimi / Moonshot thinking mode
-        # both require reasoning_content on every assistant tool-call
-        # message. Without it, replaying the persisted message causes
-        # HTTP 400 ("The reasoning_content in the thinking mode must
-        # be passed back to the API"). Include streamed reasoning
-        # text when captured; otherwise pad with a single space —
-        # DeepSeek V4 Pro tightened validation and rejects empty
-        # string ("The reasoning content in the thinking mode must
-        # be passed back to the API"). A space satisfies non-empty
-        # checks everywhere without leaking fabricated reasoning.
-        # Refs,.
+        # Thinking-mode models require reasoning_content on every
+        # assistant tool-call message. Without it, replaying the persisted
+        # message causes HTTP 400 ("The reasoning_content in the thinking
+        # mode must be passed back to the API"). Include streamed reasoning
+        # text when captured; otherwise pad with a single space — an empty
+        # string is rejected. A space satisfies non-empty checks everywhere
+        # without leaking fabricated reasoning.
         msg["reasoning_content"] = reasoning_text or " "
 
-    # Additive fallback (refs,). Streaming-only providers
-    # (glm, MiniMax, gpt-5.x via aigw, Anthropic via openai-compat shims)
+    # Additive fallback. Streaming-only providers
     # accumulate reasoning through ``delta.reasoning_content`` chunks
     # but never land it on the message object as a top-level attribute,
     # so neither branch above fires and the chain-of-thought is stored
     # only under the internal ``reasoning`` key. When the user later
-    # replays that history through a DeepSeek-v4 / Kimi thinking model,
-    # the missing ``reasoning_content`` causes HTTP 400 ("The
+    # replays that history through a thinking model, the missing
+    # ``reasoning_content`` causes HTTP 400 ("The
     # reasoning_content in the thinking mode must be passed back to the
     # API.").
     #
@@ -1848,9 +1772,8 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     # ``reasoning_content`` at write time, but ONLY when no prior branch
     # already set it AND we actually captured reasoning text. This
     # preserves every existing behavior:
-    #   - SDK-exposed ``reasoning_content`` (OpenAI/Moonshot/DeepSeek SDK)
-    #     still wins.
-    # - DeepSeek tool-call ""-pad still fires.
+    #   - SDK-exposed ``reasoning_content`` still wins.
+    #   - The tool-call ""-pad still fires.
     #   - Non-thinking turns with no reasoning leave the field absent,
     #     so ``_copy_reasoning_content_for_api``'s cross-provider leak
     # guard and ``reasoning``→``reasoning_content``
@@ -1859,9 +1782,9 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
         msg["reasoning_content"] = reasoning_text
 
     if hasattr(assistant_message, 'reasoning_details') and assistant_message.reasoning_details:
-        # Pass reasoning_details back unmodified so providers (OpenRouter,
-        # Anthropic, OpenAI) can maintain reasoning continuity across turns.
-        # Each provider may include opaque fields (signature, encrypted_content)
+        # Pass reasoning_details back unmodified so the provider can
+        # maintain reasoning continuity across turns.
+        # It may include opaque fields (signature, encrypted_content)
         # that must be preserved exactly.
         raw_details = assistant_message.reasoning_details
         preserved = []
@@ -1879,18 +1802,6 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
                     preserved.append(d.model_dump())
         if preserved:
             msg["reasoning_details"] = preserved
-
-    # Anthropic interleaved-thinking replay: when a turn interleaves signed
-    # thinking blocks with tool_use, the parallel reasoning_details +
-    # tool_calls fields lose the cross-type ordering, and reconstruction
-    # front-loads thinking — reordering signed blocks and triggering HTTP 400
-    # ("thinking ... blocks in the latest assistant message cannot be
-    # modified"). Carry the verbatim ordered block list so the adapter can
-    # replay the latest assistant message unchanged. See
-    # agent/transports/anthropic.py and agent/anthropic_adapter.py.
-    ordered_blocks = getattr(assistant_message, "anthropic_content_blocks", None)
-    if ordered_blocks:
-        msg["anthropic_content_blocks"] = ordered_blocks
 
     # Codex Responses API: preserve encrypted reasoning items for
     # multi-turn continuity. These get replayed as input on the next turn.
@@ -1960,8 +1871,8 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
             # breaking replay. Storage-time redaction remains governed by the
             # `security.redact_secrets` toggle. introduced this;
             # removed it.)
-            # Preserve extra_content (e.g. Gemini thought_signature) so it
-            # is sent back on subsequent API calls.  Without this, Gemini 3
+            # Preserve extra_content (opaque per-tool-call metadata) so it
+            # is sent back on subsequent API calls.  Without this, some
             # thinking models reject the request with a 400 error.
             extra = getattr(tool_call, "extra_content", None)
             if extra is not None:
@@ -1975,386 +1886,6 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
         msg["tool_calls"] = tool_calls
 
     return msg
-
-
-
-def rewrite_prompt_model_identity(agent, model: str, provider: str) -> None:
-    """Point the cached system prompt's ``Model:``/``Provider:`` lines at
-    the active runtime after a provider switch.
-
-    The system prompt is session-stable and replayed verbatim for prefix-cache
-    warmth, but after a failover the new backend's cache is cold anyway —
-    while a stale identity line makes the agent misreport which model it is
-    when asked.  Rewrite the lines in place WITHOUT persisting to the session
-    DB: the stored row keeps the primary's labels, so when the primary is
-    restored the prompt is byte-identical to the stored copy again and its
-    prefix cache still matches.
-
-    Only the LAST occurrence of each line is touched — the identity lines
-    live in the volatile tail of the prompt, and earlier matches could be
-    user content (memory snapshots, context files).
-    """
-    sp = getattr(agent, "_cached_system_prompt", None)
-    if not isinstance(sp, str) or not sp:
-        return
-    for label, value in (("Model", model), ("Provider", provider)):
-        if not value:
-            continue
-        matches = list(re.finditer(rf"(?m)^{label}: .*$", sp))
-        if matches:
-            last = matches[-1]
-            sp = f"{sp[:last.start()]}{label}: {value}{sp[last.end():]}"
-    agent._cached_system_prompt = sp
-
-
-def _fallback_entry_key(fb: dict) -> tuple[str, str, str]:
-    return (
-        str(fb.get("provider") or "").strip().lower(),
-        str(fb.get("model") or "").strip(),
-        str(fb.get("base_url") or "").strip().rstrip("/"),
-    )
-
-
-def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool:
-    """Switch to the next fallback model/provider in the chain.
-
-    Called when the current model is failing after retries.  Swaps the
-    OpenAI client, model slug, and provider in-place so the retry loop
-    can continue with the new backend.  Advances through the chain on
-    each call; returns False when exhausted.
-
-    Uses the centralized provider router (resolve_provider_client) for
-    auth resolution and client construction — no duplicated provider→key
-    mappings.
-    """
-    if reason in {FailoverReason.rate_limit, FailoverReason.billing}:
-        # Only start cooldown when leaving the primary provider.  If we're
-        # already on a fallback and chain-switching, the primary wasn't the
-        # source of the 429 so the cooldown should not be reset/extended.
-        fallback_already_active = bool(getattr(agent, "_fallback_activated", False))
-        current_provider = (getattr(agent, "provider", "") or "").strip().lower()
-        primary_provider = ((agent._primary_runtime or {}).get("provider") or "").strip().lower()
-        if (not fallback_already_active) or (primary_provider and current_provider == primary_provider):
-            # Exponential backoff: keep upstream's 60s first-hit cooldown and
-            # escalate on CONSECUTIVE rate-limits: 60s → 2m → 4m → 8m → ... →
-            # 4h cap. The first 429 must NOT bench the primary for half an
-            # hour — fast primary restore is the common case; escalation only
-            # punishes providers that keep 429ing.
-            # Counter is reset by restore_primary_runtime on successful restore.
-            backoff_count = getattr(agent, "_rate_limit_backoff_count", 0)
-            agent._rate_limit_backoff_count = backoff_count + 1
-            backoff_seconds = min(60 * (2 ** backoff_count), 14400)
-            agent._rate_limited_until = time.monotonic() + backoff_seconds
-            logging.info(
-                "Rate-limit backoff level %d: cooldown %d s (%.1f min, backoff#%d)",
-                backoff_count, backoff_seconds, backoff_seconds / 60, backoff_count + 1,
-            )
-    if agent._fallback_index >= len(agent._fallback_chain):
-        # Chain exhausted.  If we actually walked a non-empty chain and the
-        # failure was NOT a rate-limit/billing event (those already armed
-        # their own 60s cooldown above), arm a short cooldown so the next
-        # turn's restore_primary_runtime stays gated instead of resetting
-        # _fallback_index=0 and re-marshaling the whole context across every
-        # provider again. Guards the cross-turn replay storm in.
-        if (
-            len(agent._fallback_chain) > 0
-            and reason not in {FailoverReason.rate_limit, FailoverReason.billing}
-        ):
-            _existing_cooldown = getattr(agent, "_rate_limited_until", 0) or 0
-            agent._rate_limited_until = max(
-                _existing_cooldown,
-                time.monotonic() + _FALLBACK_EXHAUSTED_COOLDOWN_S,
-            )
-        return False
-    fb = agent._fallback_chain[agent._fallback_index]
-    agent._fallback_index += 1
-    fb_key = _fallback_entry_key(fb)
-    unavailable = getattr(agent, "_unavailable_fallback_keys", None)
-    if unavailable is None:
-        unavailable = set()
-        agent._unavailable_fallback_keys = unavailable
-    if fb_key in unavailable:
-        logger.debug("Fallback skip: %s previously marked unavailable", fb_key)
-        return agent._try_activate_fallback(reason)
-    fb_provider = (fb.get("provider") or "").strip().lower()
-    fb_model = (fb.get("model") or "").strip()
-    if not fb_provider or not fb_model:
-        return agent._try_activate_fallback(reason)  # skip invalid, try next
-
-    # Skip entries that resolve to the same backend that just failed —
-    # falling back to it loops the failure. Identity semantics (which axes
-    # distinguish two backends, shim aliases, first-class credential
-    # surfaces, multi-endpoint pools) are owned by agent.backend_identity —
-    # see,,. Do not re-implement comparisons here.
-    from agent.backend_identity import BackendIdentity, should_skip_candidate
-
-    current_ident = BackendIdentity.build(
-        provider=getattr(agent, "provider", ""),
-        model=getattr(agent, "model", ""),
-        base_url=str(getattr(agent, "base_url", "") or ""),
-    )
-    fb_ident = BackendIdentity.build(
-        provider=fb_provider,
-        model=fb_model,
-        base_url=(fb.get("base_url") or ""),
-    )
-    if should_skip_candidate(fb_ident, current_ident):
-        logger.warning(
-            "Fallback skip: chain entry %s/%s resolves to the same backend "
-            "as the current one (%s)",
-            fb_provider, fb_model, current_ident.base_url or current_ident.provider,
-        )
-        return agent._try_activate_fallback(reason)
-
-    # Use centralized router for client construction.
-    # raw_codex=True because the main agent needs direct responses.stream()
-    # access for Codex providers.
-    try:
-        from agent.auxiliary_client import resolve_provider_client
-        # Pass base_url and api_key from fallback config so custom
-        # endpoints (e.g. Ollama Cloud) resolve correctly instead of
-        # falling through to OpenRouter defaults.
-        from pilotage_cli.fallback_config import resolve_entry_api_key
-
-        fb_base_url_hint = (fb.get("base_url") or "").strip() or None
-        fb_api_key_hint = resolve_entry_api_key(fb)
-        # Determine api_mode from the ORIGINAL base_url (before URL transformation).
-        # resolve_provider_client() calls _to_openai_base_url() which can rewrite
-        # a dual-surface /anthropic base to /v1, losing the Anthropic wire signal
-        # from the client's post-rewrite base_url. Pre-compute here so detection
-        # sees the URL the user actually configured.
-        #
-        # An explicit ``api_mode`` on the fallback entry always wins — including
-        # an explicit "chat_completions" — and suppresses all re-detection below.
-        fb_api_mode_explicit = bool(str(fb.get("api_mode") or "").strip())
-        fb_api_mode = "chat_completions"
-        if fb_api_mode_explicit:
-            fb_api_mode = str(fb.get("api_mode")).strip()
-        
-        # For Ollama Cloud endpoints, pull OLLAMA_API_KEY from env
-        # when no explicit key is in the fallback config. Host match
-        # (not substring) — see GHSA-76xc-57q6-vm5m.
-        if fb_base_url_hint and base_url_host_matches(fb_base_url_hint, "ollama.com") and not fb_api_key_hint:
-            from agent.secret_scope import get_secret
-
-            fb_api_key_hint = get_secret("OLLAMA_API_KEY") or None
-        fb_client, _resolved_fb_model = resolve_provider_client(
-            fb_provider, model=fb_model, raw_codex=True,
-            explicit_base_url=fb_base_url_hint,
-            explicit_api_key=fb_api_key_hint,
-            api_mode=fb_api_mode)
-        if fb_client is None:
-            logger.warning(
-                "Fallback to %s failed: provider not configured",
-                fb_provider)
-            unavailable.add(fb_key)
-            return agent._try_activate_fallback(reason)  # try next in chain
-        try:
-            from pilotage_cli.model_normalize import normalize_model_for_provider
-
-            fb_model = normalize_model_for_provider(fb_model, fb_provider)
-        except Exception as _norm_err:
-            logger.warning(
-                "Could not normalize fallback model %r for provider %r: %s",
-                fb_model, fb_provider, _norm_err,
-            )
-
-        # Re-determine api_mode from provider / resolved base URL / model when
-        # the pre-computed pass above landed on the default and the user did
-        # not pin api_mode explicitly. An explicit fb.api_mode (even
-        # "chat_completions") must never be overridden here.
-        fb_base_url = str(fb_client.base_url)
-        _fb_is_azure = agent._is_azure_openai_url(fb_base_url)
-
-        if not fb_api_mode_explicit and fb_api_mode == "chat_completions":
-            if fb_provider == "openai-codex":
-                fb_api_mode = "codex_responses"
-            elif _fb_is_azure:
-                # Azure OpenAI serves gpt-5.x on /chat/completions — does NOT
-                # support the Responses API. Stay on chat_completions.
-                fb_api_mode = "chat_completions"
-            elif agent._is_direct_openai_url(fb_base_url):
-                fb_api_mode = "codex_responses"
-            elif agent._provider_model_requires_responses_api(
-                fb_model,
-                provider=fb_provider,
-            ):
-                # GPT-5.x models usually need Responses API, but keep
-                # provider-specific exceptions like Copilot gpt-5-mini on
-                # chat completions.
-                fb_api_mode = "codex_responses"
-
-        old_model = agent.model
-        old_provider = agent.provider
-
-        # Clear the per-config context_length override so the fallback
-        # model's actual context window is resolved instead of inheriting
-        # the stale value from the previous model. See.
-        agent._config_context_length = None
-        agent.model = fb_model
-        agent.provider = fb_provider
-        agent.requested_provider = fb_provider
-        agent.base_url = fb_base_url
-        agent.api_mode = fb_api_mode
-        if hasattr(agent, "_transport_cache"):
-            agent._transport_cache.clear()
-        agent._fallback_activated = True
-
-        # Rebind the credential pool to the fallback provider when the provider
-        # changes.  Keeping the primary pool attached would make downstream
-        # recovery (rate_limit / billing / auth) mutate the wrong credential
-        # set and can overwrite the fallback's base_url back to the primary
-        # endpoint. See.
-        #
-        # When the fallback shares the pool's provider (e.g. both openrouter
-        # entries with different routing) the pool is preserved.  When the
-        # providers differ, load the fallback provider's own pool if one exists
-        # so provider-specific rotation continues to work after the switch.
-        _existing_pool = getattr(agent, "_credential_pool", None)
-        if _existing_pool is not None:
-            _pool_provider = (getattr(_existing_pool, "provider", "") or "").strip().lower()
-            if _pool_provider and _pool_provider != fb_provider:
-                logger.info(
-                    "Fallback to %s/%s: clearing primary credential pool "
-                    "(pool_provider=%s) to prevent cross-provider contamination",
-                    fb_provider, fb_model, _pool_provider,
-                )
-                agent._credential_pool = None
-                agent._credential_pool_entry_id = None
-        if getattr(agent, "_credential_pool", None) is None:
-            try:
-                from agent.credential_pool import load_pool
-
-                fallback_pool = load_pool(fb_provider)
-                if fallback_pool and fallback_pool.has_credentials():
-                    agent._credential_pool = fallback_pool
-                    logger.info(
-                        "Fallback to %s/%s: attached fallback credential pool",
-                        fb_provider, fb_model,
-                    )
-            except Exception as exc:
-                logger.debug(
-                    "Fallback to %s/%s: could not attach credential pool: %s",
-                    fb_provider, fb_model, exc,
-                )
-
-        # Honor per-provider / per-model request_timeout_seconds for the
-        # fallback target (same knob the primary client uses).  None = use
-        # SDK default.
-        _fb_timeout = get_provider_request_timeout(fb_provider, fb_model)
-
-        # Swap OpenAI client and config in-place
-        agent.api_key = fb_client.api_key
-        agent.client = fb_client
-        # Preserve provider-specific headers that
-        # resolve_provider_client() may have baked into
-        # fb_client via the default_headers kwarg.  The OpenAI
-        # SDK stores these in _custom_headers.  Without this,
-        # subsequent request-client rebuilds (via
-        # _create_request_openai_client) drop the headers,
-        # causing 403s from providers like Kimi Coding that
-        # require a User-Agent sentinel.
-        fb_headers = getattr(fb_client, "_custom_headers", None)
-        if not fb_headers:
-            fb_headers = getattr(fb_client, "default_headers", None)
-        agent._client_kwargs = {
-            "api_key": fb_client.api_key,
-            "base_url": fb_base_url,
-            **({"default_headers": dict(fb_headers)} if fb_headers else {}),
-        }
-        if _fb_timeout is not None:
-            agent._client_kwargs["timeout"] = _fb_timeout
-            # Rebuild the shared OpenAI client so the configured
-            # timeout takes effect on the very next fallback request,
-            # not only after a later credential-rotation rebuild.
-            agent._replace_primary_openai_client(reason="fallback_timeout_apply")
-
-        from agent.agent_runtime_helpers import sync_credential_pool_entry_id
-        sync_credential_pool_entry_id(agent)
-
-
-        # Update context compressor limits for the fallback model.
-        # Without this, compression decisions use the primary model's
-        # context window (e.g. 200K) instead of the fallback's (e.g. 32K),
-        # causing oversized sessions to overflow the fallback.
-        # Also pass _config_context_length so the explicit config override
-        # (model.context_length in config.yaml) is respected — without this,
-        # the fallback activation drops to 128K even when config says 204800.
-        if hasattr(agent, 'context_compressor') and agent.context_compressor:
-            from agent.model_metadata import get_model_context_length
-            # ``agent.api_key`` may be callable (Entra ID); the
-            # context-length resolver expects a string for live
-            # probes. Foundry typically resolves via config/static
-            # catalogs anyway, so coerce defensively.
-            _fb_ctx_api_key = agent.api_key if isinstance(agent.api_key, str) else ""
-            fb_context_length = get_model_context_length(
-                agent.model, base_url=agent.base_url,
-                api_key=_fb_ctx_api_key, provider=agent.provider,
-                config_context_length=getattr(agent, "_config_context_length", None),
-                custom_providers=getattr(agent, "_custom_providers", None),
-            )
-            agent.context_compressor.update_model(
-                model=agent.model,
-                context_length=fb_context_length,
-                base_url=agent.base_url,
-                api_key=getattr(agent, "api_key", ""),  # callable preserved → call_llm
-                provider=agent.provider,
-                api_mode=agent.api_mode,
-            )
-
-        # Re-resolve reasoning_config for the new fallback model (Closes).
-        # Shared chokepoint: per-model override > global reasoning_effort
-        # (YAML boolean False = disabled). Wrapped in try/except because a
-        # config load failure must not kill the swap.
-        try:
-            from pilotage_cli.config import load_config
-            from pilotage_constants import resolve_reasoning_config
-
-            agent.reasoning_config = resolve_reasoning_config(
-                load_config() or {}, agent.model
-            )
-            logger.info(
-                "Fallback %s: reasoning_config resolved: %s",
-                agent.model, agent.reasoning_config,
-            )
-        except Exception as _reasoning_err:
-            logger.debug(
-                "Failed to resolve reasoning_config for fallback %s; keeping current: %s",
-                agent.model, _reasoning_err,
-            )
-            # Keep whatever reasoning_config was active — don't break the fallback swap.
-
-        # Keep the prompt's self-identity in sync with the model actually
-        # answering, so "what model are you?" doesn't report the primary.
-        rewrite_prompt_model_identity(agent, fb_model, fb_provider)
-
-        agent._buffer_status(
-            f"🔄 Primary model failed — switching to fallback: "
-            f"{fb_model} via {fb_provider}"
-        )
-        # The buffered line above is dropped on successful recovery, but a
-        # provider/model switch is a durable state change operators must see
-        # even when the fallback succeeds.  Record a one-shot notice that the
-        # success path surfaces exactly once via _emit_pending_fallback_notice
-        # (see run_agent.py); it is discarded on terminal failure since the
-        # buffered line is flushed instead.  See fallback-observability fix.
-        agent._pending_fallback_notice = (
-            f"🔄 Switched to fallback model: {old_model} via {old_provider} "
-            f"→ {fb_model} via {fb_provider}"
-        )
-        logger.info(
-            "Fallback activated: %s → %s (%s)",
-            old_model, fb_model, fb_provider,
-        )
-        # Reset the stale-call circuit breaker: the streak measured
-        # the OLD provider's unresponsiveness.  Carrying it over would
-        # short-circuit the freshly activated fallback before it gets a
-        # single stream attempt.
-        _reset_stale_streak(agent)
-        return True
-    except Exception as e:
-        logger.error("Failed to activate fallback %s: %s", fb_model, e)
-        return agent._try_activate_fallback(reason)  # try next in chain
 
 
 
@@ -2396,7 +1927,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
 
     try:
         # Build API messages, stripping internal-only fields
-        # (finish_reason, reasoning) that strict APIs like Mistral reject with 422
+        # (finish_reason, reasoning) that strict APIs reject with 422
         _needs_sanitize = agent._should_sanitize_tool_calls()
         api_messages = []
         for msg in messages:
@@ -2404,9 +1935,9 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
             agent._copy_reasoning_content_for_api(msg, api_msg)
             for internal_field in ("reasoning", "finish_reason"):
                 api_msg.pop(internal_field, None)
-            # Strict OpenAI-compatible gateways (Fireworks-backed OpenCode Go,
-            # Mistral, Moonshot/Kimi) reject any message key outside the Chat
-            # Completions schema. The main loop drops these via
+            # Strict OpenAI-compatible gateways reject any message key
+            # outside the Chat Completions schema. The main loop drops these
+            # via
             # ChatCompletionsTransport.convert_messages(), but the summary path
             # hand-builds messages and calls chat.completions.create() directly,
             # bypassing the transport — so mirror that sanitization here:
@@ -2447,7 +1978,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
         api_messages = agent._sanitize_api_messages(api_messages)
 
         # Same safety net as the main loop: drop thinking-only assistant
-        # turns so Anthropic-family providers don't 400 the summary call.
+        # turns so strict providers don't 400 the summary call.
         # _thinking_prefill must survive until here so the drop pass can
         # recognize stubs after reasoning fields are stripped.
         api_messages = agent._drop_thinking_only_and_merge_users(api_messages)
@@ -2461,12 +1992,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                     api_msg.pop(internal_key, None)
 
         summary_extra_body = {}
-        # LM Studio uses top-level `reasoning_effort` (not extra_body.reasoning).
-        # Mirror ChatCompletionsTransport.build_kwargs() so the summary path
-        # — which calls chat.completions.create() directly without going
-        # through the transport — sends the same shape the transport does.
-        _is_lmstudio_summary = False
-        _lm_reasoning_effort: str | None = None
         if agent._supports_reasoning_extra_body():
             if agent.reasoning_config is not None:
                 summary_extra_body["reasoning"] = agent.reasoning_config
@@ -2663,9 +2188,8 @@ def _build_partial_stream_stub(
 def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=None):
     """Streaming variant of _interruptible_api_call for real-time token delivery.
 
-    Handles all three api_modes:
+    Handles both api_modes:
     - chat_completions: stream=True on OpenAI-compatible endpoints
-    - anthropic_messages: client.messages.stream() via Anthropic SDK
     - codex_responses: delegates to _run_codex_stream (already streaming)
 
     Fires stream_delta_callback and _stream_callback for each text token.
@@ -2749,8 +2273,8 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
 
     request_client_holder = {"client": None, "diag": None, "owner_tid": None}
     # Transport kind of the registered request client — see the non-streaming
-    # variant. Routes _close_request_client_once to anthropic vs openai abort/
-    # close helpers. ``kind="stream"`` registers a per-request
+    # variant. Routes _close_request_client_once to the right abort/close
+    # helpers. ``kind="stream"`` registers a per-request
     # *stream handle* instead of a client — used under the MoA facade, whose
     # singleton client has no per-request sockets to abort
     # (_abort_request_openai_client is a no-op on it), so interrupts must
@@ -2981,8 +2505,8 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         content_parts: list = []
         tool_calls_acc: dict = {}
         tool_gen_notified: set = set()
-        # Ollama-compatible endpoints reuse index 0 for every tool call
-        # in a parallel batch, distinguishing them only by id.  Track
+        # Some endpoints reuse index 0 for every tool call in a parallel
+        # batch, distinguishing them only by id.  Track
         # the last seen id per raw index so we can detect a new tool
         # call starting at the same index and redirect it to a fresh slot.
         _last_id_at_idx: dict = {}      # raw_index -> last seen non-empty id
@@ -3026,7 +2550,6 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             attempt_stream_response["value"] = response
             agent._capture_rate_limits(response)
             agent._stream_diag_capture_response(_diag, response)
-            agent._check_openrouter_cache_status(response)
             _writer_token["value"] = claim_stream_writer(agent)
 
         def _accept_stream_chunk(_chunk: Any) -> bool:
@@ -3097,8 +2620,6 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                     "call_role": (
                         "delegated"
                         if getattr(agent, "is_subagent", False)
-                        else "fallback"
-                        if int(getattr(agent, "_fallback_index", 0) or 0) > 0
                         else "primary"
                     ),
                 },
@@ -3269,8 +2790,8 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                     raw_idx = tc_delta.index if tc_delta.index is not None else 0
                     delta_id = tc_delta.id or ""
 
-                    # Ollama fix: detect a new tool call reusing the same
-                    # raw index (different id) and redirect to a fresh slot.
+                    # Detect a new tool call reusing the same raw index
+                    # (different id) and redirect it to a fresh slot.
                     if raw_idx not in _active_slot_by_idx:
                         _active_slot_by_idx[raw_idx] = raw_idx
                     if (
@@ -3285,7 +2806,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                     idx = _active_slot_by_idx[raw_idx]
 
                     if idx not in tool_calls_acc:
-                        # Poolside may send integer id instead of string
+                        # Some providers send an integer id, not a string.
                         _tc_id = tc_delta.id
                         if isinstance(_tc_id, int):
                             _tc_id = str(_tc_id)
@@ -3307,11 +2828,9 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                             # Use assignment, not +=.  Function names are
                             # atomic identifiers delivered complete in the
                             # first chunk (OpenAI spec).  Some providers
-                            # (MiniMax M2.7 via NVIDIA NIM) resend the full
-                            # name in every chunk; concatenation would
-                            # produce "read_fileread_file".  Assignment
-                            # (matching the OpenAI Node SDK / LiteLLM /
-                            # Vercel AI patterns) is immune to this.
+                            # resend the full name in every chunk;
+                            # concatenation would produce
+                            # "read_fileread_file".  Assignment is immune.
                             entry["function"]["name"] = tc_delta.function.name
                         if tc_delta.function.arguments:
                             entry["function"]["arguments"] += tc_delta.function.arguments
@@ -3402,8 +2921,8 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                         json.loads(arguments)
                     except json.JSONDecodeError:
                         # Attempt repair before flagging as truncated.
-                        # Models like GLM-5.1 via Ollama produce trailing
-                        # commas, unclosed brackets, Python None, etc.
+                        # Some models produce trailing commas, unclosed
+                        # brackets, Python None, etc.
                         # Without repair, these hit the truncation handler
                         # and kill the session.  _repair_tool_call_arguments
                         # returns "{}" for unrepairable args, which is far
@@ -3462,8 +2981,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         #      the opening "{" with no terminator and no [DONE]) → the
         #      upstream dropped/stalled the connection mid tool-call.  This
         #      is NOT an output cap — the model never reported hitting one.
-        #      Some dedicated endpoints (e.g. NVIDIA Nemotron Ultra on the
-        #      Nous dedicated endpoint) stall for minutes during large
+        #      Some dedicated endpoints stall for minutes during large
         #      tool-arg generation, then close the stream cleanly without a
         #      finish_reason.  Stamping "length" here sends it down the
         #      max_tokens-boost truncation path, which retries 3× to no
@@ -3555,8 +3073,8 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 # Check for interrupt before each retry attempt.  Without
                 # this, /stop closes the HTTP connection (outer poll loop),
                 # but the retry loop opens a FRESH connection — negating the
-                # interrupt entirely.  On slow providers (ollama-cloud) each
-                # retry can block for the full stream-read timeout (120s+),
+                # interrupt entirely.  On slow providers each retry can
+                # block for the full stream-read timeout (120s+),
                 # causing multi-minute delays between /stop and response.
                 if agent._interrupt_requested:
                     _cancel_current_stream_attempt("interrupt_before_stream_retry")
@@ -3694,16 +3212,11 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                         )
                         _cancel_current_stream_attempt("stream_mid_tool_retry_cleanup")
                         _close_request_client_once("stream_mid_tool_retry_cleanup")
-                        #: anthropic streams on a request-local client,
-                        # already worker-owned-closed by _close_request_client_once
-                        # above; the next attempt builds a fresh one. The shared
-                        # _anthropic_client is never closed from inside a request.
-                        #: same FD-recycle corruption vector for OpenAI.
                         # The shared client will be replaced lazily by
                         # _ensure_primary_openai_client on the next attempt.
                         continue
 
-                    # SSE error events from proxies (e.g. OpenRouter sends
+                    # SSE error events from proxies (e.g.
                     # {"error":{"message":"Network connection lost."}}) are
                     # raised as APIError by the OpenAI SDK.  These are
                     # semantically identical to httpx connection drops —
@@ -3753,14 +3266,9 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                             # Close the stale request client before retry
                             _cancel_current_stream_attempt("stream_retry_cleanup")
                             _close_request_client_once("stream_retry_cleanup")
-                            # Also rebuild the primary client to purge any dead
-                            # connections from the pool.: anthropic uses a
-                            # request-local client (already worker-owned-closed
-                            # above; next attempt builds fresh), so the shared
-                            # _anthropic_client is never closed from inside a
-                            # request — only the OpenAI-wire primary is refreshed.
-                            #: same FD-recycle corruption vector for OpenAI.
-                            # The shared client will be replaced lazily by
+                            # Also rebuild the primary client to purge any
+                            # dead connections from the pool.  The shared
+                            # client will be replaced lazily by
                             # _ensure_primary_openai_client on the next attempt.
                             continue
                         # Retries exhausted. Log the final failure with
@@ -3884,8 +3392,8 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         # Periodic heartbeat: touch the agent's activity tracker so the
         # gateway's inactivity monitor knows we're alive while waiting
         # for stream chunks.  Without this, long thinking pauses (e.g.
-        # reasoning models) or slow prefill on local providers (Ollama)
-        # trigger false inactivity timeouts.  The _call thread touches
+        # reasoning models) or slow prefill trigger false inactivity
+        # timeouts.  The _call thread touches
         # activity on each chunk, but the gap between API call start
         # and first chunk can exceed the gateway timeout — especially
         # when the stale-stream timeout is disabled (local providers).
@@ -3966,9 +3474,6 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             )
             try:
                 _cancel_current_stream_attempt("stream_interrupt_abort")
-                #: kind-aware — anthropic aborts the request-local
-                # client's socket from this poll thread; the shared
-                # _anthropic_client is never closed here.
                 _close_request_client_once("stream_interrupt_abort")
             except Exception:
                 pass
@@ -3984,9 +3489,9 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             raise InterruptedError("Agent interrupted during streaming API call")
     # Worker thread exited before the main thread's poll loop could check
     # the interrupt flag.  If the worker returned early due to an interrupt
-    # (e.g. _call_anthropic() detected _interrupt_requested and returned
-    # None), the InterruptedError above was never raised.  Re-check the
-    # flag here so /stop is not silently swallowed. area)
+    # (the worker detected _interrupt_requested and returned None), the
+    # InterruptedError above was never raised.  Re-check the flag here so
+    # /stop is not silently swallowed.
     if agent._interrupt_requested:
         raise InterruptedError("Agent interrupted during streaming API call (post-worker)")
     if result["error"] is not None:
@@ -4049,9 +3554,9 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 role="assistant", content=_partial_text, tool_calls=None,
                 reasoning_content=None,
             )
-            # Detect provider output-layer content filtering (e.g. MiniMax
-            # "output new_sensitive (1027)", Azure/OpenAI content_filter,
-            # Anthropic safety refusal).  The raw error is about to be
+            # Detect provider output-layer content filtering (e.g. the
+            # OpenAI content_filter finish reason, a safety refusal).
+            # The raw error is about to be
             # swallowed into a finish_reason=length stub, so classify it HERE
             # while we still have it and stamp the stub.  Retrying such a
             # content-deterministic filter on the same primary just re-hits
@@ -4103,7 +3608,6 @@ __all__ = [
     "interruptible_api_call",
     "build_api_kwargs",
     "build_assistant_message",
-    "try_activate_fallback",
     "handle_max_iterations",
     "cleanup_task_resources",
     "interruptible_streaming_api_call",

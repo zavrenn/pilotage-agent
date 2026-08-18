@@ -3,8 +3,8 @@
 Vision Tools Module
 
 This module provides vision analysis tools that work with image URLs.
-Uses the centralized auxiliary vision router, which can select OpenRouter,
-Nous, Codex, native Anthropic, or a custom OpenAI-compatible endpoint.
+Uses the centralized auxiliary vision router, which can select OpenAI,
+Codex, or a custom OpenAI-compatible endpoint.
 
 Available tools:
 - vision_analyze_tool: Analyze images from URLs with custom prompts
@@ -263,13 +263,13 @@ def _detect_image_mime_type_from_bytes(data: bytes) -> Optional[str]:
     return None
 
 
-# Media types the major vision providers (Anthropic in particular) accept for
-# inline base64 images.  Anything outside this set — SVG, BMP, TIFF, etc. — is
+# Media types vision providers accept for inline base64 images.
+# Anything outside this set — SVG, BMP, TIFF, etc. — is
 # rejected with a non-retryable 400.  Because a vision tool-result is baked into
 # immutable conversation history and re-sent every turn, embedding an
 # unsupported media_type permanently wedges the session (retries re-send the
 # same bad bytes).  We MUST normalize to one of these before embedding.
-_ANTHROPIC_SUPPORTED_MEDIA_TYPES = frozenset(
+_SUPPORTED_IMAGE_MEDIA_TYPES = frozenset(
     {"image/jpeg", "image/png", "image/gif", "image/webp"}
 )
 
@@ -337,7 +337,7 @@ def _normalize_to_supported_image(
     the image is base64-embedded into conversation history, so an unsupported
     media_type can never reach the provider and wedge the session.
     """
-    if detected_mime in _ANTHROPIC_SUPPORTED_MEDIA_TYPES:
+    if detected_mime in _SUPPORTED_IMAGE_MEDIA_TYPES:
         return image_path, detected_mime, None
 
     out_dir = get_pilotage_dir("cache/vision", "temp_vision_images")
@@ -627,7 +627,7 @@ _MAX_BASE64_BYTES = 20 * 1024 * 1024
 
 # Proactive embed cap (4 MB).  This is the size we resize an image DOWN to
 # before embedding it into conversation history, regardless of the 20 MB hard
-# ceiling.  Anthropic's per-image base64 limit is 5 MB; once an oversized image
+# ceiling.  The per-image base64 limit is typically 5 MB; once an oversized image
 # is baked into history (e.g. a vision tool-result), it is re-sent on every
 # subsequent turn and permanently wedges the session with a 400 that retries
 # can't clear (the bad bytes are immutable history).  Capping at embed time —
@@ -636,7 +636,7 @@ _MAX_BASE64_BYTES = 20 * 1024 * 1024
 # whether we resize proactively or reactively.
 _EMBED_TARGET_BYTES = 4 * 1024 * 1024
 
-# Proactive embed dimension cap (px, longest side).  Anthropic enforces an
+# Proactive embed dimension cap (px, longest side).  Providers enforce an
 # 8000px per-side ceiling INDEPENDENTLY of the 5 MB byte cap — a tall full-page
 # screenshot can be well under 5 MB yet far over 8000px (e.g. 1200×12000 at
 # 0.06 MB), so the byte-only embed check above lets it slip into immutable
@@ -663,7 +663,7 @@ def _is_image_size_error(error: Exception) -> bool:
 def _image_exceeds_dimension(image_path: Path, max_dimension: int) -> bool:
     """True if the image's longest side exceeds ``max_dimension`` px.
 
-    Anthropic enforces an 8000px per-side cap independently of the 5 MB byte
+    Providers enforce an 8000px per-side cap independently of the 5 MB byte
     cap, so a tall small-byte screenshot can pass every byte check yet trip a
     non-retryable 400.  Returns False (don't force a resize) when Pillow is
     unavailable or the file can't be read as an image — the byte-based checks
@@ -690,8 +690,6 @@ def _crop_image_region(
     Coordinates are clamped to the image bounds; a region that clamps to zero
     area (or is inverted/malformed) is rejected with an error naming the
     actual image dimensions so the caller can retry with sensible values.
-
-    Ported from: QwenLM/qwen-code zoom-image.ts (Apache-2.0).
 
     Returns:
         (cropped_temp_path, out_mime, None) on success — the caller owns
@@ -806,7 +804,7 @@ def _resize_image_for_vision(image_path: Path, mime_type: Optional[str] = None,
     Args:
         max_dimension: If set, images whose longest side exceeds this pixel
             count are forcibly downscaled even if they're under the byte
-            budget.  Anthropic enforces an 8000 px per-side cap independently
+            budget.  Providers enforce an 8000 px per-side cap independently
             of the 5 MB byte cap.
 
     Returns the base64 data URL string.
@@ -957,10 +955,10 @@ def _resize_image_for_vision(image_path: Path, mime_type: Optional[str] = None,
 # supports native vision. Instead of asking a separate LLM to describe the
 # image and returning text, we load the image, base64-encode it, and return a
 # multimodal tool-result envelope. The agent loop unwraps the envelope into an
-# OpenAI-style content list on the `tool` role; provider adapters (anthropic,
-# codex_responses, chat_completions) translate that into Anthropic
-# tool_result image blocks / Responses input_image / OpenAI image_url tool
-# content. The main model then "sees" the pixels directly on its next turn.
+# OpenAI-style content list on the `tool` role; provider adapters
+# (codex_responses, chat_completions) translate that into Responses
+# input_image / OpenAI image_url tool content. The main model then "sees"
+# the pixels directly on its next turn.
 # ---------------------------------------------------------------------------
 
 
@@ -968,21 +966,16 @@ def _supports_media_in_tool_results(provider: str, model: str) -> bool:
     """Whether the given provider+model combination accepts image content
     inside a tool-result message.
 
-    Providers covered today (per spec docs verified Apr-2026):
+    Providers covered today:
 
-      * Anthropic Messages API (``anthropic`` provider, plus aggregators that
-        proxy Claude — ``openrouter``, ``nous``, ``vertex``):
-        ``tool_result`` blocks accept ``image`` content blocks.
       * OpenAI Chat Completions: tool messages accept array content with
         ``image_url`` parts.
       * OpenAI Responses (``openai-codex``): ``function_call_output.output``
         accepts an array of ``input_text``/``input_image`` items.
-      * Gemini 3 (and proxied via aggregators): supports multimodal tool
-        results. Older Gemini does NOT.
 
-    For unknown / legacy providers we conservatively return False — the
-    caller falls back to the legacy aux-LLM text path.  The check is relaxed
-    when the provider's ``ProviderProfile`` declares ``supports_vision=True``.
+    For unknown providers we conservatively return False — the caller falls
+    back to the legacy aux-LLM text path.  The check is relaxed when the
+    provider's ``ProviderProfile`` declares ``supports_vision=True``.
     """
     if not isinstance(provider, str):
         return False
@@ -990,38 +983,12 @@ def _supports_media_in_tool_results(provider: str, model: str) -> bool:
     if not p:
         return False
 
-    # Aggregators that route to multiple vendors — assume support since
-    # users on these aggregators are typically using vision-capable
-    # frontier models. Falling back to text would be a regression for
-    # them.
-    _AGGREGATORS = {
-        "openrouter", "nous", "vertex", "anthropic-vertex",
-        "google-vertex",
-    }
-    if p in _AGGREGATORS:
-        return True
-
-    # Native Anthropic
-    if p in {"anthropic", "claude", "anthropic-direct"}:
-        return True
-
     # OpenAI Chat Completions and Responses
     if p in {"openai", "openai-chat", "openai-codex", "azure-openai"}:
         return True
 
-    # Gemini — gate on model name; older Gemini variants did not support
-    # multimodal functionResponse. Gemini 3.x does.
-    if p in {"google", "gemini", "google-gemini", "google-vertex-gemini"}:
-        if not isinstance(model, str):
-            return False
-        m = model.strip().lower()
-        if "gemini-3" in m or "gemini-pro-3" in m or "gemini-flash-3" in m:
-            return True
-        return False
-
-    # Check the provider's registered profile for the supports_vision flag.
-    # This covers vision-capable providers like xiaomi, minimax, etc. that
-    # aren't in the hardcoded list above.
+    # Check the provider's registered profile for the supports_vision flag,
+    # which covers custom OpenAI-compatible vision endpoints.
     try:
         from providers import get_provider_profile
         profile = get_provider_profile(p)
@@ -1030,9 +997,6 @@ def _supports_media_in_tool_results(provider: str, model: str) -> bool:
     except Exception:
         pass
 
-    # Other vision-capable provider stacks. Conservative default: False.
-    # Add explicit entries here as we verify each provider's tool-result
-    # multimodal support empirically.
     return False
 
 
@@ -1191,7 +1155,7 @@ async def _vision_analyze_native(
         should_cleanup = True
 
         # Normalize unsupported formats (SVG, BMP, ...) to PNG BEFORE embedding.
-        # Anthropic only accepts jpeg/png/gif/webp; an unsupported media_type
+        # Providers only accept jpeg/png/gif/webp; an unsupported media_type
         # baked into immutable history wedges the session with a 400 on every
         # resume.  Convert here so it can never enter history. Offloaded — the
         # rasterizers/Pillow are blocking.
@@ -1240,7 +1204,7 @@ async def _vision_analyze_native(
         )
 
         # Proactive embed cap: this image gets baked into conversation
-        # history and re-sent on every subsequent turn.  Anthropic rejects
+        # history and re-sent on every subsequent turn.  Providers reject
         # any single base64 image over 5 MB OR over 8000px per side with a
         # 400, and because history is immutable, an oversized embed
         # permanently wedges the session — retries can't clear bytes (or
@@ -1308,7 +1272,7 @@ async def vision_analyze_tool(
     
     This tool accepts either an HTTP/HTTPS URL or a local file path. For URLs,
     it downloads the image first. In both cases, the image is converted to base64
-    and processed using Gemini 3 Flash Preview via OpenRouter API.
+    and processed by the configured auxiliary vision model.
     
     The user_prompt parameter is expected to be pre-formatted by the calling
     function (typically model_tools.py) to include both full description
@@ -1318,7 +1282,7 @@ async def vision_analyze_tool(
         image_url (str): The URL or local file path of the image to analyze.
                          Accepts http://, https:// URLs or absolute/relative file paths.
         user_prompt (str): The pre-formatted prompt for the vision model
-        model (str): The vision model to use (default: google/gemini-3-flash-preview)
+        model (str): The vision model to use (default: configured aux vision model)
     
     Returns:
         str: JSON string containing the analysis results with the following structure:
@@ -1482,7 +1446,7 @@ async def vision_analyze_tool(
         
         # Call the vision API via centralized router.
         # Read timeout from config.yaml (auxiliary.vision.timeout), default 120s.
-        # Local vision models (llama.cpp, ollama) can take well over 30s.
+        # Vision models can take well over 30s.
         vision_timeout = 120.0
         vision_temperature = 0.1
         try:
@@ -1625,12 +1589,11 @@ async def vision_analyze_tool(
 def check_vision_requirements() -> bool:
     """Check if the configured runtime vision path can resolve a client.
 
-    Mirrors the fallback chain that ``call_llm(task="vision")`` actually uses
-    at runtime: first the explicit ``auxiliary.vision.provider`` (if any),
-    and if that fails, the auto chain (main provider → openrouter → nous).
-    Without the auto-fallback step the tool would disappear from the model's
-    tool list whenever the explicit provider name was unresolvable, even
-    when the auto chain would have served the request.
+    Mirrors what ``call_llm(task="vision")`` actually does at runtime: first
+    the explicit ``auxiliary.vision.provider`` (if any), then the main
+    provider via ``auto``.  Without the second step the tool would disappear
+    from the model's tool list whenever the explicit provider name was
+    unresolvable.
     """
     try:
         from agent.auxiliary_client import aux_probe_mode, resolve_vision_provider_client
@@ -1644,7 +1607,7 @@ def check_vision_requirements() -> bool:
             _provider, client, _model = resolve_vision_provider_client()
             if client is not None:
                 return True
-            # Same fallback to "auto" that call_llm performs when the configured
+            # Same "auto" retry that call_llm performs when the configured
             # provider can't be resolved.
             _provider, client, _model = resolve_vision_provider_client(provider="auto")
             return client is not None
@@ -1665,7 +1628,7 @@ if __name__ == "__main__":
     
     if not api_available:
         print("❌ No auxiliary vision model available")
-        print("Configure a supported multimodal backend (OpenRouter, Nous, Codex, Anthropic, or a custom OpenAI-compatible endpoint).")
+        print("Configure a supported multimodal backend (OpenAI, Codex, or a custom OpenAI-compatible endpoint).")
         sys.exit(1)
     else:
         print("✅ Vision model available")
@@ -2121,8 +2084,8 @@ async def video_analyze_tool(
         )):
             analysis = (
                 f"The model does not support video analysis or the request was "
-                f"rejected. Ensure you're using a video-capable model "
-                f"(e.g. google/gemini-2.5-flash). Error: {e}"
+                f"rejected. Ensure you're using a video-capable model. "
+                f"Error: {e}"
             )
         elif any(hint in err_str for hint in (
             "too large", "payload", "413", "content_too_large",
@@ -2165,7 +2128,7 @@ VIDEO_ANALYZE_SCHEMA = {
     "name": "video_analyze",
     "description": (
         "Analyze a video from a URL or local file path using a multimodal AI model. "
-        "Sends the video to a video-capable model (e.g. Gemini) for understanding. "
+        "Sends the video to a video-capable model for understanding. "
         "Use this for video files — for images, use vision_analyze instead. "
         "Supports mp4, webm, mov, avi, mkv, mpeg formats. "
         "Note: large videos (>20 MB) may be slow; max ~50 MB."

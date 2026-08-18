@@ -27,7 +27,7 @@ Substrate facts (verified May 2026):
 - ``list_authenticated_providers`` already populates each row's
   ``models`` from the curated catalog (same source as the picker). Do
   NOT call ``provider_model_ids()`` per row to "freshen" — that bypasses
-  curation and pulls in non-agentic models (Nous /models returns ~400
+  curation and pulls in non-agentic models (a bare /models can return ~400
   IDs including TTS, embeddings, rerankers, image/video generators).
 """
 
@@ -144,10 +144,10 @@ def build_models_payload(
       ``CANONICAL_PROVIDERS`` declaration order; truly-custom rows go
       last (TUI display order).
     - ``pricing``: enrich each row with formatted per-model pricing and,
-      for Nous, ``free_tier``/``unavailable_models`` so the GUI picker can
+      ``free_tier``/``unavailable_models`` so the GUI picker can
       show $/Mtok columns and gate paid models on free accounts —
       mirroring the ``pilotage model`` CLI picker. Adds network calls
-      (pricing fetch + Nous tier check); only set for interactive pickers.
+      (pricing fetch + tier check); only set for interactive pickers.
     - ``capabilities``: add a per-row ``capabilities`` map
       ``{model: {fast, reasoning}}`` so pickers can gate the model-options
       controls (fast toggle / reasoning) to what each model actually
@@ -159,8 +159,8 @@ def build_models_payload(
       these; the rest of ``models`` stays reachable via search / show-all. Empty
       for single-lab providers (callers fall back to top-N). Derived live from
       models.dev — no allowlist.
-    - ``force_fresh_nous_tier``: bypass the short Nous free-tier cache when
-      selecting Portal-recommended Nous models and applying tier gating. Keep
+    - ``force_fresh_nous_tier``: bypass the short free-tier cache when
+      applying tier gating. Keep
       this false for UI picker opens; explicit auth/model flows can opt in
       when they need freshly-purchased credits to show up immediately.
     - ``refresh``: bust the per-provider model-id disk cache so every row
@@ -214,7 +214,7 @@ def build_models_payload(
     # serves a model whose name also appears in an aggregator's curated
     # catalog, the picker would show the model under both providers.
     # Selecting it from the aggregator row sets model.provider to the
-    # aggregator (e.g. openrouter) instead of the user's proxy — silently
+    # aggregator instead of the user's proxy — silently
     # breaking the call.  Filtering at the payload level keeps the
     # aggregator rows honest: they only show models the user can't get
     # from a more-specific provider.
@@ -239,12 +239,12 @@ def build_models_payload(
                 if row.get("is_user_defined"):
                     continue
                 slug = row.get("slug", "")
-                # Only strip overlaps from TRUE routing aggregators (OpenRouter,
+                # Only strip overlaps from TRUE routing aggregators
                 # custom:* proxies). Flat-namespace resellers (opencode-go /
                 # opencode-zen) serve every listed model as a first-party model,
                 # so their rows must keep models that a user's proxy happens to
                 # share a name with — otherwise a subscription provider's own
-                # catalog (minimax-m3, glm-5, deepseek-v4-flash, ...) is silently
+                # catalog is silently
                 # gutted in the picker.
                 if not _is_routing_aggregator(slug):
                     continue
@@ -437,7 +437,7 @@ _FEATURED_PER_LAB = 5
 def _apply_featured(rows: list[dict]) -> None:
     """Attach a ``featured_models`` shortlist to each aggregator provider row.
 
-    Aggregator providers (nous, openrouter) serve dozens of models across many
+    Aggregator providers serve dozens of models across many
     labs, so a flat "top-N" default would drop whole labs from the picker.
     Instead we surface the ``_FEATURED_PER_LAB`` newest models per lab (the
     vendor segment of a ``vendor/model`` id), ranked by models.dev
@@ -570,7 +570,7 @@ def _filter_explicit_provider_rows(rows: list[dict], ctx: ConfigContext) -> list
     """Keep only rows backed by explicit user configuration.
 
     ``list_authenticated_providers`` intentionally discovers ambient / auto-
-    seeded credentials (for example GitHub CLI -> Copilot). Desktop chat model
+    seeded credentials. Desktop chat model
     pickers want the narrower subset the user explicitly configured for Pilotage.
     """
     from pilotage_cli.auth import is_provider_explicitly_configured
@@ -652,15 +652,15 @@ def _reorder_canonical(rows: list[dict]) -> list[dict]:
 
 
 def _apply_pricing(rows: list[dict]) -> None:
-    """Enrich each provider row with per-model pricing + Nous tier gating.
+    """Enrich each provider row with per-model pricing + tier gating.
 
     Mutates ``rows`` in-place. For every row whose provider supports live
-    pricing (openrouter / nous / novita) adds::
+    pricing adds::
 
         row["pricing"] = {model_id: {"input": "$3.00", "output": "$15.00",
                                      "cache": "$0.30" | None, "free": bool}}
 
-    For Nous additionally adds::
+    Additionally adds::
 
         row["free_tier"] = bool            # current account is free-tier
         row["unavailable_models"] = [...]  # paid models a free user can't pick

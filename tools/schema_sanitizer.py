@@ -2,7 +2,7 @@
 
 Some local inference backends (notably llama.cpp's ``json-schema-to-grammar``
 converter used to build GBNF tool-call parsers) are strict about what JSON
-Schema shapes they accept. Schemas that OpenAI / Anthropic / most cloud
+Schema shapes they accept. Schemas that OpenAI / most cloud
 providers silently accept can make llama.cpp fail the entire request with:
 
     HTTP 400: Unable to generate parser for this template.
@@ -18,11 +18,11 @@ The failure modes we've seen in the wild:
 * ``"type": ["string", "null"]`` array types — many converters only accept
   single-string ``type``.
 * ``anyOf`` / ``oneOf`` unions whose only purpose is to permit ``null`` for
-  optional fields (common Pydantic/MCP shape). Anthropic rejects these at
+  optional fields (common Pydantic/MCP shape). Some backends reject these at
   the top of ``input_schema``; collapse them to the non-null branch.
 * Unconstrained ``additionalProperties`` on objects with empty properties.
 * ``default`` (and other annotation keywords) alongside ``$ref`` — strict
-  backends (Fireworks-hosted Kimi, JSON Schema draft-07 validators) reject
+  backends (JSON Schema draft-07 validators) reject
   sibling keywords at the same level as ``$ref``.  Common MCP/Pydantic shape
   after nullable-union collapse::
 
@@ -44,7 +44,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-# Anthropic (and Bedrock/Vertex/Azure fronting it) reject tool input schemas
+# Some backends reject tool input schemas
 # whose property keys don't match this pattern. Cloudflare's flat API MCP
 # ships 61 such keys (query-filter params like ``issue_class~neq`` and
 # ``meta.<field>[<operator>]``) — one bad key anywhere in the tools array
@@ -181,7 +181,7 @@ _REF_FORBIDDEN_SIBLINGS = frozenset({"default"})
 def _strip_ref_siblings(node: Any) -> Any:
     """Drop forbidden sibling keywords from nodes that carry ``$ref``.
 
-    Fireworks (and other draft-07-strict backends) fail tool requests with::
+    Draft-07-strict backends fail tool requests with::
 
         JSON Schema not supported: keyword(s) ['default'] not allowed at
         the same level as $ref.
@@ -248,7 +248,7 @@ def strip_nullable_unions(
 
         {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null}
 
-    Anthropic's tool input-schema validator rejects the null branch. Tool
+    Some tool input-schema validators reject the null branch. Tool
     optionality is already represented by the parent object's ``required``
     array, so we collapse the union to the single non-null variant.
 
@@ -260,7 +260,7 @@ def strip_nullable_unions(
         keep_nullable_hint: If True, set ``nullable: true`` on the replacement
             to preserve the "this field may be None" signal for downstream
             consumers that care (e.g. runtime argument coercion that maps the
-            literal string ``"null"`` to Python ``None``). Anthropic's
+            literal string ``"null"`` to Python ``None``). Some
             validator accepts ``nullable: true`` but strict producers may
             prefer False.
 
@@ -450,8 +450,7 @@ def _sanitize_node(node: Any, path: str) -> Any:
         # JSON Schema ``type`` arrays (e.g. ``["number", "string"]``, common
         # in MCP tool schemas) are rejected by several tool-call backends:
         #   * llama.cpp's grammar generator only accepts a singular string type.
-        #   * Gemini (including OpenAI-compatible transports such as GitHub
-        #     Copilot proxying to Gemini) rejects the array form outright —
+        #   * Some OpenAI-compatible transports reject the array form —
         #     plain @ai-sdk/google rewrites it, but the OpenAI-compatible path
         #     forwards it verbatim and the backend 400s.
         #
@@ -556,7 +555,7 @@ def strip_pattern_and_format(tools: list[dict]) -> tuple[list[dict], int]:
     small subset of ECMAScript regex (literals, ``.``, ``[...]``, ``|``,
     ``*``, ``+``, ``?``, ``{n,m}``) — it rejects escape classes like ``\\d``,
     ``\\w``, ``\\s`` and most ``format`` values.  Cloud providers (OpenAI,
-    Anthropic, OpenRouter, Gemini) accept these keywords fine and rely on
+    most cloud backends) accept these keywords fine and rely on
     them as prompting hints, so we keep them in the default schema and only
     strip on demand.
 
@@ -609,7 +608,7 @@ def strip_pattern_and_format(tools: list[dict]) -> tuple[list[dict], int]:
                 continue
         
         # Responses-format: {"name": "...", "parameters": {...}}
-        # (used by codex_responses API mode — xAI, OpenAI Codex, etc.)
+        # (used by codex_responses API mode)
         params = tool.get("parameters")
         if isinstance(params, dict):
             _walk(params)
@@ -627,14 +626,15 @@ def strip_pattern_and_format(tools: list[dict]) -> tuple[list[dict], int]:
 def strip_slash_enum(tools: list[dict]) -> tuple[list[dict], int]:
     """Strip ``enum`` keywords whose string values contain a forward slash.
 
-    xAI's ``/v1/responses`` and ``/v1/chat/completions`` endpoints compile
+    Some ``/v1/responses`` and ``/v1/chat/completions`` endpoints compile
     tool schemas to a grammar that rejects ``enum`` values containing ``/``
     (the request fails with HTTP 400 "Invalid arguments passed to the
     model" before any token is emitted). Most commonly hit by MCP-derived
-    tools whose enum lists HuggingFace model IDs (``Qwen/Qwen3.5-0.8B``,
+    tools whose enum lists slash-bearing IDs (``org/model-name``,
     ``openai/gpt-oss-20b``) or owner/name environment IDs. The constraint
     is purely a prompting hint; dropping it lets the model still see the
-    field description and pick a value, without xAI tripping on the slash.
+    field description and pick a value, without the grammar compiler
+    tripping on the slash.
 
     Args:
         tools: OpenAI-format or Responses-format tool list, mutated in
@@ -681,7 +681,7 @@ def strip_slash_enum(tools: list[dict]) -> tuple[list[dict], int]:
     if stripped:
         logger.info(
             "schema_sanitizer: stripped %d enum keyword(s) containing '/' "
-            "from tool schemas (xAI Responses grammar-compile recovery)",
+            "from tool schemas (Responses grammar-compile recovery)",
             stripped,
         )
     return tools, stripped

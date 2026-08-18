@@ -210,7 +210,6 @@ class ResponsesApiTransport(ProviderTransport):
         """Classify the current Responses endpoint from transport params."""
         from agent.codex_responses_adapter import _classify_responses_issuer
         return _classify_responses_issuer(
-            is_github_responses=params.get("is_github_responses") is True,
             is_codex_backend=params.get("is_codex_backend") is True,
             base_url=params.get("base_url"),
         )
@@ -222,7 +221,6 @@ class ResponsesApiTransport(ProviderTransport):
         self._last_issuer_kind = issuer
         return _chat_messages_to_responses_input(
             messages,
-            is_github_responses=kwargs.get("is_github_responses") is True,
             replay_encrypted_reasoning=bool(
                 kwargs.get("replay_encrypted_reasoning", True)
             ),
@@ -267,9 +265,7 @@ class ResponsesApiTransport(ProviderTransport):
             provider: str | None — provider name for backend-specific logic
             base_url: str | None — endpoint URL
             base_url_hostname: str | None — hostname for backend detection
-            is_github_responses: bool — Copilot/GitHub models backend
             is_codex_backend: bool — chatgpt.com/backend-api/codex
-            github_reasoning_extra: dict | None — Copilot reasoning params
         """
         from agent.codex_responses_adapter import (
             _chat_messages_to_responses_input,
@@ -287,7 +283,6 @@ class ResponsesApiTransport(ProviderTransport):
         if not instructions:
             instructions = DEFAULT_AGENT_IDENTITY
 
-        is_github_responses = params.get("is_github_responses") is True
         is_codex_backend = params.get("is_codex_backend") is True
         replay_encrypted_reasoning = bool(
             params.get("replay_encrypted_reasoning", True)
@@ -360,7 +355,6 @@ class ResponsesApiTransport(ProviderTransport):
             "instructions": instructions,
             "input": _chat_messages_to_responses_input(
                 payload_messages,
-                is_github_responses=is_github_responses,
                 replay_encrypted_reasoning=replay_encrypted_reasoning,
                 current_issuer_kind=issuer_kind,
                 native_compaction_eligible=native_compaction_active,
@@ -395,21 +389,15 @@ class ResponsesApiTransport(ProviderTransport):
         cache_key = _content_cache_key(
             instructions, response_tools, _cache_scope
         ) or _cache_scope
-        # GitHub Models opts out of cache-key routing entirely.
-        if not is_github_responses and cache_key:
+        if cache_key:
             kwargs["prompt_cache_key"] = cache_key
 
         if reasoning_enabled:
-            if is_github_responses:
-                github_reasoning = params.get("github_reasoning_extra")
-                if github_reasoning is not None:
-                    kwargs["reasoning"] = github_reasoning
-            else:
-                kwargs["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
-                kwargs["include"] = (
-                    ["reasoning.encrypted_content"] if replay_encrypted_reasoning else []
-                )
-        elif not is_github_responses:
+            kwargs["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
+            kwargs["include"] = (
+                ["reasoning.encrypted_content"] if replay_encrypted_reasoning else []
+            )
+        else:
             kwargs["include"] = []
 
         request_overrides = params.get("request_overrides")
@@ -557,7 +545,6 @@ class ResponsesApiTransport(ProviderTransport):
         api_kwargs: Any,
         *,
         allow_stream: bool = False,
-        is_github_responses: bool = False,
         sanitize_harmony_tokens: bool = False,
     ) -> dict:
         """Validate and sanitize Codex API kwargs before the call.
@@ -571,7 +558,6 @@ class ResponsesApiTransport(ProviderTransport):
         normalized = _preflight_codex_api_kwargs(
             api_kwargs,
             allow_stream=allow_stream,
-            is_github_responses=is_github_responses,
             sanitize_harmony_tokens=sanitize_harmony_tokens,
         )
         if "prompt_cache_key" in normalized:

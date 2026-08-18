@@ -153,7 +153,6 @@ def _host_derived_api_key(base_url: str) -> str:
     Examples:
         https://api.groq.com/openai/v1 → GROQ_API_KEY
         https://api.groq.com/openai/v1 → GROQ_API_KEY
-        https://api.mistral.ai/v1     → MISTRAL_API_KEY
         https://generativelanguage.googleapis.com/v1beta/openai/ → GOOGLEAPIS_API_KEY
 
     Returns the env value (stripped) or "". Never returns env vars whose names

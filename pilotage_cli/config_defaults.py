@@ -7,7 +7,6 @@ verbatim from pilotage_cli/config.py. Must not import from pilotage_cli.config.
 DEFAULT_CONFIG = {
     "model": "",
     "providers": {},
-    "fallback_providers": [],
     "credential_pool_strategies": {},
     "toolsets": ["pilotage-cli"],
     # SQLite journal mode used by every Pilotage database opener. WAL is the
@@ -421,7 +420,7 @@ DEFAULT_CONFIG = {
     },
 
     # Hard cap (chars) for a single automatic context file such as SOUL.md,
-    # AGENTS.md, CLAUDE.md, .pilotage.md, or .cursorrules before Pilotage applies
+    # AGENTS.md, .pilotage.md, or .cursorrules before Pilotage applies
     # head/tail truncation. ``null`` (the default) lets the cap scale with the
     # model's context window (floor 20K, ceiling 500K) so large-context models
     # rarely truncate a project doc. Set a positive integer to pin a fixed cap
@@ -469,8 +468,8 @@ DEFAULT_CONFIG = {
             "same_tool_failure": 8,
             "idempotent_no_progress": 5,
         },
-        # Per-turn runaway-loop caps (inspired by Claude Code v2.1.212,
-        # Week 29, July 2026). Hard ceilings on how many times a runaway-prone
+        # Per-turn runaway-loop caps. Hard ceilings on how many times a
+        # runaway-prone
         # tool may be called within a SINGLE agent loop (turn); the counters
         # reset at the start of every turn, so a legitimate multi-turn session
         # is never starved. They are always-on and fire regardless of the
@@ -854,7 +853,7 @@ DEFAULT_CONFIG = {
         # The mid-turn steering itself still happens.
         "busy_steer_ack_enabled": True,
         # Classic CLI multiline fallbacks beyond Alt+Enter.
-        # Default true matches Claude Code / Codex / OpenCode: Ctrl+J inserts
+        # Default true matches Codex / OpenCode: Ctrl+J inserts
         # a newline, a trailing backslash followed by Enter continues the draft,
         # and supported terminals are asked to report Shift+Enter distinctly.
         # Set false to restore the legacy c-j submit fallback on unusual POSIX
@@ -913,7 +912,7 @@ DEFAULT_CONFIG = {
         # class of over-claim that otherwise forces users to run
         # `git status` to verify edits landed.  Set false to suppress.
         "file_mutation_verifier": True,
-        # Nous credits status-bar notices (usage bands, grant-spent, depleted /
+        # Credits status-bar notices (usage bands, grant-spent, depleted /
         # restored).  When false, no credits notices are emitted — balance data
         # is still captured and /usage keeps working.  Off switch for sub +
         # top-up users who find the gauge noisy.
@@ -1426,7 +1425,7 @@ DEFAULT_CONFIG = {
             "transport": "builtin",
             "transport_fallback": "deny",
         },
-        # Writes to agent-instruction files (AGENTS.md/CLAUDE.md/SOUL.md/
+        # Writes to agent-instruction files (AGENTS.md/SOUL.md/
         # .cursorrules, project-local .pilotage config) always require human
         # approval — even under auto-approve/yolo. Extra patterns are
         # fnmatch globs matched against the basename (e.g. "*.mdc").
@@ -2425,13 +2424,6 @@ OPTIONAL_ENV_VARS = {
         "prompt": "OpenAI API Key (for Whisper STT + TTS)",
         "url": "https://platform.openai.com/api-keys",
         "tools": ["voice_transcription", "openai_tts"],
-        "password": True,
-        "category": "tool",
-    },
-    "MISTRAL_API_KEY": {
-        "description": "Mistral API key for Voxtral TTS and transcription (STT)",
-        "prompt": "Mistral API key",
-        "url": "https://console.mistral.ai/",
         "password": True,
         "category": "tool",
     },

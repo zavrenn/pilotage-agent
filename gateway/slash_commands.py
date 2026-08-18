@@ -1573,7 +1573,7 @@ class GatewaySlashCommandsMixin:
 
         # Read current model/provider from config
         current_model = ""
-        current_provider = "openrouter"
+        current_provider = "openai"
         current_base_url = ""
         current_api_key = ""
         user_provs = None
@@ -1755,13 +1755,9 @@ class GatewaySlashCommandsMixin:
                                     "Failed to persist model switch to DB: %s", exc
                                 )
 
-                        # Store model note + session override.  Use display
-                        # form (strips opaque Palantir prefix) for the user-
-                        # visible note; session-override map still gets the
-                        # full opaque ID, which is what the wire needs.
-                        from pilotage_cli.model_switch import format_model_for_display
-                        _display_cur = format_model_for_display(_cur_model)
-                        _display_new = format_model_for_display(result.new_model)
+                        # Store model note + session override.
+                        _display_cur = _cur_model
+                        _display_new = result.new_model
                         if not hasattr(_self, "_pending_model_notes"):
                             _self._pending_model_notes = {}
                         _self._pending_model_notes[_session_key] = (
@@ -1855,11 +1851,9 @@ class GatewaySlashCommandsMixin:
                             except Exception as e:
                                 logger.warning("Failed to persist model switch: %s", e)
 
-                        # Build confirmation text.  Use display form so opaque
-                        # Palantir IDs (ri.language-model-service..*) get
-                        # shortened to their trailing slug for the UI.
+                        # Build confirmation text.
                         plabel = result.provider_label or result.target_provider
-                        lines = [t("gateway.model.switched", model=format_model_for_display(result.new_model))]
+                        lines = [t("gateway.model.switched", model=result.new_model)]
                         lines.append(t("gateway.model.provider_label", provider=plabel))
                         mi = result.model_info
                         from pilotage_cli.model_switch import resolve_display_context_length_async
@@ -2068,13 +2062,10 @@ class GatewaySlashCommandsMixin:
 
             # Store a note to prepend to the next user message so the model
             # knows about the switch (avoids system messages mid-history).
-            # Display form strips opaque Palantir RID prefixes; the override
-            # map below keeps the full ID for the wire.
-            from pilotage_cli.model_switch import format_model_for_display
             if not hasattr(self, "_pending_model_notes"):
                 self._pending_model_notes = {}
             self._pending_model_notes[session_key] = (
-                f"[Note: model was just switched from {format_model_for_display(current_model)} to {format_model_for_display(result.new_model)} "
+                f"[Note: model was just switched from {current_model} to {result.new_model} "
                 f"via {result.provider_label or result.target_provider}. "
                 f"{'This override applies to the next turn only. ' if one_turn else ''}"
                 f"Adjust your self-identification accordingly.]"
@@ -2183,11 +2174,11 @@ class GatewaySlashCommandsMixin:
 
             # Build confirmation message with full metadata
             provider_label = result.provider_label or result.target_provider
-            lines = [t("gateway.model.switched", model=format_model_for_display(result.new_model))]
+            lines = [t("gateway.model.switched", model=result.new_model)]
             lines.append(t("gateway.model.provider_label", provider=provider_label))
 
-            # Context: always resolve via the provider-aware chain so Codex OAuth,
-            # Copilot, and Nous-enforced caps win over the raw models.dev entry.
+            # Context: always resolve via the provider-aware chain so Codex
+            # OAuth caps win over the raw models.dev entry.
             mi = result.model_info
             from pilotage_cli.model_switch import resolve_display_context_length_async
             _sw2_config_ctx = None
@@ -3419,8 +3410,7 @@ class GatewaySlashCommandsMixin:
         agent turn installs it via ``_run_agent``'s wrapper, but slash-command
         dispatch does not — so manual /compress reached the compressor's
         provider resolution unscoped and died with ``UnscopedSecretError``
-        (``get_secret('OPENROUTER_BASE_URL') called with no profile secret
-        scope active``). Install the source profile's scope around the whole
+        (``get_secret(...) called with no profile secret scope active``). Install the source profile's scope around the whole
         handler, mirroring ``_run_agent``. Single-profile gateways skip this
         — zero behavior change.
         """
@@ -3442,9 +3432,7 @@ class GatewaySlashCommandsMixin:
 
         Also accepts the boundary-aware form ``/compress here [N]``:
         summarize everything except the most recent ``N`` exchanges
-        (default 2), kept verbatim. Inspired by Claude Code's Rewind
-        "Summarize up to here" action (v2.1.139, May 2026,
-        https://code.claude.com/docs/en/whats-new/2026-w20).
+        (default 2), kept verbatim.
         """
         source = event.source
         session_entry = await self.async_session_store.get_or_create_session(source)
@@ -4255,7 +4243,6 @@ class GatewaySlashCommandsMixin:
 
         Copies conversation history to a new session so the user can explore
         a different approach without losing the original.
-        Inspired by Claude Code's /branch command.
         """
         import uuid as _uuid
 

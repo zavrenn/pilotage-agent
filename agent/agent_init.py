@@ -153,11 +153,6 @@ def _provider_default_routes(provider: str) -> set[str]:
     except Exception:
         pass
 
-    if provider == "gemini":
-        routes.update(
-            f"{route.rstrip('/')}/openai"
-            for route in list(routes)
-        )
     return routes
 
 
@@ -208,8 +203,8 @@ def _context_route_mismatch(
         # route — agent_init fills base_url from custom_providers before this
         # check, but gateway display/hygiene paths historically compared the
         # raw empty model.base_url and falsely dropped model.context_length,
-        # falling through to family defaults (e.g. qwen → 131072) on Discord
-        # session-reset banners while /status still showed the config pin.
+        # falling through to family defaults on session-reset banners while
+        # /status still showed the config pin.
         if active_provider and configured_provider == active_provider:
             return False
         return True
@@ -506,7 +501,6 @@ def init_agent(
     session_db=None,
     parent_session_id: str = None,
     iteration_budget: "IterationBudget" = None,
-    fallback_model: Dict[str, Any] = None,
     credential_pool=None,
     checkpoints_enabled: bool = False,
     checkpoint_max_snapshots: int = 20,
@@ -524,7 +518,7 @@ def init_agent(
         provider (str): Provider identifier (optional; used for telemetry/routing hints)
         requested_provider (str): Original provider identity before runtime canonicalization
         api_mode (str): API mode override: "chat_completions" or "codex_responses"
-        model (str): Model name to use (default: "anthropic/claude-opus-4.6")
+        model (str): Model name to use
         max_iterations (int): Maximum number of tool calling iterations (default: 90)
         enabled_toolsets (List[str]): Only enable tools from these toolsets (optional)
         disabled_toolsets (List[str]): Disable tools from these toolsets (optional)
@@ -539,15 +533,15 @@ def init_agent(
         clarify_callback (callable): Callback function(question, choices) -> str for interactive user questions.
             Provided by the platform layer (CLI or gateway). If None, the clarify tool returns an error.
         max_tokens (int): Maximum tokens for model responses (optional, uses model default if not set)
-        reasoning_config (Dict): OpenRouter reasoning configuration override (e.g. {"effort": "none"} to disable thinking).
-            If None, defaults to {"enabled": True, "effort": "medium"} for OpenRouter. Set to disable/customize reasoning.
+        reasoning_config (Dict): Reasoning configuration override (e.g. {"effort": "none"} to disable thinking).
+            If None, defaults to {"enabled": True, "effort": "medium"}.
         prefill_messages (List[Dict]): Messages to prepend to conversation history as prefilled context.
             Useful for injecting a few-shot example or priming the model's response style.
             Example: [{"role": "user", "content": "Hi!"}, {"role": "assistant", "content": "Hello!"}]
-            NOTE: Anthropic Sonnet 4.6+ and Opus 4.6+ reject a conversation that ends on an
-            assistant-role message (400 error).  For those models use structured outputs or
+            NOTE: some models reject a conversation that ends on an assistant-role
+            message (400 error).  For those use structured outputs or
             output_config.format instead of a trailing-assistant prefill.
-        platform (str): The interface platform the user is on (e.g. "cli", "telegram", "discord", "whatsapp").
+        platform (str): The interface platform the user is on (e.g. "cli", "telegram", "whatsapp").
             Used to inject platform-specific formatting hints into the system prompt.
         skip_context_files (bool): If True, skip auto-injection of project context files
             (SOUL.md, .pilotage.md, AGENTS.md, CLAUDE.md, .cursorrules) from the cwd / PILOTAGE_HOME
@@ -622,11 +616,9 @@ def init_agent(
     else:
         agent.api_mode = "chat_completions"
 
-    # Credential-pool validation runs AFTER provider auto-detection so
-    # a pool scoped to e.g. "anthropic" is not rejected when the agent
-    # was constructed with provider=None and an anthropic.com URL.
-    # Regression from which placed this check before the
-    # URL-based auto-detection block above (fixed).
+    # Credential-pool validation runs AFTER provider auto-detection so a
+    # provider-scoped pool is not rejected when the agent was constructed
+    # with provider=None and a matching URL.
     if credential_pool is not None:
         try:
             from agent.credential_pool import credential_pool_matches_provider
@@ -654,18 +646,14 @@ def init_agent(
     except Exception:
         pass
 
-    # GPT-5.x models usually require the Responses API path, but some
-    # providers have exceptions (for example Copilot's gpt-5-mini still
-    # uses chat completions). Also auto-upgrade for direct OpenAI URLs
-    # (api.openai.com) since all newer tool-calling models prefer
-    # Responses there. ACP runtimes are excluded: CopilotACPClient
-    # handles its own routing and does not implement the Responses API
-    # surface.
-    # When api_mode was explicitly provided, respect it — the user
-    # knows what their endpoint supports.
-    # Exception: Azure OpenAI serves gpt-5.x on /chat/completions and
-    # does NOT support the Responses API — skip the upgrade for Azure
-    # (openai.azure.com), even though it looks OpenAI-compatible.
+    # GPT-5.x models usually require the Responses API path; auto-upgrade
+    # for direct OpenAI URLs (api.openai.com) since all newer tool-calling
+    # models prefer Responses there. ACP runtimes are excluded — they
+    # handle their own routing and have no Responses surface.
+    # When api_mode was explicitly provided, respect it — the user knows
+    # what their endpoint supports.
+    # Exception: Azure OpenAI serves gpt-5.x on /chat/completions and does
+    # NOT support the Responses API — skip the upgrade for Azure.
     if (
         api_mode is None
         and agent.api_mode == "chat_completions"
@@ -771,7 +759,7 @@ def init_agent(
     
     # Model response configuration
     agent.max_tokens = max_tokens  # None = use model default
-    agent.reasoning_config = reasoning_config  # None = use default (medium for OpenRouter)
+    agent.reasoning_config = reasoning_config  # None = use the medium default
     agent.service_tier = service_tier
     agent.request_overrides = dict(request_overrides or {})
     agent.prefill_messages = prefill_messages or []  # Prefilled conversation turns
@@ -812,10 +800,6 @@ def init_agent(
     # after each API call.  Accessed by /usage slash command.
     agent._rate_limit_state: Optional["RateLimitState"] = None
 
-    # OpenRouter response cache hit counter — incremented when
-    # X-OpenRouter-Cache-Status: HIT is seen in streaming response headers.
-    agent._or_cache_hits: int = 0
-
     # Centralized logging — agent.log (INFO+) and errors.log (WARNING+)
     # both live under ~/.pilotage/logs/.  Idempotent, so gateway mode
     # (which creates a new AIAgent per message) won't duplicate handlers.
@@ -849,11 +833,11 @@ def init_agent(
     # boundaries because the block regex needs both tags in one string.
     agent._stream_context_scrubber = StreamingContextScrubber()
     # Stateful scrubber for reasoning/thinking tags in streamed deltas
-    # Replaces the per-delta _strip_think_blocks regex that
-    # destroyed downstream state (e.g. MiniMax-M2.7 streaming
-    # '<think>' as delta1 and 'Let me check' as delta2 — the regex
-    # erased delta1, so downstream state machines never learned a
-    # block was open and leaked delta2 as content).
+    # Replaces the per-delta _strip_think_blocks regex that destroyed
+    # downstream state (a provider streaming '<think>' as delta1 and
+    # 'Let me check' as delta2 — the regex erased delta1, so downstream
+    # state machines never learned a block was open and leaked delta2
+    # as content).
     agent._stream_think_scrubber = StreamingThinkScrubber()
     # Visible assistant text already delivered through live token callbacks
     # during the current model response. Used to avoid re-sending the same
@@ -887,20 +871,18 @@ def init_agent(
     agent._persist_user_message_override = None
     agent._persist_user_message_timestamp = None
 
-    # Cache anthropic image-to-text fallbacks per image payload/URL so a
-    # single tool loop does not repeatedly re-run auxiliary vision on the
-    # same image history.
-    agent._anthropic_image_fallback_cache: Dict[str, str] = {}
+    # Cache image-to-text fallbacks per image payload/URL so a single tool
+    # loop does not repeatedly re-run auxiliary vision on the same history.
+    agent._image_text_fallback_cache: Dict[str, str] = {}
 
     # Initialize LLM client via centralized provider router.
-    # The router handles auth resolution, base URL, headers, and
-    # Codex/Anthropic wrapping for all known providers.
+    # The router handles auth resolution, base URL, headers and Codex
+    # wrapping for all known providers.
     # raw_codex=True because the main agent needs direct responses.stream()
     # access for Codex Responses API streaming.
 
     # Resolve per-provider / per-model request timeout once up front so
-    # every client construction path below (Anthropic native, OpenAI-wire,
-    # router-based implicit auth) can apply it consistently.
+    # every client construction path below can apply it consistently.
     _provider_timeout = get_provider_request_timeout(agent.provider, agent.model)
 
     if api_key and base_url:
@@ -928,22 +910,12 @@ def init_agent(
             client_kwargs["command"] = agent.acp_command
             client_kwargs["args"] = agent.acp_args
         effective_base = base_url
-        if base_url_host_matches(effective_base, "openrouter.ai"):
-            from agent.auxiliary_client import build_or_headers
-            client_kwargs["default_headers"] = build_or_headers()
-        elif base_url_host_matches(effective_base, "integrate.api.nvidia.com"):
-            from agent.auxiliary_client import build_nvidia_nim_headers
-            client_kwargs["default_headers"] = build_nvidia_nim_headers(effective_base)
-        elif base_url_host_matches(effective_base, "api.routermint.com"):
-            client_kwargs["default_headers"] = _ra()._routermint_headers()
-        elif base_url_host_matches(effective_base, "portal.qwen.ai"):
-            client_kwargs["default_headers"] = _ra()._qwen_portal_headers()
-        elif base_url_host_matches(effective_base, "chatgpt.com"):
+        if base_url_host_matches(effective_base, "chatgpt.com"):
             from agent.auxiliary_client import _codex_cloudflare_headers
             client_kwargs["default_headers"] = _codex_cloudflare_headers(api_key)
         elif "default_headers" not in client_kwargs:
             # Fall back to profile.default_headers for providers that
-            # declare custom headers (e.g. Vercel AI Gateway attribution).
+            # declare custom headers.
             try:
                 from providers import get_provider_profile as _gpf
                 _ph = _gpf(agent.provider)
@@ -975,14 +947,12 @@ def init_agent(
             if _routed_headers:
                 client_kwargs["default_headers"] = dict(_routed_headers)
         else:
-            # When the user explicitly chose a non-OpenRouter provider
-            # but no credentials were found, fail fast with a clear
-            # message instead of silently routing through OpenRouter.
+            # No credentials were found for the explicitly chosen provider
+            # — fail fast with a clear message.
             _explicit = (agent.provider or "").strip().lower()
-            if _explicit and _explicit not in {"auto", "openrouter", "custom"}:
-                # Look up the actual env var name from the provider
-                # config — some providers use non-standard names
-                # (e.g. alibaba → DASHSCOPE_API_KEY, not ALIBABA_API_KEY).
+            if _explicit and _explicit not in {"auto", "custom"}:
+                # Look up the actual env var name from the provider config
+                # — some providers use non-standard names.
                 _env_hint = f"{_explicit.upper()}_API_KEY"
                 try:
                     from pilotage_cli.auth import PROVIDER_REGISTRY
@@ -991,83 +961,19 @@ def init_agent(
                         _env_hint = _pcfg.api_key_env_vars[0]
                 except Exception:
                     pass
-                # --- Init-time fallback ---
-                _fb_entries = []
-                if isinstance(fallback_model, list):
-                    _fb_entries = [
-                        f for f in fallback_model
-                        if isinstance(f, dict) and f.get("provider") and f.get("model")
-                    ]
-                elif isinstance(fallback_model, dict) and fallback_model.get("provider") and fallback_model.get("model"):
-                    _fb_entries = [fallback_model]
-                _fb_resolved = False
-                for _fb in _fb_entries:
-                    try:
-                        from pilotage_cli.fallback_config import resolve_entry_api_key
-                        _fb_explicit_key = resolve_entry_api_key(_fb)
-                        _fb_client, _fb_model = resolve_provider_client(
-                            _fb["provider"], model=_fb["model"], raw_codex=True,
-                            explicit_base_url=_fb.get("base_url"),
-                            explicit_api_key=_fb_explicit_key,
-                        )
-                    except Exception as _fb_exc:
-                        logger.debug(
-                            "Init-time fallback entry %s failed: %s",
-                            _fb.get("provider"), _fb_exc,
-                        )
-                        continue
-                    if _fb_client is not None:
-                        agent.provider = _fb["provider"]
-                        agent.model = _fb_model or _fb["model"]
-                        agent._fallback_activated = True
-                        client_kwargs = {
-                            "api_key": _fb_client.api_key,
-                            "base_url": str(_fb_client.base_url),
-                        }
-                        if _provider_timeout is not None:
-                            client_kwargs["timeout"] = _provider_timeout
-                        _fb_headers = getattr(_fb_client, "_custom_headers", None)
-                        if not _fb_headers:
-                            _fb_headers = getattr(_fb_client, "default_headers", None)
-                        if not _fb_headers:
-                            _fb_headers = getattr(_fb_client, "_default_headers", None)
-                        if _fb_headers:
-                            client_kwargs["default_headers"] = dict(_fb_headers)
-                        _fb_resolved = True
-                        break
-                if not _fb_resolved:
-                    raise RuntimeError(
-                        f"Provider '{_explicit}' is set in config.yaml but no API key "
-                        f"was found. Set the {_env_hint} environment "
-                        f"variable, or switch to a different provider with `pilotage model`."
-                    )
-            if not getattr(agent, "_fallback_activated", False):
-                # No provider configured — reject with a clear message.
                 raise RuntimeError(
-                    "No LLM provider configured. Run `pilotage model` to "
-                    "select a provider, or run `pilotage setup` for first-time "
-                    "configuration."
+                    f"Provider '{_explicit}' is set in config.yaml but no API key "
+                    f"was found. Set the {_env_hint} environment "
+                    f"variable, or switch to a different provider with `pilotage model`."
                 )
+            # No provider configured — reject with a clear message.
+            raise RuntimeError(
+                "No LLM provider configured. Run `pilotage model` to "
+                "select a provider, or run `pilotage setup` for first-time "
+                "configuration."
+            )
     
     agent._client_kwargs = client_kwargs  # stored for rebuilding after interrupt
-
-    # Enable fine-grained tool streaming for Claude on OpenRouter.
-    # Without this, Anthropic buffers the entire tool call and goes
-    # silent for minutes while thinking — OpenRouter's upstream proxy
-    # times out during the silence.  The beta header makes Anthropic
-    # stream tool call arguments token-by-token, keeping the
-    # connection alive.
-    _effective_base = str(client_kwargs.get("base_url", "")).lower()
-    if base_url_host_matches(_effective_base, "openrouter.ai") and "claude" in (agent.model or "").lower():
-        headers = client_kwargs.get("default_headers") or {}
-        existing_beta = headers.get("x-anthropic-beta", "")
-        _FINE_GRAINED = "fine-grained-tool-streaming-2025-05-14"
-        if _FINE_GRAINED not in existing_beta:
-            if existing_beta:
-                headers["x-anthropic-beta"] = f"{existing_beta},{_FINE_GRAINED}"
-            else:
-                headers["x-anthropic-beta"] = _FINE_GRAINED
-            client_kwargs["default_headers"] = headers
 
     # User-configured request headers (model.default_headers in
     # config.yaml) override provider/SDK defaults. Lets custom
@@ -1131,31 +1037,6 @@ def init_agent(
     from agent.agent_runtime_helpers import sync_credential_pool_entry_id
     sync_credential_pool_entry_id(agent)
     
-    # Provider fallback chain — ordered list of backup providers tried
-    # when the primary is exhausted (rate-limit, overload, connection
-    # failure).  Supports both legacy single-dict ``fallback_model`` and
-    # new list ``fallback_providers`` format.
-    if isinstance(fallback_model, list):
-        agent._fallback_chain = [
-            f for f in fallback_model
-            if isinstance(f, dict) and f.get("provider") and f.get("model")
-        ]
-    elif isinstance(fallback_model, dict) and fallback_model.get("provider") and fallback_model.get("model"):
-        agent._fallback_chain = [fallback_model]
-    else:
-        agent._fallback_chain = []
-    agent._fallback_index = 0
-    agent._fallback_activated = getattr(agent, "_fallback_activated", False)
-    # Legacy attribute kept for backward compat (tests, external callers)
-    agent._fallback_model = agent._fallback_chain[0] if agent._fallback_chain else None
-    if agent._fallback_chain and not agent.quiet_mode:
-        if len(agent._fallback_chain) == 1:
-            fb = agent._fallback_chain[0]
-            print(f"🔄 Fallback model: {fb['model']} ({fb['provider']})")
-        else:
-            print(f"🔄 Fallback chain ({len(agent._fallback_chain)} providers): " +
-                  " → ".join(f"{f['model']} ({f['provider']})" for f in agent._fallback_chain))
-
     # A multiplexed gateway may enter a different PILOTAGE_HOME after
     # ``model_tools`` was first imported. Ensure that profile's keyed plugin
     # manager has discovered its registrations before taking the tool snapshot.
@@ -1358,26 +1239,6 @@ def init_agent(
             agent.show_commentary = bool(_display_section.get("show_commentary", True))
     except Exception:
         agent.show_commentary = True
-
-    # LM Studio can either be explicitly preloaded through LM Studio's
-    # management API (the historical Pilotage behavior) or left to LM Studio's
-    # just-in-time / Auto-Evict chat-completions path.  Keep the default
-    # explicit for backward compatibility; users with LM Studio Auto-Evict can
-    # opt into JIT via ``model.lmstudio_load_mode: jit``.
-    agent.lmstudio_load_mode = "explicit"
-    try:
-        _model_section = _agent_cfg.get("model", {})
-        if isinstance(_model_section, dict):
-            _load_mode = str(_model_section.get("lmstudio_load_mode", "explicit") or "explicit").strip().lower()
-            if _load_mode in {"explicit", "jit"}:
-                agent.lmstudio_load_mode = _load_mode
-            else:
-                logger.warning(
-                    "Invalid model.lmstudio_load_mode=%r; expected 'explicit' or 'jit'. Using explicit.",
-                    _model_section.get("lmstudio_load_mode"),
-                )
-    except Exception:
-        agent.lmstudio_load_mode = "explicit"
 
     try:
         agent._tool_guardrails = ToolCallGuardrailController(
@@ -2279,13 +2140,7 @@ def init_agent(
     # Reject models whose context window is below the minimum required
     # for reliable tool-calling workflows (64K tokens).
     _ctx = getattr(agent.context_compressor, "context_length", 0)
-    _allow_lmstudio_explicit_below_floor = (
-        str(getattr(agent, "provider", "") or "").strip().lower() == "lmstudio"
-        and isinstance(agent._config_context_length, int)
-        and not isinstance(agent._config_context_length, bool)
-        and agent._config_context_length > 0
-    )
-    if _ctx and _ctx < MINIMUM_CONTEXT_LENGTH and not _allow_lmstudio_explicit_below_floor:
+    if _ctx and _ctx < MINIMUM_CONTEXT_LENGTH:
         raise ValueError(
             f"Model {agent.model} has a context window of {_ctx:,} tokens, "
             f"which is below the minimum {MINIMUM_CONTEXT_LENGTH:,} required "
@@ -2365,7 +2220,7 @@ def init_agent(
         working_dir=os.getenv("TERMINAL_CWD") or None,
     )
     agent._user_turn_count = 0
-    # Copilot x-initiator flag: first API call of a user turn sends "user".
+    # First API call of a user turn is flagged as user-initiated.
     agent._is_user_initiated_turn = False
 
     # Cumulative token usage for the session
@@ -2460,7 +2315,7 @@ def init_agent(
         "api_mode": agent.api_mode,
         "api_key": getattr(agent, "api_key", ""),
         "client_kwargs": dict(agent._client_kwargs),
-        # Context engine state that _try_activate_fallback() overwrites.
+        # Context engine state that a runtime swap overwrites.
         # Use getattr for model/base_url/api_key/provider since plugin
         # engines may not have these (they're ContextCompressor-specific).
         "compressor_model": getattr(_cc, "model", agent.model),

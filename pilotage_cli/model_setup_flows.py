@@ -665,66 +665,8 @@ def _model_flow_named_custom(config, provider_info):
     print(f"\n✅ Model set to: {model_name}")
     print(f"   Provider: {name} ({base_url})")
 
-def _select_zai_endpoint(current_base: str) -> str:
-    """Present a picker for Z.AI endpoint selection during setup.
-
-    Offers the four official Z.AI endpoints (Global, China, Coding Plan
-    Global, Coding Plan China) plus a custom-proxy option.  The list is
-    sourced from ``ZAI_ENDPOINTS`` in ``pilotage_cli.auth`` so it stays in
-    sync with the probe list.
-
-    Returns the selected base URL.  Falls back to *current_base* on cancel
-    or error.
-    """
-    from pilotage_cli.main import _prompt_provider_choice
-    from pilotage_cli.auth import ZAI_ENDPOINTS
-
-    # Build label + URL pairs from the shared endpoint list.
-    options = [(label, url) for _, url, _, label in ZAI_ENDPOINTS]
-    normalized_current = (current_base or "").strip().rstrip("/")
-
-    # Default to the currently-active option if it matches one of the
-    # known endpoints; otherwise default to the first (Global).
-    default_idx = 0
-    for idx, (_, url) in enumerate(options):
-        if normalized_current == url.rstrip("/"):
-            default_idx = idx
-            break
-    else:
-        if normalized_current:
-            # A custom URL is active — offer "Custom proxy" as the default.
-            default_idx = len(options)
-
-    choices = [f"{label} ({url})" for label, url in options]
-    choices.append("Custom proxy URL")
-
-    selected = _prompt_provider_choice(
-        choices,
-        default=default_idx,
-        title="Select Z.AI / GLM endpoint:",
-    )
-    if selected is None:
-        return current_base
-
-    if selected == len(options):
-        # Custom proxy URL
-        try:
-            override = input(f"Custom base URL [{current_base}]: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            return current_base
-        if not override:
-            return current_base
-        if not override.startswith(("http://", "https://")):
-            print("  Invalid URL — must start with http:// or https://. Keeping current value.")
-            return current_base
-        return override.rstrip("/")
-
-    return options[selected][1].rstrip("/")
-
-
 def _model_flow_api_key_provider(config, provider_id, current_model=""):
-    """Generic flow for API-key providers (z.ai, MiniMax, OpenCode, etc.)."""
+    """Generic flow for API-key providers."""
     from pilotage_cli.main import _prompt_api_key
     from pilotage_cli.auth import (
         PROVIDER_REGISTRY,
@@ -776,29 +718,19 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
             pass
     effective_base = current_base or pconfig.inference_base_url
 
-    if provider_id == "zai":
-        # Z.AI has four official endpoints (Global, China, Coding Plan
-        # Global, Coding Plan China) with separate billing paths.  Present
-        # a picker instead of a plain text input so users can explicitly
-        # choose the endpoint that matches their key type.
-        chosen_base = _select_zai_endpoint(effective_base)
-        if chosen_base and chosen_base != effective_base and base_url_env:
-            save_env_value(base_url_env, chosen_base)
-        effective_base = chosen_base
-    else:
-        try:
-            override = input(f"Base URL [{effective_base}]: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            override = ""
-        if override and base_url_env:
-            if not override.startswith(("http://", "https://")):
-                print(
-                    "  Invalid URL — must start with http:// or https://. Keeping current value."
-                )
-            else:
-                save_env_value(base_url_env, override)
-                effective_base = override
+    try:
+        override = input(f"Base URL [{effective_base}]: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        override = ""
+    if override and base_url_env:
+        if not override.startswith(("http://", "https://")):
+            print(
+                "  Invalid URL — must start with http:// or https://. Keeping current value."
+            )
+        else:
+            save_env_value(base_url_env, override)
+            effective_base = override
 
     # Model selection — resolution order:
     #   1. models.dev registry (cached, filtered for agentic/tool-capable models)

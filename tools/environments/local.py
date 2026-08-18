@@ -231,24 +231,8 @@ def _build_provider_env_blocklist() -> frozenset:
         "OPENAI_API_BASE",
         "OPENAI_ORG_ID",
         "OPENAI_ORGANIZATION",
-        "OPENROUTER_API_KEY",
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_TOKEN",
         "LLM_MODEL",
         "GOOGLE_API_KEY",
-        # Path to a GCP service-account JSON, not a bare key, so
-        # OPTIONAL_ENV_VARS marks it password=False and the loop above skips it.
-        "VERTEX_CREDENTIALS_PATH",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "DEEPSEEK_API_KEY",
-        "MISTRAL_API_KEY",
-        "GROQ_API_KEY",
-        "TOGETHER_API_KEY",
-        "PERPLEXITY_API_KEY",
-        "COHERE_API_KEY",
-        "FIREWORKS_API_KEY",
-        "HELICONE_API_KEY",
         "PARALLEL_API_KEY",
         "FIRECRAWL_API_KEY",
         "FIRECRAWL_API_URL",
@@ -297,16 +281,6 @@ def _build_provider_env_blocklist() -> frozenset:
         "VERCEL_PROJECT_ID",
         "VERCEL_TEAM_ID",
     })
-    # CLAUDE_CODE_OAUTH_TOKEN is deliberately NOT stripped.  It is set and
-    # owned by the user's Claude Code install (subscription OAuth), not a
-    # Pilotage-managed inference credential — Claude subscription auth is not a
-    # working Pilotage provider path.  Stripping it broke agent-spawned
-    # ``claude`` CLIs: the child fell through to the shared macOS Keychain /
-    # ``~/.claude/.credentials.json`` store and, on auth failure, cleared it,
-    # logging the user out of their interactive Claude sessions.
-    # It arrives via the registry loop above (anthropic api_key_env_vars),
-    # so remove it explicitly.
-    blocked.discard("CLAUDE_CODE_OAUTH_TOKEN")
     return frozenset(blocked)
 
 
@@ -506,7 +480,7 @@ def _scrub_delegated_child_env(env: dict[str, str]) -> dict[str, str]:
 
 # Tier-1 secrets: stripped from EVERY spawned subprocess unconditionally —
 # even when the caller opts into credential inheritance for a model-driving
-# CLI (claude / codex / gemini).  These are not LLM provider credentials; no
+# CLI (codex).  These are not LLM provider credentials; no
 # legitimate child Pilotage spawns needs them, and they are the highest-value
 # secrets to keep out of a compromised dependency's reach (gateway bot tokens,
 # GitHub auth, remote-compute tokens, dashboard session secret).  The set is a
@@ -533,7 +507,7 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     # between paths: _SECRET / _DELIVERY_KEY are also matched by
     # _is_pilotage_internal_secret, but _ID has no secret suffix, so it must be
     # enumerated here to stay stripped on the inherit_credentials=True path
-    # (codex / copilot), which skips the Tier-2 blocklist.
+    # (codex), which skips the Tier-2 blocklist.
     "GATEWAY_RELAY_ID",
     "GATEWAY_RELAY_SECRET",
     "GATEWAY_RELAY_DELIVERY_KEY",
@@ -569,8 +543,8 @@ def pilotage_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, s
       ``inherit_credentials=True``.
 
     Pass ``inherit_credentials=True`` **only** when the child legitimately
-    needs LLM provider credentials — a user-blessed ``claude`` / ``codex`` /
-    ``gemini`` CLI executor, or the TUI Node host that makes model calls.  The
+    needs LLM provider credentials — a user-blessed ``codex`` CLI executor,
+    or the TUI Node host that makes model calls.  The
     flag is grep-able for audit: ``grep -rn 'inherit_credentials=True'`` lists
     every spawn site that still receives provider credentials.
 
