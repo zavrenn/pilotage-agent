@@ -10835,5 +10835,4 @@ def register(ctx) -> None:
         standalone_sender_fn=_standalone_send,
         max_message_length=4096,
         emoji="✈️",
-        allow_update_command=True,
     )

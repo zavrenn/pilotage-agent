@@ -3204,8 +3204,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
 
 
 # Per-run cron output (`cron/output/<job>/<timestamp>.md`) is written once per
-# execution. Unlike the quick-snapshot store (`pilotage_cli.backup`, capped at 20)
-# it had no retention, so a frequently-scheduled job on a long-running deploy
+# execution. It had no retention, so a frequently-scheduled job on a long-running deploy
 # accumulated one file per run forever and could fill the disk. Keep the
 # most recent N files per job; a non-positive value disables pruning (opt-out).
 _CRON_OUTPUT_DEFAULT_KEEP = 50
@@ -3225,8 +3224,7 @@ def _cron_output_keep() -> int:
 def _prune_job_output(job_output_dir: Path, keep: int) -> int:
     """Remove the oldest ``*.md`` run-output files beyond *keep*. Returns count deleted.
 
-    Mirrors the quick-snapshot retention in ``pilotage_cli.backup._prune_quick_snapshots``:
-    output filenames are timestamp-based (``%Y-%m-%d_%H-%M-%S.md``) so a reverse
+    Output filenames are timestamp-based (``%Y-%m-%d_%H-%M-%S.md``) so a reverse
     lexical sort orders newest-first, and everything past *keep* is the tail to
     drop. A non-positive *keep* disables pruning. Pruning failures are swallowed
     so they can never break output saving.

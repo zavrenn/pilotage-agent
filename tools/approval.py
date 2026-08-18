@@ -887,7 +887,6 @@ DANGEROUS_PATTERNS = [
     # `pilotage` and `gateway` (e.g. `pilotage -p ade gateway restart`) so a
     # profile flag can't slip the agent past the guard.
     (r'\bpilotage\s+(?:-{1,2}\S+(?:\s+\S+)?\s+)*gateway\s+(stop|restart)\b', "stop/restart pilotage gateway (kills running agents)"),
-    (r'\bpilotage\s+update\b', "pilotage update (restarts gateway, kills running agents)"),
     # Gateway protection: never start gateway outside systemd management
     (r'gateway\s+run\b.*(&\s*$|&\s*;|\bdisown\b|\bsetsid\b)', "start gateway outside systemd (use 'systemctl --user restart pilotage-gateway')"),
     (r'\bnohup\b.*gateway\s+run\b', "start gateway outside systemd (use 'systemctl --user restart pilotage-gateway')"),

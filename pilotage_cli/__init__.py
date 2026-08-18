@@ -29,7 +29,7 @@ def _ensure_utf8():
       installs and Raspberry Pi) select latin-1 or ASCII.
 
     The CLI prints box-drawing characters (┌│├└─) and the ⚕ glyph in the setup
-    wizard, doctor, and status banners. Encoding those under a non-UTF-8 codec
+    wizard and status banners. Encoding those under a non-UTF-8 codec
     raises an unhandled UnicodeEncodeError that crashes the command before it
     can even start — e.g. `pilotage setup` on a fresh Pi.
 

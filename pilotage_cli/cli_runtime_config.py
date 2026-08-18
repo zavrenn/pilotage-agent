@@ -215,7 +215,7 @@ def load_cli_config() -> Dict[str, Any]:
     # pilotage_cli.config._load_config_impl (which has its own managed merge), so
     # without this the entire interactive CLI/TUI surface — display prefs,
     # etc. read from CLI_CONFIG — would silently ignore managed scope while
-    # `pilotage config`/`doctor`/guards (which use load_config) honor it. The
+    # `pilotage config`/guards (which use load_config) honor it. The
     # shared helper mirrors _load_config_impl (env-only expansion, root-model
     # normalization, leaf-merge) and is fail-open.
     from pilotage_cli import managed_scope

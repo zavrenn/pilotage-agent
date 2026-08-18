@@ -347,13 +347,6 @@ gateway:
     removed:               "↩️ تم التراجع عن {turns} دور ({count} رسالة).\nنُسخ احتياطيًا إلى: \"{preview}\"\nانسخ/عدّل النص أعلاه وأرسله لإعادة التوجيه من هنا."
     invalid_count:         "عدد غير صالح \"{arg}\" — استخدم /undo أو /undo N."
 
-  update:
-    platform_not_messaging:  "✗ /update متاح فقط من منصّات المراسلة. شغّل `pilotage update` من الطرفية."
-    not_git_repo:            "✗ ليس مستودع git — لا يمكن التحديث."
-    pilotage_cmd_not_found:    "✗ تعذّر تحديد موقع أمر `pilotage`. Pilotage يعمل، لكن أمر التحديث لم يجد الملف التنفيذي على PATH أو عبر مُفسّر Python الحالي. جرّب تشغيل `pilotage update` يدويًا في طرفيتك."
-    start_failed:            "✗ فشل بدء التحديث: {error}"
-    starting:                "⚕ جارٍ بدء تحديث Pilotage… سأبثّ التقدّم هنا."
-
   usage:
     rate_limits:              "⏱️ **حدود المعدّل:** {state}"
     header_session:           "📊 **استخدام رموز الجلسة**"

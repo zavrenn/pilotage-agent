@@ -1204,7 +1204,7 @@ def switch_model(
                 from pilotage_cli.config import validate_config_structure
                 _cfg_issues = validate_config_structure()
                 if _cfg_issues:
-                    _switch_err += "\n\nRun 'pilotage doctor' — config issues detected:"
+                    _switch_err += "\n\nConfig issues detected:"
                     for _ci in _cfg_issues[:3]:
                         _switch_err += f"\n  • {_ci.message}"
             except Exception:

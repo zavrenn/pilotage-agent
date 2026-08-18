@@ -269,7 +269,7 @@ _EXTRA_ENV_KEYS = frozenset({
     # fallback, so it must stay known to reload/compat paths. The boolean
     # PILOTAGE_TOOL_PROGRESS variant is fully unsupported since the v12 config
     # support floor retired its only consumer (the v3→4 migration): it is no
-    # longer listed here and doctor flags it as ignored.
+    # longer listed here and is flagged as ignored.
     "PILOTAGE_TOOL_PROGRESS_MODE",
     "WHATSAPP_MODE", "WHATSAPP_ENABLED",
 })
@@ -1739,7 +1739,6 @@ def print_config_warnings(config: Optional[Dict[str, Any]] = None) -> None:
     for ci in issues:
         marker = "\033[31m✗\033[0m" if ci.severity == "error" else "\033[33m⚠\033[0m"
         lines.append(f"  {marker} {ci.message}")
-    lines.append("  \033[2mRun 'pilotage doctor' for fix suggestions.\033[0m")
     sys.stderr.write("\n".join(lines) + "\n\n")
 
 
@@ -2439,7 +2438,7 @@ def _normalize_root_model_keys(config: Dict[str, Any]) -> Dict[str, Any]:
     model_has_alias = isinstance(model_in, dict) and model_in.get("api_base")
     # A dict-valued ``default``/``model`` (``{provider: ..., model: ...}``)
     # must be flattened into ``default`` (string) + ``provider`` here at the
-    # single load/save chokepoint, so every reader (doctor, status, fallback
+    # single load/save chokepoint, so every reader (status, fallback
     # picker, prompt-size, context-switch guard, …) sees plain strings instead
     # of a nested dict that crashes ``.strip()``/``.lower()`` or routes the
     # model through the wrong provider.
@@ -2551,7 +2550,7 @@ def is_provider_enabled(provider_cfg: Optional[Dict[str, Any]]) -> bool:
 
     A provider is enabled by default. Only an explicit ``enabled: false`` in
     the block hides it from the model picker, ``/models`` listings, the
-    runtime resolver and the doctor / status output.
+    runtime resolver and the status output.
 
     Backward-compat: configs without the ``enabled`` key keep working as
     before — the default is ``True``.
@@ -2706,7 +2705,7 @@ def read_user_config_raw(config_path: Optional[Path] = None) -> Dict[str, Any]:
         defaults or the managed overlay here would persist hundreds of
         default keys (or administrator-pinned values) into the user's file
         on the next save. Raw is *correct*, not an optimization.
-      * RAW-FILE DIAGNOSTICS (doctor, deprecation sweeps): these inspect
+      * RAW-FILE DIAGNOSTICS (deprecation sweeps): these inspect
         what the user actually wrote — stale root keys, drift against .env —
         and merged defaults would produce false positives.
       * PRESENCE-SENSITIVE ENV BRIDGES (gateway/send bridges that only
@@ -3957,7 +3956,7 @@ def show_config():
         if _env_ghost is not None and str(_env_ghost).strip() != str(_cfg_max_turns).strip():
             print(color(
                 f"                ⚠ .env has stale PILOTAGE_MAX_ITERATIONS={_env_ghost} "
-                f"(run 'pilotage doctor --fix' to remove)",
+                f"(remove it from .env)",
                 Colors.YELLOW,
             ))
     except Exception:

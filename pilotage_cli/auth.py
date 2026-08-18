@@ -1322,7 +1322,7 @@ def _get_config_hint_for_unknown_provider(provider_name: str) -> str:
         if not issues:
             return ""
 
-        lines = ["Config issue detected — run 'pilotage doctor' for full diagnostics:"]
+        lines = ["Config issue detected:"]
         for ci in issues:
             prefix = "ERROR" if ci.severity == "error" else "WARNING"
             lines.append(f"  [{prefix}] {ci.message}")
@@ -1366,7 +1366,7 @@ def resolve_provider(
         if _config_hint:
             msg += f"\n\n{_config_hint}"
         else:
-            msg += " Check 'pilotage model' for available providers, or run 'pilotage doctor' to diagnose config issues."
+            msg += " Check 'pilotage model' for available providers."
         raise AuthError(msg, code="invalid_provider")
 
     # Explicit one-off CLI creds always mean a custom endpoint

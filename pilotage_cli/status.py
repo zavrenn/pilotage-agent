@@ -440,6 +440,5 @@ def show_status(args):
 
     print()
     print(color("─" * 60, Colors.DIM))
-    print(color("  Run 'pilotage doctor' for detailed diagnostics", Colors.DIM))
     print(color("  Run 'pilotage setup' to configure", Colors.DIM))
     print()

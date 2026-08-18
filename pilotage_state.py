@@ -1402,7 +1402,7 @@ def _log_wal_reset_bug_once(
         "%s: linked SQLite %s is vulnerable to the WAL-reset corruption "
         "bug (https://sqlite.org/wal.html#walresetbug) — %s. "
         "Upgrade to SQLite 3.51.3+ (or backports 3.50.7 / 3.44.6); "
-        "%s. See `pilotage doctor`. This warning fires once per "
+        "%s. This warning fires once per "
         "process per database.",
         db_label,
         sqlite3.sqlite_version,
@@ -2699,17 +2699,7 @@ def is_zeroed_state_db(
     through ``read_header_bytes_preopen``, which refuses (returning False
     here) once a connection is live. Pass ``force=True`` only for offline
     files -- quarantined copies, snapshots, archives.
-
-    Prefer ``pilotage_cli.backup.is_zeroed_sqlite_file`` when available; this
-    local copy keeps SessionDB openable without importing the CLI package
-    in constrained embed paths.
     """
-    try:
-        from pilotage_cli.backup import is_zeroed_sqlite_file
-
-        return is_zeroed_sqlite_file(path, probe_bytes=probe_bytes, force=force)
-    except Exception:
-        pass
     try:
         size = path.stat().st_size
     except OSError:
@@ -2840,7 +2830,7 @@ def quarantine_zeroed_state_db(path: Path) -> Optional[Path]:
             handle.close()
 
 
-# ── Read-only health/stats probes (pilotage doctor, dashboards) ──────────
+# ── Read-only health/stats probes ──────────────────────────────
 
 
 def collect_state_db_stats(db_path: Path) -> Dict[str, Any]:
@@ -2897,7 +2887,7 @@ def collect_state_db_stats(db_path: Path) -> Dict[str, Any]:
     conn = None
     try:
         # mode=ro refuses to create the file and refuses every write; a
-        # short timeout keeps doctor snappy when a writer holds the lock.
+        # short timeout keeps the probe snappy when a writer holds the lock.
         # Route through the tracked connect so byte-probe helpers
         # (read_header_bytes_preopen) see this connection and refuse raw
         # opens that could cancel our POSIX locks mid-read.

@@ -54,7 +54,7 @@ class ProviderProfile:
     base_url: str = ""
     models_url: str = ""  # explicit models endpoint; falls back to {base_url}/models
     auth_type: str = "api_key"   # api_key|oauth_external
-    supports_health_check: bool = True  # False → doctor skips /models probe for this provider
+    supports_health_check: bool = True  # False → health checks skip the /models probe
 
     # ── Vision support ────────────────────────────────────────
     # True when the provider's API accepts image content inside

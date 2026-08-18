@@ -321,7 +321,7 @@ def register_from_config(
 
 def iter_configured_hooks(cfg: Optional[Dict[str, Any]]) -> List[ShellHookSpec]:
     """Return the parsed ``ShellHookSpec`` entries from config without
-    registering anything.  Used by ``pilotage hooks list`` and ``doctor``."""
+    registering anything.  Used by ``pilotage hooks list`` and ``hooks doctor``."""
     if not isinstance(cfg, dict):
         return []
     return _parse_hooks_block(cfg.get("hooks"))
@@ -983,7 +983,7 @@ _SCRIPT_EXTENSIONS: Tuple[str, ...] = (
 
 
 def _command_script_path(command: str) -> str:
-    """Return the script path from ``command`` for doctor / drift checks.
+    """Return the script path from ``command`` for hook drift checks.
 
     Prefers a token ending in a known script extension, then a token
     containing ``/`` or leading ``~``, then the first token.  Handles

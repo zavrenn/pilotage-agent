@@ -142,10 +142,6 @@ class PlatformEntry:
     # Emoji for CLI/gateway display (e.g. "💬")
     emoji: str = "🔌"
 
-    # Whether this platform should appear in _UPDATE_ALLOWED_PLATFORMS
-    # (allows /update command from this platform).
-    allow_update_command: bool = True
-
     # ── LLM guidance ──
     # Platform hint injected into the system prompt (e.g. "You are on IRC.
     # Do not use markdown.").  Empty string = no hint.

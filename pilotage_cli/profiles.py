@@ -115,8 +115,8 @@ _CLONE_ALL_DEFAULT_EXCLUDE_ROOT: frozenset[str] = frozenset({
 # Rationale per item:
 #   state.db (+wal/shm) — SQLite session store (can reach many GB)
 #   sessions            — per-session transcript/data dirs
-#   backups             — `pilotage backup` archives
-#   state-snapshots     — quick-backup snapshot trees
+#   backups             — legacy backup archives
+#   state-snapshots     — legacy snapshot trees
 #   checkpoints         — session checkpoint data
 _CLONE_ALL_HISTORY_EXCLUDE_ROOT: frozenset[str] = frozenset({
     "state.db",
@@ -240,7 +240,7 @@ _RESERVED_NAMES = frozenset({
 # Pilotage subcommands that cannot be used as profile names/aliases
 _PILOTAGE_SUBCOMMANDS = frozenset({
     "chat", "model", "gateway", "setup", "whatsapp", "login", "logout",
-    "status", "cron", "doctor", "dump", "config", "pairing", "skills", "tools",
+    "status", "cron", "dump", "config", "pairing", "skills", "tools",
     "mcp", "sessions", "insights", "version",
     "profile", "plugins", "honcho", "acp",
 })
@@ -499,7 +499,7 @@ def _migrate_profile_config_if_outdated(profile_dir: Path) -> None:
 
     Profile creation can clone a config file that predates schema tracking (no
     ``_config_version``) or that is simply older than the running Pilotage. If we
-    leave it untouched, the first desktop/doctor view of the new profile shows a
+    leave it untouched, the first view of the new profile shows a
     scary ``v0 → latest`` warning even though we just created the profile. Scope
     the normal migration pipeline to the new profile and keep it non-interactive.
     """
@@ -520,7 +520,7 @@ def _migrate_profile_config_if_outdated(profile_dir: Path) -> None:
             reset_pilotage_home_override(token)
     except Exception:
         # Profile creation should not fail because an old copied config could
-        # not be migrated. The next `pilotage doctor --fix` can still surface the
+        # not be migrated. A later config check can still surface the
         # detailed error in the target profile.
         pass
 

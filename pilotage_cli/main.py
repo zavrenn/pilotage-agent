@@ -16,7 +16,6 @@ Usage:
     pilotage cron                # Manage cron jobs
     pilotage cron list           # List cron jobs
     pilotage cron status         # Check if cron scheduler is running
-    pilotage doctor              # Check configuration and dependencies
     pilotage memory status       # Show memory provider config
     pilotage skills list         # List installed skills
     pilotage plugins list        # List plugins
@@ -294,13 +293,10 @@ from pilotage_cli.subcommands.status import build_status_parser
 from pilotage_cli.subcommands.pause import build_pause_parser
 from pilotage_cli.subcommands.webhook import build_webhook_parser
 from pilotage_cli.subcommands.hooks import build_hooks_parser
-from pilotage_cli.subcommands.doctor import build_doctor_parser
 from pilotage_cli.subcommands.security import build_security_parser
 from pilotage_cli.subcommands.approvals import build_approvals_parser
 from pilotage_cli.subcommands.dump import build_dump_parser
 from pilotage_cli.subcommands.debug import build_debug_parser
-from pilotage_cli.subcommands.backup import build_backup_parser
-from pilotage_cli.subcommands.import_cmd import build_import_cmd_parser
 from pilotage_cli.subcommands.config import build_config_parser
 from pilotage_cli.subcommands.version import build_version_parser
 from pilotage_cli.subcommands.logs import build_logs_parser
@@ -1882,7 +1878,7 @@ def select_provider_and_model(args=None):
         else:
             warning = (
                 f"Unknown provider '{effective_provider}'. Check 'pilotage model' for "
-                "available providers, or run 'pilotage doctor' to diagnose config "
+                "available providers, or check config.yaml for issues "
                 "issues."
             )
             print(f"Warning: {warning} Falling back to auto provider detection.")
@@ -3076,13 +3072,6 @@ def cmd_hooks(args):
     hooks_command(args)
 
 
-def cmd_doctor(args):
-    """Check configuration and dependencies."""
-    from pilotage_cli.doctor import run_doctor
-
-    run_doctor(args)
-
-
 def cmd_security(args):
     """Dispatch `pilotage security <subcmd>`."""
     sub = getattr(args, "security_command", None)
@@ -3125,25 +3114,6 @@ def cmd_config(args):
     from pilotage_cli.config import config_command
 
     config_command(args)
-
-
-def cmd_backup(args):
-    """Back up Pilotage home directory to a zip file."""
-    if getattr(args, "quick", False):
-        from pilotage_cli.backup import run_quick_backup
-
-        run_quick_backup(args)
-    else:
-        from pilotage_cli.backup import run_backup
-
-        run_backup(args)
-
-
-def cmd_import(args):
-    """Restore a Pilotage backup from a zip file."""
-    from pilotage_cli.backup import run_import
-
-    run_import(args)
 
 
 def _print_version_info(*, check_updates: bool = True) -> None:
@@ -3328,7 +3298,6 @@ def _coalesce_session_name_args(argv: list) -> list:
         "auth",
         "status",
         "cron",
-        "doctor",
         "config",
         "pairing",
         "skills",
@@ -3344,8 +3313,6 @@ def _coalesce_session_name_args(argv: list) -> list:
         "memory",
         "dump",
         "debug",
-        "backup",
-        "import",
         "completion",
         "logs",
     }
@@ -3849,9 +3816,9 @@ def _build_provider_choices() -> list[str]:
 # to parse.
 _BUILTIN_SUBCOMMANDS = frozenset(
     {
-        "approvals", "auth", "backup", "bundles", "checkpoints", "completion",
-        "config", "cron", "debug", "doctor",
-        "dump", "gateway", "hooks", "import",
+        "approvals", "auth", "bundles", "checkpoints", "completion",
+        "config", "cron", "debug",
+        "dump", "gateway", "hooks",
         "login", "logout", "logs", "memory",
         "model", "pairing", "pause", "plugins", "profile",
         "prompt-size",
@@ -4426,11 +4393,6 @@ def main():
     build_hooks_parser(subparsers, cmd_hooks=cmd_hooks)
 
     # =========================================================================
-    # doctor command  (parser built in pilotage_cli/subcommands/doctor.py)
-    # =========================================================================
-    build_doctor_parser(subparsers, cmd_doctor=cmd_doctor)
-
-    # =========================================================================
     # verify command  (parser built in pilotage_cli/subcommands/verify.py)
     # =========================================================================
 
@@ -4457,11 +4419,6 @@ def main():
     build_debug_parser(subparsers, cmd_debug=cmd_debug)
 
     # =========================================================================
-    # backup command  (parser built in pilotage_cli/subcommands/backup.py)
-    # =========================================================================
-    build_backup_parser(subparsers, cmd_backup=cmd_backup)
-
-    # =========================================================================
     # checkpoints command
     # =========================================================================
     checkpoints_parser = subparsers.add_parser(
@@ -4474,11 +4431,6 @@ def main():
     )
     from pilotage_cli.checkpoints import register_cli as _register_checkpoints_cli
     _register_checkpoints_cli(checkpoints_parser)
-
-    # =========================================================================
-    # import command  (parser built in pilotage_cli/subcommands/import_cmd.py)
-    # =========================================================================
-    build_import_cmd_parser(subparsers, cmd_import=cmd_import)
 
     # =========================================================================
     # config command  (parser built in pilotage_cli/subcommands/config.py)

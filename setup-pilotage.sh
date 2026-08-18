@@ -472,7 +472,6 @@ else
     echo "  pilotage gateway install # Install gateway service (messaging + cron)"
 fi
 echo "  pilotage cron list     # View scheduled jobs"
-echo "  pilotage doctor        # Diagnose issues"
 echo ""
 
 # Ask if they want to run setup wizard now

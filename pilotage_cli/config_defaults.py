@@ -1442,8 +1442,7 @@ DEFAULT_CONFIG = {
         # Acknowledged supply-chain security advisories. Each entry is the
         # ID of an advisory the user has read and acted on (uninstalled the
         # compromised package, rotated credentials). Acked advisories no
-        # longer trigger the startup banner. Add via `pilotage doctor --ack
-        # <id>`; remove by editing the list directly. See
+        # longer trigger the startup banner. Edit the list directly. See
         # ``pilotage_cli/security_advisories.py`` for the catalog.
         "acked_advisories": [],
     },
@@ -2021,57 +2020,6 @@ DEFAULT_CONFIG = {
         # reads connected accounts silently). "off" -> plain intro only.
         # The offer fires at most once (latched under onboarding.seen).
         "profile_build": "ask",
-    },
-
-    # ``pilotage doctor`` behaviour.
-    "doctor": {
-        # Per-probe timeout (seconds) for the opt-in `pilotage doctor --live`
-        # real-call backend probes (Firecrawl/FAL/browser/MCP/TTS/STT).
-        "live_probe_timeout": 10,
-    },
-
-    # ``pilotage update`` behaviour.
-    "updates": {
-        # Pre-update safety backup — ONE consolidated mechanism, three modes:
-        #
-        #   quick (default) — snapshot critical small state files (pairing
-        #     JSONs, cron jobs, config.yaml, .env, auth.json, per-profile
-        #     DBs) into <PILOTAGE_HOME>/state-snapshots/ before the update.
-        #     Files over 1 GiB (e.g. a bloated state.db) are skipped with a
-        #     warning so the snapshot stays fast. Restore via ``/snapshot``.
-        # This is the (lost pairing data) / (emptied cron
-        #     jobs) safety net.
-        #   full — the quick snapshot PLUS a full ``pilotage backup``-style zip
-        #     of PILOTAGE_HOME into <PILOTAGE_HOME>/backups/, restorable with
-        #     ``pilotage import``. Can add minutes on large homes. This is the
-        # (wrong-path wipe) safety net. ``--backup`` forces this
-        #     for a single run.
-        #   off — no pre-update backup of any kind. ``--no-backup`` forces
-        #     this for a single run.
-        #
-        # Legacy boolean values are honored: true -> full, false -> off.
-        "pre_update_backup": "quick",
-        # How many full pre-update backup zips to retain (mode ``full``).
-        # Older ones are pruned automatically after each successful backup.
-        # Values below 1 are floored to 1 — the backup just created is
-        # always preserved. The quick snapshot always keeps exactly 1.
-        "backup_keep": 5,
-        # What `pilotage update` does with uncommitted local changes to the
-        # source tree when it runs NON-interactively — i.e. triggered from
-        # the desktop/chat app or the gateway, where there's no TTY to answer
-        # a restore prompt. Interactive (terminal) updates are unaffected:
-        # they always stash the changes and ask whether to restore, exactly
-        # as they always have.
-        #   "stash"   — auto-stash the changes, pull, then auto-restore them
-        #               on top of the updated code (the safe default; nothing
-        #               is ever lost — conflicts are preserved in a git stash).
-        #   "discard" — auto-stash the changes and throw the stash away after
-        #               the pull. Use this only if you never intend to keep
-        #               local edits to the source tree on this machine.
-        #               Stash-and-drop (not `reset --hard` + `clean -fd`) so
-        #               ignored paths — node_modules, venv, build outputs —
-        #               are never touched.
-        "non_interactive_local_changes": "stash",
     },
 
     # Language Server Protocol — semantic diagnostics from real

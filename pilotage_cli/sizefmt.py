@@ -21,7 +21,7 @@ def format_bytes(n) -> str:
 
     Accepts anything ``float()`` accepts; returns ``"?"`` for None or
     unparseable input so display call sites never raise (contract inherited
-    from doctor's original copy — its stats dict tolerates None fields).
+    from the original copy — its stats dict tolerates None fields).
     """
     try:
         size = float(n)

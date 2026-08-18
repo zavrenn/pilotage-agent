@@ -522,8 +522,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
     if isinstance(custom_providers, dict):
         logger.warning(
             "custom_providers in config.yaml is a dict, not a list. "
-            "Each entry must be prefixed with '-' in YAML. "
-            "Run 'pilotage doctor' for details."
+            "Each entry must be prefixed with '-' in YAML."
         )
         return None
 

@@ -74,7 +74,6 @@ TIPS = [
     "pilotage -p work chat runs under a specific profile without changing your default.",
 
     # --- CLI Subcommands ---
-    "pilotage doctor --fix diagnoses and auto-repairs config and dependency issues.",
     "pilotage dump outputs a compact setup summary — great for bug reports.",
     "pilotage config set KEY VALUE auto-routes secrets to .env and everything else to config.yaml.",
     "pilotage config edit opens config.yaml in your default editor.",
@@ -90,7 +89,6 @@ TIPS = [
     "pilotage auth add lets you add multiple API keys for credential pool rotation.",
     "pilotage completion bash >> ~/.bashrc enables tab completion for all commands and profiles.",
     "pilotage logs -f follows agent.log in real time. --level WARNING --since 1h filters output.",
-    "pilotage backup creates a zip backup of your entire Pilotage home directory.",
     "pilotage profile create coder creates an isolated profile that becomes its own command.",
     "pilotage profile create work --clone copies your current config and keys to a new profile.",
     "pilotage update syncs new bundled skills to ALL profiles automatically.",
@@ -391,7 +389,6 @@ TIPS = [
     "pilotage chat --source tool tags programmatic chats so they don't clutter pilotage sessions list.",
     'pilotage dump --show-keys includes redacted API key fingerprints for deeper support debugging.',
     'pilotage sessions rename <ID> "new title" renames any past session; pilotage sessions delete <ID> removes one.',
-    'pilotage import restores a full Pilotage backup zip, including session JSON/JSONL exports.',
     'pilotage pairing rotates the DM pairing token — the first messager after rotation claims access to the bot.',
     'pilotage setup walks first-time users through provider, keys, and platform wiring in one interactive flow.',
     'pilotage status --deep runs the full health sweep across every component; plain pilotage status is the quick view.',

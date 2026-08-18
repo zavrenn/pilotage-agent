@@ -578,7 +578,6 @@ def _print_setup_summary(config: dict, pilotage_home):
     print()
     print(f"   {color('pilotage', Colors.GREEN)}              Start chatting")
     print(f"   {color('pilotage gateway', Colors.GREEN)}      Start messaging gateway")
-    print(f"   {color('pilotage doctor', Colors.GREEN)}       Check for issues")
     print()
 
 
