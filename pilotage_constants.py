@@ -126,8 +126,7 @@ def get_pilotage_home() -> Path:
     the platform-native default — because raising here would brick 30+ module-level
     callers that import this at load time.  Subprocess spawners are
     expected to propagate ``PILOTAGE_HOME`` explicitly (see the systemd
-    template in ``pilotage_cli/gateway.py`` and the kanban dispatcher in
-    ``pilotage_cli/kanban_db.py``).
+    template in ``pilotage_cli/gateway.py``).
     """
     override = get_pilotage_home_override()
     if override:
@@ -173,7 +172,7 @@ def get_process_pilotage_home() -> Path:
 # Process-level memo for get_default_pilotage_root(). The function resolves
 # PILOTAGE_HOME against the native home on every call (~80us of path
 # resolution), and it is called at 31+ sites — every _load_global_auth_store()
-# (per provider row in the /model picker), kanban, backup, gateway, update.
+# (per provider row in the /model picker), backup, gateway, update.
 # Its result depends only on (PILOTAGE_HOME, platform native home), which are
 # compared for free on each call, so the memo is freshness-correct even if a
 # test or plugin mutates PILOTAGE_HOME mid-process.

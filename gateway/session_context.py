@@ -116,7 +116,7 @@ _CRON_SESSION: ContextVar = ContextVar("PILOTAGE_CRON_SESSION", default=_UNSET)
 #         real gateway platforms (Telegram/Discord/Slack/...), which hold a
 #         persistent outbound channel and run the watcher/drain loops.
 # False — finite runtimes that can end before a detached completion returns:
-#         stateless API-server requests and dispatcher-spawned Kanban workers.
+#         stateless API-server requests and one-shot CLI runs.
 #
 # Tools that promise async delivery (terminal notify_on_complete /
 # watch_patterns, delegate_task background=True) read this via
@@ -421,7 +421,6 @@ NON_MESSAGING_SESSION_SURFACES = frozenset(
         "local",
         "msgraph_webhook",
         "tool",
-        "tui",
         "webhook",
     }
 )

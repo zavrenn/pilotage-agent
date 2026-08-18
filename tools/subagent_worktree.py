@@ -27,10 +27,6 @@ Contract (mirrors Muse Code's documented semantics):
 - **Clean worktrees are pruned.** A worktree with no new commits and a
   clean tree is removed automatically after the child finishes; anything
   holding work is kept and reported.
-
-Only the local terminal backend is supported: on docker/ssh/modal/etc. the
-worktree created on the host would not be visible inside the sandbox, so
-isolation is skipped (with a debug log) rather than half-applied.
 """
 
 from __future__ import annotations

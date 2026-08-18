@@ -237,8 +237,8 @@ TOOLSETS = {
     #
     # All platforms share the same core tools. Note: agents do NOT get an
     # agent-callable send_message tool — outbound platform messaging is handled
-    # outside the agent loop (cron delivery, the gateway kanban notifier, and
-    # the `pilotage send` CLI), not by the model deciding to send on its own.
+    # outside the agent loop (cron delivery and the `pilotage send` CLI),
+    # not by the model deciding to send on its own.
     # ==========================================================================
 
     "pilotage-api-server": {

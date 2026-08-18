@@ -77,16 +77,7 @@ def evaluate_command(command: str, env_type: str = "local") -> dict:
             "normalized_variants": variants,
         }
 
-    # 1. Isolated container backends skip every guard (runtime parity:
-    #    this fires BEFORE the hardline floor in check_all_command_guards).
-    if approval._should_skip_container_guards(env_type):
-        return result(
-            "allow",
-            detail=(f"env_type '{env_type}' is an isolated container backend; "
-                    "the runtime skips all command guards for it"),
-        )
-
-    # 2. Hardline blocklist — never bypassable, even under yolo.
+    # 1. Hardline blocklist — never bypassable, even under yolo.
     is_hardline, hardline_desc = approval.detect_hardline_command(command)
     if is_hardline:
         return result(
@@ -95,7 +86,7 @@ def evaluate_command(command: str, env_type: str = "local") -> dict:
                    "blocked even under --yolo / approvals.mode=off)",
         )
 
-    # 3. Sudo stdin guard — unconditional, like the hardline floor.
+    # 2. Sudo stdin guard — unconditional, like the hardline floor.
     is_sudo_guess, sudo_desc = approval._check_sudo_stdin_guard(command)
     if is_sudo_guess:
         return result(
@@ -103,7 +94,7 @@ def evaluate_command(command: str, env_type: str = "local") -> dict:
             detail="sudo stdin guard (unconditional block)",
         )
 
-    # 4. User-defined approvals.deny rules — fire before yolo/off.
+    # 3. User-defined approvals.deny rules — fire before yolo/off.
     deny_pattern = approval._match_user_deny_rule(command)
     if deny_pattern is not None:
         return result(
@@ -112,7 +103,7 @@ def evaluate_command(command: str, env_type: str = "local") -> dict:
                    "config.yaml (blocked even under --yolo / mode=off)",
         )
 
-    # 5. Yolo / approvals.mode=off bypass.
+    # 4. Yolo / approvals.mode=off bypass.
     if (approval._YOLO_MODE_FROZEN
             or approval.is_current_session_yolo_enabled()
             or approval._get_approval_mode() == "off"):
@@ -122,7 +113,7 @@ def evaluate_command(command: str, env_type: str = "local") -> dict:
                    "only hardline/deny rules would block",
         )
 
-    # 6. Permanent command_allowlist.
+    # 5. Permanent command_allowlist.
     if approval._command_matches_permanent_allowlist(command):
         return result(
             "allow",
@@ -130,7 +121,7 @@ def evaluate_command(command: str, env_type: str = "local") -> dict:
                    "(permanently approved)",
         )
 
-    # 7. Dangerous-pattern detection → would prompt.
+    # 6. Dangerous-pattern detection → would prompt.
     is_dangerous, pattern_key, description = approval.detect_dangerous_command(command)
     if is_dangerous:
         return result(

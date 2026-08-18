@@ -2,26 +2,13 @@
 """
 Terminal Tool Module
 
-A terminal tool that executes commands in local, Docker, Modal, SSH,
-Singularity, Daytona, and Vercel Sandbox environments. Supports local
-execution, containerized backends, and cloud sandboxes, including managed
-Modal mode.
-
-Environment Selection (via TERMINAL_ENV environment variable):
-- "local": Execute directly on the host machine (default, fastest)
-- "docker": Execute in Docker containers (isolated, requires Docker)
-- "modal": Execute in Modal cloud sandboxes
-- "vercel_sandbox": Execute in Vercel Sandbox cloud sandboxes
+A terminal tool that executes commands on the host machine. Remote and
+containerized backends were removed; ``TERMINAL_ENV`` accepts only "local".
 
 Features:
-- Multiple execution backends (local, docker, modal, vercel_sandbox)
 - Background task support
-- VM/container lifecycle management
+- Persistent shell sessions
 - Automatic cleanup after inactivity
-
-Cloud sandbox note:
-- Persistent filesystems preserve working state across sandbox recreation
-- Persistent filesystems do NOT guarantee the same live sandbox or long-running processes survive cleanup, idle reaping, or Pilotage exit
 
 Usage:
     from terminal_tool import terminal_tool
@@ -33,7 +20,6 @@ Usage:
     result = terminal_tool("python server.py", background=True)
 """
 
-import importlib.util
 import json
 import logging
 import os
@@ -122,135 +108,6 @@ FOREGROUND_MAX_TIMEOUT = _safe_parse_import_env(
     int,
     "integer",
 )
-
-# Disk usage warning threshold (in GB)
-DISK_USAGE_WARNING_THRESHOLD_GB = _safe_parse_import_env(
-    "TERMINAL_DISK_WARNING_GB",
-    500.0,
-    float,
-    "number",
-)
-_VERCEL_SANDBOX_DEFAULT_CWD = "/vercel/sandbox"
-_SUPPORTED_VERCEL_RUNTIMES = ("node24", "node22", "python3.13")
-
-
-def _is_supported_vercel_runtime(runtime: str) -> bool:
-    return not runtime or runtime in _SUPPORTED_VERCEL_RUNTIMES
-
-
-def _check_vercel_sandbox_requirements(config: dict[str, Any]) -> bool:
-    """Validate Vercel Sandbox terminal backend requirements."""
-    runtime = (config.get("vercel_runtime") or "").strip()
-    if not _is_supported_vercel_runtime(runtime):
-        supported = ", ".join(_SUPPORTED_VERCEL_RUNTIMES)
-        logger.error(
-            "Vercel Sandbox runtime %r is not supported. "
-            "Set TERMINAL_VERCEL_RUNTIME to one of: %s.",
-            runtime,
-            supported,
-        )
-        return False
-
-    disk = config.get("container_disk", 51200)
-    if disk not in {0, 51200}:
-        logger.error(
-            "Vercel Sandbox does not support custom TERMINAL_CONTAINER_DISK=%s. "
-            "Use the default shared setting (51200 MB).",
-            disk,
-        )
-        return False
-
-    if importlib.util.find_spec("vercel") is None:
-        logger.error(
-            "vercel is required for the Vercel Sandbox terminal backend: pip install vercel"
-        )
-        return False
-
-    from agent.secret_scope import get_secret
-
-    has_oidc = bool(get_secret("VERCEL_OIDC_TOKEN"))
-    has_token = bool(get_secret("VERCEL_TOKEN"))
-    has_project = bool(get_secret("VERCEL_PROJECT_ID"))
-    has_team = bool(get_secret("VERCEL_TEAM_ID"))
-
-    if has_oidc:
-        return True
-
-    if has_token or has_project or has_team:
-        if has_token and has_project and has_team:
-            return True
-        logger.error(
-            "Vercel Sandbox backend selected with token auth, but "
-            "VERCEL_TOKEN, VERCEL_PROJECT_ID, and VERCEL_TEAM_ID must all "
-            "be set together. VERCEL_OIDC_TOKEN is supported for one-off "
-            "local development only."
-        )
-        return False
-
-    logger.error(
-        "Vercel Sandbox backend selected but no supported auth configuration "
-        "was found. Set VERCEL_TOKEN, VERCEL_PROJECT_ID, and VERCEL_TEAM_ID "
-        "for normal use. VERCEL_OIDC_TOKEN is supported for one-off local "
-        "development only."
-    )
-    return False
-
-
-# Cache for disk usage warning to avoid full rglob scan on every call.
-# The check is advisory-only — staleness for up to 5 minutes is acceptable.
-_disk_usage_cache: dict = {"timestamp": 0.0, "result": False}
-_DISK_USAGE_CACHE_TTL = 300.0  # seconds
-
-
-def _check_disk_usage_warning():
-    """Check if total disk usage exceeds warning threshold.
-
-    Result is cached for :data:`_DISK_USAGE_CACHE_TTL` seconds (default:
-    5 minutes) to avoid an expensive recursive filesystem scan on every
-    terminal command.  The check is advisory-only so a stale result is
-    harmless.
-    """
-    import time as _time_mod
-    now = _time_mod.monotonic()
-    if now - _disk_usage_cache["timestamp"] < _DISK_USAGE_CACHE_TTL:
-        return _disk_usage_cache["result"]
-    try:
-        scratch_dir = _get_scratch_dir()
-
-        # Get total size of pilotage directories
-        total_bytes = 0
-        import glob
-        for path in glob.glob(str(scratch_dir / "pilotage-*")):
-            for f in Path(path).rglob('*'):
-                if f.is_file():
-                    try:
-                        total_bytes += f.stat().st_size
-                    except OSError as e:
-                        logger.debug("Could not stat file %s: %s", f, e)
-        
-        total_gb = total_bytes / (1024 ** 3)
-        
-        exceeded = total_gb > DISK_USAGE_WARNING_THRESHOLD_GB
-        if exceeded:
-            logger.warning("Disk usage (%.1fGB) exceeds threshold (%.0fGB). Consider running cleanup_all_environments().",
-                           total_gb, DISK_USAGE_WARNING_THRESHOLD_GB)
-        _disk_usage_cache["timestamp"] = _time_mod.monotonic()
-        _disk_usage_cache["result"] = exceeded
-        return exceeded
-    except Exception as e:
-        logger.debug("Disk usage warning check failed: %s", e, exc_info=True)
-        # Don't update cache on error so the next call retries.
-        return False
-
-
-# Interactive sudo password cache.
-#
-# Scope the cache to the active session when a session key is available, then
-# fall back to callback identity (ACP / CLI interactive callbacks), then the
-# current thread. This prevents one interactive session from reusing another
-# session's cached sudo password inside the same long-lived process.
-_sudo_password_cache: dict[str, str] = {}
-_sudo_password_cache_lock = threading.Lock()
 
 # Optional UI callbacks for interactive prompts. When set, these are called
 # instead of the default /dev/tty or input() readers. The CLI registers these
@@ -351,33 +208,10 @@ from tools.approval import (
 )
 
 
-def _docker_volume_uses_host_path(volume_spec: str) -> bool:
-    """Return True when a docker volume spec bind-mounts a host path."""
-    if not isinstance(volume_spec, str):
-        return False
-
-    vol = volume_spec.strip()
-    return bool(vol) and (
-        vol.startswith(("/", "~", "./", "../")) or
-        (len(vol) >= 3 and vol[1] == ":" and vol[2] in ("/", "\\"))
-    )
-
-
-def _docker_has_host_access(config: Dict[str, Any]) -> bool:
-    """Return True when a Docker sandbox exposes host paths through bind mounts."""
-    if config.get("env_type") != "docker":
-        return False
-    if config.get("host_cwd") and config.get("docker_mount_cwd_to_workspace"):
-        return True
-    return any(_docker_volume_uses_host_path(vol) for vol in config.get("docker_volumes", []))
-
-
-def _check_all_guards(command: str, env_type: str,
-                      has_host_access: bool = False) -> dict:
+def _check_all_guards(command: str, env_type: str) -> dict:
     """Delegate to consolidated guard (tirith + dangerous cmd) with CLI callback."""
     return _check_all_guards_impl(command, env_type,
-                                  approval_callback=_get_approval_callback(),
-                                  has_host_access=has_host_access)
+                                  approval_callback=_get_approval_callback())
 
 
 # Allowlist: characters that can legitimately appear in directory paths.
@@ -993,14 +827,8 @@ def _transform_sudo_command(command: str | None) -> tuple[str | None, str | None
           returned unchanged so it fails gracefully with
           "sudo: a password is required".
 
-    Callers that drive a subprocess directly (local, ssh, docker, singularity)
-    should prepend sudo_stdin to their stdin_data and pass the merged bytes to
-    Popen's stdin pipe.
-
-    Callers that cannot pipe subprocess stdin (modal, daytona,
-    vercel_sandbox) must embed the password in the command string
-    themselves; see their execute() methods for how they handle the
-    non-None sudo_stdin case.
+    Callers that drive a subprocess directly should prepend sudo_stdin to
+    their stdin_data and pass the merged bytes to Popen's stdin pipe.
 
     If SUDO_PASSWORD is not set and an interactive UI is available
     (PILOTAGE_INTERACTIVE=1 or a registered sudo password callback):
@@ -1088,159 +916,7 @@ _creation_locks_lock = threading.Lock()  # Protects _creation_locks dict itself
 _cleanup_thread = None
 _cleanup_running = False
 
-# Once-per-process guard for the docker orphan reaper.
-# Set when _maybe_reap_docker_orphans first runs; concurrent _create_environment
-# calls for parallel subagents won't re-trigger the sweep.
-_docker_orphan_reaper_ran = False
-_docker_orphan_reaper_lock = threading.Lock()
-
-
-def _maybe_reap_docker_orphans(container_config: Dict[str, Any]) -> None:
-    """No-op: the docker backend was removed."""
-    return
-
-
-def record_session_cwd(session_key: Optional[str], cwd: Optional[str]) -> None:
-    """Record *cwd* as the working directory of *session_key*.
-
-    Called wherever a session's live cwd becomes known: after a terminal
-    command completes (the env's post-command tracking has just parsed the
-    resulting cwd) and when a surface registers a workspace cwd override.
-    Empty/None session keys collapse to ``"default"`` (single-session CLI).
-    Non-string / empty cwds are ignored.
-    """
-    if not isinstance(cwd, str) or not cwd.strip():
-        return
-    key = str(session_key or "default")
-    with _session_cwd_lock:
-        if _session_cwd.get(key) != cwd:
-            _session_cwd[key] = cwd
-
-
-def get_session_cwd(session_key: Optional[str]) -> Optional[str]:
-    """Return the recorded working directory for *session_key*, if any.
-
-    No fallback chain here on purpose: callers decide what an absent record
-    means (config default, TERMINAL_CWD seed, process cwd). ``None``/empty
-    keys read the ``"default"`` record.
-    """
-    key = str(session_key or "default")
-    with _session_cwd_lock:
-        return _session_cwd.get(key)
-
-
-def clear_session_cwd(session_key: str) -> None:
-    """Drop a session's cwd record (session teardown)."""
-    with _session_cwd_lock:
-        _session_cwd.pop(session_key, None)
-
-
-def register_task_env_overrides(task_id: str, overrides: Dict[str, Any]):
-    """
-    Register environment overrides for a specific task/rollout.
-
-    Called by Atropos environments before the agent loop to configure
-    per-task sandbox settings (e.g., a custom Dockerfile for the Modal image).
-
-    Supported override keys:
-        - modal_image: str -- Path to Dockerfile or Docker Hub image name
-        - docker_image: str -- Docker image name
-        - cwd: str -- Working directory inside the sandbox
-
-    Args:
-        task_id: The rollout's unique task identifier
-        overrides: Dict of config keys to override
-    """
-    _task_env_overrides[task_id] = overrides
-
-    # If a live environment already exists for this task, a freshly registered
-    # ``cwd`` override (e.g. the ACP client switching the editor's project root
-    # mid-session via ``session/load`` / ``session/resume``) must take effect
-    # immediately. The session record is what commands resolve against;
-    # the live env's cwd is also updated so env-side seeding stays consistent.
-    new_cwd = overrides.get("cwd")
-    if isinstance(new_cwd, str) and new_cwd.strip():
-        # A registered workspace cwd IS the session's working directory until
-        # a `cd` changes it.
-        record_session_cwd(task_id, new_cwd)
-        # The live env is cached under the raw task_id for per-session surfaces
-        # (ACP/gateway/dashboard) and under the collapsed container id for
-        # isolation-keyed rollouts. Try the raw id first, then the container id,
-        # so a CWD-only override (which collapses to "default") still finds and
-        # updates the originating session's env.
-        container_id = _resolve_container_task_id(task_id)
-        with _env_lock:
-            env = _active_environments.get(task_id) or _active_environments.get(container_id)
-        if env is not None and getattr(env, "cwd", None) is not None:
-            env.cwd = new_cwd
-
-
-def clear_task_env_overrides(task_id: str):
-    """
-    Clear environment overrides for a task after rollout completes.
-
-    Called during cleanup to avoid stale entries accumulating.
-    """
-    _task_env_overrides.pop(task_id, None)
-    clear_session_cwd(task_id)
-    with _container_alias_lock:
-        _container_aliases.pop(task_id, None)
-
-
-# Subagent → parent container aliasing.  delegate_task children get their own
-# task_id (file-state tracking, TUI events) but must share the PARENT
-# session's container — one bash, one /workspace, one set of installed
-# packages.  With per-session container isolation active (docker +
-# container_persistent: false), the collapse-to-"default" shortcut no longer
-# provides that sharing, so the spawn site registers an explicit alias.
-_container_aliases: Dict[str, str] = {}
-_container_alias_lock = threading.Lock()
-
-
-def register_container_alias(child_task_id: str, parent_task_id: Optional[str]) -> None:
-    """Make *child_task_id* resolve to *parent_task_id*'s container.
-
-    Called by ``delegate_task`` at child spawn so subagents share the parent
-    session's sandbox under per-session container isolation. A missing/empty
-    parent id aliases the child to ``"default"`` (top-level CLI parent).
-    """
-    if not child_task_id:
-        return
-    with _container_alias_lock:
-        _container_aliases[child_task_id] = str(parent_task_id or "default")
-
-
-def _resolve_container_alias(task_id: str) -> str:
-    """Follow the child→parent alias chain (cycle-safe) for *task_id*."""
-    seen = set()
-    key = task_id
-    with _container_alias_lock:
-        while key in _container_aliases and key not in seen:
-            seen.add(key)
-            key = _container_aliases[key]
-    return key
-
-
-def _docker_session_isolation_enabled() -> bool:
-    """True when docker sessions get their OWN containers (issue: stale
-    workspace mounts leaking between desktop sessions).
-
-    Gated on ``terminal.backend: docker`` + ``container_persistent: false``:
-    a non-persistent sandbox is a statement that state must not survive the
-    session, so sharing one container across sessions contradicts it. With
-    ``container_persistent: true`` the documented ONE-long-lived-container
-    contract is unchanged.
-    """
-    _ensure_terminal_env_bridged()
-    if os.getenv("TERMINAL_ENV", "local") != "docker":
-        return False
-    return os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() not in {"true", "1", "yes"}
-
-
-_ISOLATION_OVERRIDE_KEYS = frozenset({
-    "docker_image", "modal_image", "singularity_image",
-    "daytona_image", "env_type",
-})
+_ISOLATION_OVERRIDE_KEYS = frozenset({"env_type"})
 
 
 def _has_isolation_overrides(task_id: Optional[str]) -> bool:
@@ -1255,41 +931,23 @@ def _has_isolation_overrides(task_id: Optional[str]) -> bool:
     return bool(set(_task_env_overrides[task_id].keys()) & _ISOLATION_OVERRIDE_KEYS)
 
 
-def _resolve_container_task_id(task_id: Optional[str]) -> str:
-    """
-    Map a tool-call ``task_id`` to the container/sandbox key used by
-    ``_active_environments``.
+def _resolve_env_task_id(task_id: Optional[str]) -> str:
+    """Map a tool-call ``task_id`` to the key used by ``_active_environments``.
 
     The top-level agent passes ``task_id=None`` and lands on ``"default"``.
-    ``delegate_task`` children pass their own subagent ID so that
-    file-state tracking, the active-subagents registry, and TUI events stay
-    distinct per child -- but we deliberately collapse that ID back to
-    ``"default"`` here so subagents share the parent's long-lived container
-    (one bash, one /workspace, one set of installed packages).
+    ``delegate_task`` children pass their own subagent ID so file-state
+    tracking and the active-subagents registry stay distinct per child -- but
+    we collapse that ID back to ``"default"`` here so subagents share the
+    parent's shell session.
 
-    Exception: RL / benchmark environments (TerminalBench2, PilotageSweEnv, ...)
-    call ``register_task_env_overrides(task_id, {...})`` to request a
-    per-task Docker/Modal image. When an override is registered for a
-    task_id, we honour it by returning the task_id unchanged -- those
-    rollouts need their own isolated sandbox, which is the whole point of
-    the override.
-
-    CWD-only overrides (registered by the ACP adapter for workspace
-    tracking) are *not* isolation signals — they should not cause each
-    session to spin up its own container.  Only overrides containing
-    backend-specific image keys or ``env_type`` trigger isolation.
-
-    Per-session container isolation (docker + ``container_persistent:
-    false``): each session's task_id is its own container key, so a fresh
-    chat gets a fresh sandbox with only ITS mounts — a previous session's
-    workspace can no longer appear in a new session's container.
-    ``delegate_task`` children keep sharing the parent's container via the
-    alias registry (``register_container_alias``).
+    Exception: RL / benchmark environments call
+    ``register_task_env_overrides(task_id, {"env_type": ...})`` to request an
+    isolated environment; that override is honoured by returning the task_id
+    unchanged.  CWD-only overrides (registered for workspace tracking) are not
+    isolation signals.
     """
     if task_id and _has_isolation_overrides(task_id):
         return task_id
-    if task_id and _docker_session_isolation_enabled():
-        return _resolve_container_alias(task_id)
     return "default"
 
 
@@ -1297,64 +955,20 @@ def resolve_task_overrides(task_id: Optional[str]) -> Dict[str, Any]:
     """Return the env overrides for *task_id*, raw key first then collapsed.
 
     ``register_task_env_overrides`` writes under the *raw* task/session id, but
-    a CWD-only override collapses (:func:`_resolve_container_task_id`) to the
+    a CWD-only override collapses (:func:`_resolve_env_task_id`) to the
     shared ``"default"`` container so per-session surfaces (ACP/gateway/
     dashboard) don't each spin up their own sandbox. Callers that need the
     override (terminal command setup, file-tool cwd resolution) must therefore
-    read the raw id FIRST and only fall back to the collapsed container id, or
+    read the raw id FIRST and only fall back to the collapsed env id, or
     the originating session's override is silently dropped. This is the single
     source of that lookup so the terminal and file layers can't drift apart.
     """
     raw = task_id or "default"
     return (
         _task_env_overrides.get(raw)
-        or _task_env_overrides.get(_resolve_container_task_id(raw))
+        or _task_env_overrides.get(_resolve_env_task_id(raw))
         or {}
     )
-
-
-def _resolve_task_host_cwd(config: Dict[str, Any], task_id: Optional[str]) -> Optional[str]:
-    """Host directory to bind-mount at ``/workspace`` for *task_id*'s container.
-
-    The single owner of the cwd-mount policy, shared by every environment
-    creation site (terminal tool, file tools, execute_code, lazy bring-up):
-
-    * Shared-container mode (the default): the process-global
-      ``TERMINAL_CWD``-derived ``config["host_cwd"]`` — unchanged legacy
-      behavior, ONE container whose mount tracks the configured workspace.
-    * Per-session isolation mode (docker + ``container_persistent: false``):
-      only the SESSION's own registered workspace may mount.  The process
-      env var is a launch artifact — the TUI/desktop workspace picker writes
-      ``os.environ["TERMINAL_CWD"]`` and it outlives the session that set it,
-      so deriving a fresh session's mount from it leaks the previous
-      session's directory into a chat that never attached one.  Overrides
-      tagged ``cwd_source: "process"`` (gateway fallback to the global env
-      var) are likewise refused as mount sources; only a workspace the user
-      actually attached to THIS session (``cwd_source: "session"`` or an
-      untagged override from ACP/RL surfaces) mounts.
-    """
-    if config.get("env_type") != "docker":
-        return None
-    if not config.get("docker_mount_cwd_to_workspace"):
-        return None
-    if not _docker_session_isolation_enabled():
-        return config.get("host_cwd")
-    if _resolve_container_task_id(task_id) == "default":
-        # Top-level CLI parent — single-session process, legacy behavior.
-        return config.get("host_cwd")
-    overrides = resolve_task_overrides(task_id)
-    if overrides.get("cwd_source") == "process":
-        return None
-    candidate = overrides.get("cwd")
-    if not isinstance(candidate, str) or not candidate.strip():
-        return None
-    candidate = os.path.abspath(os.path.expanduser(candidate))
-    if not os.path.isdir(candidate):
-        return None
-    if candidate.startswith(("/workspace", "/root")):
-        # Already an in-container path, not a host workspace.
-        return None
-    return candidate
 
 
 # Configuration from environment variables
@@ -1389,36 +1003,6 @@ def _safe_getcwd() -> str:
         return os.getenv("TERMINAL_CWD") or os.path.expanduser("~")
 
 
-# Path prefixes that identify a *host* working directory which cannot exist
-# inside a container sandbox. Covers POSIX user dirs and Windows drive paths
-# (``C:\Users\...`` / ``C:/Users/...``) — the latter is how a Windows host's
-# cwd looks when it leaks toward a Linux container's ``-w`` flag.
-_HOST_CWD_PREFIXES = ("/Users/", "/home/", "C:\\", "C:/")
-
-_CONTAINER_BACKENDS = frozenset({"docker", "singularity", "modal", "daytona", "vercel_sandbox"})
-
-
-def _is_unusable_container_cwd(cwd: str) -> bool:
-    """Return True if *cwd* is a host/relative path that won't work as the
-    working directory inside a container sandbox.
-
-    A container's cwd must be an absolute path that exists *inside* the
-    sandbox (e.g. ``/workspace`` or ``/root``). A host path (``/home/user``,
-    ``C:\\Users\\me``) or a relative path (``.``, ``src/``) is meaningless to
-    ``docker run -w`` and makes the container fail to start (exit 125).
-    """
-    if not cwd:
-        return False
-    if any(cwd.startswith(p) for p in _HOST_CWD_PREFIXES):
-        return True
-    # Relative paths (".", "src/") can't be a container workdir either. Windows
-    # drive paths are absolute on Windows but os.path.isabs() is False on a
-    # POSIX host, so they're already caught by the prefix check above.
-    if not os.path.isabs(cwd):
-        return True
-    return False
-
-
 # One-shot guard for the config-fallback bridge below.  Purely an
 # optimization: after the first attempt either TERMINAL_ENV is set (bridge
 # succeeded — merged config always carries terminal.backend) or the import
@@ -1436,8 +1020,7 @@ def _ensure_terminal_env_bridged() -> None:
     vars at startup — but processes that skip all of those paths (``pilotage
     serve`` / the Desktop app backend's in-process agents, the desktop cron
     ticker, ACP) used to silently fall back to the local backend even when
-    config.yaml selects ``terminal.backend: docker``, running commands on the
-    host the user intended to sandbox.
+    config.yaml selects an explicit ``terminal`` section.
 
     Explicit terminal config keys win: when config.yaml has a ``terminal``
     section, each key present there overrides its matching env value (which may
@@ -1475,182 +1058,26 @@ def _ensure_terminal_env_bridged() -> None:
 
 def _get_env_config() -> Dict[str, Any]:
     """Get terminal environment configuration from environment variables."""
-    # Default image with Python and Node.js for maximum compatibility
-    default_image = "nikolaik/python-nodejs:python3.11-nodejs20"
     _ensure_terminal_env_bridged()
     env_type = os.getenv("TERMINAL_ENV", "local")
-    
-    mount_docker_cwd = os.getenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").lower() in {"true", "1", "yes"}
-    container_backend = env_type in {"docker", "singularity", "modal", "daytona", "vercel_sandbox"}
-    docker_backend = env_type == "docker"
 
-    # Docker/container-only env vars may be bridged from config.yaml even when
-    # the active backend is local/ssh.  Do not parse their JSON/numeric payloads
-    # until a backend that can consume them is selected; a stale or invalid
-    # Docker value should not make local terminal/execute_code unusable.
-    if container_backend:
-        container_cpu = _parse_env_var("TERMINAL_CONTAINER_CPU", "1", float, "number")
-        container_memory = _parse_env_var("TERMINAL_CONTAINER_MEMORY", "5120")
-        container_disk = _parse_env_var("TERMINAL_CONTAINER_DISK", "51200")
-    else:
-        container_cpu = 1.0
-        container_memory = 5120
-        container_disk = 51200
-
-    if docker_backend:
-        docker_forward_env = _parse_env_var("TERMINAL_DOCKER_FORWARD_ENV", "[]", json.loads, "valid JSON")
-        docker_volumes = _parse_env_var("TERMINAL_DOCKER_VOLUMES", "[]", json.loads, "valid JSON")
-        docker_env = _parse_env_var("TERMINAL_DOCKER_ENV", "{}", json.loads, "valid JSON")
-        docker_extra_args = _parse_env_var("TERMINAL_DOCKER_EXTRA_ARGS", "[]", json.loads, "valid JSON")
-        docker_shm_size = os.getenv("TERMINAL_DOCKER_SHM_SIZE", "1g")
-    else:
-        docker_forward_env = []
-        docker_volumes = []
-        docker_env = {}
-        docker_extra_args = []
-        docker_shm_size = "1g"
-
-    # Default cwd: local uses the host's current directory, ssh uses the
-    # remote home, Vercel uses its documented workspace root, and everything
-    # else starts in the backend's default root-like cwd.
-    if env_type == "local":
-        default_cwd = _safe_getcwd()
-    elif env_type == "ssh":
-        default_cwd = "~"
-    elif env_type == "vercel_sandbox":
-        default_cwd = _VERCEL_SANDBOX_DEFAULT_CWD
-    else:
-        default_cwd = "/root"
-
-    # Read TERMINAL_CWD but sanity-check it for container backends.
-    # If Docker cwd passthrough is explicitly enabled, remap the host path to
-    # /workspace and track the original host path separately. Otherwise keep the
-    # normal sandbox behavior and discard host paths.
-    cwd = os.getenv("TERMINAL_CWD", default_cwd)
-    from pilotage_cli.config import _is_ssh_remote_tilde_cwd
-    if cwd and not _is_ssh_remote_tilde_cwd(env_type, cwd):
+    cwd = os.getenv("TERMINAL_CWD", _safe_getcwd())
+    if cwd:
         cwd = os.path.expanduser(cwd)
-    host_cwd = None
-    if env_type == "docker" and mount_docker_cwd:
-        docker_cwd_source = os.getenv("TERMINAL_CWD") or _safe_getcwd()
-        candidate = os.path.abspath(os.path.expanduser(docker_cwd_source))
-        if (
-            any(candidate.startswith(p) for p in _HOST_CWD_PREFIXES)
-            or (os.path.isabs(candidate) and os.path.isdir(candidate) and not candidate.startswith(("/workspace", "/root")))
-        ):
-            host_cwd = candidate
-            cwd = "/workspace"
-    elif env_type in _CONTAINER_BACKENDS and cwd:
-        # Host paths and relative paths that won't work inside containers
-        if _is_unusable_container_cwd(cwd) and cwd != default_cwd:
-            logger.info("Ignoring TERMINAL_CWD=%r for %s backend "
-                        "(host/relative path won't work in sandbox). Using %r instead.",
-                        cwd, env_type, default_cwd)
-            cwd = default_cwd
 
     return {
         "env_type": env_type,
-        "docker_image": os.getenv("TERMINAL_DOCKER_IMAGE", default_image),
-        "docker_forward_env": docker_forward_env,
-        "singularity_image": os.getenv("TERMINAL_SINGULARITY_IMAGE", f"docker://{default_image}"),
-        "modal_image": os.getenv("TERMINAL_MODAL_IMAGE", default_image),
-        "daytona_image": os.getenv("TERMINAL_DAYTONA_IMAGE", default_image),
-        "vercel_runtime": os.getenv("TERMINAL_VERCEL_RUNTIME", "").strip(),
         "cwd": cwd,
-        "host_cwd": host_cwd,
-        "docker_mount_cwd_to_workspace": mount_docker_cwd,
         "timeout": _parse_env_var("TERMINAL_TIMEOUT", "180"),
         "lifetime_seconds": _parse_env_var("TERMINAL_LIFETIME_SECONDS", "300"),
-        # SSH-specific config
-        "ssh_host": os.getenv("TERMINAL_SSH_HOST", ""),
-        "ssh_user": os.getenv("TERMINAL_SSH_USER", ""),
-        "ssh_port": _parse_env_var("TERMINAL_SSH_PORT", "22"),
-        "ssh_key": os.getenv("TERMINAL_SSH_KEY", ""),
-        # Persistent shell: SSH defaults to the config-level persistent_shell
-        # setting (true by default for non-local backends); local is always opt-in.
-        # Per-backend env vars override if explicitly set.
-        "ssh_persistent": os.getenv(
-            "TERMINAL_SSH_PERSISTENT",
-            os.getenv("TERMINAL_PERSISTENT_SHELL", "true"),
-        ).lower() in {"true", "1", "yes"},
+        # Persistent shell is always opt-in on the local backend.
         "local_persistent": os.getenv("TERMINAL_LOCAL_PERSISTENT", "false").lower() in {"true", "1", "yes"},
-        # Container resource config (applies to docker, singularity, modal,
-        # daytona, and vercel_sandbox -- ignored for local/ssh)
-        "container_cpu": container_cpu,
-        "container_memory": container_memory,     # MB (default 5GB)
-        "container_disk": container_disk,        # MB (default 50GB)
-        "container_persistent": os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() in {"true", "1", "yes"},
-        "docker_volumes": docker_volumes,
-        "docker_env": docker_env,
-        "docker_run_as_host_user": os.getenv("TERMINAL_DOCKER_RUN_AS_HOST_USER", "false").lower() in {"true", "1", "yes"},
-        "docker_network": os.getenv("TERMINAL_DOCKER_NETWORK", "true").lower() in {"true", "1", "yes"},
-        "docker_extra_args": docker_extra_args,
-        "docker_shm_size": docker_shm_size,
-        # Cross-process container reuse. The docs claim
-        # "ONE long-lived container shared across sessions" — this toggle
-        # makes that real by probing for a labeled container at startup and
-        # attaching to it instead of always starting a fresh one.  Set to
-        # ``false`` for hard per-process isolation (no reuse, container is
-        # removed on exit).
-        "docker_persist_across_processes": os.getenv(
-            "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES", "true"
-        ).lower() in {"true", "1", "yes"},
-        # Startup orphan reaper for pilotage-tagged containers left behind by
-        # crashed / SIGKILL'd previous processes that bypassed atexit.
-        # Conservative: only sweeps Exited containers older than 2× the
-        # idle-reap window AND scoped to the current profile.
-        "docker_orphan_reaper": os.getenv(
-            "TERMINAL_DOCKER_ORPHAN_REAPER", "true"
-        ).lower() in {"true", "1", "yes"},
     }
 
 
-def _ssh_config_from_config(config: Dict[str, Any]) -> dict:
-    """Build the ``ssh_config`` dict passed to :func:`_create_environment`.
-
-    Shared by the terminal tool's own get-or-create path and the lazy
-    :func:`ensure_task_env` bring-up so both derive SSH connection settings
-    from the resolved config identically.
-    """
-    return {
-        "host": config.get("ssh_host", ""),
-        "user": config.get("ssh_user", ""),
-        "port": config.get("ssh_port", 22),
-        "key": config.get("ssh_key", ""),
-        "persistent": config.get("ssh_persistent", False),
-    }
-
-
-def _container_config_from_config(config: Dict[str, Any]) -> dict:
-    """Build the ``container_config`` dict passed to :func:`_create_environment`.
-
-    Shared by the terminal tool's own get-or-create path and the lazy
-    :func:`ensure_task_env` bring-up (see :func:`_ssh_config_from_config`).
-    """
-    return {
-        "container_cpu": config.get("container_cpu", 1),
-        "container_memory": config.get("container_memory", 5120),
-        "container_disk": config.get("container_disk", 51200),
-        "container_persistent": config.get("container_persistent", True),
-        "vercel_runtime": config.get("vercel_runtime", ""),
-        "docker_volumes": config.get("docker_volumes", []),
-        "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
-        "docker_forward_env": config.get("docker_forward_env", []),
-        "docker_env": config.get("docker_env", {}),
-        "docker_run_as_host_user": config.get("docker_run_as_host_user", False),
-        "docker_extra_args": config.get("docker_extra_args", []),
-        "docker_shm_size": config.get("docker_shm_size", "1g"),
-        "docker_network": config.get("docker_network", True),
-        "docker_persist_across_processes": config.get("docker_persist_across_processes", True),
-        "docker_orphan_reaper": config.get("docker_orphan_reaper", True),
-    }
-
-
-def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
-                        ssh_config: dict = None, container_config: dict = None,
+def _create_environment(env_type: str, cwd: str, timeout: int,
                         local_config: dict = None,
-                        task_id: str = "default",
-                        host_cwd: Optional[str] = None):
+                        task_id: str = "default"):
     """Create an execution environment for command execution.
 
     Pilotage runs commands on the host process only; remote/container sandbox
@@ -1765,110 +1192,28 @@ def _stop_cleanup_thread():
 
 def get_active_env(task_id: str):
     """Return the active BaseEnvironment for *task_id*, or None."""
-    lookup = _resolve_container_task_id(task_id)
+    lookup = _resolve_env_task_id(task_id)
     with _env_lock:
         return _active_environments.get(lookup) or _active_environments.get(task_id)
 
 
 def ensure_task_env(task_id: Optional[str] = None):
-    """Lazily create and cache the sandbox env for *task_id* if none is active.
-
-    :func:`terminal_tool` creates the environment on the first terminal command,
-    but nothing else did — so under a non-local backend (ssh, docker, …) a
-    session whose first action is ``vision_analyze`` on a container-only path hit
-    "no active sandbox session" because the SSH/Docker handshake never ran
-    . vision reads such paths inside the sandbox (see
-    ``tools.image_source``), so it calls this to bring the env up on demand,
-    reusing the same creation machinery as the terminal tool.
-
-    No-op on the local backend (images are read host-side). Returns the env
-    instance, or ``None`` when local or when creation fails (best-effort: a
-    failure leaves the caller's fail-closed error path intact).
+    """No-op: Pilotage runs commands on the host, so there is no sandbox to
+    bring up ahead of time.  Kept as a hook for callers (vision/image reads)
+    that used to need a remote backend handshake before touching a path.
     """
-    config = _get_env_config()
-    env_type = config["env_type"]
-    if env_type == "local":
-        return None
-
-    effective_task_id = _resolve_container_task_id(task_id)
-
-    # Fast path: already active — mirror terminal_tool and refresh activity.
-    existing = get_active_env(effective_task_id)
-    if existing is not None:
-        with _env_lock:
-            _last_activity[effective_task_id] = time.time()
-        return existing
-
-    overrides = resolve_task_overrides(task_id)
-    if env_type == "docker":
-        image = overrides.get("docker_image") or config["docker_image"]
-    elif env_type == "singularity":
-        image = overrides.get("singularity_image") or config["singularity_image"]
-    elif env_type == "modal":
-        image = overrides.get("modal_image") or config["modal_image"]
-    elif env_type == "daytona":
-        image = overrides.get("daytona_image") or config["daytona_image"]
-    else:
-        image = ""
-
-    _start_cleanup_thread()
-
-    # Per-task creation lock so a concurrent terminal_tool call and this helper
-    # don't each spawn a sandbox for the same task.
-    with _creation_locks_lock:
-        task_lock = _creation_locks.setdefault(effective_task_id, threading.Lock())
-
-    with task_lock:
-        existing = get_active_env(effective_task_id)
-        if existing is not None:
-            return existing
-        try:
-            new_env = _create_environment(
-                env_type=env_type,
-                image=image,
-                cwd=config["cwd"],
-                timeout=config["timeout"],
-                ssh_config=_ssh_config_from_config(config) if env_type == "ssh" else None,
-                container_config=(
-                    _container_config_from_config(config)
-                    if env_type in _CONTAINER_BACKENDS else None
-                ),
-                local_config=None,
-                task_id=effective_task_id,
-                host_cwd=_resolve_task_host_cwd(config, task_id),
-            )
-        except Exception as exc:  # noqa: BLE001 — best-effort bring-up
-            logger.warning(
-                "Lazy %s environment init failed for task %s: %s",
-                env_type, effective_task_id[:8], exc,
-            )
-            return None
-
-        with _env_lock:
-            _active_environments[effective_task_id] = new_env
-            _last_activity[effective_task_id] = time.time()
-        logger.info(
-            "%s environment lazily initialized for task %s",
-            env_type, effective_task_id[:8],
-        )
-        return new_env
+    return None
 
 
 def is_persistent_env(task_id: str) -> bool:
     """Return True if the active environment for task_id is configured for
     cross-turn persistence (``persistent_filesystem=True``).
 
-    Used by the agent loop to skip per-turn teardown for backends whose whole
-    point is to survive between turns (docker with ``container_persistent``,
-    daytona, modal, etc.). Non-persistent backends (e.g. Morph) still get torn
-    down at end-of-turn to prevent leakage. The idle reaper
+    Used by the agent loop to skip per-turn teardown for a persistent shell,
+    whose whole point is to survive between turns. Non-persistent envs still
+    get torn down at end-of-turn to prevent leakage. The idle reaper
     (``_cleanup_inactive_envs``) handles persistent envs once they exceed
     ``terminal.lifetime_seconds``.
-
-    Session-scoped docker containers (per-session isolation mode) also count
-    as persistent HERE: their lifetime is the SESSION, not the turn — they
-    are removed by ``AIAgent.close()`` → ``cleanup_vm`` at session teardown
-    and by the idle reaper, not per-turn.
     """
     env = get_active_env(task_id)
     if env is None:
@@ -1982,14 +1327,13 @@ def _atexit_cleanup():
         count = len(_active_environments)
         logger.info("Shutting down %d remaining sandbox(es)...", count)
         # Snapshot the env objects BEFORE cleanup_all_environments empties
-        # the dict; we need them to wait on docker cleanup threads after the
+        # the dict; we need them to wait on their cleanup threads after the
         # registry has been cleared.
         envs_to_wait = list(_active_environments.values())
         cleanup_all_environments()
-        # Block briefly so docker stop/rm actually completes before the
-        # interpreter exits. — without this join, the daemon
-        # cleanup threads were getting torn down mid-`docker stop`, leaving
-        # Exited containers piled up on the host.
+        # Block briefly so teardown actually completes before the interpreter
+        # exits — without this join the daemon cleanup threads get torn down
+        # mid-shutdown.
         for env in envs_to_wait:
             wait_fn = getattr(env, "wait_for_cleanup", None)
             if wait_fn is None:
@@ -2215,39 +1559,19 @@ def _resolve_command_cwd(
     workdir: Optional[str],
     default_cwd: str,
     session_key: Optional[str] = None,
-    env_type: Optional[str] = None,
 ) -> str:
     """Return the cwd for a command. Explicit ``workdir=`` overrides everything.
 
-    Otherwise the session's own cwd RECORD (``get_session_cwd``) wins — it is
+    Otherwise the session's own cwd RECORD (``get_session_cwd``) wins -- it is
     written after every completed command for this session, so it IS the
     session's ``cd`` state, with no shared-env ambiguity: another session's
     ``cd`` lands in another record and can't affect us. A session with no
     record yet (first command) runs in ``default_cwd`` (config/override cwd),
     which is also what seeds a fresh environment.
-
-    ``env_type`` makes the record container-aware: on container backends a
-    recorded HOST path (a desktop/TUI surface registering its host workspace
-    via ``register_task_env_overrides`` → ``record_session_cwd``) is unusable
-    inside the sandbox — the shell prefixes every command with ``cd <host
-    path>`` and fails with exit 126. Same guard class as the env-creation
-    sanitizers ; this is the per-command sibling site.
     """
     if workdir:
         return workdir
-    recorded = get_session_cwd(session_key)
-    if (
-        recorded
-        and env_type in _CONTAINER_BACKENDS
-        and _is_unusable_container_cwd(recorded)
-    ):
-        logger.info(
-            "Ignoring recorded session cwd %r for %s backend "
-            "(host/relative path won't work in sandbox). Using %r instead.",
-            recorded, env_type, default_cwd,
-        )
-        return default_cwd
-    return recorded or default_cwd
+    return get_session_cwd(session_key) or default_cwd
 
 
 def terminal_tool(
@@ -2312,57 +1636,19 @@ def terminal_tool(
 
         # Use task_id for environment isolation. By default all subagent
         # task_ids collapse back to "default" so the top-level agent and
-        # every delegate_task child share one container; only task_ids with
-        # a registered env override (RL benchmarks) get isolated sandboxes.
-        effective_task_id = _resolve_container_task_id(task_id)
+        # every delegate_task child share one shell; only task_ids with a
+        # registered env override (RL benchmarks) get isolated environments.
+        effective_task_id = _resolve_env_task_id(task_id)
 
         # Check per-task overrides (set by environments like TerminalBench2Env)
         # before falling back to global env var config. ``resolve_task_overrides``
-        # reads the raw task id first then the collapsed container id, so a
+        # reads the raw task id first then the collapsed env id, so a
         # CWD-only override (which collapses ``effective_task_id`` to
         # ``"default"``) is still found under its originating session id while
         # isolation-keyed RL/benchmark overrides keep resolving as before.
         overrides = resolve_task_overrides(task_id)
         
-        # Select image based on env type, with per-task override support
-        if env_type == "docker":
-            image = overrides.get("docker_image") or config["docker_image"]
-        elif env_type == "singularity":
-            image = overrides.get("singularity_image") or config["singularity_image"]
-        elif env_type == "modal":
-            image = overrides.get("modal_image") or config["modal_image"]
-        elif env_type == "daytona":
-            image = overrides.get("daytona_image") or config["daytona_image"]
-        else:
-            image = ""
-
         cwd = overrides.get("cwd") or get_session_cwd(task_id) or config["cwd"]
-        # Session-scoped mount resolution (single owner: _resolve_task_host_cwd).
-        # Under per-session isolation a fresh session must not inherit the
-        # process-global TERMINAL_CWD mount left behind by a previous session.
-        host_cwd = _resolve_task_host_cwd(config, task_id)
-        # A per-task cwd override (registered by the gateway/TUI for workspace
-        # tracking, or by RL/benchmark envs) wins over config["cwd"] — but
-        # config["cwd"] was already sanitized for container backends in
-        # _get_env_config() while the override is raw. On a container backend a
-        # raw host path (e.g. a Windows desktop session's C:\Users\<user>, or a
-        # POSIX /home/<user>) reaches `docker run -w <host-path>` and the
-        # container fails to start (exit 125). Re-apply the same host/relative
-        # path guard to the *resolved* cwd so the override can't bypass it.
-        # When the host path IS this session's mounted workspace, remap it to
-        # /workspace (where the mount lands) instead of discarding it.
-        # Valid in-container override paths (RL/benchmark sandboxes that set
-        # cwd to /workspace, /root, etc.) are absolute non-host paths and pass
-        # through untouched.
-        if env_type in _CONTAINER_BACKENDS and _is_unusable_container_cwd(cwd):
-            remapped = "/workspace" if host_cwd else config["cwd"]
-            if cwd != remapped:
-                logger.info(
-                    "Remapping host/relative cwd override %r for %s backend "
-                    "(won't exist in sandbox). Using %r instead.",
-                    cwd, env_type, remapped,
-                )
-            cwd = remapped
         default_timeout = config["timeout"]
 
         # Validate an explicit timeout before it flows into deadline math.
@@ -2406,7 +1692,7 @@ def terminal_tool(
         # instead of each creating their own (wasting Modal resources).
         env: Any = None
         with _env_lock:
-            # Prefer the collapsed container id, but fall back to an env cached
+            # Prefer the collapsed env id, but fall back to an env cached
             # under the raw task_id. Per-session surfaces (ACP/gateway/dashboard)
             # with a CWD-only override collapse to "default" for container
             # sharing, yet an env may already be cached under the originating
@@ -2442,32 +1728,16 @@ def terminal_tool(
                         needs_creation = False
 
                 if needs_creation:
-                    if env_type == "singularity":
-                        _check_disk_usage_warning()
                     logger.info("Creating new %s environment for task %s...", env_type, effective_task_id[:8])
                     try:
-                        ssh_config = _ssh_config_from_config(config) if env_type == "ssh" else None
-                        container_config = (
-                            _container_config_from_config(config)
-                            if env_type in _CONTAINER_BACKENDS else None
-                        )
-
-                        local_config = None
-                        if env_type == "local":
-                            local_config = {
-                                "persistent": config.get("local_persistent", False),
-                            }
-
                         new_env = _create_environment(
                             env_type=env_type,
-                            image=image,
                             cwd=cwd,
                             timeout=effective_timeout,
-                            ssh_config=ssh_config,
-                            container_config=container_config,
-                            local_config=local_config,
+                            local_config={
+                                "persistent": config.get("local_persistent", False),
+                            },
                             task_id=effective_task_id,
-                            host_cwd=host_cwd,
                         )
                     except ImportError as e:
                         return json.dumps({
@@ -2617,29 +1887,28 @@ def terminal_tool(
                 }, ensure_ascii=False)
 
         # Non-bypassable: rewriting the local checkout backing this interpreter
-        # can mix module versions. Remote backends cannot reach that checkout.
-        if env_type == "local":
-            from tools.self_repo_guard import detect_self_repo_git_mutation
+        # can mix module versions.
+        from tools.self_repo_guard import detect_self_repo_git_mutation
 
-            guard_cwd = _resolve_command_cwd(
-                workdir=workdir,
-                default_cwd=cwd,
-                session_key=session_key,
+        guard_cwd = _resolve_command_cwd(
+            workdir=workdir,
+            default_cwd=cwd,
+            session_key=session_key,
+        )
+        _self_repo_hit, _self_repo_msg = detect_self_repo_git_mutation(
+            command, guard_cwd
+        )
+        if _self_repo_hit:
+            logger.warning(
+                "Blocked self-repo git mutation (command: %s)",
+                _safe_command_preview(command),
             )
-            _self_repo_hit, _self_repo_msg = detect_self_repo_git_mutation(
-                command, guard_cwd
-            )
-            if _self_repo_hit:
-                logger.warning(
-                    "Blocked self-repo git mutation (command: %s)",
-                    _safe_command_preview(command),
-                )
-                return json.dumps({
-                    "output": "",
-                    "exit_code": 1,
-                    "error": _self_repo_msg,
-                    "status": "blocked",
-                }, ensure_ascii=False)
+            return json.dumps({
+                "output": "",
+                "exit_code": 1,
+                "error": _self_repo_msg,
+                "status": "blocked",
+            }, ensure_ascii=False)
 
         # Pre-exec security checks (tirith + dangerous command detection)
         # Skip check if force=True (user has confirmed they want to run it)
@@ -2650,10 +1919,7 @@ def terminal_tool(
         # the approval-wait (see clear_current_thread_interrupt).
         _approved_run = bool(force)
         if not force:
-            approval = _check_all_guards(
-                command, env_type,
-                has_host_access=_docker_has_host_access(config),
-            )
+            approval = _check_all_guards(command, env_type)
             if not approval["approved"]:
                 # Check if this is an approval_required (gateway ask mode)
                 if approval.get("status") == "pending_approval":
@@ -2704,9 +1970,8 @@ def terminal_tool(
 
         # The session key is already computed above the gateway guard.
         if background:
-            # Spawn a tracked background process via the process registry.
-            # For local backends: uses subprocess.Popen with output buffering.
-            # For non-local backends: runs inside the sandbox via env.execute().
+            # Spawn a tracked background process via the process registry:
+            # subprocess.Popen with output buffering.
             from tools.process_registry import process_registry
 
             effective_cwd = _resolve_command_cwd(
@@ -2716,23 +1981,14 @@ def terminal_tool(
                 env_type=env_type,
             )
             try:
-                if env_type == "local":
-                    proc_session = process_registry.spawn_local(
-                        command=command,
-                        cwd=effective_cwd,
-                        task_id=effective_task_id,
-                        session_key=session_key,
-                        env_vars=env.env if hasattr(env, 'env') else None,
-                        use_pty=effective_pty,
-                    )
-                else:
-                    proc_session = process_registry.spawn_via_env(
-                        env=env,
-                        command=command,
-                        cwd=effective_cwd,
-                        task_id=effective_task_id,
-                        session_key=session_key,
-                    )
+                proc_session = process_registry.spawn_local(
+                    command=command,
+                    cwd=effective_cwd,
+                    task_id=effective_task_id,
+                    session_key=session_key,
+                    env_vars=env.env if hasattr(env, 'env') else None,
+                    use_pty=effective_pty,
+                )
 
                 result_data = {
                     "output": "Background process started",
@@ -2864,7 +2120,7 @@ def terminal_tool(
                     )
 
                     # Finite sessions (stateless HTTP requests and one-shot
-                    # Kanban workers) cannot route a completion back to the
+                    # CLI runs) cannot route a completion back to the
                     # agent after the turn/process ends. Refuse the promise:
                     # drop the flags and tell the agent to poll.
                     if not _async_ok():
@@ -2875,7 +2131,7 @@ def terminal_tool(
                             "notify_on_complete / watch_patterns are not available in "
                             "this session — it cannot receive an async completion after "
                             "the turn ends (a one-shot runner such as `pilotage -z`, a "
-                            "cron job, a Kanban worker, or a stateless HTTP endpoint). "
+                            "cron job or a stateless HTTP endpoint). "
                             "The process is "
                             "running in the background; retrieve its result with "
                             "process(action='poll') or process(action='wait')."
@@ -3307,7 +2563,7 @@ def _evict_environment_for_task(task_id: Optional[str]) -> None:
     env cached would make every subsequent call fail against a stale
     connection, defeating automatic recovery.
     """
-    keys = {_resolve_container_task_id(task_id)}
+    keys = {_resolve_env_task_id(task_id)}
     if task_id:
         keys.add(task_id)
     evicted = []
@@ -3347,8 +2603,6 @@ if __name__ == "__main__":
     config = _get_env_config()
     print("\nCurrent Configuration:")
     print(f"  Environment type: {config['env_type']}")
-    print(f"  Docker image: {config['docker_image']}")
-    print(f"  Modal image: {config['modal_image']}")
     print(f"  Working directory: {config['cwd']}")
     print(f"  Default timeout: {config['timeout']}s")
     print(f"  Lifetime: {config['lifetime_seconds']}s")
@@ -3359,7 +2613,7 @@ if __name__ == "__main__":
 
     print("\n✅ All requirements met!")
     print("\nAvailable Tool:")
-    print("  - terminal_tool: Execute commands in sandboxed environments")
+    print("  - terminal_tool: Execute commands on the host machine")
 
     print("\nUsage Examples:")
     print("  # Execute a command")
@@ -3369,19 +2623,8 @@ if __name__ == "__main__":
     print("  result = terminal_tool(command='python server.py', background=True)")
 
     print("\nEnvironment Variables:")
-    default_img = "nikolaik/python-nodejs:python3.11-nodejs20"
-    print(
-        "  TERMINAL_ENV: "
-        f"{os.getenv('TERMINAL_ENV', 'local')} "
-        "(local/docker/singularity/modal/daytona/vercel_sandbox/ssh)"
-    )
-    print(f"  TERMINAL_DOCKER_IMAGE: {os.getenv('TERMINAL_DOCKER_IMAGE', default_img)}")
-    print(f"  TERMINAL_SINGULARITY_IMAGE: {os.getenv('TERMINAL_SINGULARITY_IMAGE', f'docker://{default_img}')}")
-    print(f"  TERMINAL_MODAL_IMAGE: {os.getenv('TERMINAL_MODAL_IMAGE', default_img)}")
-    print(f"  TERMINAL_DAYTONA_IMAGE: {os.getenv('TERMINAL_DAYTONA_IMAGE', default_img)}")
+    print(f"  TERMINAL_ENV: {os.getenv('TERMINAL_ENV', 'local')} (local)")
     print(f"  TERMINAL_CWD: {os.getenv('TERMINAL_CWD', _safe_getcwd())}")
-    from pilotage_constants import display_pilotage_home as _dhh
-    print(f"  TERMINAL_SANDBOX_DIR: {os.getenv('TERMINAL_SANDBOX_DIR', f'{_dhh()}/sandboxes')}")
     print(f"  TERMINAL_TIMEOUT: {os.getenv('TERMINAL_TIMEOUT', '60')}")
     print(f"  TERMINAL_LIFETIME_SECONDS: {os.getenv('TERMINAL_LIFETIME_SECONDS', '300')}")
 

@@ -49,7 +49,6 @@ EXECUTION_SURFACES: frozenset[str] = frozenset({
     "gateway",
     "python",
     "scheduled_task",
-    "tui",
     "other",
     "unknown",
 })
@@ -721,7 +720,6 @@ def task_entrypoint(kwargs: dict[str, Any], surface: str | None = None) -> str:
         "gateway": "gateway_message",
         "python": "python",
         "scheduled_task": "scheduled_task",
-        "tui": "interactive",
         "unknown": "unknown",
     }.get(resolved_surface, "other")
 
@@ -814,7 +812,7 @@ def tool_category(kwargs: dict[str, Any]) -> str:
         return "media"
     if toolset.startswith("homeassistant"):
         return "home_automation"
-    if toolset in {"clarify", "kanban", "todo"}:
+    if toolset in {"clarify", "todo"}:
         return "planning"
     if toolset == "session_search":
         return "memory"

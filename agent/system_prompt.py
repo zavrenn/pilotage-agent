@@ -514,9 +514,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # Local Python toolchain probe — names python/pip/uv/PEP-668 state when
     # something is non-default so the model can pick the right install
     # strategy without discovering by failure.  Emits a single line; emits
-    # NOTHING when the environment is clean (no token cost).  Skipped
-    # entirely for remote terminal backends (the host's Python state is
-    # irrelevant when tools run inside docker/modal/ssh).  Gated by
+    # NOTHING when the environment is clean (no token cost).  Gated by
     # config.yaml ``agent.environment_probe`` (default True).
     if getattr(agent, "_environment_probe", True):
         try:
@@ -662,7 +660,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         context_files_prompt = _r.build_context_files_prompt(
             cwd=resolve_context_cwd(), skip_soul=_soul_loaded,
             context_length=_ctx_len,
-            allow_install_tree_fallback=agent.platform in ("cli", "tui"),
+            allow_install_tree_fallback=agent.platform == "cli",
             home_override=_agent_home(agent))
         if context_files_prompt:
             context_parts.append(context_files_prompt)

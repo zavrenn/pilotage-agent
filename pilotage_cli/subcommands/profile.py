@@ -59,7 +59,7 @@ def build_profile_parser(subparsers, *, cmd_profile: Callable) -> None:
         "--description",
         default=None,
         help="One- or two-sentence description of what this profile is good at. "
-             "Used by the kanban decomposer to route tasks based on role instead "
+             "Used to route tasks based on role instead "
              "of profile name alone. Skip and add later via `pilotage profile describe`.",
     )
 
@@ -71,7 +71,7 @@ def build_profile_parser(subparsers, *, cmd_profile: Callable) -> None:
 
     profile_describe = profile_subparsers.add_parser(
         "describe",
-        help="Read or set a profile's description (used by the kanban orchestrator)",
+        help="Read or set a profile's description (used for role-based routing)",
     )
     profile_describe.add_argument(
         "profile_name",

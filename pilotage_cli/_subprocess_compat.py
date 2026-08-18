@@ -270,7 +270,7 @@ def suppress_platform_ver_console() -> None:
     ``platform.version()``, and ``platform.platform()`` — unconditionally
     shells out ``cmd /c ver`` via ``subprocess.check_output(..., shell=True)``
     with no ``CREATE_NO_WINDOW``.  From a windowless parent (the pythonw
-    gateway and every kanban worker it spawns) that allocates a fresh
+    gateway and every worker it spawns) that allocates a fresh
     *visible* console: one flashing ``cmd`` window per process, triggered by
     any dependency that merely touches ``platform.uname()`` at import time.
 

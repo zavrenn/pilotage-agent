@@ -5,30 +5,19 @@ Code Execution Tool -- Programmatic Tool Calling (PTC)
 Lets the LLM write a Python script that calls Pilotage tools via RPC,
 collapsing multi-step tool chains into a single inference turn.
 
-Architecture (two transports):
+Architecture:
 
-  **Local backend (UDS):**
-  1. Parent generates a `pilotage_tools.py` stub module with UDS RPC functions
-  2. Parent opens a Unix domain socket and starts an RPC listener thread
+  1. Parent generates a `pilotage_tools.py` stub module with RPC functions
+  2. Parent opens a socket and starts an RPC listener thread
   3. Parent spawns a child process that runs the LLM's script
-  4. Tool calls travel over the UDS back to the parent for dispatch
+  4. Tool calls travel over the socket back to the parent for dispatch
 
-  **Remote backends (file-based RPC):**
-  1. Parent generates `pilotage_tools.py` with file-based RPC stubs
-  2. Parent ships both files to the remote environment
-  3. Script runs inside the terminal backend (Docker/SSH/Modal/Daytona/etc.)
-  4. Tool calls are written as request files; a polling thread on the parent
-     reads them via env.execute(), dispatches, and writes response files
-  5. The script polls for response files and continues
+Only the script's stdout is returned to the LLM; intermediate tool results
+never enter the context window.
 
-In both cases, only the script's stdout is returned to the LLM; intermediate
-tool results never enter the context window.
-
-Platform: Linux / macOS only (Unix domain sockets for local). Disabled on Windows.
-Remote execution additionally requires Python 3 in the terminal backend.
+Transport: a Unix domain socket on Linux/macOS, loopback TCP on Windows.
 """
 
-import base64
 import json
 import logging
 import os
@@ -138,12 +127,12 @@ def _truncate_stdout_text(stdout_text: str) -> Tuple[str, Dict[str, Any]]:
 # match a safe prefix, the operational PILOTAGE_ allowlist, or (on Windows) an
 # OS-essential name.  Delegate-task child context is also an exact-name
 # operational marker: without it, a sandbox script that spawns/imports Pilotage
-# code can lose the DB-layer Kanban mutation guard while still inheriting
+# code can lose the DB-layer mutation guard while still inheriting
 # PILOTAGE_HOME.
 #
 # NB: the broad "PILOTAGE_" prefix was deliberately removed — it leaked
 # PILOTAGE_*-named config that lacks a secret substring (e.g. PILOTAGE_BASE_URL,
-# PILOTAGE_KANBAN_DB, PILOTAGE_*_WEBHOOK).  The child only needs the few
+# PILOTAGE_*_WEBHOOK).  The child only needs the few
 # location/profile vars in _PILOTAGE_CHILD_ALLOWED below; PILOTAGE_RPC_SOCKET /
 # PILOTAGE_RPC_DIR / TZ / HOME are injected explicitly after scrubbing.
 _SAFE_ENV_PREFIXES = ("PATH", "HOME", "USER", "LANG", "LC_", "TERM",
@@ -245,7 +234,7 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
     # Non-secret PILOTAGE_* vars dropped by the tightened allowlist. The
     # broad "PILOTAGE_" prefix used to pass these through; now only the
     # operational set does. The drop is intentional (those vars can carry
-    # config like PILOTAGE_KANBAN_DB / PILOTAGE_BASE_URL), but a sandbox script
+    # config like PILOTAGE_BASE_URL), but a sandbox script
     # that imports a repo module reading one at import time would otherwise see
     # it silently unset. Surface the drop once so the behavior change is
     # diagnosable and points at the env_passthrough opt-in escape hatch.
@@ -283,9 +272,9 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
 
     # delegate_task children are marked with a ContextVar, not os.environ, while
     # the execute_code sandbox crosses a process boundary. Bridge that context
-    # into the child env and strip dispatcher-owned Kanban variables after the
+    # into the child env and strip dispatcher-owned variables after the
     # normal secret/passthrough scrub so an explicit passthrough cannot re-grant
-    # a delegated child the parent's board mutation capability.
+    # a delegated child the parent's mutation capability.
     try:
         from agent.delegation_context import (
             is_delegated_child_process_context,
@@ -300,25 +289,8 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
 
 
 def check_sandbox_requirements() -> bool:
-    """Code execution sandbox requires a POSIX OS for Unix domain sockets."""
-    if not SANDBOX_AVAILABLE:
-        return False
-
-    try:
-        from tools.terminal_tool import (
-            _check_vercel_sandbox_requirements,
-            _get_env_config,
-        )
-
-        config = _get_env_config()
-    except Exception:
-        logger.debug("Could not resolve terminal config for execute_code availability", exc_info=True)
-        return False
-
-    if config.get("env_type") == "vercel_sandbox":
-        return _check_vercel_sandbox_requirements(config)
-
-    return True
+    """Availability gate for execute_code."""
+    return SANDBOX_AVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -428,8 +400,7 @@ def _sandbox_failure_hint(stderr_text: str, enabled_tools=None) -> Optional[str]
     return None
 
 
-def generate_pilotage_tools_module(enabled_tools: List[str],
-                                 transport: str = "uds") -> str:
+def generate_pilotage_tools_module(enabled_tools: List[str]) -> str:
     """
     Build the source code for the pilotage_tools.py stub module.
 
@@ -437,8 +408,6 @@ def generate_pilotage_tools_module(enabled_tools: List[str],
 
     Args:
         enabled_tools: Tool names enabled in the current session.
-        transport: ``"uds"`` for Unix domain socket (local backend) or
-                   ``"file"`` for file-based RPC (remote backends).
     """
     tools_to_generate = sorted(SANDBOX_ALLOWED_TOOLS & set(enabled_tools))
 
@@ -455,15 +424,10 @@ def generate_pilotage_tools_module(enabled_tools: List[str],
         )
         export_names.append(func_name)
 
-    if transport == "file":
-        header = _FILE_TRANSPORT_HEADER
-    else:
-        header = _UDS_TRANSPORT_HEADER
-
-    return header + "\n".join(stub_functions)
+    return _UDS_TRANSPORT_HEADER + "\n".join(stub_functions)
 
 
-# ---- Shared helpers section (embedded in both transport headers) ----------
+# ---- Shared helpers section (embedded in the transport header) ------------
 
 _COMMON_HELPERS = '''\
 
@@ -506,7 +470,7 @@ def retry(fn, max_attempts=3, delay=2):
 
 '''
 
-# ---- UDS transport (local backend) ---------------------------------------
+# ---- UDS transport -------------------------------------------------------
 
 _UDS_TRANSPORT_HEADER = '''\
 """Auto-generated Pilotage tools RPC stubs."""
@@ -573,73 +537,6 @@ def _call(tool_name, args):
     return result
 
 '''
-
-# ---- File-based transport (remote backends) -------------------------------
-
-_FILE_TRANSPORT_HEADER = '''\
-"""Auto-generated Pilotage tools RPC stubs (file-based transport)."""
-import json, os, shlex, tempfile, threading, time
-
-_RPC_DIR = os.environ.get("PILOTAGE_RPC_DIR") or os.path.join(tempfile.gettempdir(), "pilotage_rpc")
-_seq = 0
-# `_seq += 1` is not atomic (read-modify-write), so concurrent _call()
-# invocations from multiple threads could allocate the same sequence number
-# and clobber each other's request files. Guard seq allocation with a lock.
-_seq_lock = threading.Lock()
-''' + _COMMON_HELPERS + '''\
-
-def _call(tool_name, args):
-    """Send a tool call request via file-based RPC and wait for response."""
-    global _seq
-    with _seq_lock:
-        _seq += 1
-        seq = _seq
-    seq_str = f"{seq:06d}"
-    req_file = os.path.join(_RPC_DIR, f"req_{seq_str}")
-    res_file = os.path.join(_RPC_DIR, f"res_{seq_str}")
-
-    # Write request atomically (write to .tmp, then rename).
-    # encoding="utf-8" is critical: on Windows-hosted remote backends
-    # (or any non-UTF-8 locale) the default open() mode would mangle
-    # non-ASCII chars in tool args when encoding them as JSON.
-    tmp = req_file + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({
-            "tool": tool_name,
-            "args": args,
-            "seq": seq,
-            "token": os.environ.get("PILOTAGE_RPC_TOKEN", ""),
-        }, f)
-    os.rename(tmp, req_file)
-
-    # Wait for response with adaptive polling
-    deadline = time.monotonic() + 300  # 5-minute timeout per tool call
-    poll_interval = 0.05  # Start at 50ms
-    while not os.path.exists(res_file):
-        if time.monotonic() > deadline:
-            raise RuntimeError(f"RPC timeout: no response for {tool_name} after 300s")
-        time.sleep(poll_interval)
-        poll_interval = min(poll_interval * 1.2, 0.25)  # Back off to 250ms
-
-    with open(res_file, encoding="utf-8") as f:
-        raw = f.read()
-
-    # Clean up response file
-    try:
-        os.unlink(res_file)
-    except OSError:
-        pass
-
-    result = json.loads(raw)
-    if isinstance(result, str):
-        try:
-            return json.loads(result)
-        except (json.JSONDecodeError, TypeError):
-            return result
-    return result
-
-'''
-
 
 # ---------------------------------------------------------------------------
 # RPC server (runs in a thread inside the parent process)
@@ -778,477 +675,6 @@ def _rpc_server_loop(
 
 
 # ---------------------------------------------------------------------------
-# Remote execution support (file-based RPC via terminal backend)
-# ---------------------------------------------------------------------------
-
-def _get_or_create_env(task_id: str):
-    """Get or create the terminal environment for *task_id*.
-
-    Reuses the same environment (container/sandbox/SSH session) that the
-    terminal and file tools use, creating one if it doesn't exist yet.
-    Returns ``(env, env_type)`` tuple.
-    """
-    from tools.terminal_tool import (
-        _active_environments, _env_lock, _create_environment,
-        _get_env_config, _last_activity, _start_cleanup_thread,
-        _creation_locks, _creation_locks_lock, _task_env_overrides,
-        _resolve_container_task_id, _resolve_task_host_cwd,
-    )
-
-    effective_task_id = _resolve_container_task_id(task_id)
-
-    # Fast path: environment already exists
-    with _env_lock:
-        if effective_task_id in _active_environments:
-            _last_activity[effective_task_id] = time.time()
-            return _active_environments[effective_task_id], _get_env_config()["env_type"]
-
-    # Slow path: create environment (same pattern as file_tools._get_file_ops)
-    with _creation_locks_lock:
-        if effective_task_id not in _creation_locks:
-            _creation_locks[effective_task_id] = threading.Lock()
-        task_lock = _creation_locks[effective_task_id]
-
-    with task_lock:
-        with _env_lock:
-            if effective_task_id in _active_environments:
-                _last_activity[effective_task_id] = time.time()
-                return _active_environments[effective_task_id], _get_env_config()["env_type"]
-
-        config = _get_env_config()
-        env_type = config["env_type"]
-        overrides = _task_env_overrides.get(effective_task_id, {})
-
-        if env_type == "docker":
-            image = overrides.get("docker_image") or config["docker_image"]
-        elif env_type == "singularity":
-            image = overrides.get("singularity_image") or config["singularity_image"]
-        elif env_type == "modal":
-            image = overrides.get("modal_image") or config["modal_image"]
-        elif env_type == "daytona":
-            image = overrides.get("daytona_image") or config["daytona_image"]
-        else:
-            image = ""
-
-        cwd = overrides.get("cwd") or config["cwd"]
-
-        container_config = None
-        if env_type in {"docker", "singularity", "modal", "daytona", "vercel_sandbox"}:
-            container_config = {
-                "container_cpu": config.get("container_cpu", 1),
-                "container_memory": config.get("container_memory", 5120),
-                "container_disk": config.get("container_disk", 51200),
-                "container_persistent": config.get("container_persistent", True),
-                "vercel_runtime": config.get("vercel_runtime", ""),
-                "docker_volumes": config.get("docker_volumes", []),
-                "docker_run_as_host_user": config.get("docker_run_as_host_user", False),
-                "docker_network": config.get("docker_network", True),
-            }
-
-        ssh_config = None
-        if env_type == "ssh":
-            ssh_config = {
-                "host": config.get("ssh_host", ""),
-                "user": config.get("ssh_user", ""),
-                "port": config.get("ssh_port", 22),
-                "key": config.get("ssh_key", ""),
-                "persistent": config.get("ssh_persistent", False),
-            }
-
-        local_config = None
-        if env_type == "local":
-            local_config = {
-                "persistent": config.get("local_persistent", False),
-            }
-
-        logger.info("Creating new %s environment for execute_code task %s...",
-                     env_type, effective_task_id[:8])
-        env = _create_environment(
-            env_type=env_type,
-            image=image,
-            cwd=cwd,
-            timeout=config["timeout"],
-            ssh_config=ssh_config,
-            container_config=container_config,
-            local_config=local_config,
-            task_id=effective_task_id,
-            host_cwd=_resolve_task_host_cwd(config, task_id),
-        )
-
-        with _env_lock:
-            _active_environments[effective_task_id] = env
-            _last_activity[effective_task_id] = time.time()
-
-        _start_cleanup_thread()
-        logger.info("%s environment ready for execute_code task %s",
-                     env_type, effective_task_id[:8])
-        return env, env_type
-
-
-def _ship_file_to_remote(env, remote_path: str, content: str) -> None:
-    """Write *content* to *remote_path* on the remote environment.
-
-    Uses ``echo … | base64 -d`` rather than stdin piping because some
-    backends (Modal) don't reliably deliver stdin_data to chained
-    commands.  Base64 output is shell-safe ([A-Za-z0-9+/=]) so single
-    quotes are fine.
-    """
-    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
-    quoted_remote_path = shlex.quote(remote_path)
-    env.execute(
-        f"echo '{encoded}' | base64 -d > {quoted_remote_path}",
-        cwd="/",
-        timeout=30,
-    )
-
-
-def _env_temp_dir(env: Any) -> str:
-    """Return a writable temp dir for env-backed execute_code sandboxes."""
-    get_temp_dir = getattr(env, "get_temp_dir", None)
-    if callable(get_temp_dir):
-        try:
-            temp_dir = get_temp_dir()
-            if isinstance(temp_dir, str) and temp_dir.startswith("/"):
-                return temp_dir.rstrip("/") or "/"
-        except Exception as exc:
-            logger.debug("Could not resolve execute_code env temp dir: %s", exc)
-    candidate = tempfile.gettempdir()
-    if isinstance(candidate, str) and candidate.startswith("/"):
-        return candidate.rstrip("/") or "/"
-    return "/tmp"
-
-
-def _rpc_poll_loop(
-    env,
-    rpc_dir: str,
-    task_id: str,
-    tool_call_log: list,
-    tool_call_counter: list,
-    max_tool_calls: int,
-    allowed_tools: frozenset,
-    stop_event: threading.Event,
-    rpc_token: str,
-):
-    """Poll the remote filesystem for tool call requests and dispatch them.
-
-    Runs in a background thread.  Each ``env.execute()`` spawns an
-    independent process, so these calls run safely concurrent with the
-    script-execution thread.
-    """
-    from model_tools import handle_function_call
-
-    poll_interval = 0.1  # 100 ms
-
-    quoted_rpc_dir = shlex.quote(rpc_dir)
-    while not stop_event.is_set():
-        try:
-            # List pending request files (skip .tmp partials)
-            ls_result = env.execute(
-                f"ls -1 {quoted_rpc_dir}/req_* 2>/dev/null || true",
-                cwd="/",
-                timeout=10,
-            )
-            output = ls_result.get("output", "").strip()
-            if not output:
-                stop_event.wait(poll_interval)
-                continue
-
-            req_files = sorted([
-                f.strip() for f in output.split("\n")
-                if f.strip()
-                and not f.strip().endswith(".tmp")
-                and "/req_" in f.strip()
-            ])
-
-            for req_file in req_files:
-                if stop_event.is_set():
-                    break
-
-                call_start = time.monotonic()
-
-                quoted_req_file = shlex.quote(req_file)
-                # Read request
-                read_result = env.execute(
-                    f"cat {quoted_req_file}",
-                    cwd="/",
-                    timeout=10,
-                )
-                try:
-                    request = json.loads(read_result.get("output", ""))
-                except (json.JSONDecodeError, ValueError):
-                    logger.debug("Malformed RPC request in %s", req_file)
-                    # Remove bad request to avoid infinite retry
-                    env.execute(f"rm -f {quoted_req_file}", cwd="/", timeout=5)
-                    continue
-
-                if not rpc_token or not secrets.compare_digest(
-                    # Compare as bytes: compare_digest raises TypeError on a
-                    # str with non-ASCII characters, and the token comes from
-                    # sandbox-script-supplied JSON.
-                    str(request.get("token") or "").encode(), rpc_token.encode()
-                ):
-                    logger.debug("Unauthorized RPC request in %s", req_file)
-                    env.execute(f"rm -f {quoted_req_file}", cwd="/", timeout=5)
-                    continue
-
-                tool_name = request.get("tool", "")
-                tool_args = request.get("args", {})
-                seq = request.get("seq", 0)
-                seq_str = f"{seq:06d}"
-                res_file = f"{rpc_dir}/res_{seq_str}"
-                quoted_res_file = shlex.quote(res_file)
-
-                # Enforce allow-list
-                if tool_name not in allowed_tools:
-                    available = ", ".join(sorted(allowed_tools))
-                    tool_result = tool_error(
-                        f"Tool '{tool_name}' is not available in execute_code. "
-                        f"Available: {available}"
-                    )
-                # Enforce tool call limit
-                elif tool_call_counter[0] >= max_tool_calls:
-                    tool_result = tool_error(
-                        f"Tool call limit reached ({max_tool_calls}). "
-                        "No more tool calls allowed in this execution."
-                    )
-                else:
-                    # Strip forbidden terminal parameters
-                    if tool_name == "terminal" and isinstance(tool_args, dict):
-                        for param in _TERMINAL_BLOCKED_PARAMS:
-                            tool_args.pop(param, None)
-
-                    # Dispatch through the standard tool handler
-                    try:
-                        with thread_scoped_silence():
-                            tool_result = handle_function_call(
-                                tool_name, tool_args, task_id=task_id
-                            )
-                    except Exception as exc:
-                        logger.error("Tool call failed in remote sandbox: %s",
-                                     exc, exc_info=True)
-                        tool_result = tool_error(str(exc))
-
-                    tool_call_counter[0] += 1
-                    call_duration = time.monotonic() - call_start
-                    tool_call_log.append({
-                        "tool": tool_name,
-                        "args_preview": str(tool_args)[:80],
-                        "duration": round(call_duration, 2),
-                    })
-
-                # Write response atomically (tmp + rename).
-                # Use echo piping (not stdin_data) because Modal doesn't
-                # reliably deliver stdin to chained commands.
-                encoded_result = base64.b64encode(
-                    tool_result.encode("utf-8")
-                ).decode("ascii")
-                env.execute(
-                    f"echo '{encoded_result}' | base64 -d > {quoted_res_file}.tmp"
-                    f" && mv {quoted_res_file}.tmp {quoted_res_file}",
-                    cwd="/",
-                    timeout=60,
-                )
-
-                # Remove the request file
-                env.execute(f"rm -f {quoted_req_file}", cwd="/", timeout=5)
-
-        except Exception as e:
-            if not stop_event.is_set():
-                logger.debug("RPC poll error: %s", e, exc_info=True)
-
-        if not stop_event.is_set():
-            stop_event.wait(poll_interval)
-
-
-def _execute_remote(
-    code: str,
-    task_id: Optional[str],
-    enabled_tools: Optional[List[str]],
-) -> str:
-    """Run a script on the remote terminal backend via file-based RPC.
-
-    The script and the generated pilotage_tools.py module are shipped to
-    the remote environment, and tool calls are proxied through a polling
-    thread that communicates via request/response files.
-    """
-
-    _cfg = _load_config()
-    timeout = _cfg.get("timeout", DEFAULT_TIMEOUT)
-    max_tool_calls = _cfg.get("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)
-
-    session_tools = set(enabled_tools) if enabled_tools else set()
-    sandbox_tools = frozenset(SANDBOX_ALLOWED_TOOLS & session_tools)
-    if not sandbox_tools:
-        sandbox_tools = SANDBOX_ALLOWED_TOOLS
-
-    effective_task_id = task_id or "default"
-    env, env_type = _get_or_create_env(effective_task_id)
-
-    sandbox_id = uuid.uuid4().hex[:12]
-    temp_dir = _env_temp_dir(env)
-    sandbox_dir = f"{temp_dir}/pilotage_exec_{sandbox_id}"
-    quoted_sandbox_dir = shlex.quote(sandbox_dir)
-    quoted_rpc_dir = shlex.quote(f"{sandbox_dir}/rpc")
-
-    tool_call_log: list = []
-    tool_call_counter = [0]
-    exec_start = time.monotonic()
-    stop_event = threading.Event()
-    rpc_thread = None
-
-    try:
-        # Verify Python is available on the remote
-        py_check = env.execute(
-            "command -v python3 >/dev/null 2>&1 && echo OK",
-            cwd="/", timeout=15,
-        )
-        if "OK" not in py_check.get("output", ""):
-            return json.dumps({
-                "status": "error",
-                "error": (
-                    f"Python 3 is not available in the {env_type} terminal "
-                    "environment. Install Python to use execute_code with "
-                    "remote backends."
-                ),
-                "tool_calls_made": 0,
-                "duration_seconds": 0,
-            })
-
-        # Create sandbox directory on remote
-        env.execute(
-            f"mkdir -p {quoted_rpc_dir}", cwd="/", timeout=10,
-        )
-
-        rpc_token = secrets.token_urlsafe(32)
-
-        # Generate and ship files
-        tools_src = generate_pilotage_tools_module(
-            list(sandbox_tools), transport="file",
-        )
-        _ship_file_to_remote(env, f"{sandbox_dir}/pilotage_tools.py", tools_src)
-        _ship_file_to_remote(env, f"{sandbox_dir}/script.py", code)
-
-        # Wrapped so the thread inherits the turn's approval context + callbacks
-        # (see tools.thread_context) — else sandbox RPC tool calls lose approval
-        # routing.
-        rpc_thread = threading.Thread(
-            target=propagate_context_to_thread(_rpc_poll_loop),
-            args=(
-                env, f"{sandbox_dir}/rpc", effective_task_id,
-                tool_call_log, tool_call_counter, max_tool_calls,
-                sandbox_tools, stop_event, rpc_token,
-            ),
-            daemon=True,
-        )
-        rpc_thread.start()
-
-        # Build environment variable prefix for the script
-        env_prefix = (
-            f"PILOTAGE_RPC_DIR={shlex.quote(f'{sandbox_dir}/rpc')} "
-            f"PILOTAGE_RPC_TOKEN={shlex.quote(rpc_token)} "
-            f"PYTHONDONTWRITEBYTECODE=1"
-        )
-        tz = os.getenv("PILOTAGE_TIMEZONE", "").strip()
-        if tz:
-            env_prefix += f" TZ={shlex.quote(tz)}"
-
-        # Execute the script on the remote backend
-        logger.info("Executing code on %s backend (task %s)...",
-                     env_type, effective_task_id[:8])
-        script_result = env.execute(
-            f"cd {quoted_sandbox_dir} && {env_prefix} python3 script.py",
-            timeout=timeout,
-        )
-
-        stdout_text = script_result.get("output", "") or ""
-        exit_code = script_result.get("returncode", -1)
-        status = "success"
-
-        # Check for timeout/interrupt from the backend
-        if exit_code == 124:
-            status = "timeout"
-        elif exit_code == 130:
-            status = "interrupted"
-
-    except Exception as exc:
-        duration = round(time.monotonic() - exec_start, 2)
-        logger.error(
-            "execute_code remote failed after %ss with %d tool calls: %s: %s",
-            duration, tool_call_counter[0], type(exc).__name__, exc,
-            exc_info=True,
-        )
-        return json.dumps({
-            "status": "error",
-            "error": str(exc),
-            "tool_calls_made": tool_call_counter[0],
-            "duration_seconds": duration,
-        }, ensure_ascii=False)
-
-    finally:
-        # Stop the polling thread
-        stop_event.set()
-        if rpc_thread is not None:
-            rpc_thread.join(timeout=5)
-
-        # Clean up remote sandbox dir
-        try:
-            env.execute(
-                f"rm -rf {quoted_sandbox_dir}", cwd="/", timeout=15,
-            )
-        except Exception:
-            logger.debug("Failed to clean up remote sandbox %s", sandbox_dir)
-
-    duration = round(time.monotonic() - exec_start, 2)
-
-    # --- Post-process output (same as local path) ---
-
-    stdout_text, stdout_metadata = _truncate_stdout_text(stdout_text)
-
-    # Strip ANSI escape sequences
-    from tools.ansi_strip import strip_ansi
-    stdout_text = strip_ansi(stdout_text)
-
-    # Redact secrets. code_file=True: execute_code output is code-execution
-    # output that often echoes source/config — skip false-positive ENV/JSON/
-    # f-string-template redaction while still masking real credentials.
-    from agent.redact import redact_sensitive_text
-    stdout_text = redact_sensitive_text(stdout_text, code_file=True)
-
-    # Build response
-    result: Dict[str, Any] = {
-        "status": status,
-        "output": stdout_text,
-        "exit_code": exit_code,
-        "tool_calls_made": tool_call_counter[0],
-        "duration_seconds": duration,
-    }
-    result.update(stdout_metadata)
-
-    if status == "timeout":
-        timeout_msg = f"Script timed out after {timeout}s and was killed."
-        result["error"] = timeout_msg
-        # Include timeout message in output so the LLM always surfaces it
-        # to the user (see local path comment — same reasoning,).
-        if stdout_text:
-            result["output"] = stdout_text + f"\n\n⏰ {timeout_msg}"
-        else:
-            result["output"] = f"⏰ {timeout_msg}"
-        logger.warning(
-            "execute_code (remote) timed out after %ss (limit %ss) with %d tool calls",
-            duration, timeout, tool_call_counter[0],
-        )
-    elif status == "interrupted":
-        result["output"] = (
-            stdout_text + "\n[execution interrupted — user sent a new message]"
-        )
-    elif exit_code != 0:
-        result["status"] = "error"
-        result["error"] = f"Script exited with code {exit_code}"
-
-    return json.dumps(result, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -1260,9 +686,6 @@ def execute_code(
     """
     Run a Python script in a sandboxed child process with RPC access
     to a subset of Pilotage tools.
-
-    Dispatches to the local (UDS) or remote (file-based RPC) path
-    depending on the configured terminal backend.
 
     Args:
         code:          Python source code to execute.
@@ -1286,22 +709,15 @@ def execute_code(
             "terminal(command=...) instead."
         )
 
-    # Dispatch: remote backends use file-based RPC, local uses UDS
-    from tools.terminal_tool import _get_env_config, _docker_has_host_access
-    _env_config = _get_env_config()
-    env_type = _env_config["env_type"]
+    from tools.terminal_tool import _get_env_config
+    env_type = _get_env_config()["env_type"]
 
     # execute_code runs arbitrary Python (subprocess/os.system/...) that never
     # passes through terminal()/DANGEROUS_PATTERNS, so guard the whole script
     # here before either dispatch path spawns it. Runs synchronously in the
     # caller (tool-executor) thread, which holds the session context.
-    # A Docker sandbox with host bind mounts is no longer isolated, so its
-    # script does not get the container fast-path.
     from tools.approval import check_execute_code_guard
-    _guard = check_execute_code_guard(
-        code, env_type,
-        has_host_access=_docker_has_host_access(_env_config),
-    )
+    _guard = check_execute_code_guard(code, env_type)
     if not _guard.get("approved", False):
         return json.dumps({
             "status": "error",
@@ -1310,20 +726,14 @@ def execute_code(
             "duration_seconds": 0,
         }, ensure_ascii=False)
 
-    # Clean interrupt slate for a user-approved script before EITHER dispatch
-    # path spawns it: drop a stale bit that landed on this thread during the
-    # blocking approval-wait so it can't kill the just-approved run on the first
-    # poll (local _wait_for_process loop, or remote/ssh env.execute which routes
-    # through the same poll loop).  A genuine post-clear interrupt re-sets the
+    # Clean interrupt slate for a user-approved script before it is spawned:
+    # drop a stale bit that landed on this thread during the blocking
+    # approval-wait so it can't kill the just-approved run on the first poll of
+    # the _wait_for_process loop.  A genuine post-clear interrupt re-sets the
     # bit and is still caught downstream.
     if _guard.get("user_approved"):
         from tools.interrupt import clear_current_thread_interrupt
         clear_current_thread_interrupt()
-
-    if env_type != "local":
-        return _execute_remote(code, task_id, enabled_tools)
-
-    # --- Local execution path (UDS) --- below this line is unchanged ---
 
     # Import per-thread interrupt check (cooperative cancellation)
     from tools.interrupt import is_interrupted as _is_interrupted

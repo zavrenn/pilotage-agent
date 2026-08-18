@@ -1020,9 +1020,7 @@ class ToolRegistry:
 
         Only tools whose ``check_fn()`` returns True (or have no check_fn)
         are included. ``check_fn()`` results are cached for ~30 s via
-        :func:`_check_fn_cached` to amortize repeat probes (check_terminal_
-        requirements probes modal/docker, browser checks probe playwright,
-        etc.); TTL chosen so env-var changes (``pilotage tools enable foo``)
+        :func:`_check_fn_cached` to amortize repeat probes; TTL chosen so env-var changes (``pilotage tools enable foo``)
         still take effect in near-real-time without forcing a full cache
         flush on every call.
         """

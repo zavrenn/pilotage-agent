@@ -233,17 +233,6 @@ def show_status(args):
         terminal_env = terminal_cfg.get("backend", "local")
     print(f"  Backend:      {terminal_env}")
 
-    if terminal_env == "ssh":
-        ssh_host = os.getenv("TERMINAL_SSH_HOST", "")
-        ssh_user = os.getenv("TERMINAL_SSH_USER", "")
-        print(f"  SSH Host:     {ssh_host or '(not set)'}")
-        print(f"  SSH User:     {ssh_user or '(not set)'}")
-    elif terminal_env == "docker":
-        docker_image = os.getenv("TERMINAL_DOCKER_IMAGE", "python:3.11-slim")
-        print(f"  Docker Image: {docker_image}")
-    elif terminal_env == "daytona":
-        daytona_image = os.getenv("TERMINAL_DAYTONA_IMAGE", "nikolaik/python-nodejs:python3.11-nodejs20")
-        print(f"  Daytona Image: {daytona_image}")
     sudo_password = os.getenv("SUDO_PASSWORD", "")
     print(f"  Sudo:         {check_mark(bool(sudo_password))} {'enabled' if sudo_password else 'disabled'}")
 

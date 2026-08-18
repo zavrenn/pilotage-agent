@@ -236,7 +236,7 @@ _YAML_ASSIGN_RE = re.compile(
 # merely CONTAIN a keyword also matched — ``Secretary: J.Smith`` (secret),
 # ``tokenizer: cl100k_base`` (token), ``author=Smith`` (auth) — mangling
 # legitimate content on the surfaces that run these passes (browser snapshots,
-# log lines, kanban summaries, CLI-echoed command output). Ported from
+# log lines, CLI-echoed command output). Ported from
 # nearai/ironclaw, where the same substring false positive ("Secretary of
 # the Treasury" matching the ``secret`` marker) scrubbed legitimate tool
 # results from the replayed transcript and sent the model into a re-fetch

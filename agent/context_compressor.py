@@ -7019,8 +7019,8 @@ This compaction should PRIORITISE preserving all information related to the focu
         # request-build time), so ``last_head_role`` defaults to "user" and
         # the summary is emitted as role="assistant". On a session whose only
         # genuine user turn falls into the compressed middle — e.g. a
-        # ``pilotage kanban`` worker seeded with a single short
-        # ``"work kanban task <id>"`` prompt followed by nothing but
+        # one-shot ``pilotage chat -q`` run seeded with a single short
+        # prompt followed by nothing but
         # assistant/tool turns — that leaves the compressed transcript with
         # ZERO user-role messages. OpenAI-compatible backends (vLLM/Qwen)
         # reject such a request with a non-retryable

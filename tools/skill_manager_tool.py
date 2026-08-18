@@ -108,8 +108,8 @@ _SKILLS_DIR_AT_IMPORT = SKILLS_DIR
 def _skills_dir() -> Path:
     """Return the active profile's skills directory at call time.
 
-    Long-lived multi-profile runtimes (Dashboard/TUI/Desktop backend, cron,
-    kanban workers) import this module once under the launch PILOTAGE_HOME and
+    Long-lived multi-profile runtimes (gateway, cron workers) import this
+    module once under the launch PILOTAGE_HOME and
     later bind a different profile per session. Honor an explicitly
     patched module-level ``SKILLS_DIR`` (tests), otherwise resolve from the
     live profile-scoped PILOTAGE_HOME on every call.

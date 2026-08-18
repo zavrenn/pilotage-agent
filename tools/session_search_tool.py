@@ -41,8 +41,8 @@ from pilotage_state_common import _RESET_END_REASONS
 
 # Sources that are excluded from session browsing/searching by default.
 # Third-party integrations tag their sessions with PILOTAGE_SESSION_SOURCE=tool;
-# delegate subagent runs are tagged "subagent"; kanban dispatcher workers are
-# tagged "kanban" — none belongs in the user's session history.
+# delegate subagent runs are tagged "subagent" — neither belongs in the
+# user's session history.
 _HIDDEN_SESSION_SOURCES = ("subagent", "tool")
 
 # Automation sources that are kept searchable but DEMOTED below interactive

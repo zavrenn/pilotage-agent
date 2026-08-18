@@ -928,7 +928,7 @@ def _try_dispatch_background_run(
     -------
     None
         Background delivery unavailable on this session runtime (one-shot
-        ``pilotage -z``, stateless HTTP, Kanban worker, nested cron run).
+        ``pilotage -z``, stateless HTTP, nested cron run).
         Caller falls back to the synchronous path unchanged.
     dict
         ``{"claimed": False, "success": False, "error": ...}`` — claim lost;

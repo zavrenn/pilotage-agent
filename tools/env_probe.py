@@ -19,11 +19,6 @@ short line** when something non-default is detected.  When the
 environment looks normal (python3+pip both present and matched, no
 PEP 668), it emits nothing — no token cost.
 
-Remote terminal backends (docker, modal, ssh, …) are skipped: the
-host's Python state is irrelevant when tools run inside a sandbox.
-The sandbox has its own existing probe (``_probe_remote_backend``)
-in ``agent/prompt_builder.py``.
-
 Toggle via ``agent.environment_probe`` in config.yaml (default True).
 """
 
@@ -69,15 +64,6 @@ _PROBE_WAIT_TIMEOUT = 10.0
 # ever finishes, the published line resumes appearing in new prompts.
 _WAIT_ALREADY_TIMED_OUT = False
 
-# Remote backends — keep in sync with agent/prompt_builder.py:_REMOTE_TERMINAL_BACKENDS.
-# Duplicated rather than imported to avoid a circular import (prompt_builder
-# imports nothing from tools).
-_REMOTE_BACKENDS = frozenset({
-    "docker", "singularity", "modal", "daytona", "ssh",
-    "vercel_sandbox",
-})
-
-
 def _run(cmd: list[str], timeout: float = 3.0) -> tuple[int, str, str]:
     """Run a short subprocess.  Returns (returncode, stdout, stderr).
 
@@ -108,7 +94,7 @@ def _run(cmd: list[str], timeout: float = 3.0) -> tuple[int, str, str]:
                     check=False,
                     stdin=subprocess.DEVNULL,
                     # CREATE_NO_WINDOW (0 on POSIX): the probe runs in
-                    # windowless processes (pythonw gateway / kanban workers)
+                    # windowless processes (pythonw gateway / worker processes)
                     # where a console child would otherwise flash a visible
                     # window per probe — ~5 flashes at every worker startup.
                     creationflags=windows_hide_flags(),
@@ -192,12 +178,6 @@ def _build_probe_line() -> str:
     Emit only when SOMETHING is off — the goal is to save the model from
     hitting an avoidable wall, not to narrate a healthy environment.
     """
-    # Bail out if a remote terminal backend is configured; the host's
-    # Python state isn't where the agent's tools run.
-    backend = (os.getenv("TERMINAL_ENV") or "local").strip().lower()
-    if backend in _REMOTE_BACKENDS:
-        return ""
-
     py3_ver = _python_version_of("python3")
     py_ver = _python_version_of("python")  # for systems with a `python` alias
     py3_has_pip = _has_pip_module("python3") if py3_ver else False

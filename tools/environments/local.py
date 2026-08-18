@@ -625,7 +625,7 @@ def pilotage_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, s
 
     # Non-terminal subprocess helpers (browser, lazy-deps, TUI/ACP hosts, etc.)
     # also need the delegate_task child lineage marker.  Otherwise a child
-    # context that later imports Kanban DB code in the spawned process would
+    # context that later imports Pilotage DB code in the spawned process would
     # still see the parent's PILOTAGE_HOME but lose the DB mutation guard.
     env = _scrub_delegated_child_env(env)
 
@@ -657,7 +657,7 @@ def build_subprocess_env(
     * ``scrub_secrets=True`` (default) — delegate to
       :func:`_sanitize_subprocess_env`, the long-standing owner of the scrub
       list (provider blocklist + ``_is_pilotage_internal_secret`` dynamic
-      patterns + kanban/venv-marker/session-context guards) **and** of
+      patterns + venv-marker/session-context guards) **and** of
       ``PILOTAGE_HOME`` / subprocess-HOME propagation.  On this path profile
       home propagation is inherent — ``inherit_profile_home`` is ignored
       (always applied), exactly matching today's sanitize semantics.

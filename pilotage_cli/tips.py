@@ -340,7 +340,6 @@ TIPS = [
     '/topic in Telegram DMs enables user-managed multi-session topic mode — /topic <id> restores past sessions inline.',
     '/approve session|always runs a pending dangerous command with your chosen trust scope; /deny rejects it.',
     '/restart gracefully restarts the gateway after draining active runs, then pings the requester when back up.',
-    '/kanban boards switch <slug> changes the active multi-project Kanban board from inside chat.',
     '/reload reloads ~/.pilotage/.env into the running session — pick up new API keys without restarting.',
 
     # --- Cron (no-agent & scripts) ---
@@ -360,17 +359,6 @@ TIPS = [
     'use_gateway: true per-tool routes web, image, tts, or browser through your Nous subscription — no extra keys.',
     'provider_routing.data_collection: deny excludes data-storing providers on OpenRouter.',
     'provider_routing.require_parameters: true only routes to providers that support every param in your request.',
-
-    # --- TUI & Dashboard ---
-    'PILOTAGE_TUI_RESUME=1 auto-re-attaches to the most recent TUI session on launch — handy after SSH drops.',
-    "PILOTAGE_TUI_THEME=light|dark|<hex> forces the TUI theme on terminals that don't set COLORFGBG.",
-    'Ctrl+G or Ctrl+X Ctrl+E in the TUI opens the input buffer in $EDITOR for long multi-line prompts.',
-    'The TUI renders LaTeX inline — $E=mc^2$ becomes Unicode math instead of raw TeX.',
-    'pilotage dashboard launches a local web UI at 127.0.0.1:9119 — zero data leaves localhost.',
-    'pilotage dashboard embeds the full Pilotage TUI in your browser via xterm.js and a WebSocket PTY.',
-    'Drop a YAML in ~/.pilotage/dashboard-themes/ with two palette colors to reskin the entire dashboard.',
-    'Dashboard plugins are drop-in: manifest.json + JS bundle in ~/.pilotage/dashboard-plugins/ — no npm build required.',
-    'layoutVariant: cockpit in a dashboard theme adds a 260px left rail that plugins can populate via the sidebar slot.',
 
     # --- Env Vars & Config Gates ---
     "display.tool_progress_command: true exposes /verbose on messaging platforms; it's CLI-only by default.",
@@ -401,7 +389,6 @@ TIPS = [
     '/toolsets lists every available toolset so you know what -t/--toolsets accepts.',
     '/voice tts toggles TTS-only mode — agent replies out loud but you still type your prompts.',
     '/reload-skills re-scans ~/.pilotage/skills/ so drop-in skills appear without restarting the session.',
-    '/indicator kaomoji|emoji|unicode|ascii picks the TUI busy-indicator style shown during agent runs.',
     '/debug uploads a support bundle (system info + logs) and returns shareable links — works in chat too.',
 
     # --- CLI Subcommands & Flags ---
@@ -412,7 +399,7 @@ TIPS = [
     "pilotage chat --source tool tags programmatic chats so they don't clutter pilotage sessions list.",
     'pilotage dump --show-keys includes redacted API key fingerprints for deeper support debugging.',
     'pilotage sessions rename <ID> "new title" renames any past session; pilotage sessions delete <ID> removes one.',
-    'pilotage import restores a full Pilotage backup zip; session JSON/JSONL exports import from the dashboard Sessions page.',
+    'pilotage import restores a full Pilotage backup zip, including session JSON/JSONL exports.',
     'pilotage fallback manages the fallback_model chain interactively — no hand-editing config.yaml.',
     'pilotage pairing rotates the DM pairing token — the first messager after rotation claims access to the bot.',
     'pilotage setup walks first-time users through provider, keys, and platform wiring in one interactive flow.',
@@ -450,7 +437,6 @@ TIPS = [
 
     # --- Misc ---
     'API_SERVER_MODEL_NAME customizes the model name on /v1/models — essential for multi-profile Open WebUI setups.',
-    'Dashboard plugins are served from /dashboard-plugins/<name>/ — drop files into ~/.pilotage/dashboard-plugins/.',
 ]
 
 def get_random_tip(exclude_recent: int = 0) -> str:

@@ -578,7 +578,7 @@ def _secure_dir(path):
 
     Also applies ``PILOTAGE_UID``/``PILOTAGE_GID``-based ownership when those env
     vars are set — Docker deployments need this so profile subdirs
-    created at runtime by kanban workers don't land as root:root and block
+    created at runtime by worker processes don't land as root:root and block
     subsequent uid-mapped workers).
     """
     try:
@@ -3081,29 +3081,6 @@ TERMINAL_CONFIG_ENV_MAP = {
     "cwd": "TERMINAL_CWD",
     "timeout": "TERMINAL_TIMEOUT",
     "lifetime_seconds": "TERMINAL_LIFETIME_SECONDS",
-    "docker_image": "TERMINAL_DOCKER_IMAGE",
-    "docker_forward_env": "TERMINAL_DOCKER_FORWARD_ENV",
-    "singularity_image": "TERMINAL_SINGULARITY_IMAGE",
-    "modal_image": "TERMINAL_MODAL_IMAGE",
-    "daytona_image": "TERMINAL_DAYTONA_IMAGE",
-    "vercel_runtime": "TERMINAL_VERCEL_RUNTIME",
-    "ssh_host": "TERMINAL_SSH_HOST",
-    "ssh_user": "TERMINAL_SSH_USER",
-    "ssh_port": "TERMINAL_SSH_PORT",
-    "ssh_key": "TERMINAL_SSH_KEY",
-    "container_cpu": "TERMINAL_CONTAINER_CPU",
-    "container_memory": "TERMINAL_CONTAINER_MEMORY",
-    "container_disk": "TERMINAL_CONTAINER_DISK",
-    "container_persistent": "TERMINAL_CONTAINER_PERSISTENT",
-    "docker_volumes": "TERMINAL_DOCKER_VOLUMES",
-    "docker_env": "TERMINAL_DOCKER_ENV",
-    "docker_mount_cwd_to_workspace": "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE",
-    "docker_network": "TERMINAL_DOCKER_NETWORK",
-    "docker_extra_args": "TERMINAL_DOCKER_EXTRA_ARGS",
-    "docker_shm_size": "TERMINAL_DOCKER_SHM_SIZE",
-    "docker_run_as_host_user": "TERMINAL_DOCKER_RUN_AS_HOST_USER",
-    "docker_persist_across_processes": "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES",
-    "docker_orphan_reaper": "TERMINAL_DOCKER_ORPHAN_REAPER",
     "sandbox_dir": "TERMINAL_SANDBOX_DIR",
     "persistent_shell": "TERMINAL_PERSISTENT_SHELL",
 }
@@ -3121,18 +3098,6 @@ def terminal_config_env_var_for_key(key: str) -> Optional[str]:
     if not key.startswith(prefix):
         return None
     return TERMINAL_CONFIG_ENV_MAP.get(key[len(prefix):])
-
-
-def _is_ssh_remote_tilde_cwd(backend: str, cwd: str) -> bool:
-    """Return whether the remote SSH shell must expand *cwd* itself.
-
-    Expanding ``~`` on the Pilotage host rewrites it to the host or container
-    home before SSH sees it. Preserve ``~`` and ``~/...`` so they follow the
-    user selected by the SSH connection.
-    """
-    if (backend or "").strip().lower() != "ssh":
-        return False
-    return cwd == "~" or cwd.startswith("~/")
 
 
 def apply_terminal_config_to_env(
@@ -3189,9 +3154,7 @@ def apply_terminal_config_to_env(
             raw_cwd = str(value or "").strip()
             if raw_cwd in {".", "auto", "cwd"}:
                 continue
-            if isinstance(value, str) and not _is_ssh_remote_tilde_cwd(
-                terminal_backend, raw_cwd
-            ):
+            if isinstance(value, str):
                 value = os.path.expanduser(value)
         if (should_override and cfg_key in explicit_keys) or env_var not in target:
             target[env_var] = _terminal_env_value(value)
@@ -4252,28 +4215,7 @@ def show_config():
     print(f"  Backend:      {terminal.get('backend', 'local')}")
     print(f"  Working dir:  {terminal.get('cwd', '.')}")
     print(f"  Timeout:      {terminal.get('timeout', 60)}s")
-    
-    if terminal.get('backend') == 'docker':
-        print(f"  Docker image: {terminal.get('docker_image', 'nikolaik/python-nodejs:python3.11-nodejs20')}")
-    elif terminal.get('backend') == 'singularity':
-        print(f"  Image:        {terminal.get('singularity_image', 'docker://nikolaik/python-nodejs:python3.11-nodejs20')}")
-    elif terminal.get('backend') == 'modal':
-        print(f"  Modal image:  {terminal.get('modal_image', 'nikolaik/python-nodejs:python3.11-nodejs20')}")
-        modal_token = get_env_value('MODAL_TOKEN_ID')
-        print(f"  Modal token:  {'configured' if modal_token else '(not set)'}")
-    elif terminal.get('backend') == 'daytona':
-        print(f"  Daytona image: {terminal.get('daytona_image', 'nikolaik/python-nodejs:python3.11-nodejs20')}")
-        daytona_key = get_env_value('DAYTONA_API_KEY')
-        print(f"  API key:      {'configured' if daytona_key else '(not set)'}")
-    elif terminal.get('backend') == 'vercel_sandbox':
-        print(f"  Vercel runtime: {terminal.get('vercel_runtime', 'node24')}")
-        print(f"  Vercel auth:    {'configured' if get_env_value('VERCEL_OIDC_TOKEN') or (get_env_value('VERCEL_TOKEN') and get_env_value('VERCEL_PROJECT_ID') and get_env_value('VERCEL_TEAM_ID')) else '(not set)'}")
-    elif terminal.get('backend') == 'ssh':
-        ssh_host = get_env_value('TERMINAL_SSH_HOST')
-        ssh_user = get_env_value('TERMINAL_SSH_USER')
-        print(f"  SSH host:     {ssh_host or '(not set)'}")
-        print(f"  SSH user:     {ssh_user or '(not set)'}")
-    
+
     # Timezone
     print()
     print(color("◆ Timezone", Colors.CYAN, Colors.BOLD))

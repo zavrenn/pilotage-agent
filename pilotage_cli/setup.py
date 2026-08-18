@@ -12,11 +12,9 @@ Config files are stored in ~/.pilotage/ for easy access.
 """
 
 import importlib.util
-import json
 import logging
 import os
 import re
-import shutil
 import sys
 import copy
 from pathlib import Path
@@ -477,14 +475,6 @@ def _print_setup_summary(config: dict, pilotage_home):
             ("Speech-to-Text (OpenAI — no API key)", False, "set VOICE_TOOLS_OPENAI_KEY or OPENAI_API_KEY")
         )
 
-    if cfg_get(config, "terminal", "backend") == "modal":
-        from tools.tool_backend_helpers import has_direct_modal_credentials
-
-        if has_direct_modal_credentials():
-            tool_status.append(("Modal Execution (direct Modal)", True, None))
-        else:
-            tool_status.append(("Modal Execution", False, "run 'pilotage setup terminal'"))
-
     # Home Assistant
     if get_env_value("HASS_TOKEN"):
         tool_status.append(("Smart Home (Home Assistant)", True, None))
@@ -592,144 +582,6 @@ def _print_setup_summary(config: dict, pilotage_home):
     print()
 
 
-def _prompt_container_resources(config: dict):
-    """Prompt for container resource settings (Docker, Singularity, Modal, Daytona)."""
-    terminal = config.setdefault("terminal", {})
-
-    print()
-    print_info("Container Resource Settings:")
-
-    # Persistence
-    current_persist = terminal.get("container_persistent", True)
-    persist_label = "yes" if current_persist else "no"
-    print_info("  Persistent filesystem keeps files between sessions.")
-    print_info("  Set to 'no' for ephemeral sandboxes that reset each time.")
-    persist_str = prompt(
-        "  Persist filesystem across sessions? (yes/no)", persist_label
-    )
-    terminal["container_persistent"] = persist_str.lower() in {"yes", "true", "y", "1"}
-
-    # CPU
-    current_cpu = terminal.get("container_cpu", 1)
-    cpu_str = prompt("  CPU cores", str(current_cpu))
-    try:
-        terminal["container_cpu"] = float(cpu_str)
-    except ValueError:
-        pass
-
-    # Memory
-    current_mem = terminal.get("container_memory", 5120)
-    mem_str = prompt("  Memory in MB (5120 = 5GB)", str(current_mem))
-    try:
-        terminal["container_memory"] = int(mem_str)
-    except ValueError:
-        pass
-
-    # Disk
-    current_disk = terminal.get("container_disk", 51200)
-    disk_str = prompt("  Disk in MB (51200 = 50GB)", str(current_disk))
-    try:
-        terminal["container_disk"] = int(disk_str)
-    except ValueError:
-        pass
-
-
-def _prompt_vercel_sandbox_settings(config: dict):
-    """Prompt for Vercel Sandbox settings without exposing unsupported disk sizing."""
-    terminal = config.setdefault("terminal", {})
-
-    print()
-    print_info("Vercel Sandbox settings:")
-    print_info("  Filesystem persistence uses Vercel snapshots.")
-    print_info("  Snapshots restore files only; live processes do not continue after sandbox recreation.")
-
-    from tools.terminal_tool import _SUPPORTED_VERCEL_RUNTIMES
-
-    current_runtime = terminal.get("vercel_runtime") or "node24"
-    supported_label = ", ".join(_SUPPORTED_VERCEL_RUNTIMES)
-    runtime = prompt(f"  Runtime ({supported_label})", current_runtime).strip() or current_runtime
-    if runtime not in _SUPPORTED_VERCEL_RUNTIMES:
-        print_warning(f"Unsupported Vercel runtime '{runtime}', keeping {current_runtime}.")
-        runtime = current_runtime if current_runtime in _SUPPORTED_VERCEL_RUNTIMES else "node24"
-    terminal["vercel_runtime"] = runtime
-    save_env_value("TERMINAL_VERCEL_RUNTIME", runtime)
-
-    current_persist = terminal.get("container_persistent", True)
-    persist_label = "yes" if current_persist else "no"
-    terminal["container_persistent"] = prompt(
-        "  Persist filesystem with snapshots? (yes/no)", persist_label
-    ).lower() in {"yes", "true", "y", "1"}
-
-    current_cpu = terminal.get("container_cpu", 1)
-    cpu_str = prompt("  CPU cores", str(current_cpu))
-    try:
-        terminal["container_cpu"] = float(cpu_str)
-    except ValueError:
-        pass
-
-    current_mem = terminal.get("container_memory", 5120)
-    mem_str = prompt("  Memory in MB (5120 = 5GB)", str(current_mem))
-    try:
-        terminal["container_memory"] = int(mem_str)
-    except ValueError:
-        pass
-
-    if terminal.get("container_disk", 51200) not in {0, 51200}:
-        print_warning("Vercel Sandbox does not support custom disk sizing; resetting container_disk to 51200.")
-    terminal["container_disk"] = 51200
-
-    print()
-    print_info("Vercel authentication:")
-    print_info("  Use a long-lived Vercel access token plus project/team IDs.")
-    linked_project = _read_nearest_vercel_project()
-    if linked_project:
-        print_info("  Found defaults in nearest .vercel/project.json.")
-
-    remove_env_value("VERCEL_OIDC_TOKEN")
-    token = prompt("    Vercel access token", get_env_value("VERCEL_TOKEN") or "", password=True)
-    project = prompt(
-        "    Vercel project ID",
-        get_env_value("VERCEL_PROJECT_ID") or linked_project.get("projectId", ""),
-    )
-    team = prompt(
-        "    Vercel team ID",
-        get_env_value("VERCEL_TEAM_ID") or linked_project.get("orgId", ""),
-    )
-    if token:
-        save_env_value("VERCEL_TOKEN", token)
-    if project:
-        save_env_value("VERCEL_PROJECT_ID", project)
-    if team:
-        save_env_value("VERCEL_TEAM_ID", team)
-
-
-def _read_nearest_vercel_project(start: Path | None = None) -> dict[str, str]:
-    """Read project/team defaults from the nearest Vercel link file."""
-    current = (start or Path.cwd()).resolve()
-    if current.is_file():
-        current = current.parent
-
-    for directory in (current, *current.parents):
-        project_file = directory / ".vercel" / "project.json"
-        if not project_file.exists():
-            continue
-        try:
-            data = json.loads(project_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        return {
-            key: value
-            for key, value in {
-                "projectId": data.get("projectId"),
-                "orgId": data.get("orgId"),
-            }.items()
-            if isinstance(value, str) and value.strip()
-        }
-    return {}
-
-
 # Tool categories and provider config are now in tools_config.py (shared
 # between `pilotage tools` and `pilotage setup tools`).
 
@@ -826,295 +678,26 @@ def setup_tts(config: dict):
 
 
 def setup_terminal_backend(config: dict):
-    """Configure the terminal execution backend."""
-    import platform as _platform
+    """Configure the local terminal execution backend."""
     print_header("Terminal Backend")
-    print_info("Choose where Pilotage runs shell commands and code.")
-    print_info("This affects tool execution, file access, and isolation.")
+    print_info("Pilotage runs shell commands and code directly on this machine.")
     print_info(f"   Guide: {_DOCS_BASE}/user-guide/configuration#terminal-backend-configuration")
     print()
 
-    current_backend = cfg_get(config, "terminal", "backend", default="local")
-    is_linux = _platform.system() == "Linux"
+    terminal = config.setdefault("terminal", {})
+    terminal["backend"] = "local"
+    # Gateway working directory defaults to home; sudo stays off. Both are
+    # configurable later via `pilotage setup terminal` / config.yaml.
+    current_cwd = terminal.get("cwd") or str(Path.home())
+    cwd = prompt("  Working directory", current_cwd).strip() or current_cwd
+    terminal["cwd"] = cwd
 
-    # Build backend choices with descriptions
-    terminal_choices = [
-        "Local - run directly on this machine (default)",
-        "Docker - isolated container with configurable resources",
-        "Modal - serverless cloud sandbox",
-        "SSH - run on a remote machine",
-        "Daytona - persistent cloud development environment",
-        "Vercel Sandbox - cloud microVM with snapshot filesystem persistence",
-    ]
-    idx_to_backend = {0: "local", 1: "docker", 2: "modal", 3: "ssh", 4: "daytona", 5: "vercel_sandbox"}
-    backend_to_idx = {"local": 0, "docker": 1, "modal": 2, "ssh": 3, "daytona": 4, "vercel_sandbox": 5}
-
-    next_idx = 6
-    if is_linux:
-        terminal_choices.append("Singularity/Apptainer - HPC-friendly container")
-        idx_to_backend[next_idx] = "singularity"
-        backend_to_idx["singularity"] = next_idx
-        next_idx += 1
-
-    # Add keep current option
-    keep_current_idx = next_idx
-    terminal_choices.append(f"Keep current ({current_backend})")
-    idx_to_backend[keep_current_idx] = current_backend
-
-    terminal_idx = prompt_choice(
-        "Select terminal backend:", terminal_choices, keep_current_idx
-    )
-
-    selected_backend = idx_to_backend.get(terminal_idx)
-
-    if terminal_idx == keep_current_idx:
-        print_info(f"Keeping current backend: {current_backend}")
-        return
-
-    config.setdefault("terminal", {})["backend"] = selected_backend
-
-    if selected_backend == "local":
-        print_success("Terminal backend: Local")
-        print_info("Commands run directly on this machine.")
-        # Gateway working directory defaults to home; sudo stays off. Both are
-        # configurable later via `pilotage setup terminal` / config.yaml.
-        config["terminal"].setdefault("cwd", str(Path.home()))
-
-    elif selected_backend == "docker":
-        print_success("Terminal backend: Docker")
-
-        # Check if Docker is available
-        docker_bin = shutil.which("docker")
-        if not docker_bin:
-            print_warning("Docker not found in PATH!")
-            print_info("Install Docker: https://docs.docker.com/get-docker/")
-        else:
-            print_info(f"Docker found: {docker_bin}")
-
-        # Image and resource limits use defaults; tune via `pilotage setup terminal`.
-        config["terminal"].setdefault(
-            "docker_image", "nikolaik/python-nodejs:python3.11-nodejs20"
-        )
-        print()
-        print_info("Docker sandboxes can be protected with the egress credential firewall.")
-        print_info(
-            "It routes sandbox traffic through iron-proxy so containers receive "
-            "proxy tokens instead of real API keys."
-        )
-        print_info(
-            "   Docker only for now; Modal, SSH, Daytona, and Singularity are not wired yet."
-        )
-        if prompt_yes_no("  Enable egress firewall for Docker sandboxes?", False):
-            proxy_cfg = config.setdefault("proxy", {})
-            proxy_cfg["enabled"] = True
-            proxy_cfg.setdefault("enforce_on_docker", True)
-            print_success("Egress firewall enabled in config")
-            print_info(
-                "Run `pilotage egress setup` then `pilotage egress start` to mint "
-                "tokens and launch the proxy."
-            )
-        else:
-            print_info(
-                "Skipping egress firewall. You can enable it later with `pilotage egress setup`."
-            )
-
-    elif selected_backend == "singularity":
-        print_success("Terminal backend: Singularity/Apptainer")
-
-        # Check if singularity/apptainer is available
-        sing_bin = shutil.which("apptainer") or shutil.which("singularity")
-        if not sing_bin:
-            print_warning("Singularity/Apptainer not found in PATH!")
-            print_info(
-                "Install: https://apptainer.org/docs/admin/main/installation.html"
-            )
-        else:
-            print_info(f"Found: {sing_bin}")
-
-        # Image and resource limits use defaults; tune via `pilotage setup terminal`.
-        config["terminal"].setdefault(
-            "singularity_image",
-            "docker://nikolaik/python-nodejs:python3.11-nodejs20",
-        )
-
-    elif selected_backend == "modal":
-        print_success("Terminal backend: Modal")
-        print_info("Serverless cloud sandboxes. Each session gets its own container.")
-        print_info("Requires a Modal account: https://modal.com")
-
-        # Check if modal SDK is installed
-        try:
-            __import__("modal")
-        except ImportError:
-            print_info("Installing modal SDK...")
-            from pilotage_cli.tools_config import _pip_install
-
-            result = _pip_install(["modal"])
-            if result.returncode == 0:
-                print_success("modal SDK installed")
-            else:
-                print_warning("Install failed — run manually: uv pip install modal")
-
-        # Modal token
-        print()
-        print_info("Modal authentication:")
-        print_info("  Get your token at: https://modal.com/settings")
-        existing_token = get_env_value("MODAL_TOKEN_ID")
-        if existing_token:
-            print_info("  Modal token: already configured")
-            if prompt_yes_no("  Update Modal credentials?", False):
-                token_id = prompt("    Modal Token ID", password=True)
-                token_secret = prompt("    Modal Token Secret", password=True)
-                if token_id:
-                    save_env_value("MODAL_TOKEN_ID", token_id)
-                if token_secret:
-                    save_env_value("MODAL_TOKEN_SECRET", token_secret)
-        else:
-            token_id = prompt("    Modal Token ID", password=True)
-            token_secret = prompt("    Modal Token Secret", password=True)
-            if token_id:
-                save_env_value("MODAL_TOKEN_ID", token_id)
-            if token_secret:
-                save_env_value("MODAL_TOKEN_SECRET", token_secret)
-
-    elif selected_backend == "daytona":
-        print_success("Terminal backend: Daytona")
-        print_info("Persistent cloud development environments.")
-        print_info("Each session gets a dedicated sandbox with filesystem persistence.")
-        print_info("Sign up at: https://daytona.io")
-
-        # Check if daytona SDK is installed
-        try:
-            __import__("daytona")
-        except ImportError:
-            print_info("Installing daytona SDK...")
-            from pilotage_cli.tools_config import _pip_install
-
-            result = _pip_install(["daytona"])
-            if result.returncode == 0:
-                print_success("daytona SDK installed")
-            else:
-                print_warning("Install failed — run manually: uv pip install daytona")
-                if result.stderr:
-                    print_info(f"  Error: {result.stderr.strip().splitlines()[-1]}")
-
-        # Daytona API key
-        print()
-        existing_key = get_env_value("DAYTONA_API_KEY")
-        if existing_key:
-            print_info("  Daytona API key: already configured")
-            if prompt_yes_no("  Update API key?", False):
-                api_key = prompt("    Daytona API key", password=True)
-                if api_key:
-                    save_env_value("DAYTONA_API_KEY", api_key)
-                    print_success("    Updated")
-        else:
-            api_key = prompt("    Daytona API key", password=True)
-            if api_key:
-                save_env_value("DAYTONA_API_KEY", api_key)
-                print_success("    Configured")
-
-        # Image and resource limits use defaults; tune via `pilotage setup terminal`.
-        config["terminal"].setdefault(
-            "daytona_image", "nikolaik/python-nodejs:python3.11-nodejs20"
-        )
-
-    elif selected_backend == "vercel_sandbox":
-        print_success("Terminal backend: Vercel Sandbox")
-        print_info("Cloud microVM sandboxes with snapshot-backed filesystem persistence.")
-        print_info("Requires the optional SDK: pip install 'pilotage-agent[vercel]'")
-
-        try:
-            __import__("vercel")
-        except ImportError:
-            print_info("Installing vercel SDK...")
-            import subprocess
-
-            # Managed uv first: $PILOTAGE_HOME/bin is never on PATH, so a bare
-            # which() misses the uv Pilotage installed. Bootstrapping one is
-            # welcome here — this is the interactive setup wizard, already
-            # mid-install, and the alternative tier is a pip that a `uv venv`
-            # venv may not even have.
-            from pilotage_cli.managed_uv import ensure_uv
-
-            uv_bin = ensure_uv()
-            if uv_bin:
-                result = subprocess.run(
-                    [uv_bin, "pip", "install", "--python", sys.executable, "vercel"],
-                    capture_output=True,
-                    text=True,
-                )
-            else:
-                result = subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "vercel"],
-                    capture_output=True,
-                    text=True,
-                )
-            if result.returncode == 0:
-                print_success("vercel SDK installed")
-            else:
-                print_warning("Install failed — run manually: pip install 'pilotage-agent[vercel]'")
-                if result.stderr:
-                    print_info(f"  Error: {result.stderr.strip().splitlines()[-1]}")
-
-        _prompt_vercel_sandbox_settings(config)
-
-    elif selected_backend == "ssh":
-        print_success("Terminal backend: SSH")
-        print_info("Run commands on a remote machine via SSH.")
-
-        # SSH host
-        current_host = get_env_value("TERMINAL_SSH_HOST") or ""
-        host = prompt("  SSH host (hostname or IP)", current_host)
-        if host:
-            save_env_value("TERMINAL_SSH_HOST", host)
-
-        # SSH user
-        current_user = get_env_value("TERMINAL_SSH_USER") or ""
-        user = prompt("  SSH user", current_user or os.getenv("USER", ""))
-        if user:
-            save_env_value("TERMINAL_SSH_USER", user)
-
-        # SSH port
-        current_port = get_env_value("TERMINAL_SSH_PORT") or "22"
-        port = prompt("  SSH port", current_port)
-        if port and port != "22":
-            save_env_value("TERMINAL_SSH_PORT", port)
-
-        # SSH key
-        current_key = get_env_value("TERMINAL_SSH_KEY") or ""
-        default_key = str(Path.home() / ".ssh" / "id_rsa")
-        ssh_key = prompt("  SSH private key path", current_key or default_key)
-        if ssh_key:
-            save_env_value("TERMINAL_SSH_KEY", ssh_key)
-
-        # Test connection
-        if host and prompt_yes_no("  Test SSH connection?", True):
-            print_info("  Testing connection...")
-            import subprocess
-
-            ssh_cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
-            if ssh_key:
-                ssh_cmd.extend(["-i", ssh_key])
-            if port and port != "22":
-                ssh_cmd.extend(["-p", port])
-            ssh_cmd.append(f"{user}@{host}" if user else host)
-            ssh_cmd.append("echo ok")
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
-            if result.returncode == 0:
-                print_success("  SSH connection successful!")
-            else:
-                print_warning(f"  SSH connection failed: {result.stderr.strip()}")
-                print_info("  Check your SSH key and host settings.")
-
-    # Sync terminal backend to .env so terminal_tool picks it up directly.
     # config.yaml is the source of truth, but terminal_tool reads TERMINAL_ENV.
-    save_env_value("TERMINAL_ENV", selected_backend)
-    if selected_backend == "vercel_sandbox":
-        save_env_value("TERMINAL_VERCEL_RUNTIME", config["terminal"].get("vercel_runtime", "node24"))
+    save_env_value("TERMINAL_ENV", "local")
+    save_env_value("TERMINAL_CWD", cwd)
     save_config(config)
     print()
-    print_success(f"Terminal backend set to: {selected_backend}")
+    print_success(f"Commands run locally, starting in {cwd}")
 
 
 # =============================================================================
@@ -2429,7 +2012,7 @@ def _blank_slate_minimal_toolsets(config: dict):
     2. ``agent.disabled_toolsets`` — a global hard-suppression list (applied last
        in ``_get_platform_tools``, overriding every other path including the
        non-configurable platform-toolset recovery that would otherwise re-add
-       toolsets like ``kanban``). We list every known toolset except the two we
+       non-configurable toolsets). We list every known toolset except the two we
        keep, guaranteeing a true blank slate regardless of platform/recovery
        quirks. The user re-enables any of them later via ``pilotage tools`` (which
        rewrites ``platform_toolsets``) or by editing ``agent.disabled_toolsets``.
@@ -2445,7 +2028,7 @@ def _blank_slate_minimal_toolsets(config: dict):
         all_keys.update(k for k, _, _ in CONFIGURABLE_TOOLSETS)
         all_keys.update(_get_plugin_toolset_keys())
         # Plain (non-composite) TOOLSETS entries — catches recovered toolsets
-        # like ``kanban`` that aren't in CONFIGURABLE_TOOLSETS but get re-added.
+        # that aren't in CONFIGURABLE_TOOLSETS but get re-added.
         for k, tdef in TOOLSETS.items():
             if k.startswith("pilotage-"):
                 continue  # platform composites — not user-facing toolsets

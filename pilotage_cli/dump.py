@@ -227,7 +227,6 @@ def _config_overrides(config: dict) -> dict[str, str]:
         ("agent", "session_stall_timeout"),
         ("agent", "tool_use_enforcement"),
         ("terminal", "backend"),
-        ("terminal", "docker_image"),
         ("terminal", "persistent_shell"),
         ("browser", "allow_private_urls"),
         ("compression", "enabled"),

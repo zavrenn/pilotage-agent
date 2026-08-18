@@ -1369,7 +1369,6 @@ from tools.registry import tool_error
 # helpers) remains the shared transport used by:
 #   - cron delivery (cron/scheduler.py)
 #   - the ``pilotage send`` CLI command (pilotage_cli/send_cmd.py)
-#   - the gateway kanban notifier (dashboard-toggled, outside agent control)
 #   - the standalone MCP server (mcp_serve.py), which is an opt-in surface
 # Those callers import the helpers directly; none of them need the registry
 # entry.

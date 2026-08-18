@@ -1171,8 +1171,8 @@ class GatewayLiveness:
 
     ``probe_error`` is True when a rung raised instead of answering. Callers
     that must distinguish "the gateway is down" from "we could not tell"
-    need it: the dashboard renders a down badge either way, but the kanban
-    dispatcher warning deliberately fails OPEN on an unreadable probe so it
+    need it: a status readout can render a down badge either way, but the
+    gateway-down warning deliberately fails OPEN on an unreadable probe so it
     never cries wolf at a user whose gateway is fine.
     """
 

@@ -335,7 +335,7 @@ def _tool_search_scoped_names(agent) -> frozenset:
     The Tool Search unwrap dispatches the underlying tool directly, bypassing
     the bridge branch (and its scope check) in
     ``model_tools.handle_function_call``. To keep a restricted-toolset session
-    (subagent, kanban worker, curated gateway session) from reaching tools it
+    (subagent, curated gateway session) from reaching tools it
     was never granted, the unwrap validates the underlying name against this
     set: the deferrable subset of the session's own enabled/disabled toolset
     scope.

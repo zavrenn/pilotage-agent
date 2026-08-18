@@ -5238,7 +5238,7 @@ def _guard_supervised_gateway_conflict(force: bool = False) -> None:
     from a shell on a systemd/launchd host spawns a second, long-lived
     dispatcher that escapes the service cgroup, survives
     ``systemctl restart``, and becomes a silent concurrent writer on the shared
-    kanban DB — the documented root cause of multi-writer SQLite WAL corruption
+    state DB — the documented root cause of multi-writer SQLite WAL corruption
     . Pass ``--force`` to start anyway.
     """
     if force or _running_under_gateway_supervisor():
@@ -5257,7 +5257,7 @@ def _guard_supervised_gateway_conflict(force: bool = False) -> None:
     )
     print(
         "  Starting another one from a shell leaves an orphan dispatcher that\n"
-        "  escapes the service, survives restarts, and writes to the same kanban\n"
+        "  escapes the service, survives restarts, and writes to the same state\n"
         "  DB concurrently — which can corrupt it. Restart the supervised gateway\n"
         "  instead:"
     )

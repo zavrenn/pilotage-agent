@@ -4568,17 +4568,6 @@ def run_job(
         # cron entrypoints and tests.
         _cron_session_token = _cron_session_var.set("1")
 
-        # Mark this job as NOT the dispatcher-owned kanban worker.
-        #
-        # A kanban worker is a normal `pilotage chat -q` CLI agent whose default
-        # toolset includes `cronjob`, running with PILOTAGE_KANBAN_TASK
-        # legitimately in its own env; `cronjob(action="run")` calls
-        # run_one_job() -> run_job() right here in that process.  Without this
-        # marker the cron agent is misread as that worker: the kanban toolset is
-        # force-added, the worker protocol is injected into its system prompt,
-        # and kanban_complete defaults task_id to $PILOTAGE_KANBAN_TASK -- letting
-        # an unrelated cron job close the worker's task and overwrite real
-        # results.
         if _job_workdir:
             os.environ["TERMINAL_CWD"] = _job_workdir
             logger.info("Job '%s': using workdir %s", job_id, _job_workdir)

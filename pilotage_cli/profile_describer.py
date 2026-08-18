@@ -12,9 +12,8 @@ badge. User can edit afterward to confirm.
 
 Design notes
 ------------
-- Mirrors the shape of ``pilotage_cli/kanban_specify.py``: lazy aux
-  client import inside the function, lenient response parse, never
-  raises on expected failure modes.
+- Lazy aux client import inside the function, lenient response parse,
+  never raises on expected failure modes.
 - Reads at most ``MAX_SKILLS_FOR_PROMPT`` skill names to keep the
   prompt bounded. No skill body — names + categories are enough
   signal and avoid blowing context on profiles with 100+ skills.
@@ -44,12 +43,12 @@ logger = logging.getLogger(__name__)
 MAX_SKILLS_FOR_PROMPT = 60
 
 
-_SYSTEM_PROMPT = """You are a profile-describer for the Pilotage Agent kanban board.
+_SYSTEM_PROMPT = """You are a profile-describer for the Pilotage Agent.
 
 A user runs multiple "profiles" — distinct agent identities, each with their
-own skills, model, and configuration. The kanban board's orchestrator routes
-work to whichever profile best fits each task. To do that well, every
-profile needs a short, concrete description of what it's good at.
+own skills, model, and configuration. Work is routed to whichever profile
+best fits each task. To do that well, every profile needs a short, concrete
+description of what it's good at.
 
 You are given a profile's:
   - Name

@@ -3268,7 +3268,7 @@ def run_conversation(
                     if agent._session_db and agent.session_id:
                         try:
                             # Ensure the session row exists before attempting UPDATE.
-                            # Under concurrent load (cron/kanban), the initial
+                            # Under concurrent load (cron), the initial
                             # _ensure_db_session() may have failed due to SQLite
                             # locking.  Retry here so per-call token deltas are
                             # not silently lost (UPDATE on a non-existent row
@@ -5156,7 +5156,7 @@ def run_conversation(
                         "failed": True,
                         "error": _final_summary,
                         # Surface the classified reason so callers (notably the
-                        # kanban worker path in cli.py) can distinguish a
+                        # one-shot CLI path) can distinguish a
                         # transient throttle from a real failure and choose a
                         # different exit code. ``rate_limit`` / ``billing`` here
                         # mean "quota wall, not a task error".

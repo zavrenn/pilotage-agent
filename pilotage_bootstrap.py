@@ -131,7 +131,7 @@ def suppress_platform_ver_console() -> None:
 
     - **Console flash**: the ``check_output(..., shell=True)`` call has no
       ``CREATE_NO_WINDOW``, so a windowless parent (pythonw gateway, slash
-      workers, kanban workers) flashes a visible console per call.
+      workers) flashes a visible console per call.
     - **UnicodeDecodeError on Python 3.11.0/3.11.1**: those micros lack
       CPython's ``encoding="locale"`` fix (added 3.11.2), so under PEP 540
       UTF-8 mode (which we enable above) the ``ver`` output — OEM code page

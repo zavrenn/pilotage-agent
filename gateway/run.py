@@ -64,7 +64,7 @@ from agent.interrupt_compat import request_hard_interrupt
 from agent.turn_context import (
     compression_made_progress,
 )
-from pilotage_cli.config import _is_ssh_remote_tilde_cwd, cfg_get
+from pilotage_cli.config import cfg_get
 from pilotage_cli.fallback_config import get_fallback_chain
 
 # --- Agent cache tuning ---------------------------------------------------
@@ -1988,7 +1988,7 @@ def _profile_runtime_scope(profile_home: "Path"):
     Only used on the multiplexed inbound path. Single-profile gateways never
     enter this scope, so their behavior is unchanged. Loading the profile's
     ``.env`` here does NOT mutate ``os.environ`` — ``build_profile_secret_scope``
-    returns an isolated dict — which is what keeps subprocesses (MCP, kanban)
+    returns an isolated dict — which is what keeps subprocesses (MCP, cron)
     from inheriting cross-profile secrets.
     """
     from pilotage_constants import set_pilotage_home_override, reset_pilotage_home_override
@@ -2109,9 +2109,6 @@ if _config_path.exists():
         # config.yaml overrides .env for these since it's the documented config path.
         _terminal_cfg = _cfg.get("terminal", {})
         if _terminal_cfg and isinstance(_terminal_cfg, dict):
-            _terminal_backend = str(
-                _terminal_cfg.get("backend") or os.environ.get("TERMINAL_ENV") or ""
-            ).strip().lower()
             _terminal_env_map = {
                 "backend": "TERMINAL_ENV",
                 "degraded_mode": "TERMINAL_DEGRADED_MODE",
@@ -2119,29 +2116,6 @@ if _config_path.exists():
                 "timeout": "TERMINAL_TIMEOUT",
                 "home_mode": "TERMINAL_HOME_MODE",
                 "lifetime_seconds": "TERMINAL_LIFETIME_SECONDS",
-                "docker_image": "TERMINAL_DOCKER_IMAGE",
-                "docker_forward_env": "TERMINAL_DOCKER_FORWARD_ENV",
-                "singularity_image": "TERMINAL_SINGULARITY_IMAGE",
-                "modal_image": "TERMINAL_MODAL_IMAGE",
-                "daytona_image": "TERMINAL_DAYTONA_IMAGE",
-                "vercel_runtime": "TERMINAL_VERCEL_RUNTIME",
-                "ssh_host": "TERMINAL_SSH_HOST",
-                "ssh_user": "TERMINAL_SSH_USER",
-                "ssh_port": "TERMINAL_SSH_PORT",
-                "ssh_key": "TERMINAL_SSH_KEY",
-                "container_cpu": "TERMINAL_CONTAINER_CPU",
-                "container_memory": "TERMINAL_CONTAINER_MEMORY",
-                "container_disk": "TERMINAL_CONTAINER_DISK",
-                "container_persistent": "TERMINAL_CONTAINER_PERSISTENT",
-                "docker_volumes": "TERMINAL_DOCKER_VOLUMES",
-                "docker_env": "TERMINAL_DOCKER_ENV",
-                "docker_extra_args": "TERMINAL_DOCKER_EXTRA_ARGS",
-                "docker_shm_size": "TERMINAL_DOCKER_SHM_SIZE",
-                "docker_mount_cwd_to_workspace": "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE",
-                "docker_network": "TERMINAL_DOCKER_NETWORK",
-                "docker_run_as_host_user": "TERMINAL_DOCKER_RUN_AS_HOST_USER",
-                "docker_persist_across_processes": "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES",
-                "docker_orphan_reaper": "TERMINAL_DOCKER_ORPHAN_REAPER",
                 "sandbox_dir": "TERMINAL_SANDBOX_DIR",
                 "persistent_shell": "TERMINAL_PERSISTENT_SHELL",
             }
@@ -2154,15 +2128,10 @@ if _config_path.exists():
                     # Only bridge explicit absolute paths from config.yaml.
                     if _cfg_key == "cwd" and str(_val) in {".", "auto", "cwd"}:
                         continue
-                    # Expand shell tilde in local/container cwd so subprocess.Popen
-                    # never receives a literal "~/" which the kernel rejects.
-                    # SSH cwd is interpreted by the remote shell, so preserve
-                    # "~" / "~/..." for the SSH backend instead of expanding it
-                    # to the Pilotage host/container HOME (often /opt/data). Shared
-                    # predicate with terminal_tool so the two sites can't drift.
+                    # Expand shell tilde in cwd so subprocess.Popen never
+                    # receives a literal "~/" which the kernel rejects.
                     if _cfg_key == "cwd" and isinstance(_val, str):
-                        if not _is_ssh_remote_tilde_cwd(_terminal_backend, _val.strip()):
-                            _val = os.path.expanduser(_val)
+                        _val = os.path.expanduser(_val)
                     if isinstance(_val, (list, dict)):
                         os.environ[_env_var] = json.dumps(_val)
                     else:
@@ -2378,21 +2347,15 @@ os.environ["PILOTAGE_QUIET"] = "1"
 
 # Set terminal working directory for messaging platforms.
 # config.yaml terminal.cwd is the canonical source (bridged to TERMINAL_CWD
-# by the config bridge above).  Placeholder values are resolved per-backend —
-# see gateway/cwd_placeholder.py for the three-case contract (local vs docker
-# mount-off vs docker mount-on).  MESSAGING_CWD is a backward-compat fallback.
+# by the config bridge above).  Placeholder values are resolved in
+# gateway/cwd_placeholder.py.  MESSAGING_CWD is a backward-compat fallback.
 from gateway.cwd_placeholder import CWD_PLACEHOLDERS, resolve_placeholder_terminal_cwd
 
 _configured_cwd = os.environ.get("TERMINAL_CWD", "")
 if not _configured_cwd or _configured_cwd in CWD_PLACEHOLDERS:
     _resolved_cwd = resolve_placeholder_terminal_cwd(
         configured_cwd=_configured_cwd,
-        terminal_backend=os.environ.get("TERMINAL_ENV", ""),
         messaging_cwd=os.getenv("MESSAGING_CWD"),
-        docker_mount_cwd_to_workspace=os.getenv(
-            "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false"
-        ).lower()
-        in {"true", "1", "yes"},
         home_fallback=str(Path.home()),
     )
     if _resolved_cwd is None:
@@ -11934,7 +11897,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
     # crashes that happen within this window of a (re)spawn accumulate toward
     # ``_MAX_SUPERVISED_RESTARTS``. Without this, a long-lived launchd daemon
     # whose watcher crashes a handful of times over days would hit the cap and
-    # be permanently abandoned (NS: silent loss of platform-reconnect / kanban /
+    # be permanently abandoned (NS: silent loss of platform-reconnect /
     # handoff for the rest of the process life).
     _SUPERVISED_HEALTHY_SECS = 300
 
@@ -11974,7 +11937,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         task = asyncio.create_task(coro_factory())
         # Mark this as a PERMANENT supervised watcher, not transient background
         # WORK. The scale-to-zero idle check must ignore these: supervised
-        # watchers (session-expiry, kanban, reconnect, the scale-to-zero watcher
+        # watchers (session-expiry, reconnect, the scale-to-zero watcher
         # itself, ...) live for the whole process, so counting them as "live
         # background work" would make the gateway consider itself busy forever
         # and never go dormant/suspend. Transient tasks added to
@@ -14686,7 +14649,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         estop.engage(reason=args or None)
         suffix = f" (reason: {args})" if args else ""
         return (
-            f"⏸️ Paused{suffix}. New cron/kanban/gateway work is on hold; "
+            f"⏸️ Paused{suffix}. New cron/gateway work is on hold; "
             "in-flight work finishes normally. Use `/pause off` to resume."
         )
 
@@ -17008,7 +16971,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
                 return
         else:
             # Internal wakes must observe reset policy without becoming user
-            # activity themselves. Otherwise periodic Kanban/process
+            # activity themselves. Otherwise periodic process
             # notifications keep the stable routing key alive across every
             # daily/idle boundary.
             session_entry = await self.async_session_store.get_or_create_session(
@@ -19906,7 +19869,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
 
                 # Send media files, routing each by type so a TTS clip
                 # arrives as a voice bubble / a clip as a video rather than
-                # a generic document. Mirrors the streaming + kanban paths.
+                # a generic document. Mirrors the streaming path.
                 from gateway.platforms.base import (
                     should_send_media_as_audio as _should_send_media_as_audio,
                 )

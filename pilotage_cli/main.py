@@ -49,7 +49,7 @@ except ModuleNotFoundError:
 # imports — it shells out ``cmd /c ver`` (shell=True, no CREATE_NO_WINDOW), so
 # any dependency touching ``platform.uname()`` at import time flashes a
 # visible console when this process is windowless (pythonw gateway + every
-# kanban worker).  No-op on POSIX; never raises.
+# worker process).  No-op on POSIX; never raises.
 from pilotage_cli._subprocess_compat import suppress_platform_ver_console
 
 suppress_platform_ver_console()
@@ -243,18 +243,6 @@ def _set_process_title() -> None:
         pass
 
 
-# Cheap, dependency-free read of `display.interface` from config.yaml for the
-# earliest hot-path decisions (mouse-residue suppression, Termux fast launch)
-# that run *before* pilotage_cli.config is importable. Cached so the multiple
-# early callers don't re-parse YAML.
-# Mouse-tracking residue suppression — runs BEFORE every other import on the
-# TUI hot path so the terminal stops emitting SGR/X10 mouse reports while the
-# Python launcher is still doing imports (≈100–300ms in cooked + echo mode,
-# before the Node TUI takes stdin into raw mode). During that window any
-# incoming bytes are echoed straight back to the user's shell scrollback as
-# ``^[[<…M`` text. The TUI itself runs `resetTerminalModes()` again in
-# `entry.tsx`; this is just the earlier cousin. ``PILOTAGE_TUI_NO_EARLY_DISABLE``
-# escapes the behaviour for diagnostics.
 def _is_termux_startup_environment_fast() -> bool:
     """Tiny Termux check for pre-import startup shortcuts."""
     return _startup_fast.is_termux_env()
@@ -2198,8 +2186,6 @@ _AUX_TASKS: list[tuple[str, str, str]] = [
     ("title_generation", "Title generation", "session titles"),
     ("memory_query_rewrite", "Memory query rewrite", "memory retrieval queries"),
     ("tts_audio_tags", "TTS audio tags", "Gemini TTS tag insertion"),
-    ("triage_specifier", "Triage specifier", "kanban spec fleshing"),
-    ("kanban_decomposer", "Kanban decomposer", "task decomposition"),
     ("profile_describer", "Profile describer", "auto profile descriptions"),
 ]
 
@@ -5059,8 +5045,7 @@ def cmd_profile(args):
 
     elif action == "describe":
         # Read or write a profile's description. The description is
-        # consumed by the kanban decomposer to route tasks based on
-        # role instead of name alone.
+        # used to route tasks based on role instead of name alone.
         from pilotage_cli import profiles as _profiles_mod
 
         all_flag = bool(getattr(args, "all_missing", False))
@@ -5346,13 +5331,12 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "approvals", "auth", "backup", "bundles", "checkpoints", "completion",
         "config", "cron", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import",
-        "gui", "desktop", "login", "logout", "logs", "memory",
-        "model", "pairing", "pause", "plugins", "portal", "profile",
-        "project",
+        "login", "logout", "logs", "memory",
+        "model", "pairing", "pause", "plugins", "profile",
         "prompt-size",
         "resume",
         "send", "sessions", "setup",
-        "skills", "slack", "status", "sync", "tools", "uninstall",
+        "skills", "status", "tools", "uninstall",
         "version", "webhook", "whatsapp", "whatsapp-cloud", "chat", "security",
         # Help-ish invocations — plugin commands not being listed in
         # top-level --help is an acceptable trade-off for skipping an
@@ -5481,10 +5465,6 @@ _AGENT_SUBCOMMANDS = {
 }
 
 
-def _is_tui_chat_launch(args) -> bool:
-    return bool(getattr(args, "tui", False) or os.environ.get("PILOTAGE_TUI") == "1")
-
-
 def _prepare_agent_startup(args) -> None:
     """Discover plugins/MCP/hooks for commands that can run an agent turn."""
     # --yolo: chokepoint guarantee that PILOTAGE_YOLO_MODE is set before ANY
@@ -5506,25 +5486,22 @@ def _prepare_agent_startup(args) -> None:
         return
 
     _accept_hooks = bool(getattr(args, "accept_hooks", False))
-    if not _is_tui_chat_launch(args):
-        # The TUI backend process does its own plugin discovery; the launcher
-        # only spawns Node, so discovery here would be thrown-away work.
-        try:
-            from pilotage_cli.plugins import start_background_plugin_discovery
+    try:
+        from pilotage_cli.plugins import start_background_plugin_discovery
 
-            # Discovery runs in a daemon thread so its ~150ms of manifest
-            # scanning + plugin imports overlaps the rest of startup (cli /
-            # prompt_toolkit imports, worktree git calls). Correctness is
-            # unchanged: every synchronous reader goes through
-            # discover_plugins(), which joins this thread first — including
-            # the discover_plugins() call model_tools makes at import time,
-            # which happens before any tool list is built.
-            start_background_plugin_discovery()
-        except Exception:
-            logger.warning(
-                "plugin discovery failed at CLI startup",
-                exc_info=True,
-            )
+        # Discovery runs in a daemon thread so its ~150ms of manifest
+        # scanning + plugin imports overlaps the rest of startup (cli /
+        # prompt_toolkit imports, worktree git calls). Correctness is
+        # unchanged: every synchronous reader goes through
+        # discover_plugins(), which joins this thread first — including
+        # the discover_plugins() call model_tools makes at import time,
+        # which happens before any tool list is built.
+        start_background_plugin_discovery()
+    except Exception:
+        logger.warning(
+            "plugin discovery failed at CLI startup",
+            exc_info=True,
+        )
     try:
         from pilotage_cli.config import load_config
         from agent.shell_hooks import register_from_config

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 from typing import Any, Dict
 
 from utils import is_truthy_value
@@ -19,18 +18,6 @@ def normalize_browser_cloud_provider(value: object | None) -> str:
     """Return a normalized browser provider key."""
     provider = str(value or _DEFAULT_BROWSER_PROVIDER).strip().lower()
     return provider or _DEFAULT_BROWSER_PROVIDER
-
-
-def has_direct_modal_credentials() -> bool:
-    """Return True when direct Modal credentials/config are available."""
-    try:
-        modal_file_exists = (Path.home() / ".modal.toml").exists()
-    except (PermissionError, OSError):
-        modal_file_exists = False
-    return bool(
-        (os.getenv("MODAL_TOKEN_ID") and os.getenv("MODAL_TOKEN_SECRET"))
-        or modal_file_exists
-    )
 
 
 def _scoped_credential(name: str) -> str:

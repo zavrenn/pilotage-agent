@@ -171,9 +171,6 @@ _PLATFORM_MAP = {
     "windows": "win32",
 }
 _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_REMOTE_ENV_BACKENDS = frozenset(
-    {"docker", "singularity", "modal", "ssh", "daytona", "vercel_sandbox"}
-)
 _secret_capture_callback = None
 
 
@@ -265,7 +262,7 @@ def skill_matches_environment(frontmatter: Dict[str, Any]) -> bool:
 
     Delegates to ``agent.skill_utils.skill_matches_environment`` — kept here
     as a public re-export so existing callers don't need updating. This is an
-    offer-time relevance gate (kanban/docker/s6), NOT a hard-compatibility gate;
+    offer-time relevance gate (docker/s6), NOT a hard-compatibility gate;
     explicit skill loads bypass it.
     """
     from agent.skill_utils import skill_matches_environment as _impl
@@ -489,10 +486,6 @@ def _is_gateway_surface() -> bool:
         return True
     from gateway.session_context import get_session_env
     return bool(get_session_env("PILOTAGE_SESSION_PLATFORM"))
-
-
-def _get_terminal_backend_name() -> str:
-    return str(os.getenv("TERMINAL_ENV", "local")).strip().lower() or "local"
 
 
 def _is_env_var_persisted(
@@ -1618,7 +1611,6 @@ def skill_view(
         required_env_vars = _get_required_environment_variables(
             frontmatter, legacy_env_vars
         )
-        backend = _get_terminal_backend_name()
         env_snapshot = load_env()
         missing_required_env_vars = [
             e
@@ -1820,8 +1812,6 @@ def skill_view(
                 missing_items,
                 setup_help,
             )
-            if backend in _REMOTE_ENV_BACKENDS and setup_note:
-                setup_note = f"{setup_note} {backend.upper()}-backed skills need these requirements available inside the remote environment as well."
             if setup_note:
                 result["setup_note"] = setup_note
 

@@ -566,16 +566,6 @@ PLATFORM_HINTS = {
         "or 'all'). Do not promise the user that a deliver='origin' or "
         "default-deliver cron job will message them in this session."
     ),
-    "tui": (
-        "You are running in the Pilotage terminal UI (TUI). "
-        "Cron jobs scheduled from this session are LOCAL-ONLY: their output is "
-        "saved (viewable via cronjob action='list') but is NOT delivered back "
-        "into this TUI session — there is no live-delivery channel here. If the "
-        "user wants to be notified when a job runs, the job's `deliver` must "
-        "target a gateway-connected messaging platform (e.g. deliver='telegram' "
-        "or 'all'). Do not promise the user that a deliver='origin' or "
-        "default-deliver cron job will message them in this session."
-    ),
     "sms": (
         "You are communicating via SMS. Keep responses concise and use plain text "
         "only — no markdown, no formatting. SMS messages are limited to ~1600 "
@@ -741,39 +731,6 @@ WSL_ENVIRONMENT_HINT = (
 )
 
 
-# Non-local terminal backends that run commands (and therefore every file
-# tool: read_file, write_file, patch, search_files) inside a separate
-# container / remote host rather than on the machine where Pilotage itself
-# runs. For these backends, host info (Windows/Linux/macOS, $HOME, cwd) is
-# misleading — the agent should only see the machine it can actually touch.
-_REMOTE_TERMINAL_BACKENDS = frozenset({
-    "docker", "singularity", "modal", "daytona", "ssh",
-    "vercel_sandbox",
-})
-
-
-# Per-backend fallback descriptions — used when the live probe fails.
-# Only states what we know from the backend choice itself (container type,
-# likely OS family). Does NOT invent cwd, user, or $HOME — the agent is
-# told to probe those directly if it needs them.
-_BACKEND_FALLBACK_DESCRIPTIONS: dict[str, str] = {
-    "docker": "a Docker container (Linux)",
-    "singularity": "a Singularity container (Linux)",
-    "modal": "a Modal sandbox (Linux)",
-    "daytona": "a Daytona workspace (Linux)",
-    "vercel_sandbox": "a Vercel sandbox (Linux)",
-    "ssh": "a remote host reached over SSH (likely Linux)",
-}
-
-
-# Cache the backend probe result per process so we only pay the probe cost
-# on the first prompt build of a session. Keyed by (env_type, cwd_hint) so
-# a mid-process backend switch rebuilds the string. Kept in-module (not on
-# disk) because the probe captures live backend state that may change
-# across Pilotage restarts.
-_BACKEND_PROBE_CACHE: dict[tuple[str, str], str] = {}
-
-
 def _windows_marketing_version() -> str:
     """Return the marketing Windows version ("10", "11", ...) for the prompt.
 
@@ -818,151 +775,13 @@ _WINDOWS_BASH_SHELL_HINT = (
 )
 
 
-def _probe_remote_backend(env_type: str) -> str | None:
-    """Run a tiny introspection command inside the active terminal backend.
-
-    Returns a pre-formatted multi-line string describing the backend's OS,
-    $HOME, cwd, and user — or None if the probe failed. Result is cached
-    per process. Used only for non-local backends where the agent's tools
-    operate on a different machine than the host Pilotage runs on.
-    """
-    cwd_hint = os.getenv("TERMINAL_CWD", "")
-    cache_key = (env_type, cwd_hint)
-    cached = _BACKEND_PROBE_CACHE.get(cache_key)
-    if cached is not None:
-        return cached or None
-
-    try:
-        # Import locally: tools/ imports are heavy and only relevant when a
-        # non-local backend is actually configured.
-        from tools.terminal_tool import _create_environment, _get_env_config  # type: ignore
-    except Exception as e:
-        logger.debug("Backend probe unavailable (import failed): %s", e)
-        _BACKEND_PROBE_CACHE[cache_key] = ""
-        return None
-
-    try:
-        config = _get_env_config()
-        # Build the environment the same way tools/terminal_tool.py does for a
-        # live command: select the backend image, then assemble ssh/container
-        # config from the env-derived dict. (There is no `get_environment`
-        # factory — the real entry point is `_create_environment`.)
-        if env_type == "docker":
-            image = config.get("docker_image", "")
-        elif env_type == "singularity":
-            image = config.get("singularity_image", "")
-        elif env_type == "modal":
-            image = config.get("modal_image", "")
-        elif env_type == "daytona":
-            image = config.get("daytona_image", "")
-        else:
-            image = ""
-
-        ssh_config = None
-        if env_type == "ssh":
-            ssh_config = {
-                "host": config.get("ssh_host", ""),
-                "user": config.get("ssh_user", ""),
-                "port": config.get("ssh_port", 22),
-                "key": config.get("ssh_key", ""),
-                "persistent": config.get("ssh_persistent", False),
-            }
-
-        container_config = None
-        if env_type in {"docker", "singularity", "modal", "daytona", "vercel_sandbox"}:
-            container_config = {
-                "container_cpu": config.get("container_cpu", 1),
-                "container_memory": config.get("container_memory", 5120),
-                "container_disk": config.get("container_disk", 51200),
-                "container_persistent": config.get("container_persistent", True),
-                "docker_volumes": config.get("docker_volumes", []),
-                "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
-                "docker_forward_env": config.get("docker_forward_env", []),
-                "docker_env": config.get("docker_env", {}),
-                "docker_run_as_host_user": config.get("docker_run_as_host_user", False),
-                "docker_extra_args": config.get("docker_extra_args", []),
-                "docker_shm_size": config.get("docker_shm_size", "1g"),
-                "docker_persist_across_processes": config.get("docker_persist_across_processes", True),
-                "docker_orphan_reaper": config.get("docker_orphan_reaper", True),
-            }
-
-        env = _create_environment(
-            env_type=env_type,
-            image=image,
-            cwd=config.get("cwd", ""),
-            timeout=config.get("timeout", 180),
-            ssh_config=ssh_config,
-            container_config=container_config,
-            task_id="prompt-backend-probe",
-            host_cwd=config.get("host_cwd"),
-        )
-        # Single-line POSIX probe — works on any Unixy backend. Wrapped in
-        # `2>/dev/null` so a missing binary doesn't pollute the output.
-        probe_cmd = (
-            "printf 'os=%s\\nkernel=%s\\nhome=%s\\ncwd=%s\\nuser=%s\\n' "
-            "\"$(uname -s 2>/dev/null || echo unknown)\" "
-            "\"$(uname -r 2>/dev/null || echo unknown)\" "
-            "\"$HOME\" \"$(pwd)\" \"$(whoami 2>/dev/null || id -un 2>/dev/null || echo unknown)\""
-        )
-        result = env.execute(probe_cmd, timeout=4)
-        if result.get("returncode") != 0:
-            logger.debug("Backend probe returned non-zero: %r", result)
-            _BACKEND_PROBE_CACHE[cache_key] = ""
-            return None
-        output = (result.get("output") or "").strip()
-        if not output:
-            _BACKEND_PROBE_CACHE[cache_key] = ""
-            return None
-    except Exception as e:
-        logger.debug("Backend probe failed: %s", e)
-        _BACKEND_PROBE_CACHE[cache_key] = ""
-        return None
-
-    # Parse key=value lines back into a tidy summary.
-    parsed: dict[str, str] = {}
-    for line in output.splitlines():
-        if "=" in line:
-            k, _, v = line.partition("=")
-            parsed[k.strip()] = v.strip()
-
-    pieces = []
-    os_bits = " ".join(x for x in (parsed.get("os"), parsed.get("kernel")) if x and x != "unknown")
-    if os_bits:
-        pieces.append(f"OS: {os_bits}")
-    if parsed.get("user") and parsed["user"] != "unknown":
-        pieces.append(f"User: {parsed['user']}")
-    if parsed.get("home"):
-        pieces.append(f"Home: {parsed['home']}")
-    if parsed.get("cwd"):
-        pieces.append(f"Working directory: {parsed['cwd']}")
-
-    if not pieces:
-        _BACKEND_PROBE_CACHE[cache_key] = ""
-        return None
-
-    formatted = "\n".join(f"  {p}" for p in pieces)
-    _BACKEND_PROBE_CACHE[cache_key] = formatted
-    return formatted
-
-
-def _clear_backend_probe_cache() -> None:
-    """Test helper — drop the backend probe cache so monkeypatched backends take effect."""
-    _BACKEND_PROBE_CACHE.clear()
-
-
 def build_environment_hints() -> str:
     """Return environment-specific guidance for the system prompt.
 
-    Always emits a factual block describing the execution environment:
-    - For **local** terminal backends: the host OS, user home, current
-      working directory (plus a Windows-only note about hostname != user
-      and a Windows-only note that `terminal` shells out to bash, not
-      PowerShell).
-    - For **remote / sandbox** terminal backends (docker, singularity,
-      modal, daytona, ssh, vercel_sandbox): host info is **suppressed**
-      because the agent's tools can't touch the host — only the backend
-      matters. A live probe inside the backend reports its OS, user, $HOME,
-      and cwd. Falls back to a static summary if the probe fails.
+    Always emits a factual block describing the execution environment: the
+    host OS, user home, and current working directory, plus a Windows-only
+    note about hostname != user and a Windows-only note that `terminal`
+    shells out to bash, not PowerShell.
 
     The WSL environment hint is appended unchanged when running under WSL.
     """
@@ -971,68 +790,37 @@ def build_environment_hints() -> str:
 
     hints: list[str] = []
 
-    backend = (os.getenv("TERMINAL_ENV") or "local").strip().lower()
-    is_remote_backend = backend in _REMOTE_TERMINAL_BACKENDS
-
-    if not is_remote_backend:
-        # --- Host info block (local backend: host == where tools run) ---
-        host_lines: list[str] = []
-        if is_wsl():
-            host_lines.append("Host: WSL (Windows Subsystem for Linux)")
-        elif sys.platform == "win32":
-            host_lines.append(f"Host: Windows ({_windows_marketing_version()})")
-        elif sys.platform == "darwin":
-            mac_ver = platform.mac_ver()[0]
-            host_lines.append(f"Host: macOS ({mac_ver or platform.release()})")
-        else:
-            host_lines.append(f"Host: {platform.system()} ({platform.release()})")
-
-        host_lines.append(f"User home directory: {os.path.expanduser('~')}")
-        try:
-            host_lines.append(f"Current working directory: {resolve_agent_cwd()}")
-        except OSError:
-            pass
-
-        if sys.platform == "win32" and not is_wsl():
-            host_lines.append(
-                "Note: on Windows, the machine hostname (e.g. from `hostname` "
-                "or uname) is NOT the username. Use the 'User home directory' "
-                "above to construct paths under C:\\Users\\<user>\\, never the "
-                "hostname."
-            )
-        hints.append("\n".join(host_lines))
-
-        # Windows-local terminal runs bash, not PowerShell — the model must
-        # know this or it will issue PowerShell syntax and fail.
-        if sys.platform == "win32" and not is_wsl():
-            hints.append(_WINDOWS_BASH_SHELL_HINT)
+    # --- Host info block (commands always run on this machine) ---
+    host_lines: list[str] = []
+    if is_wsl():
+        host_lines.append("Host: WSL (Windows Subsystem for Linux)")
+    elif sys.platform == "win32":
+        host_lines.append(f"Host: Windows ({_windows_marketing_version()})")
+    elif sys.platform == "darwin":
+        mac_ver = platform.mac_ver()[0]
+        host_lines.append(f"Host: macOS ({mac_ver or platform.release()})")
     else:
-        # --- Remote backend block (host info suppressed) ---
-        probe = _probe_remote_backend(backend)
-        if probe:
-            hints.append(
-                f"Terminal backend: {backend}. Your `terminal`, `read_file`, "
-                f"`write_file`, `patch`, and `search_files` tools all operate "
-                f"inside this {backend} environment — NOT on the machine "
-                f"where Pilotage itself is running. The host OS, home, and cwd "
-                f"of the Pilotage process are irrelevant; only the following "
-                f"backend state matters:\n{probe}"
-            )
-        else:
-            description = _BACKEND_FALLBACK_DESCRIPTIONS.get(
-                backend, f"a {backend} environment (likely Linux)"
-            )
-            hints.append(
-                f"Terminal backend: {backend}. Your `terminal`, `read_file`, "
-                f"`write_file`, `patch`, and `search_files` tools all operate "
-                f"inside {description} — NOT on the machine where Pilotage "
-                f"itself runs. The backend probe didn't respond at "
-                f"prompt-build time, so the sandbox's current user, $HOME, "
-                f"and working directory are unknown from here. If you need "
-                f"them, probe directly with a terminal call like "
-                f"`uname -a && whoami && pwd`."
-            )
+        host_lines.append(f"Host: {platform.system()} ({platform.release()})")
 
+    host_lines.append(f"User home directory: {os.path.expanduser('~')}")
+    try:
+        host_lines.append(f"Current working directory: {resolve_agent_cwd()}")
+    except OSError:
+        pass
+
+    if sys.platform == "win32" and not is_wsl():
+        host_lines.append(
+            "Note: on Windows, the machine hostname (e.g. from `hostname` "
+            "or uname) is NOT the username. Use the 'User home directory' "
+            "above to construct paths under C:\\Users\\<user>\\, never the "
+            "hostname."
+        )
+    hints.append("\n".join(host_lines))
+
+    # Windows-local terminal runs bash, not PowerShell — the model must
+    # know this or it will issue PowerShell syntax and fail.
+    if sys.platform == "win32" and not is_wsl():
+        hints.append(_WINDOWS_BASH_SHELL_HINT)
     if is_wsl():
         hints.append(WSL_ENVIRONMENT_HINT)
 
@@ -1325,8 +1113,8 @@ def _parse_skill_file(skill_file: Path) -> tuple[bool, dict, str]:
             return False, frontmatter, ""
 
         # Environment relevance gate (offer-time only): hide skills tagged for
-        # a runtime environment that isn't active (e.g. kanban-only skills for
-        # non-kanban users, s6-only skills outside the container). Explicit
+        # a runtime environment that isn't active (e.g. s6-only skills
+        # outside the container). Explicit
         # loads (skill_view / --skills) bypass this — see skill_matches_environment.
         if not skill_matches_environment(frontmatter):
             return False, frontmatter, ""

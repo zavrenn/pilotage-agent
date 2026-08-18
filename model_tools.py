@@ -294,7 +294,7 @@ _tool_defs_cache_lock = threading.Lock()
 
 # Hard cap on memoized get_tool_definitions() results. A long-lived Gateway
 # process sees many distinct toolset/config fingerprints over its lifetime
-# (per-session toolset sets, config edits, kanban-task toggles); without a
+# (per-session toolset sets, config edits); without a
 # bound the cache grows unboundedly. 8 comfortably covers the warm working
 # set (the handful of distinct platform/toolset combos a gateway actually
 # serves) while keeping the cap small.
@@ -1218,8 +1218,8 @@ def handle_function_call(
             #
             # Scope the catalog to the session's toolsets so the bridge can
             # only surface and invoke tools the session was actually granted.
-            # Without this, a restricted-toolset session (subagent, kanban
-            # worker, curated gateway session) would see and be able to call
+            # Without this, a restricted-toolset session (subagent or
+            # curated gateway session) would see and be able to call
             # the entire process registry via the bridge. Passing the same
             # enabled/disabled toolsets the session was assembled with keeps
             # the deferred catalog identical to the deferrable subset of the

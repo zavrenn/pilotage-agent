@@ -172,31 +172,16 @@ model:
 # worktree_sync: false  # Branch from local HEAD (offline / pinned base)
 
 # =============================================================================
-# Kanban Review Dispatch
-# =============================================================================
-# First-class review tasks are dispatched automatically by default. The worker
-# is spawned with the bundled sdlc-review skill and can approve, request changes
-# back to the original implementer, or escalate a genuine external blocker.
-# Disable this only when every review is performed manually.
-kanban:
-  review_dispatch: true
-
-# =============================================================================
 # Terminal Tool Configuration
 # =============================================================================
-# Choose ONE of the following terminal configurations by uncommenting it.
-# The terminal tool executes commands in the specified environment.
-
-# -----------------------------------------------------------------------------
-# OPTION 1: Local execution (default)
-# Commands run directly on your machine in the current directory
-# -----------------------------------------------------------------------------
+# The terminal tool runs commands directly on this machine.
+#
 # Working directory behavior:
 #   - CLI (`pilotage` command): Uses "." (current directory where you run pilotage)
 #   - Gateway/messaging/cron: Uses terminal.cwd here; legacy .env cwd values are deprecated
 terminal:
   backend: "local"
-  cwd: "."  # For local backend: "." = current directory. Ignored for remote backends unless a backend documents otherwise.
+  cwd: "."  # "." = current directory.
   # Desktop xterm font. Install the font locally; Nerd Fonts render Powerlevel10k glyphs.
   # font_family: "MesloLGS NF"  # Also accepts a CSS stack; blank uses bundled JetBrains Mono.
   timeout: 180
@@ -205,108 +190,15 @@ terminal:
   #   real    - force your real OS-user HOME
   #   profile - force PILOTAGE_HOME/home for strict per-profile CLI config isolation
   home_mode: "auto"
-  docker_mount_cwd_to_workspace: false  # SECURITY: off by default. Opt in to mount the launch cwd into Docker /workspace.
   lifetime_seconds: 300
   # sudo_password: "hunter2"  # Optional: pipe a sudo password via sudo -S. SECURITY WARNING: plaintext.
   # sudo_password: ""         # Explicit empty password: try empty and never open the interactive sudo prompt.
 
 # -----------------------------------------------------------------------------
-# OPTION 2: SSH remote execution
-# Commands run on a remote server - agent code stays local (sandboxed)
-# Great for: keeping agent isolated from its own code, using powerful remote hardware
+# SUDO SUPPORT
 # -----------------------------------------------------------------------------
-# terminal:
-#   backend: "ssh"
-#   cwd: "/home/myuser/project"  # Path on the REMOTE server
-#   timeout: 180
-#   lifetime_seconds: 300
-#   ssh_host: "my-server.example.com"
-#   ssh_user: "myuser"
-#   ssh_port: 22
-#   ssh_key: "~/.ssh/id_rsa"  # Optional - uses ssh-agent if not specified
-
-# -----------------------------------------------------------------------------
-# OPTION 3: Docker container
-# Commands run in an isolated Docker container
-# Great for: reproducible environments, testing, isolation
-# -----------------------------------------------------------------------------
-# terminal:
-#   backend: "docker"
-#   cwd: "/workspace"  # Path INSIDE the container (default: /)
-#   timeout: 180
-#   lifetime_seconds: 300
-#   docker_image: "nikolaik/python-nodejs:python3.11-nodejs20"
-#   docker_mount_cwd_to_workspace: true   # Explicit opt-in: mount your launch cwd into /workspace
-#   # Optional: run the container as your host user's uid:gid so files written
-#   # into bind-mounted dirs are owned by you, not root. Drops SETUID/SETGID
-#   # caps too since no gosu privilege drop is needed. Leave off if your
-#   # chosen docker_image expects to start as root.
-#   docker_run_as_host_user: true
-#   # Optional: explicitly forward selected env vars into Docker.
-#   # These values come from your current shell first, then ~/.pilotage/.env.
-#   # Warning: anything forwarded here is visible to commands run in the container.
-#   docker_forward_env:
-#     - "GITHUB_TOKEN"
-#     - "NPM_TOKEN"
-#   # Optional: extra flags passed verbatim to docker run (appended after security defaults).
-#   # Useful for adding capabilities (e.g. apt installs needing SETUID) or custom options.
-#   # Example: add a Linux capability not included by default
-#   # docker_extra_args:
-#   #   - "--cap-add"
-#   #   - "SETUID"
-
-# -----------------------------------------------------------------------------
-# OPTION 4: Singularity/Apptainer container
-# Commands run in a Singularity container (common in HPC environments)
-# Great for: HPC clusters, shared compute environments
-# -----------------------------------------------------------------------------
-# terminal:
-#   backend: "singularity"
-#   cwd: "/workspace"  # Path INSIDE the container (default: /root)
-#   timeout: 180
-#   lifetime_seconds: 300
-#   singularity_image: "docker://nikolaik/python-nodejs:python3.11-nodejs20"
-
-# -----------------------------------------------------------------------------
-# OPTION 5: Modal cloud execution
-# Commands run on Modal's cloud infrastructure
-# Great for: GPU access, scalable compute, serverless execution
-# -----------------------------------------------------------------------------
-# terminal:
-#   backend: "modal"
-#   cwd: "/workspace"  # Path INSIDE the sandbox (default: /root)
-#   timeout: 180
-#   lifetime_seconds: 300
-#   modal_image: "nikolaik/python-nodejs:python3.11-nodejs20"
-
-# -----------------------------------------------------------------------------
-# OPTION 6: Daytona cloud execution
-# Commands run in Daytona cloud sandboxes
-# Great for: Cloud dev environments, persistent workspaces, team collaboration
-# Requires: pip install daytona, DAYTONA_API_KEY env var
-# -----------------------------------------------------------------------------
-# terminal:
-#   backend: "daytona"
-#   cwd: "~"
-#   timeout: 180
-#   lifetime_seconds: 300
-#   daytona_image: "nikolaik/python-nodejs:python3.11-nodejs20"
-#   container_disk: 10240          # Daytona max is 10GB per sandbox
-
-#
-# --- Container resource limits (docker, singularity, modal, daytona -- ignored for local/ssh) ---
-# These settings apply to all container backends. They control the resources
-# allocated to the sandbox and whether its filesystem persists across sessions.
-  container_cpu: 1              # CPU cores
-  container_memory: 5120        # Memory in MB (5120 = 5GB)
-  container_disk: 51200         # Disk in MB (51200 = 50GB)
-  container_persistent: true    # Persist filesystem across sessions (false = ephemeral)
-
-# -----------------------------------------------------------------------------
-# SUDO SUPPORT (works with ALL backends above)
-# -----------------------------------------------------------------------------
-# Add sudo_password to any terminal config above to enable sudo commands.
-# The password is piped via `sudo -S`. Works with local, ssh, docker, etc.
+# Add sudo_password to the terminal config above to enable sudo commands.
+# The password is piped via `sudo -S`.
 #
 # SECURITY WARNING: Password stored in plaintext!
 #
@@ -322,10 +214,7 @@ terminal:
 # will not open the interactive prompt. This is useful for passwordless sudo,
 # Touch ID sudo setups, and environments where prompting is just noise.
 #
-# ALTERNATIVES:
-# - SSH backend: Configure passwordless sudo on the remote server
-# - Containers: Run as root inside the container (no sudo needed)
-# - Local: Configure /etc/sudoers for specific commands
+# ALTERNATIVE: configure /etc/sudoers for specific commands.
 #
 # Example (add to your terminal section):
 #   sudo_password: "your-password-here"
@@ -1175,7 +1064,7 @@ stt:
   # Provider behavior:
   #   openai                 -> `prompt`, forwarded unchanged
   #   plugin providers       -> `prompt` in `**extra`; plugin owns limits
-  # prompt: "Pilotage, Teknium, Nous Research, kanban"
+  # prompt: "Pilotage, Bravico, FLConnect"
   language: "en"               # GLOBAL language hint for every STT provider (per-provider language wins). Set "" for auto-detect.
   openai:
     model: "whisper-1"         # whisper-1 | gpt-4o-mini-transcribe | gpt-4o-transcribe | gpt-transcribe

@@ -472,23 +472,11 @@ def from_agent_visible_cache_path(
     container_path: str,
     container_base: str = "/root/.pilotage",
 ) -> str:
-    """Translate a sandbox/container cache path back to its host path.
+    """Return *container_path* unchanged.
 
-    Inverse of :func:`to_agent_visible_cache_path`. Returns the input unchanged
-    when the active backend is not Docker, or when the path is not under any
-    auto-mounted cache directory — the caller then treats a still-container
-    path as "no host file" and falls back to an in-container read.
+    Commands always run on this machine, so an agent-visible cache path is
+    already the host path. Kept as a no-op so callers need no backend checks.
     """
-    if os.environ.get("TERMINAL_ENV", "local") != "docker":
-        return container_path
-
-    path = Path(container_path)
-    for mount in get_cache_directory_mounts(container_base=container_base):
-        try:
-            rel = path.relative_to(mount["container_path"])
-        except ValueError:
-            continue
-        return str(Path(mount["host_path"]) / rel)
     return container_path
 
 
@@ -496,40 +484,8 @@ def to_agent_visible_cache_path(
     host_path: str,
     container_base: str = "/root/.pilotage",
 ) -> str:
-    """Translate a host cache path to its mounted path inside the sandbox.
-
-    Returns the input unchanged if it is not under any auto-mounted cache
-    directory, or if the active terminal backend does not require path
-    translation (local).
-
-    Per-backend base (mirrors ``_agent_cache_base_for_env`` in
-    tools/image_generation_tool.py, the proven heuristics for where each
-    backend's Pilotage cache lands):
-
-    * docker / modal — bind-mounted (docker) or per-file-synced (modal) at
-      ``/root/.pilotage`` (the *container_base* default).
-    * ssh / daytona / vercel_sandbox — file-synced under the remote user's
-      home; ``~/.pilotage`` is shell-expanded by the remote shell, so tool
-      commands resolve it regardless of the actual remote home. Previously
-      these backends synced the bytes but still rendered the dangling host
-      path gap).
-    * singularity — NOT translated: Apptainer auto-binds the host home, so
-      the host path is directly readable and translation would dangle
-      (cache dirs are not remapped into that sandbox).
-
-    Backend is identified by TERMINAL_ENV (same env var
-    tools/terminal_tool.py reads in _get_environment_config).
-    """
-    backend = (os.environ.get("TERMINAL_ENV") or "local").strip().lower()
-    if backend in ("docker", "modal"):
-        pass  # /root/.pilotage default
-    elif backend in ("ssh", "daytona", "vercel_sandbox"):
-        container_base = "~/.pilotage"
-    else:
-        return host_path  # local, singularity, unknown: host path is correct
-
-    mapped = map_cache_path_to_container(host_path, container_base=container_base)
-    return mapped if mapped is not None else host_path
+    """Return *host_path* unchanged — the agent sees the host filesystem."""
+    return host_path
 
 
 def iter_cache_files(

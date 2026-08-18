@@ -1570,7 +1570,7 @@ class PluginContext:
         Derived from ``PILOTAGE_HOME`` via
         :func:`pilotage_cli.profiles.get_active_profile_name`, so it works in
         every execution context — interactive CLI, gateway, and
-        kanban-spawned worker sessions alike — without depending on
+        spawned worker sessions alike — without depending on
         ``_cli_ref`` (which is ``None`` outside an interactive CLI run).
 
         Returns ``"default"`` for the default profile, the profile id when

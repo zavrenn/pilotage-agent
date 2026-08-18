@@ -2,11 +2,10 @@
 """
 File Operations Module
 
-Provides file manipulation capabilities (read, write, patch, search) that work
-across all terminal backends (local, docker, ssh, singularity, modal, daytona, vercel_sandbox).
+Provides file manipulation capabilities (read, write, patch, search).
 
-The key insight is that all file operations can be expressed as shell commands,
-so we wrap the terminal backend's execute() interface to provide a unified file API.
+All file operations are expressed as shell commands, so we wrap the terminal
+environment's execute() interface to provide a unified file API.
 
 Usage:
     from tools.file_operations import ShellFileOperations
@@ -879,8 +878,8 @@ class ShellFileOperations(FileOperations):
     """
     File operations implemented via shell commands.
     
-    Works with ANY terminal backend that has execute(command, cwd) method.
-    This includes local, docker, singularity, ssh, modal, and daytona environments.
+    Works with any terminal environment exposing an execute(command, cwd)
+    method.
     """
     
     def __init__(self, terminal_env, cwd: str = None):
@@ -909,8 +908,6 @@ class ShellFileOperations(FileOperations):
         """
         self.env = terminal_env
         # Determine cwd from various possible sources.
-        # IMPORTANT: do NOT fall back to os.getcwd() -- that's the HOST's local
-        # path which doesn't exist inside container/cloud backends (modal, docker).
         # If nothing provides a cwd, use "/" as a safe universal default.
         self.cwd = cwd or getattr(terminal_env, 'cwd', None) or \
                    getattr(getattr(terminal_env, 'config', None), 'cwd', None) or "/"

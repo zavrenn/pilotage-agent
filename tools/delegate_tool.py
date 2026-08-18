@@ -2504,24 +2504,14 @@ def _run_single_child(
         child_task_id = _subagent_id or f"subagent-{task_index}-{_uuid.uuid4().hex[:8]}"
         parent_task_id = getattr(parent_agent, "_current_task_id", None)
         # Seed the child's session-cwd record from the parent's (cwd rearch):
-        # children share the parent's container, and today they inherit the
-        # parent's live env.cwd implicitly. Seeding at spawn preserves that
-        # starting directory while keeping the child's subsequent `cd`s
-        # isolated in its own record (a child's cd no longer bleeds back into
-        # the parent once readers flip to the record store).
+        # children inherit the parent's live env.cwd implicitly. Seeding at
+        # spawn preserves that starting directory while keeping the child's
+        # subsequent `cd`s isolated in its own record (a child's cd no longer
+        # bleeds back into the parent once readers flip to the record store).
         try:
-            from tools.terminal_tool import (
-                get_session_cwd,
-                record_session_cwd,
-                register_container_alias,
-            )
+            from tools.terminal_tool import get_session_cwd, record_session_cwd
 
             record_session_cwd(child_task_id, get_session_cwd(parent_task_id))
-            # Per-session container isolation (docker + container_persistent:
-            # false) keys containers by session task_id. The child must share
-            # the PARENT's container — register the alias so the child's
-            # task_id resolves to the parent's container key.
-            register_container_alias(child_task_id, parent_task_id)
         except Exception as e:
             logger.debug("Child cwd seed failed: %s", e)
 
@@ -3901,7 +3891,7 @@ def delegate_task(
 
         # Finite sessions cannot route a detached subagent result back to the
         # agent after their turn/process ends. This includes stateless HTTP
-        # requests and one-shot Kanban workers. Fall back to
+        # requests and one-shot CLI runs. Fall back to
         # SYNCHRONOUS execution so the result returns in this same turn instead
         # of handing out a handle with no durable consumer. Mirrors the
         # pool-at-capacity inline fallback below.
@@ -3944,8 +3934,8 @@ def delegate_task(
                 _sync_result["note"] = (
                     "background=true is not available in this session — it cannot "
                     "receive a detached subagent result after the turn ends (a "
-                    "one-shot runner such as `pilotage -z`, a cron job, a Kanban "
-                    "worker, or a stateless HTTP endpoint). The subagent(s) ran "
+                    "one-shot runner such as `pilotage -z`, a cron job, "
+                    "or a stateless HTTP endpoint). The subagent(s) ran "
                     "SYNCHRONOUSLY and the result is included above."
                 )
             return json.dumps(_sync_result, ensure_ascii=False)
@@ -3960,17 +3950,6 @@ def delegate_task(
             _origin_ui_session_id = (
                 get_session_env("PILOTAGE_UI_SESSION_ID", "") or _origin_ui_session_id
             )
-            # In desktop/TUI, the routable session key is the durable
-            # AIAgent.session_id. Context compression can rotate that id during
-            # the same turn before the TUI-side session dict is re-anchored;
-            # if we capture the stale approval/session context key here, the
-            # async completion becomes an orphan and any desktop poller may
-            # consume it. Gateway chats are different: their session_key is the
-            # platform conversation key (agent:main:...), so keep it there.
-            if _source == "tui":
-                _agent_session_id = str(getattr(parent_agent, "session_id", "") or "")
-                if _agent_session_id:
-                    _session_key = _agent_session_id
         except Exception:
             _source = ""
         if not _session_key:

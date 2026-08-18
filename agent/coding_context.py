@@ -69,7 +69,7 @@ CODING_TOOLSET = "coding"
 # Surfaces where a coding posture makes sense under ``auto``. Messaging
 # platforms (telegram, discord, slack, …) are intentionally absent — a chat bot
 # in a group is not pair-programming.
-INTERACTIVE_CODING_PLATFORMS = {"cli", "tui", "acp", "desktop", ""}
+INTERACTIVE_CODING_PLATFORMS = {"cli", "acp", "desktop", ""}
 
 # Project-root signals that mark a directory as a code workspace even when it
 # isn't (yet) a git repo. Cheap filename checks — no parsing.

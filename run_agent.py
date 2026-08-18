@@ -241,8 +241,6 @@ _EPHEMERAL_SCAFFOLDING_FLAGS = (
     # persisted and emitted as an interim message.
     "_verification_stop_synthetic",
     "_pre_verify_synthetic",
-    # kanban worker stop-guard: narrated exit without kanban_complete/block
-    "_kanban_stop_synthetic",
     # dropped tool-call re-prompt pair (finish_reason=tool_calls with an
     # empty tool_calls array): the interim narration-only assistant turn
     # and the "issue the actual tool call now" user nudge exist only to
@@ -3433,13 +3431,7 @@ class AIAgent:
     ) -> None:
         """Update the last-activity timestamp and description (thread-safe).
 
-        Also bridges to the kanban board's heartbeat fields when this
-        process is a dispatcher-spawned worker (PILOTAGE_KANBAN_TASK set),
-        so the dispatcher watchdog doesn't reclaim an actively-running
-        worker as stale. Bridge is rate-limited (60s) and
-        best-effort — it never raises into the agent loop.
-
-        Separately, rate-limits a durable SessionDB activity projection
+        Rate-limits a durable SessionDB activity projection
         (``last_activity_at`` + bounded description/provenance) so
         CLI/Gateway consumers share one observation source / ).
 
@@ -4421,7 +4413,7 @@ class AIAgent:
         unwinding their SSL BIOs, and the codex-direct / MoA paths stream on
         the shared client itself. If we release an FD while another thread's
         SSL layer still caches the raw integer fd, the kernel can recycle it
-        into an unrelated ``open()`` (e.g. ``kanban.db``) and the unwinding
+        into an unrelated ``open()`` (e.g. ``state.db``) and the unwinding
         TLS flush then writes an application-data record into that file — the
         SQLite-header corruption documented in/.
 

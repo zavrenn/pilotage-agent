@@ -8,7 +8,6 @@ import os
 import sys
 import subprocess
 import shutil
-import importlib.util
 from pathlib import Path
 
 from pilotage_cli.config import (
@@ -230,22 +229,12 @@ def _honcho_is_configured_for_doctor() -> bool:
         return False
 
 
-    """Optional explanatory suffix for toolsets whose doctor status needs context."""
-    if toolset == "kanban" and not os.environ.get("PILOTAGE_KANBAN_TASK"):
-        return "(runtime-gated; loaded only for dispatcher-spawned workers)"
-    return ""
-
-
 def _apply_doctor_tool_availability_overrides(available: list[str], unavailable: list[dict]) -> tuple[list[str], list[dict]]:
     """Adjust runtime-gated tool availability for doctor diagnostics."""
     updated_available = list(available)
     updated_unavailable = []
     for item in unavailable:
         name = item.get("name")
-        if _is_kanban_worker_env_gate(item):
-            if "kanban" not in updated_available:
-                updated_available.append("kanban")
-            continue
         if name == "honcho" and _honcho_is_configured_for_doctor():
             if "honcho" not in updated_available:
                 updated_available.append("honcho")
@@ -1764,156 +1753,6 @@ def run_doctor(args):
         check_warn("ripgrep (rg) not found", "(file search uses grep fallback)")
         check_info(f"Install for faster search: {_system_package_install_cmd('ripgrep')}")
     
-    # Docker (optional)
-    terminal_env = os.getenv("TERMINAL_ENV", "local")
-    try:
-        from pilotage_constants import is_container as _is_container
-        running_in_container = _is_container()
-    except Exception:
-        running_in_container = False
-
-    if running_in_container:
-        # Inside our container the Docker terminal backend is not
-        # configured by default (Docker-in-Docker isn't set up); the
-        # local backend is the intended one. Skip the noisy "docker
-        # not found" warning. If the user has explicitly chosen
-        # TERMINAL_ENV=docker inside the container they likely mounted
-        # /var/run/docker.sock, so fall through to the normal check.
-        if terminal_env != "docker":
-            check_info(
-                "Running inside a container — using local terminal backend "
-                "(docker-in-docker is not configured by default)"
-            )
-            # Skip to next section; Docker isn't relevant here.
-            terminal_env = "local"
-    if terminal_env == "docker":
-        if _safe_which("docker"):
-            # Check if docker daemon is running
-            try:
-                result = subprocess.run(["docker", "info"], capture_output=True, timeout=10)
-            except subprocess.TimeoutExpired:
-                result = None
-            if result is not None and result.returncode == 0:
-                check_ok("docker", "(daemon running)")
-            else:
-                _fail_and_issue("docker daemon not running", "", "Start Docker daemon", issues)
-        else:
-            _fail_and_issue(
-                "docker not found",
-                "(required for TERMINAL_ENV=docker)",
-                "Install Docker or change TERMINAL_ENV",
-                issues,
-            )
-    elif _safe_which("docker"):
-        check_ok("docker", "(optional)")
-    elif _is_termux():
-        check_info("Docker backend is not available inside Termux (expected on Android)")
-    elif running_in_container:
-        pass  # already explained above
-    else:
-        check_warn("docker not found", "(optional)")
-    
-    # SSH (if using ssh backend)
-    if terminal_env == "ssh":
-        ssh_host = os.getenv("TERMINAL_SSH_HOST")
-        if ssh_host:
-            ssh_user = os.getenv("TERMINAL_SSH_USER")
-            ssh_port = os.getenv("TERMINAL_SSH_PORT")
-            ssh_key = os.getenv("TERMINAL_SSH_KEY")
-            target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
-            cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes"]
-            if ssh_port:
-                cmd += ["-p", ssh_port]
-            if ssh_key:
-                cmd += ["-i", os.path.expanduser(ssh_key)]
-            cmd += [target, "echo ok"]
-            # Try to connect
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True, encoding='utf-8', errors='replace',
-                    timeout=15
-                )
-            except subprocess.TimeoutExpired:
-                result = None
-            if result is not None and result.returncode == 0:
-                check_ok(f"SSH connection to {ssh_host}")
-            else:
-                _fail_and_issue(f"SSH connection to {ssh_host}", "", f"Check SSH configuration for {ssh_host}", issues)
-        else:
-            _fail_and_issue(
-                "TERMINAL_SSH_HOST not set",
-                "(required for TERMINAL_ENV=ssh)",
-                "Set TERMINAL_SSH_HOST in .env",
-                issues,
-            )
-    
-    # Daytona (if using daytona backend)
-    if terminal_env == "daytona":
-        daytona_key = os.getenv("DAYTONA_API_KEY")
-        if daytona_key:
-            check_ok("Daytona API key", "(configured)")
-        else:
-            _fail_and_issue(
-                "DAYTONA_API_KEY not set",
-                "(required for TERMINAL_ENV=daytona)",
-                "Set DAYTONA_API_KEY environment variable",
-                issues,
-            )
-        try:
-            from daytona import Daytona  # noqa: F401 — SDK presence check
-            check_ok("daytona SDK", "(installed)")
-        except ImportError:
-            _fail_and_issue(
-                "daytona SDK not installed",
-                "(pip install daytona)",
-                "Install daytona SDK: pip install daytona",
-                issues,
-            )
-
-    # Vercel Sandbox (if using vercel_sandbox backend)
-    if terminal_env == "vercel_sandbox":
-        runtime = os.getenv("TERMINAL_VERCEL_RUNTIME", "node24").strip() or "node24"
-        from tools.terminal_tool import _SUPPORTED_VERCEL_RUNTIMES
-        if runtime in _SUPPORTED_VERCEL_RUNTIMES:
-            check_ok("Vercel runtime", f"({runtime})")
-        else:
-            supported = ", ".join(_SUPPORTED_VERCEL_RUNTIMES)
-            _fail_and_issue(
-                "Vercel runtime unsupported",
-                f"({runtime}; use {supported})",
-                f"Set TERMINAL_VERCEL_RUNTIME to one of: {supported}",
-                issues,
-            )
-
-        disk = os.getenv("TERMINAL_CONTAINER_DISK", "51200").strip()
-        if disk in {"", "0", "51200"}:
-            check_ok("Vercel disk setting", "(uses platform default)")
-        else:
-            _fail_and_issue(
-                "Vercel custom disk unsupported",
-                "(reset terminal.container_disk to 51200)",
-                "Vercel Sandbox does not support custom container_disk; use the shared default 51200",
-                issues,
-            )
-
-        if importlib.util.find_spec("vercel") is not None:
-            check_ok("vercel SDK", "(installed)")
-        else:
-            _fail_and_issue(
-                "vercel SDK not installed",
-                "(pip install 'pilotage-agent[vercel]')",
-                "Install the Vercel optional dependency: pip install 'pilotage-agent[vercel]'",
-                issues,
-            )
-
-        persistent = os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() in {"1", "true", "yes", "on"}
-        if persistent:
-            check_info("Vercel persistence: snapshot filesystem only; live processes do not survive sandbox recreation")
-        else:
-            check_info("Vercel persistence: ephemeral filesystem")
-
     # npm audit for all Node.js packages
     _npm_bin = _safe_which("npm")
     if _npm_bin:
@@ -2142,7 +1981,7 @@ def run_doctor(args):
         
         for tid in available:
             info = TOOLSET_REQUIREMENTS.get(tid, {})
-            check_ok(info.get("name", tid), _doctor_tool_availability_detail(tid))
+            check_ok(info.get("name", tid), "")
         
         for item in unavailable:
             env_vars = item.get("missing_vars") or item.get("env_vars") or []

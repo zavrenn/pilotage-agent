@@ -17,9 +17,8 @@ are then free to write into a file that a writer still believes it owns, which
 is the documented route to "database disk image is malformed".
 
 Pilotage is exactly the topology this hits: gateway, dispatcher, dashboard,
-TUI, CLI, cron and kanban workers all open the same ``state.db`` /
-``kanban.db``, and several code paths used to byte-probe those files while
-connections were live.
+CLI, cron and gateway workers all open the same ``state.db``, and several
+code paths used to byte-probe those files while connections were live.
 
 The rules
 ---------
@@ -217,7 +216,7 @@ def connect_tracked(
     """``sqlite3.connect`` that registers the connection for the lifetime of the fd.
 
     Use for any connection to a database whose file might otherwise be
-    byte-probed (``state.db``, ``kanban.db``). The registration is released
+    byte-probed (``state.db``). The registration is released
     automatically on ``close()``.
 
     The open and the registration happen together under ``_live_lock``, so a
