@@ -1558,12 +1558,10 @@ def run_conversation(
                 # ``_flush_messages_to_session_db``).
                 api_msg["content"] = _api_content
 
-            # For ALL assistant messages, pass reasoning back to the API
-            # This ensures multi-turn reasoning context is preserved
+            # Drop the internal reasoning carriers: OpenAI rejects any
+            # input-message key outside the Chat Completions schema.
             agent._copy_reasoning_content_for_api(msg, api_msg)
 
-            # Remove 'reasoning' field - it's for trajectory storage only
-            # We've copied it to 'reasoning_content' for the API above
             if "reasoning" in api_msg:
                 api_msg.pop("reasoning")
             # Remove finish_reason - not accepted by strict APIs
@@ -1957,14 +1955,6 @@ def run_conversation(
         while retry_count < max_retries:
             try:
                 agent._reset_stream_delivery_tracking()
-                # api_messages is built once, before this retry loop, while the
-                # primary provider is active.  A mid-conversation fallback can
-                # switch to a require-side provider that
-                # rejects assistant turns lacking reasoning_content.  Re-apply the
-                # echo-back pad for the *current* provider here (idempotent no-op
-                # unless the active provider needs it) so the fallback request
-                # isn't sent with stale, primary-shaped reasoning fields.
-                agent._reapply_reasoning_echo_for_provider(api_messages)
                 if tools_for_api == agent.tools:
                     api_kwargs = agent._build_api_kwargs(api_messages)
                 else:

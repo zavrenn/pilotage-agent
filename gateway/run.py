@@ -1183,12 +1183,10 @@ def build_resume_recovery_note(
 # replay, regressing the CLI-vs-gateway behavioural parity.
 #
 # Why each field matters on replay:
-#   * ``reasoning`` / ``reasoning_content``: provider-facing thinking text.
-#     ``_copy_reasoning_content_for_api`` promotes ``reasoning`` →
-#     ``reasoning_content`` at send time, but only when the strings happen to
-#     match.  Carrying the original ``reasoning_content`` verbatim avoids
-#     reconstruction loss for providers that return them as distinct
-#     fields in thinking modes.
+#   * ``reasoning`` / ``reasoning_content``: provider-facing thinking text,
+#     kept so gateway transcripts match the CLI ones. Both are stripped at
+#     send time; reasoning continuity across turns rides on
+#     ``codex_reasoning_items``.
 #   * ``reasoning_details``: opaque structured array (signature,
 #     encrypted_content) used to maintain reasoning continuity across turns.
 #   * ``codex_reasoning_items``: encrypted reasoning blobs for the OpenAI
@@ -1229,13 +1227,9 @@ def _build_replay_entry(
     the same way, so we keep the existing default of dropping it.
 
     Empty values: most fields are dropped when falsy (matching the original
- behaviour) since an empty list/string for those carries no
-    information.  The exception is ``reasoning_content``: thinking-mode
-    replay treats an empty string as a meaningful sentinel
-    that ``_copy_reasoning_content_for_api`` upgrades to a single space.
-    Dropping it here would make the gateway send no ``reasoning_content``
-    at all on the next turn, which can cause HTTP 400 from strict thinking
-    providers.
+    behaviour) since an empty list/string for those carries no
+    information.  ``reasoning_content`` is kept even when empty so gateway
+    transcripts stay byte-identical to the CLI ones.
     """
     entry: Dict[str, Any] = {"role": role, "content": content}
     # api_content sidecar (persist-what-you-send, prompt-cache stability):

@@ -28,6 +28,6 @@ def build_model_parser(subparsers, *, cmd_model: Callable) -> None:
         "--timeout",
         type=float,
         default=15.0,
-        help="HTTP request timeout in seconds for Nous login (default: 15)",
+        help="HTTP request timeout in seconds for provider requests (default: 15)",
     )
     model_parser.set_defaults(func=cmd_model)

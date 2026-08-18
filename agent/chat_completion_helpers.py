@@ -1748,15 +1748,6 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
             raw_reasoning_content = model_extra["reasoning_content"]
     if raw_reasoning_content is not None:
         msg["reasoning_content"] = _sanitize_surrogates(raw_reasoning_content)
-    elif assistant_tool_calls and agent._needs_thinking_reasoning_pad():
-        # Thinking-mode models require reasoning_content on every
-        # assistant tool-call message. Without it, replaying the persisted
-        # message causes HTTP 400 ("The reasoning_content in the thinking
-        # mode must be passed back to the API"). Include streamed reasoning
-        # text when captured; otherwise pad with a single space — an empty
-        # string is rejected. A space satisfies non-empty checks everywhere
-        # without leaking fabricated reasoning.
-        msg["reasoning_content"] = reasoning_text or " "
 
     # Additive fallback. Streaming-only providers
     # accumulate reasoning through ``delta.reasoning_content`` chunks
@@ -1770,14 +1761,8 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     #
     # Promote the already-sanitized streamed ``reasoning_text`` to
     # ``reasoning_content`` at write time, but ONLY when no prior branch
-    # already set it AND we actually captured reasoning text. This
-    # preserves every existing behavior:
-    #   - SDK-exposed ``reasoning_content`` still wins.
-    #   - The tool-call ""-pad still fires.
-    #   - Non-thinking turns with no reasoning leave the field absent,
-    #     so ``_copy_reasoning_content_for_api``'s cross-provider leak
-    # guard and ``reasoning``→``reasoning_content``
-    #     promotion tiers still apply at replay time.
+    # already set it AND we actually captured reasoning text. The
+    # SDK-exposed ``reasoning_content`` still wins when present.
     if "reasoning_content" not in msg and reasoning_text:
         msg["reasoning_content"] = reasoning_text
 

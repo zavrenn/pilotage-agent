@@ -151,6 +151,12 @@ def set_approval_callback(cb):
     _callback_tls.approval = cb
 
 
+# Interactive sudo passwords, keyed by approval-callback scope. Process-local
+# and never persisted.
+_sudo_password_cache: dict[str, str] = {}
+_sudo_password_cache_lock = threading.Lock()
+
+
 def _get_sudo_password_cache_scope() -> str:
     """Return the cache scope for interactive sudo passwords."""
     try:
@@ -916,19 +922,38 @@ _creation_locks_lock = threading.Lock()  # Protects _creation_locks dict itself
 _cleanup_thread = None
 _cleanup_running = False
 
-_ISOLATION_OVERRIDE_KEYS = frozenset({"env_type"})
+# Per-session working-directory records, keyed by task/session id.
+_session_cwd: Dict[str, str] = {}
+_session_cwd_lock = threading.Lock()
 
 
-def _has_isolation_overrides(task_id: Optional[str]) -> bool:
-    """True when *task_id* registered backend-image/env_type overrides.
+def record_session_cwd(session_key: Optional[str], cwd: Optional[str]) -> None:
+    """Record *cwd* as the working directory of *session_key*.
 
-    The single owner of the "is this an RL/benchmark-style isolated rollout"
-    predicate — shared by container-key resolution and container creation so
-    the two can't drift.
+    Called wherever a session's live cwd becomes known: after a terminal
+    command completes (the env's post-command tracking has just parsed the
+    resulting cwd) and when a surface registers a workspace cwd override.
+    Empty/None session keys collapse to ``"default"`` (single-session CLI).
+    Non-string / empty cwds are ignored.
     """
-    if not task_id or task_id not in _task_env_overrides:
-        return False
-    return bool(set(_task_env_overrides[task_id].keys()) & _ISOLATION_OVERRIDE_KEYS)
+    if not isinstance(cwd, str) or not cwd.strip():
+        return
+    key = str(session_key or "default")
+    with _session_cwd_lock:
+        if _session_cwd.get(key) != cwd:
+            _session_cwd[key] = cwd
+
+
+def get_session_cwd(session_key: Optional[str]) -> Optional[str]:
+    """Return the recorded working directory for *session_key*, if any.
+
+    No fallback chain here on purpose: callers decide what an absent record
+    means (config default, TERMINAL_CWD seed, process cwd). ``None``/empty
+    keys read the ``"default"`` record.
+    """
+    key = str(session_key or "default")
+    with _session_cwd_lock:
+        return _session_cwd.get(key)
 
 
 def _resolve_env_task_id(task_id: Optional[str]) -> str:
@@ -939,36 +964,18 @@ def _resolve_env_task_id(task_id: Optional[str]) -> str:
     tracking and the active-subagents registry stay distinct per child -- but
     we collapse that ID back to ``"default"`` here so subagents share the
     parent's shell session.
-
-    Exception: RL / benchmark environments call
-    ``register_task_env_overrides(task_id, {"env_type": ...})`` to request an
-    isolated environment; that override is honoured by returning the task_id
-    unchanged.  CWD-only overrides (registered for workspace tracking) are not
-    isolation signals.
     """
-    if task_id and _has_isolation_overrides(task_id):
-        return task_id
     return "default"
 
 
 def resolve_task_overrides(task_id: Optional[str]) -> Dict[str, Any]:
-    """Return the env overrides for *task_id*, raw key first then collapsed.
+    """Return the per-task environment overrides for *task_id*.
 
-    ``register_task_env_overrides`` writes under the *raw* task/session id, but
-    a CWD-only override collapses (:func:`_resolve_env_task_id`) to the
-    shared ``"default"`` container so per-session surfaces (ACP/gateway/
-    dashboard) don't each spin up their own sandbox. Callers that need the
-    override (terminal command setup, file-tool cwd resolution) must therefore
-    read the raw id FIRST and only fall back to the collapsed env id, or
-    the originating session's override is silently dropped. This is the single
-    source of that lookup so the terminal and file layers can't drift apart.
+    Nothing registers overrides in the local-only backend; kept as the single
+    lookup point so the terminal and file layers can't drift apart if a
+    surface ever starts writing them again.
     """
-    raw = task_id or "default"
-    return (
-        _task_env_overrides.get(raw)
-        or _task_env_overrides.get(_resolve_env_task_id(raw))
-        or {}
-    )
+    return {}
 
 
 # Configuration from environment variables

@@ -2729,50 +2729,17 @@ def intent_ack_continuation_enabled(agent) -> bool:
 
 
 def copy_reasoning_content_for_api(agent, source_msg: dict, api_msg: dict) -> None:
-    """Copy provider-facing reasoning fields onto an API replay message.
+    """Strip the internal reasoning carrier off an API replay message.
 
-    Forwarder — the strip-vs-repad POLICY is owned by
-    ``agent.message_sanitization.apply_reasoning_content_policy`` (audit F4);
-    this only supplies the agent's cached provider-direction flag.
+    ``reasoning_content`` is an internal storage field. OpenAI rejects any
+    input-message key outside the Chat Completions schema with HTTP 400/422
+    ("Extra inputs are not permitted"), and the Codex Responses path carries
+    reasoning across turns through ``codex_reasoning_items`` instead, so it
+    never needs the field replayed either.
     """
-    from agent.message_sanitization import apply_reasoning_content_policy
-
-    apply_reasoning_content_policy(
-        source_msg, api_msg, agent._needs_thinking_reasoning_pad()
-    )
-
-
-def reapply_reasoning_echo_for_provider(agent, api_messages: list) -> int:
-    """Re-pad (or strip) assistant turns' reasoning_content for the active provider.
-
-    ``api_messages`` is built once, before the retry loop, while the *prior*
-    model is active.  A mid-conversation ``/model`` switch can then change
-    providers, so the reasoning fields baked into ``api_messages`` must be
-    reconciled against the *current* one:
-
-    * Switching TO a require-side provider (thinking mode): assistant turns
-      built when the prior provider did NOT need the echo-back go out
-      without ``reasoning_content`` and the new provider rejects them with
-      HTTP 400 ("The reasoning_content in the thinking mode must be passed
-      back").  Re-apply the pad.
-
-    * Switching TO a strict provider that rejects the field: assistant turns
-      built under a reasoning primary carry a ``reasoning_content`` pad
-      (often a single space ``" "``), and the strict provider rejects it
-      with HTTP 400/422 ("Extra inputs are not permitted").  Strip the field.
-
-    Calling this immediately before building the request kwargs reconciles the
-    fields against the *current* provider.  It is idempotent and safe to call
-    every iteration.
-
-    Returns the number of assistant turns whose reasoning_content was added or
-    removed.
-    """
-    from agent.message_sanitization import reapply_reasoning_echo
-
-    return reapply_reasoning_echo(
-        api_messages, agent._needs_thinking_reasoning_pad()
-    )
+    if source_msg.get("role") != "assistant":
+        return
+    api_msg.pop("reasoning_content", None)
 
 
 def _iter_httpx_pool_objects(http_client: Any):

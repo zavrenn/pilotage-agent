@@ -1427,6 +1427,7 @@ class PluginContext:
                 "Rejected config path %r from plugin %s", key, self.plugin_id
             )
             raise
+        from pilotage_cli import config as config_mod
         from pilotage_cli import managed_scope
 
         dotted_path = ".".join((

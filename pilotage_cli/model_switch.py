@@ -1248,47 +1248,6 @@ def switch_model(
 
         target_provider = pdef.id
 
-        # Guard against silent aggregator hops. A vendor name that is an
-        # alias resolving to an aggregator must not silently switch the user
-        # onto an unauthed endpoint (the classic HTTP 401 "Missing
-        # Authentication header"). Point them at the real direct provider
-        # instead.
-        from pilotage_cli.models import _AGGREGATOR_PROVIDERS as _AGG_PROVIDERS
-        from pilotage_cli.providers import ALIASES as _PROVIDER_ALIAS_TABLE
-        _explicit_norm = explicit_provider.strip().lower()
-        _alias_target = _PROVIDER_ALIAS_TABLE.get(_explicit_norm)
-        if (
-            _alias_target
-            and _alias_target == target_provider
-            and target_provider != _explicit_norm
-            and target_provider in _AGG_PROVIDERS
-        ):
-            _authed = get_authenticated_provider_slugs(
-                current_provider=current_provider,
-                user_providers=user_providers,
-                custom_providers=custom_providers,
-            )
-            if target_provider not in _authed:
-                _suggestions = [
-                    s for s in _authed
-                    if s.startswith(_explicit_norm) and s != _explicit_norm
-                ]
-                _hint = (
-                    f" Did you mean: {', '.join(_suggestions)}?"
-                    if _suggestions else ""
-                )
-                return ModelSwitchResult(
-                    success=False,
-                    target_provider=target_provider,
-                    provider_label=pdef.name,
-                    is_global=is_global,
-                    error_message=(
-                        f"Provider '{_explicit_norm}' is an alias that routes "
-                        f"through {get_label(target_provider)}, which "
-                        f"has no credentials configured.{_hint}"
-                    ),
-                )
-
         # If no model specified, try auto-detect from endpoint
         if not new_model:
             if pdef.base_url:
@@ -1965,8 +1924,8 @@ def _collect_authed_provider_slugs(
     import os
     from agent.models_dev import PROVIDER_TO_MODELS_DEV
     from pilotage_cli.auth import PROVIDER_REGISTRY, _load_auth_store
-    from pilotage_cli.providers import PILOTAGE_OVERLAYS, ALIASES as _PROVIDER_ALIAS_TABLE
-    from pilotage_cli.models import _AGGREGATOR_PROVIDERS as _AGG_PROVIDERS, CANONICAL_PROVIDERS
+    from pilotage_cli.providers import PILOTAGE_OVERLAYS
+    from pilotage_cli.models import CANONICAL_PROVIDERS
 
     _excluded_set = {str(p).strip().lower() for p in excluded if p}
     slugs: list[str] = []
@@ -1974,13 +1933,6 @@ def _collect_authed_provider_slugs(
 
     # --- Section 1: Pilotage-mapped providers (PROVIDER_TO_MODELS_DEV) ---
     for pilotage_id, mdev_id in PROVIDER_TO_MODELS_DEV.items():
-        _alias_target = _PROVIDER_ALIAS_TABLE.get(pilotage_id)
-        if (
-            _alias_target
-            and _alias_target != pilotage_id
-            and _alias_target in _AGG_PROVIDERS
-        ):
-            continue
         _canonical = pilotage_id
         try:
             from providers import get_provider_profile as _gpp
@@ -2169,7 +2121,7 @@ def list_authenticated_providers(
             pass
 
     results: List[dict] = []
-    seen_slugs: set = set # lowercase-normalized to catch case variants
+    seen_slugs: set = set()  # lowercase-normalized to catch case variants
     _current_provider_norm = str(current_provider or "").strip().lower()
     _current_base_url_norm = str(current_base_url or "").strip().rstrip("/").lower()
 
@@ -2240,24 +2192,7 @@ def list_authenticated_providers(
             pass  # best-effort; serial path still works as fallback
 
     # --- 1. Check Pilotage-mapped providers ---
-    from pilotage_cli.models import _AGGREGATOR_PROVIDERS as _AGG_PROVIDERS
-    from pilotage_cli.providers import ALIASES as _PROVIDER_ALIAS_TABLE
     for pilotage_id, mdev_id in PROVIDER_TO_MODELS_DEV.items():
-        # Skip vendor names that are merely aliases routing through an
-        # aggregator. These are NOT
-        # directly-routable providers: emitting them as their own picker
-        # row produces a phantom entry that, when selected, resolves via
-        # resolve_provider_full() to the aggregator — silently
-        # switching a user off their real provider onto an endpoint they
-        # may have no key for (HTTP 401). The user's real provider (e.g.
-        # openai-api, or a providers.openai config row) covers this vendor.
-        _alias_target = _PROVIDER_ALIAS_TABLE.get(pilotage_id)
-        if (
-            _alias_target
-            and _alias_target != pilotage_id
-            and _alias_target in _AGG_PROVIDERS
-        ):
-            continue
         # Resolve the canonical provider profile name.  Skip pilotage_ids
         # that are mere aliases resolving to a different canonical profile.
         # Only process entries whose pilotage_id matches the canonical
