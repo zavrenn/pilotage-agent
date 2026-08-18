@@ -230,8 +230,7 @@ def compute_context_details(agent: Any) -> Dict[str, Any]:
 
 
 def render_context_grid(payload: Dict[str, Any]) -> List[str]:
-    """Render the payload as a Claude Code-style glyph block grid.
-
+    """
     100 cells (5×20), each one percent of the model context window. Categories
     fill in declaration order; the remainder renders as free space.
     """

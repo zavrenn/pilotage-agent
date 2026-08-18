@@ -993,14 +993,6 @@ def _preflight_codex_api_kwargs(
 
             tool_type = tool.get("type")
 
-            # Provider-executed built-in tools (xAI native web_search, code
-            # interpreter, etc.) are declared by ``type`` alone and carry no
-            # ``name``/``parameters`` schema — the provider owns the
-            # implementation.  Pass them through verbatim instead of forcing
-            # them through the function-tool validation below (which would
-            # otherwise reject them with "unsupported type").  See
-            # agent/transports/codex.py for where xAI's native web_search is
-            # injected.
             if tool_type in _RESPONSES_BUILTIN_TOOL_TYPES:
                 normalized_tools.append(dict(tool))
                 continue
@@ -1120,9 +1112,7 @@ def _preflight_codex_api_kwargs(
     if extra_body is not None:
         if not isinstance(extra_body, dict):
             raise ValueError("Codex Responses request 'extra_body' must be an object.")
-        # Pass extra_body through verbatim — used by xAI Responses to
-        # carry `prompt_cache_key` as a body-level field (the documented
-        # cache-routing surface on /v1/responses). The openai SDK
+        # The openai SDK
         # serializes extra_body into the JSON body without per-field
         # type checks, so it survives Responses.stream() kwarg-signature
         # changes that would otherwise raise TypeError before the wire.
@@ -1545,12 +1535,6 @@ def _normalize_codex_response(
     elif (reasoning_items_raw or reasoning_parts or saw_reasoning_item) and not final_text:
         # Response contains only reasoning (encrypted thinking state and/or
         # human-readable summary) with no visible content or tool calls.
-        #
-        # For the specially-handled backends (Codex, GitHub/Copilot),
-        # reasoning-only with status="completed" means "the model is still
-        # thinking and needs another turn" — treat it as incomplete so the
-        # Codex continuation path retries instead of falling into the
-        # empty-content retry loop.
         #
         # For all other backends (other:<base_url>, etc.), trust the provider's
         # own response.status signal. When status == "completed" and no items

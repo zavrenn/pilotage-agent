@@ -562,9 +562,6 @@ def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
 
         Safe ONLY for fields emitted in the volatile tier at the very END of
         the prompt (Model / Provider / Platform). User-supplied project
-        context (AGENTS.md / CLAUDE.md / .cursorrules) is embedded in the
-        middle context tier, so a last-match scan lets project prose shadow
-        any field emitted EARLIER — see ``host_info_value``.
         """
         prefix = f"{label}:"
         value = ""

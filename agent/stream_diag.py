@@ -1,8 +1,7 @@
 """Stream diagnostics — per-attempt counters, exception chains, retry logging.
 
 When a streaming chat-completions request dies mid-response, we want to
-know why: which Cloudflare edge served the request, which OpenRouter
-downstream provider answered, how many bytes/chunks we got before the
+know why: which Cloudflare edge served the request, how many bytes/chunks we got before the
 drop, the HTTP status, the underlying httpx error class.  These helpers
 collect that info and emit it both to ``agent.log`` (full detail) and to
 the user-facing status line (compact).
@@ -134,10 +133,6 @@ def log_stream_retry(
     retries no longer spam the parent's terminal — but the file log keeps
     full detail (provider, error class, attempt, base_url, subagent_id).
 
-    When *diag* is provided (the per-attempt stream-diagnostic dict from
-    :func:`stream_diag_init`), the WARNING also captures upstream headers
-    (cf-ray, x-openrouter-provider, x-openrouter-id), HTTP status, bytes
-    streamed before the drop, and elapsed time on the dying attempt.
     These are the breadcrumbs needed to answer "is one CF edge / one
     downstream provider responsible, or is it random across runs?"
     """
@@ -225,11 +220,6 @@ def emit_stream_drop(
     Both top-level agents and subagents announce drops in the UI — the
     parent prefixes subagent lines with ``[subagent-N]`` via ``log_prefix``
     so they're easy to attribute.  All cases also write a structured
-    WARNING to ``agent.log`` via :func:`log_stream_retry` with the full
-    diagnostic detail (subagent_id, provider, base_url, error_type,
-    cf-ray, x-openrouter-provider, bytes/chunks, elapsed) for post-hoc
-    analysis.
-
     The user-visible status line is intentionally compact: provider,
     error class, attempt N/M, plus ``after Xs`` when the stream dropped
     mid-flight.  Full diagnostic detail goes to ``agent.log`` only —

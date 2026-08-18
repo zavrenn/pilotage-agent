@@ -15,7 +15,6 @@ Two coexisting STT extension surfaces — in resolution order:
    :mod:`tools.transcription_tools`) — the native OpenAI Whisper
    implementation. **Always wins** — plugins cannot shadow it.
 2. **Plugin-registered providers** (this ABC). For new STT backends —
-   OpenRouter, SenseAudio, Gemini-STT, custom proprietary engines —
    that need a Python implementation without modifying
    ``tools/transcription_tools.py``.
 
@@ -66,10 +65,7 @@ class TranscriptionProvider(abc.ABC):
     def name(self) -> str:
         """Stable short identifier used in ``stt.provider`` config.
 
-        Lowercase, no spaces. Examples: ``openrouter``, ``sensaudio``,
-        ``gemini``, ``deepgram``. Names that collide with a built-in STT
-        provider (``local``, ``local_command``, ``groq``, ``openai``,
-        ``mistral``) are rejected at registration time.
+        Lowercase, no spaces.
         """
 
     @property
@@ -118,20 +114,6 @@ class TranscriptionProvider(abc.ABC):
 
     def get_setup_schema(self) -> Dict[str, Any]:
         """Return provider metadata for the ``pilotage tools`` picker.
-
-        Used by ``tools_config.py`` to inject this provider as a row in
-        the Speech-to-Text provider list. Shape::
-
-            {
-                "name": "OpenRouter STT",              # picker label
-                "badge": "paid",                       # optional short tag
-                "tag": "Whisper via OpenRouter API",   # optional subtitle
-                "env_vars": [                          # keys to prompt for
-                    {"key": "OPENROUTER_API_KEY",
-                     "prompt": "OpenRouter API key",
-                     "url": "https://openrouter.ai/keys"},
-                ],
-            }
 
         Default: minimal entry derived from ``display_name`` with no
         env vars. Override to expose API key prompts and custom badges.

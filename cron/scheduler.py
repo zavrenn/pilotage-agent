@@ -3489,7 +3489,6 @@ def _build_job_prompt(
         # The skill blocks (and any skipped-skill notice) above are stable per
         # job config; the appended instruction carries the volatile per-run
         # data (cron hint + prompt + script output + run context). Declare
-        # that boundary for the Anthropic cache planner.
         stable_prefix = append_user_instruction(parts, prompt)
     assembled = _scan_assembled_cron_prompt("\n".join(parts), job, has_skills=True)
     if stable_prefix and len(assembled) > len(stable_prefix) and assembled.startswith(stable_prefix):
@@ -4678,8 +4677,8 @@ def run_job(
             # Do not inject PILOTAGE_INFERENCE_PROVIDER here. resolve_runtime_provider()
             # already prefers persisted config over stale shell/env overrides when
             # no explicit provider is requested. Passing the env var here short-
-            # circuits that precedence and can resurrect old providers (for
-            # example DeepSeek) for cron jobs that do not pin provider/model.
+            # circuits that precedence and can resurrect old providers for cron
+            # jobs that do not pin provider/model.
             runtime_kwargs = {
                 # Per-job user pin wins; otherwise the cron-fleet default
                 # provider (cron.model_provider); otherwise resolve from
@@ -4834,9 +4833,6 @@ def run_job(
             enabled_toolsets=_resolve_cron_enabled_toolsets(job, _cfg),
             disabled_toolsets=_resolve_cron_disabled_toolsets(_cfg),
             quiet_mode=True,
-            # Cron jobs should always inherit the user's SOUL.md identity from
-            # PILOTAGE_HOME. When a workdir is configured, also inject project
-            # context files (AGENTS.md / CLAUDE.md / .cursorrules) from there.
             # Without a workdir, keep cwd context discovery disabled.
             skip_context_files=not bool(_job_workdir),
             load_soul_identity=True,

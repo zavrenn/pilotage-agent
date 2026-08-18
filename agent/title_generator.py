@@ -53,9 +53,7 @@ TitleCallback = Callable[[str, str], None]
 # the request would reload a model the runtime already evicted.
 RuntimeValidator = Callable[[], bool]
 
-# Cap on the text handed to the model. Claude Code and OpenClaw independently
-# converged on the same 1000-char budget; a title needs the opening intent, not
-# a pasted stack trace.
+# Cap on the text handed to the model.
 MAX_TITLE_INPUT_CHARS = 1000
 
 # Cap on the instant derived title. Deliberately shorter than the model's
@@ -343,8 +341,6 @@ def generate_title(
     small/fast model tier. Thinking is disabled and the response is constrained
     to ``{"title": "..."}`` so there is no preamble or reasoning to strip.
 
-    Titles come from the user's message alone — every surveyed implementation
-    that titles well (Claude Code, OpenCode, Cursor, OpenClaw) does the same.
     Waiting for the assistant is what made this slow, and it bought nothing:
     the user's opening message already states the intent worth naming.
 

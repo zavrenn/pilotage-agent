@@ -18,10 +18,7 @@ Pilotage' support is deliberately narrow (live verification, Aug 2026):
   "unsupported" rejection to downgrade on, so the only safe gate is an
   explicit model-family check.
 * **Direct OpenAI routes only:** api.openai.com (API key) or the ChatGPT
-  Codex backend (subscription OAuth). Every other Responses surface
-  (xAI, GitHub/Copilot, relays, local servers) never sees the field —
-  most would 400 on the unknown parameter, and none can mint or decrypt
-  the compaction blob.
+  Codex backend (subscription OAuth).
 
 Ownership model: Pilotage' local compression stays fully armed as the
 fallback owner. The native threshold is clamped safely below the local

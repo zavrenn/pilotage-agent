@@ -77,9 +77,7 @@ def append_user_instruction(parts: list, instruction: str) -> str:
     Shared by every builder that ends a static skill scaffold with the
     caller-supplied volatile instruction (single-skill invocations, cron job
     prompts). The returned prefix ends exactly at the instruction marker, so
-    registering it with ``agent.prompt_cache_boundary`` lets the Anthropic
-    cache planner put a breakpoint on the scaffold instead of caching the
-    whole message as one atomic block. Keeping construction in one
+    Keeping construction in one
     place guarantees the registered prefix stays a byte-prefix of the built
     message — the invariant the request-time split depends on.
     """
@@ -382,9 +380,7 @@ def _build_skill_message(
     if user_instruction:
         parts.append("")
         # Everything before the caller-supplied instruction is a stable
-        # scaffold; declare the exact boundary so the Anthropic cache planner
-        # can put a breakpoint on it instead of caching the whole message as
-        # one atomic block. The static instruction prose stays on
+        # scaffold. The static instruction prose stays on
         # the stable side; the volatile instruction (webhook payload, ticket
         # IDs, timestamps) and any runtime note ride in the tail.
         stable_prefix = append_user_instruction(parts, user_instruction)
@@ -582,9 +578,6 @@ def resolve_skill_command_key(command: str) -> Optional[str]:
     spaces and underscores to hyphens when building the key. Hyphens and
     underscores are treated interchangeably in user input: this matches
     ``_check_unavailable_skill`` and accommodates Telegram bot-command names
-    (which disallow hyphens, so ``/claude-code`` is registered as
-    ``/claude_code`` and comes back in the underscored form).
-
     Returns the matching ``/slug`` key from ``get_skill_commands()`` or
     ``None`` if no match.
     """
@@ -637,10 +630,6 @@ def build_skill_invocation_message(
 # ---------------------------------------------------------------------------
 # Stacked slash-skill invocations — `/skill-a /skill-b do XYZ` loads every
 # leading skill (up to _MAX_STACKED_SKILLS), not just the first.
-#
-# Inspired by Claude Code v2.1.199 (July 2, 2026): "Stacked slash-skill
-# invocations like /skill-a /skill-b do XYZ now load all leading skills
-# (up to 5), not just the first."
 #
 # The generated message deliberately reuses the BUNDLE scaffolding markers
 # ("skill bundle," header + "[Loaded as part of the " block prefix) so

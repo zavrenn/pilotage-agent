@@ -1686,9 +1686,6 @@ def check_compression_model_feasibility(agent: Any) -> None:
             base_url=aux_base_url,
             api_key=aux_api_key,
             config_context_length=getattr(agent, "_aux_compression_context_length_config", None),
-            # Each model must be resolved with its own provider so that
-            # provider-specific paths (e.g. Bedrock static table, OpenRouter API)
-            # are invoked for the correct client, not inherited from the main model.
             provider=(_aux_cfg_provider if _aux_cfg_provider and _aux_cfg_provider != "auto" else getattr(agent, "provider", "")),
             custom_providers=agent._custom_providers,
         )
@@ -2244,7 +2241,7 @@ def compress_context(
         task_id: Tool task scope (used for clearing file-read dedup state).
         focus_topic: Optional focus string for guided compression — the
             summariser will prioritise preserving information related to
-            this topic.  Inspired by Claude Code's ``/compact <focus>``.
+            this topic.
         force: If True, bypass any active summary-failure cooldown.  Set
             by the manual ``/compress`` slash command so users can retry
             immediately after an auto-compress abort.  Auto-compress

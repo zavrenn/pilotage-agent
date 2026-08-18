@@ -24,9 +24,6 @@ For block-mode (refuse the write entirely), set
 is intended for shared dev environments where unsafe-by-default patterns
 are policy violations.
 
-Pattern data lives in ``patterns.py``, forked verbatim from Anthropic's
-``claude-plugins-official`` under Apache-2.0. See ``LICENSE`` and ``NOTICE``
-in this directory.
 """
 
 from __future__ import annotations

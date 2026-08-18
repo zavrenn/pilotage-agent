@@ -42,7 +42,6 @@ override knobs (``provider=``, ``model=``, ``agent_id=``,
           llm:
             allow_provider_override: true
             allow_model_override: true
-            allowed_providers: [openrouter, anthropic]   # optional
             allowed_models:    [openai/gpt-4o-mini]       # optional
             allow_agent_id_override: false
             allow_profile_override: false
@@ -603,9 +602,7 @@ def _parse_structured_text(
 def _extract_usage(response: Any) -> PluginLlmUsage:
     """Pull token usage out of an OpenAI-shaped response object.
 
-    Tolerant of provider differences — Anthropic via the auxiliary
-    adapter exposes ``usage.prompt_tokens`` / ``usage.completion_tokens``;
-    direct OpenAI also exposes ``cache_read_input_tokens``."""
+    """
     usage = PluginLlmUsage()
     raw = getattr(response, "usage", None)
     if raw is None:

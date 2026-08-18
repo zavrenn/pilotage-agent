@@ -2,8 +2,8 @@
 
 The inner retry loop in ``run_conversation`` (``while retry_count <
 max_retries``) makes several distinct recovery attempts on a single model API
-call: a credential-pool 429 retry, a per-provider OAuth refresh (codex,
-anthropic, nous, copilot), a long-context compression restart, a length-
+call: a credential-pool 429 retry, a per-provider OAuth refresh, a long-context
+compression restart, a length-
 continuation restart, and a handful of format-recovery branches (thinking-
 signature stripping, multimodal-tool-content stripping, llama.cpp grammar
 fallback, image shrink, invalid-encrypted-content, 1M-beta header).

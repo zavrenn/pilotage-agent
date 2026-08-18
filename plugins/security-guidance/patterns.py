@@ -4,12 +4,6 @@ Regex-based security pattern definitions for the security-guidance plugin.
 Pure data + one pure helper. No env-var reads, no I/O — kept side-effect-free
 so it can be imported in isolation.
 
-Forked verbatim from Anthropic's claude-plugins-official repository
-(plugins/security-guidance/hooks/patterns.py) under the Apache License 2.0:
-
-    https://github.com/anthropics/claude-plugins-official
-
-  Copyright (c) Anthropic, PBC. and the security-guidance contributors
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
   You may obtain a copy of the License at
@@ -22,10 +16,6 @@ Forked verbatim from Anthropic's claude-plugins-official repository
   See the License for the specific language governing permissions and
   limitations under the License.
 
-Modifications by NousResearch for the Pilotage Agent plugin port:
-  - none to the pattern data itself; this file is byte-for-byte the upstream
-    patterns.py at commit 0bde168 (2026-05-26). Pilotage-side wiring lives in
-    __init__.py.
 """
 from enum import IntEnum
 

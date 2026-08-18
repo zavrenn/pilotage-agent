@@ -1006,7 +1006,6 @@ def _pool_runtime_api_key(entry: Any) -> str:
     if entry is None:
         return ""
     # Use the PooledCredential.runtime_api_key property which handles
-    # provider-specific fallback (e.g. agent_key for nous).
     key = getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")
     return str(key or "").strip()
 
@@ -1014,7 +1013,6 @@ def _pool_runtime_api_key(entry: Any) -> str:
 def _pool_runtime_base_url(entry: Any, fallback: str = "") -> str:
     if entry is None:
         return str(fallback or "").strip().rstrip("/")
-    # runtime_base_url handles provider-specific logic (e.g. nous prefers inference_base_url).
     # Fall back through inference_base_url and base_url for non-PooledCredential entries.
     url = (
         getattr(entry, "runtime_base_url", None)
@@ -1196,9 +1194,6 @@ class _CodexCompletionsAdapter:
         # cache-cold while the main Responses transport is warm.
         # The key is content-addressed from the static prefix (instructions +
         # tool schemas) so it stays warm across turns/fires. Guard the top-level
-        # field the same way the main transport does: GitHub/Copilot
-        # Responses opts out of cache-key routing entirely — for those
-        # hosts, skip it here.
         try:
             from agent.transports.codex import (
                 _cache_scope_from_session_id,
@@ -2877,9 +2872,6 @@ def _retry_same_provider_sync(
         base_url=retry_base or resolved_base_url,
         task=task,
     )
-    # Preserve per-request attribution headers (e.g. Copilot's
-    # ``x-initiator: user``) across the rebuilt-client retry — dropping them
-    # here would let a recovery retry silently lose capability gating.
     if extra_headers:
         retry_kwargs["extra_headers"] = dict(extra_headers)
     return _validate_llm_response(
@@ -3505,7 +3497,6 @@ def resolve_provider_client(
         # name, the custom entry is the intended target — the built-in alias
         # rewriting would otherwise hijack the request.  Only preferred when
         # the raw name is an alias (not a canonical provider name) so custom
-        # entries that coincidentally match a canonical provider (e.g. ``nous``)
         # still defer to the built-in per `_get_named_custom_provider`'s guard.
         custom_entry = None
         if original_provider and original_provider != provider:
@@ -3665,9 +3656,7 @@ def resolve_provider_client(
                         **({"default_headers": headers} if headers else {}))
 
         # Honor api_mode for any API-key provider (e.g. direct OpenAI with
-        # codex-family models).  The copilot-specific wrapping above handles
-        # copilot; this covers the general case, so named providers land on
-        # the right transport without needing per-provider branches.
+        # codex-family models).
         client = _wrap_if_needed(client, final_model, raw_base_url, api_key)
 
         logger.debug("resolve_provider_client: %s (%s)", provider, final_model)
@@ -5186,9 +5175,7 @@ def _create_with_progress(
     the request is sent with ``stream=True`` and aggregated, ticking the hook
     per chunk — so the configured ``timeout`` acts per stream read (idle)
     rather than as a total budget, and outer liveness watchdogs see tokens
-    moving. ``force_stream=True`` (stream-only providers such as Tencent
-    Copilot — credit @kudi88,) takes the same streamed path even
-    without a hook. Providers that reject the streamed request fall back to
+    moving. Providers that reject the streamed request fall back to
     the plain non-streaming call — except under ``force_stream``, where a
     stream-only provider rejects the plain call by definition, so the
     original error is surfaced to the normal recovery chains instead.
@@ -5532,7 +5519,6 @@ def _call_llm_impl(
               such as MoA reference/aggregator slots.
         extra_headers: Additional per-request HTTP headers. These override
             client-level defaults for providers that gate capabilities on
-            request attribution (for example Copilot's ``x-initiator``).
         stream: When True, return the raw SDK streaming iterator instead of a
             validated complete response. The caller is responsible for consuming
             chunks (and for any fallback). Used by the MoA aggregator so its

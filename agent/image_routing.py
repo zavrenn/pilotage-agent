@@ -3,9 +3,7 @@
 Two modes:
 
   native  — attach images as OpenAI-style ``image_url`` content parts on the
-            user turn. Provider adapters (Anthropic, Gemini, Bedrock, Codex,
-            OpenAI chat.completions) already translate these into their
-            vendor-specific multimodal formats.
+            user turn.
 
   text    — run ``vision_analyze`` on each image up-front and prepend the
             description to the user's text. The model never sees the pixels;
@@ -443,7 +441,6 @@ def decide_image_input_mode(
     """Return ``"native"`` or ``"text"`` for the given turn.
 
     Args:
-      provider: active inference provider ID (e.g. ``"anthropic"``, ``"openrouter"``).
       model:    active model slug as it would be sent to the provider.
       cfg:      loaded config.yaml dict, or None. When None, behaves as auto.
       requested_provider: provider identity before runtime canonicalization.
@@ -487,8 +484,6 @@ def decide_image_input_mode(
 # the provider rejects the request (e.g. Anthropic's hard 5 MB per-image
 # ceiling returned as HTTP 400 "image exceeds 5 MB maximum").
 #
-# Why reactive: our knowledge of provider ceilings is partial and evolving
-# (OpenAI accepts 49 MB+, Anthropic 5 MB, Gemini 100 MB, others unknown).
 # A proactive per-provider table would be stale the moment a provider raises
 # or lowers its limit, and silently degrading quality for users on providers
 # that would have accepted the full image is the worse failure mode.

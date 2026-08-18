@@ -544,7 +544,6 @@ def init_agent(
         platform (str): The interface platform the user is on (e.g. "cli", "telegram", "whatsapp").
             Used to inject platform-specific formatting hints into the system prompt.
         skip_context_files (bool): If True, skip auto-injection of project context files
-            (SOUL.md, .pilotage.md, AGENTS.md, CLAUDE.md, .cursorrules) from the cwd / PILOTAGE_HOME
             into the system prompt. Use this for batch processing and data generation to avoid
             polluting trajectories with user-specific persona or project instructions.
         load_soul_identity (bool): If True, still use ~/.pilotage/SOUL.md as the primary

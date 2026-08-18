@@ -372,7 +372,7 @@ class OpenAIImageGenProvider(ImageGenProvider):
             # Defensive — gpt-image-2 returns b64 today, but OpenAI's API
             # has previously returned URLs.  Cache the bytes locally so the
             # gateway never tries to fetch an ephemeral / signed URL after
-            # it expires — same rationale as the xAI provider.
+            # it expires.
             try:
                 saved_path = save_url_image(url, prefix=f"openai_{tier_id}")
             except Exception as exc:

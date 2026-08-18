@@ -747,8 +747,6 @@ def _run_review_in_thread(
             # parent below so memory(action="add") writes from
             # the review still land on disk; the review just
             # has zero side effects on external providers.
-            # Match parent's toolset config so ``tools[]`` is byte-identical
-            # in the request body — Anthropic's cache key includes it.
             # (The runtime whitelist below still restricts dispatch.)
             _fork_kwargs: Dict[str, Any] = {}
             if isinstance(_rt.get("max_tokens"), int):
@@ -756,16 +754,11 @@ def _run_review_in_thread(
             if isinstance(_rt.get("command"), str) and _rt["command"]:
                 _fork_kwargs["acp_command"] = _rt["command"]
                 _fork_kwargs["acp_args"] = _rt.get("args") or []
-            # Match parent's reasoning config so the fork's ``thinking`` /
-            # ``output_config`` are byte-identical in the request body —
-            # Anthropic's cache key is namespaced by ``thinking`` presence.
             # Same-model path only: when routed to a different aux model the
             # cache is cold regardless (parity buys nothing) and the parent's
             # effort vocabulary may not be valid for the routed model/provider
-            # (e.g. OpenRouter ``extra_body.reasoning.effort`` is forwarded
-            # unclamped; codex_responses passes ``max``/``ultra`` through
-            # unmapped except on gpt-5.6/xAI). Let the routed fork use
-            # provider defaults — matching the ``not _routed`` gate on
+            # Let the routed fork use provider defaults — matching the
+            # ``not _routed`` gate on
             # _cached_system_prompt below.
             if not _routed:
                 _fork_kwargs["reasoning_config"] = getattr(agent, "reasoning_config", None)
@@ -844,9 +837,6 @@ def _run_review_in_thread(
             # _vprint and leak past the stdout redirect (they go via
             # _print_fn/status_callback, which bypass sys.stdout).
             review_agent.suppress_status_output = True
-            # Inherit the parent's cached system prompt verbatim so
-            # the review fork's outbound HTTP request hits the same
-            # Anthropic/OpenRouter prefix cache the parent warmed.
             # Without this, the fork rebuilds the system prompt from
             # scratch (fresh _pilotage_now() timestamp, fresh
             # session_id, narrower toolset → different skills_prompt)

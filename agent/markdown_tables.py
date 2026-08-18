@@ -213,10 +213,7 @@ def _render_vertical(
 ) -> List[str]:
     """Render a too-wide table as vertical ``Header: value`` rows.
 
-    Mirrors Claude Code's narrow-terminal fallback in
-    ``MarkdownTable.tsx``: each body row becomes a small block of
-    ``Header: cell-value`` lines (continuation lines indented two
-    spaces) separated by a thin ``─`` divider between rows.  Keeps
+    Keeps
     every line narrower than ``available_width`` so the terminal does
     not soft-wrap mid-cell.
     """

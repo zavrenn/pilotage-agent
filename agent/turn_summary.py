@@ -12,9 +12,6 @@ Two display-only pieces live here:
 
         ⋯ 12.4s · edited 2 files +18 -3 · read 4 files · ran 3 commands
 
-    Ported from Claude Code's post-turn accounting line
-    ("Edited 1 file +6 -2, read 1 file … Worked for 10s").
-
 :func:`format_token_flow` is the spinner-side counterpart: a cumulative
 token readout appended to the live elapsed timer (``↓ 1.2k tok``).
 

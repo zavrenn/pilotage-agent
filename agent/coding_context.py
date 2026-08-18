@@ -153,14 +153,9 @@ _MAX_FACT_FILE_BYTES = 256 * 1024
 _GIT_TIMEOUT = 2.5
 
 
-# Per-model edit-format steering. Matching the edit tool format to how a model
-# was trained reduces mistakes and wasted reasoning (OpenAI/Codex handle
-# patch-style diffs best; Anthropic models — and most open-weight coding
-# models, whose RL scaffolds use str_replace-style editors — do best with
-# string-replacement). Our `patch` tool exposes both: mode="patch" (V4A
-# multi-file) and mode="replace" (find-and-swap). We nudge each family toward
-# its native format. Unknown families get nothing (the brief's neutral wording
-# stands). Substrings match the model id; aligned with TOOL_USE_ENFORCEMENT_MODELS.
+# Our `patch` tool exposes both: mode="patch" (V4A
+# multi-file) and mode="replace" (find-and-swap). Unknown families get nothing.
+# Substrings match the model id; aligned with TOOL_USE_ENFORCEMENT_MODELS.
 #
 # GPT/Codex get V4A for ALL edits, single-file included: in codex-rs,
 # apply_patch (V4A — apply_patch.lark) is the ONLY file editor, no
@@ -486,8 +481,6 @@ class RuntimeMode:
     # The normalized ``agent.coding_context`` mode this posture was resolved
     # under (auto/focus/on/off). Toolset collapse is gated on ``focus``.
     config_mode: str = "auto"
-    # The model id this session runs (e.g. "anthropic/claude-opus-4.8"). Used
-    # only to steer edit-format guidance toward the model's family — see
     # ``_edit_format_line``. Fixed for the session, so cache-safe.
     model: Optional[str] = None
     # Standing operator instructions (``agent.coding_instructions``), appended

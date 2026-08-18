@@ -126,7 +126,6 @@ class ToolCallGuardrailConfig:
         )
 
 
-# Default session-wide caps, matching Claude Code's v2.1.212 runaway-loop
 # Per-turn (per-agent-loop) caps on runaway-prone tool calls. Counts reset at
 # the start of every agent loop (reset_for_turn), so the limit is "within a
 # single turn" rather than cumulative over the whole session. A single loop
@@ -140,9 +139,7 @@ _DEFAULT_MAX_SUBAGENTS_PER_TURN = 50
 class LoopCapConfig:
     """Per-turn caps on runaway-prone tool calls.
 
-    Inspired by Claude Code v2.1.212 (Week 29, July 2026), which added caps on
-    WebSearch calls and subagent spawns to stop runaway search / delegation
-    loops. Here the caps count *within a single agent loop* (one turn): the
+    Here the caps count *within a single agent loop* (one turn): the
     counters reset in ``reset_for_turn`` at the start of every
     ``run_conversation``, so a legitimate multi-turn session is never starved,
     but a single turn that spirals into an unbounded search / delegation loop

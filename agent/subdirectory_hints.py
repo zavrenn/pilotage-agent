@@ -1,8 +1,6 @@
 """Progressive subdirectory hint discovery.
 
-As the agent navigates into subdirectories via tool calls (read_file, terminal,
-search_files, etc.), this module discovers and loads project context files
-(AGENTS.md, CLAUDE.md, .cursorrules) from those directories.  Discovered hints
+Discovered hints
 are appended to the tool result so the model gets relevant context at the moment
 it starts working in a new area of the codebase.
 
@@ -210,9 +208,6 @@ class SubdirectoryHintTracker:
         """Check if path is a valid directory to scan for hints.
 
         Only allow subdirectories within the working directory tree.
-        This prevents loading AGENTS.md from outside the active workspace
-        (e.g. ~/.codex/AGENTS.md, ~/.claude/CLAUDE.md), which causes
-        cross-agent context contamination and instruction mixup.
         """
         try:
             if not path.is_dir():

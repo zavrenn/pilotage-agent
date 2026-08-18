@@ -51,10 +51,7 @@ def build_write_denied_paths(home: str) -> set[str]:
             # Top-level .env, even when running under a profile — overwriting it
             # leaks credentials across every profile that inherits from root.
             str(pilotage_root / ".env"),
-            # Active profile Anthropic PKCE credential store.
             str(pilotage_home / ".anthropic_oauth.json"),
-            # Top-level Anthropic PKCE credential store remains sensitive even
-            # when a profile is active; default/non-profile sessions still read it.
             str(pilotage_root / ".anthropic_oauth.json"),
             # Bitwarden Secrets Manager encrypted disk cache.
             str(pilotage_home / "cache" / "bws_cache.enc.json"),
@@ -252,13 +249,6 @@ def get_read_block_error(path: str) -> Optional[str]:
       * Internal Pilotage cache files under ``PILOTAGE_HOME/skills/.hub`` —
         readable metadata that an attacker could use as a prompt-injection
         carrier.
-      * Credential / secret stores under PILOTAGE_HOME and the global Pilotage
-        root: ``auth.json``, ``auth.lock``, ``.anthropic_oauth.json``,
-        ``.env``, ``webhook_subscriptions.json``, ``auth/google_oauth.json``,
-        and anything under ``mcp-tokens/``. These hold plaintext provider keys,
-        OAuth tokens, and HMAC secrets that the agent never needs to read
-        directly — provider tools / gateway adapters consume them through
-        internal channels.
       * Project-local environment files anywhere on disk: ``.env``,
         ``.env.local``, ``.env.development``, ``.env.production``,
         ``.env.test``, ``.env.staging``, ``.envrc``. These routinely hold

@@ -29,9 +29,6 @@ socket behavior, the read runs on a daemon worker thread and the caller waits
 on it with a hard deadline; on timeout we close the response (which unblocks /
 cancels the read) and return whatever partial bytes were collected.
 
-Ported and adapted from openclaw/ ("bound Anthropic error
-streams"), generalized to cover Pilotage's three streaming error-body sites
-(native Gemini, Gemini Cloud Code, Antigravity Cloud Code).
 """
 
 from __future__ import annotations
@@ -44,8 +41,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Defaults chosen to comfortably hold any real provider error envelope (Google
-# RPC error JSON, Anthropic error JSON) while rejecting pathological bodies.
 DEFAULT_ERROR_BODY_MAX_BYTES = 64 * 1024
 # Hard wall-clock deadline for the whole bounded read. A streaming error body
 # that does not finish within this window is abandoned and the connection is

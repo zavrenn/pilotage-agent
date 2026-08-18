@@ -5,11 +5,7 @@ one question: **"is this candidate the same backend as the one that failed,
 along the axis that failure invalidated?"**  Before this module, that
 question was re-implemented inline at six call sites across four subsystems,
 each comparing whatever string was locally convenient (provider label,
-provider+model, base_url+model, ...).  Each incident fixed one site while the
-others kept the bug: (same-shim aliases), (xai-oauth vs xai —
-same host, distinct credential), (aux chain skipped sibling models),
- (aux main-model safety net, same bug three weeks later), /
- / (dedup ignoring base_url strands multi-endpoint pools).
+provider+model, base_url+model, ...).
 
 The root insight: "provider" conflates three independent identity axes, and
 each failure class invalidates a different one:
@@ -114,9 +110,7 @@ class BackendIdentity:
 def _both_first_class(a: BackendIdentity, b: BackendIdentity) -> bool:
     """True when both providers are distinct registered first-class providers.
 
-    Two different registry providers have distinct credential surfaces even
-    when they share an inference host (xai-oauth vs xai, openai-codex vs
-    openai-api). Custom/shim aliases are NOT in the registry, so
+    Custom/shim aliases are NOT in the registry, so
     two aliases pointing at one URL still count as the same backend.
     """
     if not a.provider or not b.provider or a.provider == b.provider:

@@ -1,11 +1,5 @@
 """Upload a Pilotage session transcript to Hugging Face as an agent trace.
 
-Pilotage stores sessions in its own SQLite store (``pilotage_state.SessionDB``),
-so we reconstruct the conversation and emit it in the **Claude Code JSONL**
-shape — one of the three formats the Hugging Face Agent Trace Viewer
-auto-detects (Claude Code / Codex / Pi). No dataset-side preprocessing is
-needed; the Hub tags the dataset ``agent-traces`` and opens it in the viewer.
-
 Docs: https://huggingface.co/docs/hub/agent-traces
 
 Design notes
@@ -48,7 +42,6 @@ class TraceRedactionError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Conversion: Pilotage OpenAI-format messages -> Claude Code JSONL
 # ---------------------------------------------------------------------------
 
 def _now_iso() -> str:
@@ -73,7 +66,6 @@ def _redact(text: Any, enabled: bool) -> Any:
 
 
 def _content_to_blocks(content: Any, redact: bool) -> List[Dict[str, Any]]:
-    """Normalize a message ``content`` field into Anthropic content blocks."""
     if content is None:
         return []
     if isinstance(content, str):
@@ -98,7 +90,6 @@ def _content_to_blocks(content: Any, redact: bool) -> List[Dict[str, Any]]:
 
 
 def _tool_calls_to_blocks(tool_calls: Any, redact: bool) -> List[Dict[str, Any]]:
-    """Convert OpenAI tool_calls into Anthropic ``tool_use`` content blocks."""
     blocks: List[Dict[str, Any]] = []
     if not isinstance(tool_calls, list):
         return blocks
@@ -140,19 +131,6 @@ def build_trace_jsonl(
     cwd: str = "",
     redact: bool = True,
 ) -> str:
-    """Render Pilotage conversation messages as Claude Code JSONL text.
-
-    Each non-system message becomes one JSONL line in the Claude Code
-    transcript shape the HF Agent Trace Viewer auto-detects:
-
-    * ``user`` / ``tool`` -> ``{"type": "user", "message": {...}}``
-    * ``assistant``       -> ``{"type": "assistant", "message": {...}}``
-      with ``content`` blocks (text + ``tool_use``).
-
-    Tool results are emitted as user turns carrying a ``tool_result``
-    block keyed by ``tool_call_id`` — the same way Claude Code records
-    them. Turns are linked via ``uuid`` / ``parentUuid``.
-    """
     lines: List[str] = []
     parent: Optional[str] = None
     base_ts = _now_iso()
@@ -359,12 +337,6 @@ def upload_session_trace(
     db_path=None,
     token: Optional[str] = None,
 ) -> str:
-    """Top-level entry point used by the CLI/gateway/subcommand.
-
-    Loads the session, converts it to Claude Code JSONL, and uploads it to
-    the user's private ``{user}/pilotage-traces`` dataset. Returns a
-    user-facing status string and never raises.
-    """
     if not session_id:
         return "No active session to upload."
 

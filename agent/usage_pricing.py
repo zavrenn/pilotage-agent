@@ -149,8 +149,7 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
     # rates (Sol $5/$30, Terra $2.50/$15, Luna $1/$6 per 1M in/out). Cache
     # writes are billed at 1.25x the uncached input rate; cache reads get the
     # standard 90% discount (0.10x input, confirmed: Sol $0.50/M cached).
-    # Note: "Sol Fast mode" ($12.5/$75, up to 750 tok/s via Cerebras) is a
-    # separate serving tier, not covered by these entries. The "-pro"
+    # The "-pro"
     # variants (high-effort modes, GA alongside base tiers) bill at the
     # SAME per-token rates and are aliased onto these entries below the
     # dict (they cost more per task by consuming more tokens, not by a

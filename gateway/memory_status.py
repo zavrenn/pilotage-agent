@@ -21,13 +21,6 @@ public-safe block that ``/api/status`` can serve to the dashboard SPA
 and the NAS availability sweep — no new sampling, no IPC with the
 gateway process, just two small file reads.
 
-Public-safety note: ``/api/status`` is an unauthenticated liveness probe
-(``PUBLIC_API_PATHS``), which is exactly why NAS can consume it.  This
-block therefore carries only coarse numbers (MB granularity), enums, and
-booleans — the same disclosure class as the existing ``active_agents``
-count and ``nous_session_valid`` field (which was added for the same
-NAS-sweep audience).
-
 Everything here is best-effort and read-only: a missing/corrupt file
 degrades to ``pressure="unknown"`` rather than raising into the status
 endpoint.

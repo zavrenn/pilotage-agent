@@ -743,8 +743,6 @@ class ManagedLlmStream(Iterator[Any]):
 
 
 class AnthropicStreamAccumulator:
-    """Rebuild an Anthropic Message from post-intercept SSE events."""
-
     def __init__(self) -> None:
         self._message: dict[str, Any] = {}
         self._blocks: dict[int, dict[str, Any]] = {}
@@ -1210,10 +1208,6 @@ def _jsonable(value: Any) -> Any:
     model_dump = getattr(type(value), "model_dump", None)
     if callable(model_dump):
         try:
-            # warnings=False: SDK stream events (e.g. the Anthropic
-            # ParsedMessage inside message_stop) carry generic-union content
-            # blocks that pydantic serializes fine but warns about — and the
-            # warning leaks to the user's terminal mid-response (#82xxx).
             try:
                 return _jsonable(value.model_dump(mode="json", warnings=False))
             except TypeError:

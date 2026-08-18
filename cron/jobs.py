@@ -1699,15 +1699,6 @@ def create_job(
                           When set, only tools from these toolsets are loaded, reducing
                           token overhead. When omitted, all default tools are loaded.
                           Ignored when ``no_agent=True``.
-        workdir: Optional absolute path.  When set, the job runs as if launched
-                from that directory: AGENTS.md / CLAUDE.md / .cursorrules from
-                that directory are injected into the system prompt, and the
-                terminal/file/code_exec tools use it as their working directory
-                (via TERMINAL_CWD).  When unset, the old behaviour is preserved
-                (no context files injected, tools use the scheduler's cwd).
-                With ``no_agent=True``, ``workdir`` is still applied as the
-                script's cwd so relative paths inside the script behave
-                predictably.
         no_agent: When True, skip the agent entirely — run ``script`` on schedule
                 and deliver its stdout directly. Empty stdout = silent (no
                 delivery). Requires ``script`` to be set. Ideal for classic

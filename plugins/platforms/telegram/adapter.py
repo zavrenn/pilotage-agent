@@ -6508,10 +6508,8 @@ class TelegramAdapter(BasePlatformAdapter):
     def _build_provider_keyboard(self, providers: list, page: int = 0) -> tuple:
         """Build the paginated top-level provider keyboard, folding groups.
 
-        Provider families (Kimi/Moonshot, MiniMax, xAI Grok, ...) collapse to
-        a single ``mpg:<gid>`` button; tapping it drills into a member
-        sub-keyboard. Single providers (and groups with only one authenticated
-        member) render as direct ``mp:<slug>`` buttons. Grouping mirrors the
+        Single providers (and groups with only one authenticated member) render
+        as direct ``mp:<slug>`` buttons. Grouping mirrors the
         CLI ``pilotage model`` picker via the shared ``group_providers`` fold,
         so all surfaces stay consistent.
         """

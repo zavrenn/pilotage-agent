@@ -17,9 +17,7 @@ One tool — ``image_generate`` — covers **text-to-image** and
 **image-to-image / image editing**. The router is the presence of
 ``image_url`` (and/or ``reference_image_urls``): if any source image is
 provided, the provider routes to its image-to-image / edit endpoint; if
-omitted, the provider routes to text-to-image. Users pick one **model**
-(e.g. nano-banana-pro, gpt-image-2, grok-imagine-image); the provider
-handles which underlying endpoint to hit.
+omitted, the provider routes to text-to-image.
 
 Response shape
 --------------
@@ -297,9 +295,6 @@ def save_url_image(
     response = requests.get(url, timeout=timeout, stream=True)
     response.raise_for_status()
 
-    # Infer extension from the response content-type, falling back to the
-    # URL suffix when xAI / OpenAI omit a precise type (some CDNs return
-    # ``application/octet-stream``).  Defaults to ``png``.
     content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
     extension = _URL_IMAGE_CONTENT_TYPES.get(content_type)
     if extension is None:

@@ -227,8 +227,6 @@ def _maybe_title_session_at_turn_start(agent: Any, messages: List[Any]) -> None:
                 return
 
         # Snapshot the runtime identity; the validator lets the background
-        # titler skip its LLM call if the user switches models before it fires
-        # (a stale request would reload an unloaded Ollama model,).
         _model = getattr(agent, "model", None)
         _provider = getattr(agent, "provider", None)
 
@@ -668,8 +666,6 @@ def build_turn_context(
 
     # Track user turns for memory flush and periodic nudge logic.
     agent._user_turn_count += 1
-    # Copilot x-initiator: the first API call of this user turn is
-    # user-initiated; tool-loop follow-ups revert to "agent".
     agent._is_user_initiated_turn = True
 
     # Reset the streaming context scrubber at the top of each turn.

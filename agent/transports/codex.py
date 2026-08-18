@@ -255,7 +255,6 @@ class ResponsesApiTransport(ProviderTransport):
             cache_scope_id: str | None — rotation-stable logical scope id
                 (compression-lineage root; see agent/prompt_cache_scope.py).
                 Preferred over session_id when deriving the prompt_cache_key
-                content hash and the xAI x-grok-conv-id header; the Codex
                 x-client-request-id header mirrors the resulting body key.
                 Keeps the cache warm across context-compression session
                 rotation
@@ -411,10 +410,6 @@ class ResponsesApiTransport(ProviderTransport):
             else:
                 kwargs.pop("prompt_cache_key", None)
 
-        # Forward per-request timeout to the SDK so OpenAI/Anthropic clients
-        # honor it.  Without this, ``providers.<id>.request_timeout_seconds``
-        # is silently dropped on the main agent Codex path while the
-        # chat_completions path and auxiliary Codex adapter both forward it.
         timeout = kwargs.get("timeout", params.get("timeout"))
         if (
             isinstance(timeout, (int, float))

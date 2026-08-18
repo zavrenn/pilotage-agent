@@ -1306,7 +1306,6 @@ def _media_delivery_denied_paths() -> List[Path]:
         "auth.lock",
         "credentials",
         "config.yaml",
-        # Anthropic PKCE / OAuth refresh credential store.
         ".anthropic_oauth.json",
         # Google Workspace skill: auto-refreshing OAuth token (mtime bumps
         # every turn, which defeated the strict-mode recency window) plus the
@@ -1455,13 +1454,6 @@ def validate_media_delivery_path(path: str) -> Optional[str]:
         if _path_is_within(resolved, resolved_root):
             return str(resolved)
 
-    # Non-strict mode (default): accept anything not on the denylist.
-    # The denylist still blocks /etc, /proc, ~/.ssh, ~/.aws, and the
-    # credential/secret stores under the Pilotage root (~/.pilotage/.env,
-    # auth.json, .anthropic_oauth.json, google_token.json, pairing/, ...) —
-    # so the obvious prompt-injection / credential-exfil sites
-    # (``MEDIA:/etc/passwd``, ``MEDIA:~/.ssh/id_rsa``,
-    # ``MEDIA:~/.pilotage/google_token.json``) remain rejected.
     if not _media_delivery_strict_mode():
         if _path_under_denied_prefix(resolved):
             return None

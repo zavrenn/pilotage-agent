@@ -1692,11 +1692,6 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             else:
                 function_result += subdir_hints
 
-        # Unwrap _multimodal dicts to an OpenAI-style content list so any
-        # vision-capable provider receives [{type:text},{type:image_url}]
-        # rather than a raw Python dict.  The Anthropic adapter already
-        # accepts content lists; vision-capable OpenAI-compatible servers
-        # (mlx-vlm, GPT-4o, …) accept image_url in tool messages natively.
         # Text-only servers get a string-safe fallback here so a rejected
         # image tool result never poisons canonical session history.
         # String results pass through unchanged.

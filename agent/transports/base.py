@@ -19,15 +19,12 @@ class ProviderTransport(ABC):
     @property
     @abstractmethod
     def api_mode(self) -> str:
-        """The api_mode string this transport handles (e.g. 'anthropic_messages')."""
         ...
 
     @abstractmethod
     def convert_messages(self, messages: List[Dict[str, Any]], **kwargs) -> Any:
         """Convert OpenAI-format messages to provider-native format.
 
-        Returns provider-specific structure (e.g. (system, messages) for Anthropic,
-        or the messages list unchanged for chat_completions).
         """
         ...
 
@@ -35,7 +32,6 @@ class ProviderTransport(ABC):
     def convert_tools(self, tools: List[Dict[str, Any]]) -> Any:
         """Convert OpenAI-format tool definitions to provider-native format.
 
-        Returns provider-specific tool list (e.g. Anthropic input_schema format).
         """
         ...
 

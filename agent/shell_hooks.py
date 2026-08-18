@@ -41,7 +41,6 @@ Wire protocol
 **stdout** (JSON, optional — anything else is ignored)::
 
     # Block a pre_tool_call (either shape accepted; normalised internally):
-    {"decision": "block", "reason":  "Forbidden command"}   # Claude-Code-style
     {"action":   "block", "message": "Forbidden command"}   # Pilotage-canonical
 
     # Inject context for pre_llm_call:
@@ -52,9 +51,7 @@ Wire protocol
 
 **exit codes**
 
-Exit code 2 from a ``pre_tool_call`` hook blocks the tool call even when
-stdout carries no block JSON (Claude-Code / Cursor compatible).  The block
-message is taken from the stdout block JSON when present, then the first
+The block message is taken from the stdout block JSON when present, then the first
 400 characters of stderr, then a generic default.  For events whose block
 directive is not honored, exit 2 is logged at warning like any other
 non-zero exit.  All other non-zero exits log a warning and stdout is still
@@ -65,7 +62,6 @@ parsed normally.
 Hooks fail *open* by default: a spawn error, timeout, or unparseable
 stdout logs a warning and contributes nothing.  A ``pre_tool_call`` entry
 can opt into fail-*closed* semantics with ``fail_closed: true``
-(``failClosed`` also accepted for Cursor/Claude-Code config compat) —
 spawn errors, timeouts, and malformed stdout then BLOCK the tool call
 with ``hook <command> failed closed: <reason>``.  Use this for
 security-gating hooks (secret scanners, policy checks) where a crashed
@@ -103,7 +99,6 @@ emitted by each built-in hook site.
 
 ``on_session_start`` (emitted from ``agent/conversation_loop.py``)::
 
-    model           – model name (e.g. "claude-sonnet-4-20250514")
     platform        – platform identifier (e.g. "cli", "whatsapp")
 
 ``on_session_end`` (emitted from ``agent/turn_finalizer.py``)::
@@ -163,7 +158,7 @@ ALLOWLIST_FILENAME = "shell-hooks-allowlist.json"
 _DEFAULT_BLOCK_MESSAGE = "Blocked by shell hook."
 
 # Exit code that signals "block this action" from a hook script, independent
-# of stdout content.  Claude Code / Cursor compatible.
+# of stdout content.
 BLOCK_EXIT_CODE = 2
 
 # Events whose block directive is actually honored downstream (see
@@ -487,8 +482,6 @@ def _parse_single_entry(
         )
         timeout = MAX_TIMEOUT_SECONDS
 
-    # ``fail_closed`` (canonical) / ``failClosed`` (Cursor/Claude-Code
-    # config compat).  Canonical spelling wins when both are present.
     fail_closed_raw = raw.get("fail_closed", raw.get("failClosed", False))
     if not isinstance(fail_closed_raw, bool):
         logger.warning(
@@ -652,7 +645,6 @@ def _evaluate_result(
       canonical block shape is returned;
     * exit code 2 on a blocking-capable event — block, with the message
       taken from stdout block JSON, then stderr, then a default
-      (Claude-Code / Cursor compatible);
     * other non-zero exits — warn, then parse stdout normally;
     * non-JSON / unparseable stdout on a ``fail_closed`` blocking hook —
       block instead of silently contributing nothing.
@@ -690,9 +682,6 @@ def _evaluate_result(
             spec.event, spec.command, stderr[:_STDERR_MESSAGE_LIMIT],
         )
 
-    # Exit code 2 = block (Claude-Code / Cursor compatible), for events
-    # whose block directive is honored downstream.  stdout block JSON
-    # still wins for the message; otherwise stderr, then a default.
     if r["returncode"] == BLOCK_EXIT_CODE and blocking_event:
         parsed = _parse_response(spec.event, r["stdout"])
         if isinstance(parsed, dict) and parsed.get("action") == "block":
@@ -766,14 +755,6 @@ def _block_message(primary: Any, secondary: Any) -> str:
 def _parse_response(event: str, stdout: str) -> Optional[Dict[str, Any]]:
     """Translate stdout JSON into a Pilotage wire-shape dict.
 
-    For ``pre_tool_call`` the Claude-Code-style ``{"decision": "block",
-    "reason": "..."}`` payload is translated into the canonical Pilotage
-    ``{"action": "block", "message": "..."}`` shape expected by
-    :func:`pilotage_cli.plugins.get_pre_tool_call_block_message`.  This is
-    the single most important correctness invariant in this module —
-    skipping the translation silently breaks every ``pre_tool_call``
-    block directive.
-
     For ``pre_llm_call``, ``{"context": "..."}`` is passed through
     unchanged to match the existing plugin-hook contract.
 
@@ -803,9 +784,6 @@ def _parse_response(event: str, stdout: str) -> Optional[Dict[str, Any]]:
         return None
 
     if event == "pre_verify":
-        # "continue" (Pilotage) / "block" (Claude-Code Stop: block the stop) both
-        # mean keep going; the message/reason is the follow-up for the model. A
-        # continue with no message is a no-op — let the turn finish.
         action = str(data.get("action") or data.get("decision") or "").strip().lower()
         if action in {"continue", "block"}:
             message = data.get("message") or data.get("reason")

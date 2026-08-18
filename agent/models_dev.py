@@ -77,7 +77,7 @@ class ModelInfo:
     id: str
     name: str
     family: str
-    provider_id: str        # models.dev provider ID (e.g. "anthropic")
+    provider_id: str
 
     # Capabilities
     reasoning: bool = False
@@ -384,8 +384,7 @@ def _fetch_models_dev_from_network(
     # Tuple (connect, read): a flat timeout=15 let a blackholed connect
     # stall the first-turn critical path for the full 15 s. 5 s connect
     # fails fast on unreachable hosts; 10 s read still tolerates a slow
-    # registry response (matches the OpenRouter fetch convention in
-    # agent/model_metadata.py).
+    # registry response.
     response = requests.get(url, headers=headers, timeout=(5, 10))
 
     if response.status_code == 304:
@@ -858,9 +857,6 @@ def _load_model_overrides() -> Dict[str, Any]:
 def _provider_override_section(provider: str) -> Optional[Dict[str, Any]]:
     """Return the override section for *provider*, or None.
 
-    Accepts either the Pilotage provider id or the models.dev provider id as
-    the config key, so ``copilot`` and ``github-copilot`` both work
-    regardless of which id space a caller passes in.
     """
     overrides = _load_model_overrides()
     if not overrides:
@@ -1087,12 +1083,6 @@ def _get_provider_models(
 def _find_model_entry(models: Dict[str, Any], model: str) -> Optional[Dict[str, Any]]:
     """Find a model entry: exact, case-insensitive, then suffix fallback.
 
-    The ``:cloud``/``-cloud`` suffix fallback mirrors
-    ``lookup_models_dev_context`` so "is this model in the catalog" means
-    the same thing to every consumer — important for ``model_overrides``
-    fill-gap ``_default`` semantics, where a suffix-keyed catalog model
-    (e.g. ``kimi-k2.6:cloud``) must count as KNOWN and keep its catalog
-    metadata rather than being displaced by a ``_default``.
     """
     # Exact match
     entry = models.get(model)
@@ -1105,8 +1095,6 @@ def _find_model_entry(models: Dict[str, Any], model: str) -> Optional[Dict[str, 
         if mid.lower() == model_lower and isinstance(mdata, dict):
             return mdata
 
-    # Suffix-aware fallback (e.g. ollama-cloud stores kimi-k2.6:cloud
-    # while the live API returns the bare name).
     for suffix in (":cloud", "-cloud"):
         entry = models.get(model + suffix)
         if isinstance(entry, dict):

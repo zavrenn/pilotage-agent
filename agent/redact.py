@@ -78,7 +78,7 @@ _REDACT_ENABLED = os.getenv("PILOTAGE_REDACT_SECRETS", "true").lower() in {"1", 
 
 # Known API key prefixes -- match the prefix + contiguous token chars
 _PREFIX_PATTERNS = [
-    r"sk-[A-Za-z0-9_-]{10,}",           # OpenAI / OpenRouter / Anthropic (sk-ant-*)
+    r"sk-[A-Za-z0-9_-]{10,}",
     r"ghp_[A-Za-z0-9]{10,}",            # GitHub PAT (classic)
     r"github_pat_[A-Za-z0-9_]{10,}",    # GitHub PAT (fine-grained)
     r"gho_[A-Za-z0-9]{10,}",            # GitHub OAuth access token
@@ -108,16 +108,16 @@ _PREFIX_PATTERNS = [
     r"sk_[A-Za-z0-9_]{10,}",            # ElevenLabs TTS key (sk_ underscore, not sk- dash)
     r"tvly-[A-Za-z0-9]{10,}",           # Tavily search API key
     r"exa_[A-Za-z0-9]{10,}",            # Exa search API key
-    r"gsk_[A-Za-z0-9]{10,}",            # Groq Cloud API key
+    r"gsk_[A-Za-z0-9]{10,}",
     r"syt_[A-Za-z0-9]{10,}",            # Matrix access token
     r"retaindb_[A-Za-z0-9]{10,}",       # RetainDB API key
     r"hsk-[A-Za-z0-9]{10,}",            # Hindsight API key
     r"mem0_[A-Za-z0-9]{10,}",           # Mem0 Platform API key
     r"brv_[A-Za-z0-9]{10,}",            # ByteRover API key
     r"ntn_[A-Za-z0-9]{10,}",            # Notion internal integration token
-    r"fw-[A-Za-z0-9]{30,}",             # Fireworks AI API key
-    r"fw_[A-Za-z0-9]{30,}",             # Fireworks AI API key
-    r"fpk_[A-Za-z0-9]{30,}",            # Fireworks AI project key
+    r"fw-[A-Za-z0-9]{30,}",
+    r"fw_[A-Za-z0-9]{30,}",
+    r"fpk_[A-Za-z0-9]{30,}",
     # GitLab token families (each pattern keeps a full literal prefix so the
     # _PREFIX_SUBSTRINGS pre-screen stays false-negative-free). Ported from
     # openclaw/; follow-up invited in.
@@ -339,9 +339,6 @@ _AUTH_HEADER_RE = re.compile(
 )
 
 # API-key style auth headers carrying a single opaque value (no scheme word).
-# Anthropic and many providers authenticate with ``x-api-key``; values without
-# a known vendor prefix (custom/local backends) would otherwise leak when a
-# request or curl command is logged or echoed into tool output / transcripts.
 _SECRET_HEADER_NAMES = (
     r"(?:x-api-key|x-goog-api-key|api-key|apikey|x-api-token|x-auth-token|x-access-token)"
 )
