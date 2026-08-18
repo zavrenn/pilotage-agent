@@ -1637,7 +1637,6 @@ class GatewaySlashCommandsMixin:
                         current_base_url=current_base_url,
                         current_model=current_model,
                         user_providers=user_provs,
-                        custom_providers=custom_provs,
                         max_models=50,
                         excluded_providers=excluded_provs,
                     )
@@ -1939,7 +1938,6 @@ class GatewaySlashCommandsMixin:
                     current_base_url=current_base_url,
                     current_model=current_model,
                     user_providers=user_provs,
-                    custom_providers=custom_provs,
                     max_models=5,
                     excluded_providers=excluded_provs,
                 )

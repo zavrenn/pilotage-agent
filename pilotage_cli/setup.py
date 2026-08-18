@@ -171,7 +171,7 @@ def print_noninteractive_setup_guidance(reason: str | None = None) -> None:
     print_info("  pilotage config set model.base_url http://localhost:8080/v1")
     print_info("  pilotage config set model.default your-model-name")
     print()
-    print_info("Or set OPENROUTER_API_KEY / OPENAI_API_KEY in your environment.")
+    print_info("Or set OPENAI_API_KEY in your environment.")
     print_info("Run 'pilotage setup' in an interactive terminal to use the full wizard.")
     print()
 
@@ -1779,7 +1779,7 @@ def run_setup_wizard(args):
 
     active_provider = get_active_provider()
     is_existing = (
-        bool(get_env_value("OPENROUTER_API_KEY"))
+        bool(get_env_value("OPENAI_API_KEY"))
         or bool(get_env_value("OPENAI_BASE_URL"))
         or active_provider is not None
     )

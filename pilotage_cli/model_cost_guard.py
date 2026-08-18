@@ -11,8 +11,6 @@ from agent.models_dev import ModelInfo, PROVIDER_TO_MODELS_DEV
 
 INPUT_COST_WARNING_THRESHOLD = Decimal("20")
 OUTPUT_COST_WARNING_THRESHOLD = Decimal("100")
-GPT55_PRO_OPENROUTER_ID = "openai/gpt-5.5-pro"
-GPT55_SUGGESTION = "did you mean to select openai/gpt-5.5?"
 
 
 @dataclass(frozen=True)
@@ -147,15 +145,13 @@ def expensive_model_warning(
             output_cost = entry.output_cost_per_million
             source = entry.source
 
-    is_known_gpt55_pro_confusion = model.lower() == GPT55_PRO_OPENROUTER_ID
-
     over_input = (
         input_cost is not None and input_cost > INPUT_COST_WARNING_THRESHOLD
     )
     over_output = (
         output_cost is not None and output_cost > OUTPUT_COST_WARNING_THRESHOLD
     )
-    if not over_input and not over_output and not is_known_gpt55_pro_confusion:
+    if not over_input and not over_output:
         return None
 
     lines = [
@@ -171,8 +167,6 @@ def expensive_model_warning(
     ]
     if source:
         lines.append(f"Pricing source: {source}.")
-    if is_known_gpt55_pro_confusion:
-        lines.append(GPT55_SUGGESTION)
     lines.append("Confirm only if you intend to use this model.")
 
     return ExpensiveModelWarning(

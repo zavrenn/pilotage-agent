@@ -2577,7 +2577,7 @@ def _reconfigure_simple_requirements(ts_key: str):
     if ts_key == "vision":
         # Vision has its own provider/model picker (any provider, like
         # `pilotage model`). Run it directly so reconfigure doesn't fall back to
-        # the generic single-key prompt (which would re-ask for OPENROUTER_API_KEY).
+        # the generic single-key prompt (which would re-ask for OPENAI_API_KEY).
         _configure_vision_backend()
         return
 

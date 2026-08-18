@@ -9,12 +9,6 @@ Currently supports:
                           ``~/.pilotage/logs/*.log`` are not leaked into
                           the public paste service. Pass ``--no-redact``
                           to disable.
-                          Pass ``--nous`` to upload instead to Nous-internal
-                          storage (AWS S3) via a signed URL minted by the
-                          Nous account service: the bundle is private
-                          (viewable only by Nous staff / allowlisted mods via
-                          a Google-login-gated viewer) and auto-deletes after
-                          14 days, rather than going to a public paste.
 """
 
 import datetime
@@ -627,7 +621,7 @@ def collect_debug_report(
 
 
 # ---------------------------------------------------------------------------
-# Shared bundle collection (used by both the paste.rs and Nous-S3 paths)
+# Shared bundle collection
 # ---------------------------------------------------------------------------
 
 
@@ -642,12 +636,8 @@ def collect_share_bundle(
     ``redact`` is True) text that would be uploaded.  Keys for logs that are
     absent/empty are simply omitted.
 
-    This is the single source of collection + redaction shared by both
-    destinations: the paste.rs path (:func:`build_debug_share`) and the
-    Nous-S3 path (``--nous``).  Centralising it guarantees the Nous bundle is
-    built from the *same* force-redacted snapshots as the public paste path —
-    redaction is the safety boundary, so the Nous path must never see raw
-    logs.
+    Redaction is the safety boundary, so collection and redaction live
+    together here: nothing can build an upload bundle from raw logs.
 
     The dump header is prepended to each full log (mirroring the historical
     paste behaviour) so every file is self-contained, and the redaction
@@ -732,10 +722,8 @@ def build_debug_share(
     """
     _best_effort_sweep_expired_pastes()
 
-    # Collect the report + full logs (force-redacted when redact=True) via the
-    # shared collector so the paste.rs and Nous-S3 paths build identical,
-    # identically-redacted bundles. The dump header + redaction banner are
-    # applied inside collect_share_bundle.
+    # Collect the report + full logs (force-redacted when redact=True). The
+    # dump header + redaction banner are applied inside collect_share_bundle.
     bundle = collect_share_bundle(log_lines=log_lines, redact=redact)
 
     if redact:

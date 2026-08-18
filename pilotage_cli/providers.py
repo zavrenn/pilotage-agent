@@ -205,8 +205,6 @@ def get_label(provider_id: str) -> str:
     return canonical
 
 
-
-
 def is_aggregator(provider: str) -> bool:
     """Return True when the provider is a multi-model aggregator."""
     provider_norm = normalize_provider(provider or "")
@@ -214,33 +212,6 @@ def is_aggregator(provider: str) -> bool:
         return True
     pdef = get_provider(provider_norm)
     return pdef.is_aggregator if pdef else False
-
-
-# Flat-namespace resellers would be flagged ``is_aggregator=True`` because
-# their live ``/v1/models`` returns bare model IDs rather than
-# ``vendor/model`` routing slugs, while NOT being routing aggregators (every
-# model they list is first-party). None are defined in the OpenAI-only
-# registry; the mechanism below stays so a plugin reseller can be exempted
-# from routing-aggregator treatment with a one-line addition.
-_FLAT_NAMESPACE_RESELLERS: frozenset[str] = frozenset()
-
-
-def is_routing_aggregator(provider: str) -> bool:
-    """Return True only for TRUE routing aggregators (named ``custom:*``
-    proxies) — those that route bare/vendor-slugged model names to *other*
-    providers' endpoints.
-
-    Distinct from :func:`is_aggregator`, which also reports True for
-    flat-namespace resellers whose catalog is entirely first-party. Use this
-    gate when the question is "would selecting this model silently re-route
-    the call away from the user's intended provider?" — i.e. the picker
-    dedup. Resellers answer no: their listed models are their own, so their
-    rows must not be deduped against user proxies.
-    """
-    provider_norm = normalize_provider(provider or "")
-    if provider_norm in _FLAT_NAMESPACE_RESELLERS:
-        return False
-    return is_aggregator(provider_norm)
 
 
 def is_official_openai_host(base_url: str) -> bool:
