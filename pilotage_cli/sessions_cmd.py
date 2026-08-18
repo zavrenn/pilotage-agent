@@ -489,32 +489,6 @@ def cmd_sessions(args, sessions_parser=None):
             db.close()
             return
 
-        # Standalone HTML export: one self-contained file (single session
-        # or multi-session with sidebar navigation).
-        if args.format == "html":
-            if not args.output or args.output == "-":
-                print("HTML export requires an output file path.")
-                return
-            from pilotage_cli.session_export_html import (
-                generate_html_export,
-                generate_multi_session_html_export,
-            )
-
-            sessions = _collect_sessions()
-            if sessions is None:
-                db.close()
-                return
-            if len(sessions) == 1:
-                content = generate_html_export(sessions[0])
-            else:
-                content = generate_multi_session_html_export(sessions)
-            with open(args.output, "w", encoding="utf-8") as f:
-                f.write(content)
-            suffix = "" if len(sessions) == 1 else "s"
-            print(f"Exported {len(sessions)} session{suffix} to {args.output} (HTML)")
-            db.close()
-            return
-
         # Claude Code JSONL trace export — local file or HF upload.
         # Redaction is ON by default for traces (they leave the machine
         # when --upload is used); --no-redact opts out after review.

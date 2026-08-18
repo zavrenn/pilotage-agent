@@ -27,7 +27,7 @@ from typing import Any
 # Overrideable display settings and their global defaults
 # ---------------------------------------------------------------------------
 # These are the settings that can be configured per-platform.
-# Other display settings (compact, personality, skin, etc.) are CLI-only
+# Other display settings (compact, personality, etc.) are CLI-only
 # and don't participate in per-platform resolution.
 
 _GLOBAL_DEFAULTS: dict[str, Any] = {

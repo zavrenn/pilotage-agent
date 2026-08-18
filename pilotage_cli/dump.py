@@ -233,7 +233,6 @@ def _config_overrides(config: dict) -> dict[str, str]:
         ("compression", "threshold"),
         ("compression", "in_place"),
         ("display", "streaming"),
-        ("display", "skin"),
         ("display", "show_reasoning"),
         ("privacy", "redact_pii"),
         ("tts", "provider"),

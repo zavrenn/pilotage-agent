@@ -4768,19 +4768,6 @@ def set_config_value(key: str, value: str, force: bool = False):
     if env_var and key != "terminal.cwd":
         save_env_value(env_var, _terminal_env_value(value))
 
-    # Setting display.skin is an explicit "apply NOW" — bump the skin file's
-    # mtime so the gateway watcher's (name, mtime) signature moves even when the
-    # name is unchanged (re-affirming the active skin after a surface missed the
-    # original activation). Built-ins have no file; a name switch already moves
-    # their signature.
-    if key == "display.skin" and isinstance(value, str) and value:
-        try:
-            skin_file = get_pilotage_home() / "skins" / f"{value}.yaml"
-            if skin_file.exists():
-                skin_file.touch()
-        except Exception:
-            pass  # best-effort: the config write above already succeeded
-
     # Mask the echoed value when the (possibly nested) key is credential-shaped
     # — e.g. `pilotage config set model.api_key cfut_...` routes to config.yaml
     # (lowercase, so it misses the .env api_keys list above) and would otherwise

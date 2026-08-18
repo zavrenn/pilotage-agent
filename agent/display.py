@@ -36,52 +36,21 @@ def _display_url(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-# Diff colors — resolved lazily from the skin engine so they adapt
-# to light/dark themes.  Falls back to sensible defaults on import
-# failure.  We cache after first resolution for performance.
+# Diff colors — fixed true-color escapes tuned for dark terminals.
 _diff_colors_cached: dict[str, str] | None = None
 
 
 def _diff_ansi() -> dict[str, str]:
-    """Return ANSI escapes for diff display, resolved from the active skin."""
+    """Return ANSI escapes for diff display."""
     global _diff_colors_cached
     if _diff_colors_cached is not None:
         return _diff_colors_cached
 
-    # Defaults that work on dark terminals
     dim = "\033[38;2;150;150;150m"
     file_c = "\033[38;2;180;160;255m"
     hunk = "\033[38;2;120;120;140m"
     minus = "\033[38;2;255;255;255;48;2;120;20;20m"
     plus = "\033[38;2;255;255;255;48;2;20;90;20m"
-
-    try:
-        from pilotage_cli.skin_engine import get_active_skin
-        skin = get_active_skin()
-
-        def _hex_fg(key: str, fallback_rgb: tuple[int, int, int]) -> str:
-            h = skin.get_color(key, "")
-            if h and len(h) == 7 and h[0] == "#":
-                r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
-                return f"\033[38;2;{r};{g};{b}m"
-            r, g, b = fallback_rgb
-            return f"\033[38;2;{r};{g};{b}m"
-
-        dim = _hex_fg("banner_dim", (150, 150, 150))
-        file_c = _hex_fg("session_label", (180, 160, 255))
-        hunk = _hex_fg("session_border", (120, 120, 140))
-        # minus/plus use background colors — derive from ui_error/ui_ok
-        err_h = skin.get_color("ui_error", "#ef5350")
-        ok_h = skin.get_color("ui_ok", "#4caf50")
-        if err_h and len(err_h) == 7:
-            er, eg, eb = int(err_h[1:3], 16), int(err_h[3:5], 16), int(err_h[5:7], 16)
-            # Use a dark tinted version as background
-            minus = f"\033[38;2;255;255;255;48;2;{max(er//2,20)};{max(eg//4,10)};{max(eb//4,10)}m"
-        if ok_h and len(ok_h) == 7:
-            or_, og, ob = int(ok_h[1:3], 16), int(ok_h[3:5], 16), int(ok_h[5:7], 16)
-            plus = f"\033[38;2;255;255;255;48;2;{max(or_//4,10)};{max(og//2,20)};{max(ob//4,10)}m"
-    except Exception:
-        pass
 
     _diff_colors_cached = {
         "dim": dim, "file": file_c, "hunk": hunk,
@@ -90,7 +59,7 @@ def _diff_ansi() -> dict[str, str]:
     return _diff_colors_cached
 
 
-# Module-level helpers — each call resolves from the active skin lazily.
+# Module-level helpers.
 def _diff_dim():   return _diff_ansi()["dim"]
 def _diff_file():  return _diff_ansi()["file"]
 def _diff_hunk():  return _diff_ansi()["hunk"]
@@ -124,42 +93,13 @@ def get_tool_preview_max_len() -> int:
     return _tool_preview_max_len
 
 
-# =========================================================================
-# Skin-aware helpers (lazy import to avoid circular deps)
-# =========================================================================
-
-def _get_skin():
-    """Get the active skin config, or None if not available."""
-    try:
-        from pilotage_cli.skin_engine import get_active_skin
-        return get_active_skin()
-    except Exception:
-        return None
-
-
 def get_skin_tool_prefix() -> str:
-    """Get tool output prefix character from active skin."""
-    skin = _get_skin()
-    if skin:
-        return skin.tool_prefix
+    """Return the tool-output prefix character."""
     return "┊"
 
 
 def get_tool_emoji(tool_name: str, default: str = "⚡") -> str:
-    """Get the display emoji for a tool.
-
-    Resolution order:
-    1. Active skin's ``tool_emojis`` overrides (if a skin is loaded)
-    2. Tool registry's per-tool ``emoji`` field
-    3. *default* fallback
-    """
-    # 1. Skin override
-    skin = _get_skin()
-    if skin and skin.tool_emojis:
-        override = skin.tool_emojis.get(tool_name)
-        if override:
-            return override
-    # 2. Registry default
+    """Return the display emoji for a tool, from the registry or *default*."""
     try:
         from tools.registry import registry
         emoji = registry.get_emoji(tool_name, default="")
@@ -167,7 +107,7 @@ def get_tool_emoji(tool_name: str, default: str = "⚡") -> str:
             return emoji
     except Exception:
         pass
-    # 3. Hardcoded fallback
+    # Hardcoded fallback
     return default
 
 
@@ -1113,41 +1053,14 @@ class KawaiiSpinner:
 
     @classmethod
     def get_waiting_faces(cls) -> list:
-        """Return waiting faces from the active skin, falling back to KAWAII_WAITING."""
-        try:
-            skin = _get_skin()
-            if skin:
-                faces = skin.spinner.get("waiting_faces", [])
-                if faces:
-                    return faces
-        except Exception:
-            pass
         return cls.KAWAII_WAITING
 
     @classmethod
     def get_thinking_faces(cls) -> list:
-        """Return thinking faces from the active skin, falling back to KAWAII_THINKING."""
-        try:
-            skin = _get_skin()
-            if skin:
-                faces = skin.spinner.get("thinking_faces", [])
-                if faces:
-                    return faces
-        except Exception:
-            pass
         return cls.KAWAII_THINKING
 
     @classmethod
     def get_thinking_verbs(cls) -> list:
-        """Return thinking verbs from the active skin, falling back to THINKING_VERBS."""
-        try:
-            skin = _get_skin()
-            if skin:
-                verbs = skin.spinner.get("thinking_verbs", [])
-                if verbs:
-                    return verbs
-        except Exception:
-            pass
         return cls.THINKING_VERBS
 
     def __init__(self, message: str = "", spinner_type: str = 'dots', print_fn=None):
@@ -1229,9 +1142,7 @@ class KawaiiSpinner:
                 time.sleep(0.1)
             return
 
-        # Cache skin wings at start (avoid per-frame imports)
-        skin = _get_skin()
-        wings = skin.get_spinner_wings() if skin else []
+        wings = []
 
         while self.running:
             if os.getenv("PILOTAGE_SPINNER_PAUSE"):

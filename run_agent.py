@@ -6446,10 +6446,6 @@ class AIAgent:
         )
         from agent import relay_runtime
         from agent.conversation_loop import run_conversation
-        from pilotage_cli.observability.relay_shared_metrics import (
-            finish_task_run,
-            start_task_run,
-        )
         from agent.subagent_lifecycle import bind_subagent_parent
         effective_task_id = task_id or str(uuid.uuid4())
         session_id = str(getattr(self, "session_id", None) or "")
@@ -6476,8 +6472,6 @@ class AIAgent:
         durable_turn_lease_turn_active = False
         durable_turn_lease_interrupt_message = None
         acct_token = None
-        task_started = False
-        task_finished = False
         relay_outcome = "failed"
 
         def _stop_durable_turn_lease_refresher() -> None:
@@ -6751,14 +6745,6 @@ class AIAgent:
                 turn_id=relay_turn_id,
                 task_id=effective_task_id,
             )
-            # Keep existing tests and external relay-runtime shims that return
-            # a minimal turn object compatible with the new opt-out flag.
-            if getattr(relay_turn, "relay_enabled", True):
-                start_task_run(
-                    **task_context,
-                    parent_session_id=getattr(self, "_parent_session_id", None) or "",
-                )
-                task_started = True
             # Publish the session accounting handles the same way so auxiliary
             # calls record their token usage into session_model_usage (task
             # dimension) — the fix for aux spend being invisible in analytics
@@ -6810,9 +6796,6 @@ class AIAgent:
                 relay_turn,
                 outcome=relay_outcome,
             )
-            if task_started:
-                task_finished = True
-                finish_task_run(**task_context, result=result)
             return result
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, InterruptedError)) or (
@@ -6826,9 +6809,6 @@ class AIAgent:
                     relay_turn,
                     outcome=relay_outcome,
                 )
-            if task_started and not task_finished:
-                task_finished = True
-                finish_task_run(**task_context, error=exc)
             raise
         finally:
             try:

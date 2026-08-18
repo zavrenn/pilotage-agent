@@ -19,7 +19,7 @@ def build_setup_parser(subparsers, *, cmd_setup: Callable) -> None:
         help="Interactive setup wizard",
         description="Configure Pilotage Agent with an interactive wizard. "
         "Run a specific section: "
-        "pilotage setup model|tts|terminal|gateway|tools|telemetry|agent",
+        "pilotage setup model|tts|terminal|gateway|tools|agent",
     )
     setup_parser.add_argument(
         "section",
@@ -30,7 +30,6 @@ def build_setup_parser(subparsers, *, cmd_setup: Callable) -> None:
             "terminal",
             "gateway",
             "tools",
-            "telemetry",
             "agent",
         ],
         default=None,

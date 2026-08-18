@@ -711,12 +711,6 @@ def _read_git_revision_fingerprint(repo_root: Path) -> str | None:
         return None
 
 
-def _termux_should_prefetch_update_check() -> bool:
-    if not _is_termux_startup_environment():
-        return True
-    return os.environ.get("PILOTAGE_TERMUX_PREFETCH_UPDATES") == "1"
-
-
 def _relative_time(ts) -> str:
     """Format a timestamp as relative time (e.g., '2h ago', 'yesterday').
 
@@ -1383,20 +1377,6 @@ def cmd_chat(args):
         print()
         print("You can run 'pilotage setup' at any time to configure.")
         sys.exit(1)
-
-    # Start update check in background (runs while other init happens).
-    # On Termux this imports rich/prompt_toolkit in the foreground and then
-    # competes for CPU on single-core devices, so keep it opt-in there.
-    if _termux_should_prefetch_update_check():
-        try:
-            from pilotage_cli.banner import prefetch_banner_data, prefetch_update_check
-
-            prefetch_update_check()
-            # Warm git banner state + skills index off-thread too — their
-            # subprocess/file-I/O waits overlap the CPU-bound cli import.
-            prefetch_banner_data()
-        except Exception:
-            pass
 
     # --yolo: bypass all dangerous command approvals.
     # Also set in main() before _prepare_agent_startup() — that is the
@@ -3227,30 +3207,6 @@ def _print_version_info(*, check_updates: bool = True) -> None:
             print("OpenAI SDK: Not installed")
     except ImportError:
         print("OpenAI SDK: Not installed")
-
-    if not check_updates:
-        return
-
-    # Show update status (synchronous — acceptable since user asked for version info)
-    try:
-        from pilotage_cli.banner import UPDATE_AVAILABLE_NO_COUNT, check_for_updates
-        from pilotage_cli.config import recommended_update_command
-
-        behind = check_for_updates()
-        if behind == UPDATE_AVAILABLE_NO_COUNT:
-            print(
-                f"Update available — run '{recommended_update_command()}'"
-            )
-        elif behind and behind > 0:
-            commits_word = "commit" if behind == 1 else "commits"
-            print(
-                f"Update available: {behind} {commits_word} behind — "
-                f"run '{recommended_update_command()}'"
-            )
-        elif behind == 0:
-            print("Up to date")
-    except Exception:
-        pass
 
 
 def cmd_version(args):
@@ -5979,10 +5935,6 @@ def main():
     build_config_parser(subparsers, cmd_config=cmd_config)
 
     # =========================================================================
-    # skin command  (parser built in pilotage_cli/subcommands/skin.py)
-    # =========================================================================
-
-    # =========================================================================
     # pairing command  (parser built in pilotage_cli/subcommands/pairing.py)
     # =========================================================================
     build_pairing_parser(subparsers, cmd_pairing=cmd_pairing)
@@ -6211,7 +6163,7 @@ def main():
     )
     sessions_export.add_argument(
         "--format",
-        choices=["jsonl", "md", "qmd", "html", "trace"],
+        choices=["jsonl", "md", "qmd", "trace"],
         default="jsonl",
         help=(
             "Export format (default: jsonl). 'trace' emits Claude Code JSONL "

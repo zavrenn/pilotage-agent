@@ -321,7 +321,7 @@ def _finish_markdown(lines: List[str]) -> str:
 # Current-session save helper (shared by CLI /save and gateway /save)
 # ---------------------------------------------------------------------------
 
-SAVE_FORMATS = ("json", "md", "html")
+SAVE_FORMATS = ("json", "md")
 
 SAVE_USAGE = """/save — export the current session to a file
 Usage: /save <format> [filename] [redact]
@@ -329,7 +329,6 @@ Usage: /save <format> [filename] [redact]
 Formats:
   json    full session snapshot (canonical export shape)
   md      readable Markdown transcript
-  html    standalone single-file HTML page (shareable, no dependencies)
 
 Options:
   filename   optional output name/path (default: auto-named;
@@ -338,9 +337,8 @@ Options:
 
 Examples:
   /save json
-  /save html
   /save md notes.md
-  /save html session.html redact"""
+  /save md notes.md redact"""
 
 
 
@@ -351,10 +349,8 @@ def normalize_save_format(fmt: Optional[str]) -> str:
         return "json"
     if token in ("md", "markdown"):
         return "md"
-    if token == "html":
-        return "html"
     raise ValueError(
-        f"Unknown format {token!r} — expected one of: json, md, html"
+        f"Unknown format {token!r} — expected one of: json, md"
     )
 
 
@@ -362,16 +358,12 @@ def render_session_for_save(session: Dict[str, Any], fmt: str) -> str:
     """Render one exported session dict for /save.
 
     ``json`` -> pretty-printed JSON; ``md`` -> the shared full-markdown
-    renderer; ``html`` -> the standalone single-file HTML export.
+    renderer.
     """
     if fmt == "json":
         return json.dumps(session, indent=2, ensure_ascii=False, default=str)
     if fmt == "md":
         return render_sessions_export([session], fmt="markdown")
-    if fmt == "html":
-        from pilotage_cli.session_export_html import generate_html_export
-
-        return generate_html_export(session)
     raise ValueError(f"Unknown save format: {fmt!r}")
 
 

@@ -275,8 +275,6 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("fast", "Toggle fast mode — OpenAI Priority Processing (Normal/Fast)", "Configuration",
                args_hint="[normal|fast|status] [--global]",
                subcommands=("normal", "fast", "status", "on", "off", "--global")),
-    CommandDef("skin", "Show or change the display skin/theme", "Configuration",
-               cli_only=True, args_hint="[name]"),
     CommandDef("indicator", "Pick the TUI busy-indicator style", "Configuration",
                cli_only=True, args_hint=f"[{'|'.join(INDICATOR_STYLES)}]",
                subcommands=INDICATOR_STYLES),
@@ -1160,7 +1158,7 @@ class SlashCommandCompleter(Completer):
     # These should NOT receive a trailing space in completions because:
     # - The TUI's submit handler applies completions on Enter if input differs
     # - Adding space makes "/model" → "/model " which blocks picker execution
-    _PICKER_COMMANDS = frozenset({"model", "skin", "personality"})
+    _PICKER_COMMANDS = frozenset({"model", "personality"})
 
     @staticmethod
     def _completion_text(cmd_name: str, word: str) -> str:
@@ -1171,7 +1169,7 @@ class SlashCommandCompleter(Completer):
         menu. Appending a trailing space keeps the dropdown visible and makes
         backspacing retrigger it naturally.
 
-        However, commands that open pickers (model, skin, personality) should
+        However, commands that open pickers (model, personality) should
         NOT get a trailing space — the TUI would apply the completion on Enter
         and block the picker from opening.
         """
@@ -1504,151 +1502,6 @@ class SlashCommandCompleter(Completer):
             )
 
     @staticmethod
-    def _skin_completions(sub_text: str, sub_lower: str):
-        """Yield completions for /skin from available skins."""
-        try:
-            from pilotage_cli.skin_engine import list_skins
-            for s in list_skins():
-                name = s["name"]
-                if name.startswith(sub_lower) and name != sub_lower:
-                    yield Completion(
-                        name,
-                        start_position=-len(sub_text),
-                        display=name,
-                        display_meta=s.get("description", "") or s.get("source", ""),
-                    )
-        except Exception:
-            pass
-
-    @staticmethod
-    def _tools_completions(sub_text: str, sub_lower: str):
-        """Yield completions for /tools — subcommand + toolset/MCP-server name.
-
-        Handles both ``/tools <tab>`` (suggesting ``list|disable|enable``) and
-        ``/tools enable <tab>`` / ``/tools disable <tab>`` (suggesting toolset
-        keys and MCP server prefixes, filtered by current enable state so the
-        user only sees actionable options).
-        """
-        SUBS = ("list", "disable", "enable")
-        parts = sub_text.split()
-        trailing_space = sub_text.endswith(" ")
-
-        # Subcommand stage: zero words typed, or completing the first word.
-        if len(parts) == 0 or (len(parts) == 1 and not trailing_space):
-            partial = sub_text if not trailing_space else ""
-            for sub in SUBS:
-                if sub.startswith(partial.lower()) and sub != partial.lower():
-                    yield Completion(sub, start_position=-len(partial), display=sub)
-            return
-
-        subcommand = parts[0].lower()
-        if subcommand not in ("enable", "disable"):
-            return
-
-        partial = "" if trailing_space else parts[-1]
-        partial_lower = partial.lower()
-        already = set(parts[1:] if trailing_space else parts[1:-1])
-
-        try:
-            from pilotage_cli.config import load_config_readonly
-            from pilotage_cli.tools_config import (
-                CONFIGURABLE_TOOLSETS,
-                _get_platform_tools,
-                _get_plugin_toolset_keys,
-            )
-
-            # Read-only path: the completer only inspects the config (toolset
-            # enable state + MCP server names) — it never mutates it. Use the
-            # readonly loader so the per-keystroke completion doesn't pay the
-            # defensive deepcopy (perf(agent) converted 29 call sites
-            # to the readonly loader; this per-keystroke site was missed).
-            config = load_config_readonly()
-            enabled = _get_platform_tools(config, "cli", include_default_mcp_servers=False)
-
-            for ts_key, label, _desc in CONFIGURABLE_TOOLSETS:
-                if ts_key in already or not ts_key.startswith(partial_lower):
-                    continue
-                is_on = ts_key in enabled
-                if subcommand == "enable" and is_on:
-                    continue
-                if subcommand == "disable" and not is_on:
-                    continue
-                yield Completion(
-                    ts_key,
-                    start_position=-len(partial),
-                    display=ts_key,
-                    display_meta=label,
-                )
-
-            for ts_key in sorted(_get_plugin_toolset_keys()):
-                if ts_key in already or not ts_key.startswith(partial_lower):
-                    continue
-                is_on = ts_key in enabled
-                if subcommand == "enable" and is_on:
-                    continue
-                if subcommand == "disable" and not is_on:
-                    continue
-                yield Completion(
-                    ts_key,
-                    start_position=-len(partial),
-                    display=ts_key,
-                    display_meta="plugin toolset",
-                )
-
-            mcp_servers = config.get("mcp_servers") or {}
-            if isinstance(mcp_servers, dict):
-                for server in sorted(mcp_servers):
-                    prefix = f"{server}:"
-                    if prefix in already or not prefix.startswith(partial_lower):
-                        continue
-                    yield Completion(
-                        prefix,
-                        start_position=-len(partial),
-                        display=prefix,
-                        display_meta=f"MCP server '{server}'",
-                    )
-        except Exception:
-            return
-
-    @staticmethod
-    def _handoff_completions(sub_text: str, sub_lower: str):
-        """Yield platform completions for /handoff.
-
-        Offers connected (enabled + configured) gateway platforms. A recorded
-        home channel is NOT required to list a platform — it's often learned at
-        runtime — so the meta hints whether one is set yet. Completes only the
-        first arg (the platform); once one is chosen, stop.
-        """
-        parts = sub_text.split()
-        trailing_space = sub_text.endswith(" ")
-        if len(parts) > 1 or (len(parts) == 1 and trailing_space):
-            return
-        partial = "" if (not parts or trailing_space) else parts[-1]
-        partial_lower = partial.lower()
-        try:
-            from gateway.config import load_gateway_config
-
-            gw = load_gateway_config()
-            platforms = gw.get_connected_platforms()
-        except Exception:
-            return
-        for platform in platforms:
-            name = platform.value
-            if not name.startswith(partial_lower):
-                continue
-            try:
-                home = gw.get_home_channel(platform)
-            except Exception:
-                home = None
-            meta = f"→ {home.name}" if home and getattr(home, "name", None) else "send this session here"
-            yield Completion(
-                name,
-                start_position=-len(partial),
-                display=name,
-                display_meta=meta,
-            )
-
-    @staticmethod
     def _personality_completions(sub_text: str, sub_lower: str):
         """Yield completions for /personality via pilotage_cli.personality."""
         try:
@@ -1716,9 +1569,6 @@ class SlashCommandCompleter(Completer):
 
             # Dynamic completions for commands with runtime lists
             if " " not in sub_text:
-                if base_cmd == "/skin":
-                    yield from self._skin_completions(sub_text, sub_lower)
-                    return
                 if base_cmd == "/personality":
                     yield from self._personality_completions(sub_text, sub_lower)
                     return

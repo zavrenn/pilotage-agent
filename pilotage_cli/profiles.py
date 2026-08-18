@@ -45,7 +45,6 @@ _PROFILE_DIRS = [
     "memories",
     "sessions",
     "skills",
-    "skins",
     "logs",
     "plans",
     "workspace",

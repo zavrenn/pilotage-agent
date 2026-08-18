@@ -107,8 +107,6 @@ def load_cli_config() -> Dict[str, Any]:
             # Print a one-line summary of resolved modal prompts (approval /
             # clarify) into scrollback so the decision survives the repaint.
             "persist_prompts": True,
-
-            "skin": "default",
         },
         "clarify": {
             "timeout": 120,  # Seconds to wait for a clarify answer before auto-proceeding
@@ -215,7 +213,7 @@ def load_cli_config() -> Dict[str, Any]:
     # Managed scope: overlay administrator-pinned values LAST so they win over
     # the user's config here too. cli.py builds its config independently of
     # pilotage_cli.config._load_config_impl (which has its own managed merge), so
-    # without this the entire interactive CLI/TUI surface — skin, display prefs,
+    # without this the entire interactive CLI/TUI surface — display prefs,
     # etc. read from CLI_CONFIG — would silently ignore managed scope while
     # `pilotage config`/`doctor`/guards (which use load_config) honor it. The
     # shared helper mirrors _load_config_impl (env-only expansion, root-model

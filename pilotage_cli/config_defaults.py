@@ -936,7 +936,6 @@ DEFAULT_CONFIG = {
         # model — see pilotage_cli/focus_view.py.
         "focus_view": False,
         "focus_saved_tool_progress": "all",
-        "skin": "default",
         # UI language for static user-facing messages (approval prompts, a
         # handful of gateway slash-command replies).  Does NOT affect agent
         # responses, log lines, tool outputs, or slash-command descriptions.
@@ -2029,14 +2028,6 @@ DEFAULT_CONFIG = {
         # reads connected accounts silently). "off" -> plain intro only.
         # The offer fires at most once (latched under onboarding.seen).
         "profile_build": "ask",
-    },
-
-    # Privacy-safe aggregate metrics written only to this profile's local
-    # telemetry directory. Collection is opt-in and no remote sink exists.
-    "telemetry": {
-        "shared_metrics": {
-            "enabled": False,
-        },
     },
 
     # ``pilotage doctor`` behaviour.
