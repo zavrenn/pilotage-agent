@@ -47,16 +47,14 @@ logger = logging.getLogger(__name__)
 def _resolve_review_runtime(agent: Any) -> Dict[str, Any]:
     """Resolve provider/model/credentials for the review fork.
 
-    Default (auto / unset / same as parent): inherit the parent's live runtime
-    (with codex_app_server -> codex_responses downgrade). ``routed`` is False —
-    the fork uses the main model and the warm cache, exactly as before. When
+    Default (auto / unset / same as parent): inherit the parent's live
+    runtime. ``routed`` is False — the fork uses the main model and the warm
+    cache, exactly as before. When
     ``auxiliary.background_review.{provider,model}`` names a concrete model
     different from the parent's, resolve that runtime and set ``routed=True``.
     """
     parent_runtime = agent._current_main_runtime()
     parent_api_mode = parent_runtime.get("api_mode") or None
-    if parent_api_mode == "codex_app_server":
-        parent_api_mode = "codex_responses"
     parent = {
         "provider": agent.provider,
         "model": agent.model,
@@ -731,8 +729,7 @@ def _run_review_in_thread(
             # _resolve_review_runtime() returns the parent's live runtime by
             # default (routed=False; main model, warm cache), or — when the user
             # set auxiliary.background_review.{provider,model} to a different
-            # model — that model's runtime (routed=True). The codex_app_server
-            # -> codex_responses downgrade is applied inside the resolver.
+            # model — that model's runtime (routed=True).
             _rt = _resolve_review_runtime(agent)
             _routed = bool(_rt.get("routed"))
             # skip_memory=True keeps the review fork from

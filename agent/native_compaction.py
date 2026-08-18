@@ -123,7 +123,7 @@ def native_compaction_context_management(
     if not bool(getattr(agent, "codex_responses_native_compaction", False)):
         return None
     # compression.enabled: false disables ALL automatic compaction, native
-    # included — mirrors the codex_app_server_auto contract.
+    # included.
     if not bool(getattr(agent, "compression_enabled", True)):
         return None
     if is_github_responses:

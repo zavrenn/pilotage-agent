@@ -14588,8 +14588,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
     # the generic catch-all text in _dispatch_busy_slash_command.
     _BUSY_REJECT_TEXT: Dict[str, str] = {
         "model": "Agent is running — wait or /stop first, then switch models.",
-        "codex-runtime": ("Agent is running — wait or /stop first, then "
-                          "change runtime."),
     }
 
     async def _dispatch_busy_slash_command(
@@ -15800,9 +15798,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
 
         if canonical == "model":
             return await self._handle_model_command(event)
-
-        if canonical == "codex-runtime":
-            return await self._handle_codex_runtime_command(event)
 
         if canonical == "personality":
             return await self._handle_personality_command(event)
@@ -22895,7 +22890,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewaySlashCommandsMixin):
         ("compression", "model_thresholds"),
         ("compression", "threshold_tokens"),
         ("compression", "codex_gpt55_autoraise"),
-        ("compression", "codex_app_server_auto"),
         ("compression", "target_ratio"),
         ("compression", "protect_last_n"),
         ("compression", "proactive_prune_tokens"),

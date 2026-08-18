@@ -876,21 +876,6 @@ def build_turn_context(
             lambda _tokens: False,
         )
         _preflight_deferred = _defer_preflight(_preflight_tokens)
-        # Codex app-server threads are compacted by the codex agent itself;
-        # Pilotage only initiates compaction in "pilotage" mode.
-        _codex_native_auto = (
-            getattr(agent, "api_mode", None) == "codex_app_server"
-            and str(
-                getattr(
-                    agent,
-                    "codex_app_server_auto_compaction",
-                    "native",
-                )
-                or "native"
-            ).lower()
-            in {"native", "off"}
-        )
-
         if not _preflight_deferred:
             _last = _compressor.last_prompt_tokens
             # Do NOT overwrite the -1 sentinel.
@@ -925,12 +910,6 @@ def build_turn_context(
                 # summary-LLM cooldown — surface a warning (see block below).
                 _cooldown_secs = _compression_cooldown.get("remaining_seconds", 0.0)
                 _compress_block_reason = f"cooldown:{_cooldown_secs:.0f}"
-        elif _codex_native_auto:
-            logger.info(
-                "Skipping Pilotage preflight compression for codex app-server "
-                "(mode=%s); Pilotage will not start thread compaction here.",
-                getattr(agent, "codex_app_server_auto_compaction", "native"),
-            )
         else:
             _should_compress_now = _compressor.should_compress(_preflight_tokens)
             if not _should_compress_now:
@@ -1067,10 +1046,10 @@ def build_turn_context(
             if callable(_clear_warn):
                 _clear_warn()
             # Engine maintenance only when NO skip-branch fired: a failure
-            # cooldown, deferred estimate, or codex-native route must keep
-            # the engine hook un-consulted contract — the cooldown
-            # exists precisely because compression recently failed).
-            if _compression_cooldown or _preflight_deferred or _codex_native_auto:
+            # cooldown or deferred estimate must keep the engine hook
+            # un-consulted contract — the cooldown exists precisely
+            # because compression recently failed).
+            if _compression_cooldown or _preflight_deferred:
                 _engine_preflight = None
             else:
                 _engine_preflight = getattr(
@@ -1078,7 +1057,7 @@ def build_turn_context(
                 )
             # ── Engine-driven sub-threshold preflight maintenance ──
             # None of the threshold-path branches fired (not deferred, no
-            # failure cooldown, not codex-native, and should_compress() said
+            # failure cooldown, and should_compress() said
             # the request is under pressure). Context engines that override
             # ``should_compress_preflight()`` (e.g. LCM-style incremental
             # leaf-chunk compaction) can still request deferred maintenance
@@ -1292,12 +1271,9 @@ def build_turn_context(
     # content, so the crash persist below writes both in the same row and
     # replay can reproduce the sent prefix byte-for-byte. Guarded by the
     # same predicate the api_messages build uses, so the stamped bytes are
-    # exactly the bytes the loop sends. codex_app_server turns bypass the
-    # api_messages build entirely (the codex thread gets the plain user
-    # message), so stamping there would persist bytes that were never sent.
+    # exactly the bytes the loop sends.
     if (
-        getattr(agent, "api_mode", None) != "codex_app_server"
-        and 0 <= current_turn_user_idx < len(messages)
+        0 <= current_turn_user_idx < len(messages)
         and messages[current_turn_user_idx].get("role") == "user"
     ):
         _turn_user_msg = messages[current_turn_user_idx]

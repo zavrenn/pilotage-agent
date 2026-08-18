@@ -678,14 +678,6 @@ DEFAULT_CONFIG = {
                                       # autoraise banner. Set False to keep the
                                       # 85% threshold autoraise but suppress the
                                       # user-facing notice in CLI/gateway output.
-        "codex_app_server_auto": "native",  # Codex app-server (codex CLI runtime) thread
-                                      # compaction mode. The codex agent owns the real
-                                      # thread context, so Pilotage' summarizer cannot
-                                      # shrink it. native = codex decides when
-                                      # to compact its own thread (default); pilotage =
-                                      # Pilotage' compression threshold triggers
-                                      # thread/compact/start; off = never auto-trigger
-                                      # (codex may still compact natively).
         "codex_responses_native": False,  # Opt in to OpenAI's server-side compaction
                                       # on the Responses API. Engages ONLY for
                                       # gpt-5.6-family models on api.openai.com or
