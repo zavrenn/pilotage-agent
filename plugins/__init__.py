@@ -1,1 +1,0 @@
-# Pilotage plugins package
