@@ -382,15 +382,18 @@ class WhatsAppChannel:
         return sender_number in allowed or sender_id in allowed
 
     def _report_blocked(self, sender_id: str, sender_number: str) -> None:
-        """Say once, per sender, exactly what to add to let them in."""
+        """Note once, per sender, that a message was ignored.
+
+        Nothing more. WhatsApp does not always send a sender's phone number —
+        sometimes it sends an internal alias, which is digits too and reads
+        exactly like a number. Telling the operator to allowlist whatever is
+        printed here would sooner or later be telling them to allowlist that.
+        """
         identity = sender_number or sender_id
         if identity in self._reported_blocked:
             return
         self._reported_blocked.add(identity)
-        logger.warning(
-            "Ignored a message from %s. Add it to PILOTAGE_ALLOWED_SENDERS to let it through.",
-            identity,
-        )
+        logger.warning("Ignored a message from %s.", identity)
 
     def _enqueue(self, message: InboundMessage) -> None:
         """Merge a message into the pending batch for its chat and restart the timer.
