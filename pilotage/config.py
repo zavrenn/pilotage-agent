@@ -15,9 +15,20 @@ DEFAULT_REASONING_EFFORT = "medium"
 
 DEFAULT_INSTRUCTIONS = (
     "You are a Pilotage agent. You answer over WhatsApp, so keep replies short "
-    "and readable on a phone: plain sentences, no headings, no tables, no code "
-    "blocks unless the answer is code. Say what you know, say plainly when you "
-    "do not know, and never invent facts."
+    "and readable on a phone: a few sentences, not a document. Say what you "
+    "know, say plainly when you do not know, and never invent facts."
+)
+
+# Added to whatever instructions the operator writes, always. The model emits
+# markdown on its own and we translate it on the way out, so it has to know
+# which marks survive the trip — including when the operator replaces the
+# instructions above entirely and never thinks about formatting.
+FORMATTING_NOTE = (
+    "Write in ordinary markdown. It is converted to WhatsApp formatting before "
+    "the message is sent: **bold**, *italic*, ~~strikethrough~~ and `code` all "
+    "arrive as WhatsApp expects them. A heading becomes a bold line, so use "
+    "headings sparingly, and bullet lists ('- item') freely. Tables do not "
+    "render at all — use short lines or bullets instead."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -54,6 +65,13 @@ def state_dir() -> Path:
     override = os.environ.get("PILOTAGE_HOME", "").strip()
     root = Path(override).expanduser() if override else Path.home() / ".pilotage-agent"
     return root
+
+
+def _instructions() -> str:
+    """The operator's instructions, plus the formatting note they cannot drop."""
+    # A blank setting means the default, so there is always something here.
+    written = _env_str("PILOTAGE_INSTRUCTIONS", DEFAULT_INSTRUCTIONS)
+    return f"{written}\n\n{FORMATTING_NOTE}"
 
 
 @dataclass(frozen=True)
@@ -119,7 +137,7 @@ class Config:
         return cls(
             model=_env_str("PILOTAGE_MODEL", DEFAULT_MODEL),
             reasoning_effort=_env_str("PILOTAGE_REASONING_EFFORT", DEFAULT_REASONING_EFFORT),
-            instructions=_env_str("PILOTAGE_INSTRUCTIONS", DEFAULT_INSTRUCTIONS),
+            instructions=_instructions(),
             allowed_senders=senders,
             answer_groups=_env_str("PILOTAGE_ANSWER_GROUPS", "0") in {"1", "true", "yes"},
             bridge_port=_env_int("PILOTAGE_BRIDGE_PORT", 8765),

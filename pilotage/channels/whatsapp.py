@@ -25,6 +25,7 @@ import httpx
 from .. import media
 from ..config import Config
 from .dedup import MessageDeduplicator
+from .formatting import to_whatsapp
 
 logger = logging.getLogger(__name__)
 
@@ -475,7 +476,9 @@ class WhatsAppChannel:
     async def send(self, chat_id: str, text: str) -> bool:
         if self._http is None:
             return False
-        body = (text or "").strip()
+        # Everything leaves through here, so this is the one place the model's
+        # markdown has to become WhatsApp's.
+        body = to_whatsapp(text or "").strip()
         if not body:
             return False
         try:
