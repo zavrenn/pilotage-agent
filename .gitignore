@@ -187,3 +187,4 @@ native/fts5_cjk/*.so
 
 # Private project context
 /CONTEXT.local.md
+/REQUIREMENTS.md
