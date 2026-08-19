@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 from openai import APIStatusError, AsyncOpenAI
 
@@ -18,6 +18,18 @@ from .codex import auth, client as codex_client, stream as codex_stream
 from .config import Config
 
 logger = logging.getLogger(__name__)
+
+# A silent stream is retried once. A fresh connection almost always works
+# straight away, and a second failure is the backend, not the socket.
+MAX_STREAM_RECONNECTS = 1
+
+# What the person waiting is told when we drop a quiet connection. They have
+# been watching the typing indicator for two minutes by then; silence would
+# read as the agent having given up.
+RECONNECT_NOTICE = "Still nothing back from the model. Reconnecting…"
+
+# Called with a line to show the person waiting, mid-turn.
+Notice = Callable[[str], Awaitable[None]]
 
 
 @dataclass
@@ -123,6 +135,7 @@ class Agent:
         chat_id: str,
         user_text: str,
         attachments: Sequence[media.Attachment] = (),
+        on_notice: Optional[Notice] = None,
     ) -> str:
         # Reading the files is blocking I/O and base64 of a few megabytes is not
         # free, so it happens off the event loop.
@@ -131,12 +144,16 @@ class Agent:
         )
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
-            result = await self._run_turn(chat_id, user_text, image_parts)
+            result = await self._run_turn(chat_id, user_text, image_parts, on_notice)
             self._remember(chat_id, user_text, image_parts, result)
             return result.text
 
     async def _run_turn(
-        self, chat_id: str, user_text: str, image_parts: List[Dict[str, Any]]
+        self,
+        chat_id: str,
+        user_text: str,
+        image_parts: List[Dict[str, Any]],
+        on_notice: Optional[Notice] = None,
     ) -> codex_stream.StreamResult:
         request = codex_stream.build_request(
             model=self._config.model,
@@ -145,23 +162,77 @@ class Agent:
             session_id=chat_id,
             reasoning_effort=self._config.reasoning_effort,
         )
+        ttfb_timeout, idle_timeout = codex_stream.stream_timeouts(
+            request,
+            ttfb_timeout=self._config.codex_first_event_timeout_seconds,
+            idle_timeout=self._config.codex_quiet_stream_timeout_seconds,
+        )
 
-        try:
-            return await self._stream_once(request, force_refresh=False)
-        except APIStatusError as exc:
-            if exc.status_code not in (401, 403):
-                raise
-            # The token went stale between the expiry check and the request.
-            logger.info("Codex returned %s; refreshing credentials and retrying once", exc.status_code)
-            return await self._stream_once(request, force_refresh=True)
+        force_refresh = False
+        refreshed = False
+        reconnects = 0
+        while True:
+            try:
+                return await self._stream_once(
+                    request,
+                    force_refresh=force_refresh,
+                    ttfb_timeout=ttfb_timeout,
+                    idle_timeout=idle_timeout,
+                )
+            except APIStatusError as exc:
+                if exc.status_code not in (401, 403) or refreshed:
+                    raise
+                # The token went stale between the expiry check and the request.
+                logger.info(
+                    "Codex returned %s; refreshing credentials and retrying once", exc.status_code
+                )
+                force_refresh = True
+                refreshed = True
+            except codex_stream.CodexStreamTimeout as exc:
+                if reconnects >= MAX_STREAM_RECONNECTS:
+                    raise
+                reconnects += 1
+                # The credentials are not the problem here; keep the ones we have.
+                force_refresh = False
+                logger.warning(
+                    "%s Dropping the connection and reconnecting (%d/%d).",
+                    exc,
+                    reconnects,
+                    MAX_STREAM_RECONNECTS,
+                )
+                await _notify(on_notice, RECONNECT_NOTICE)
 
-    async def _stream_once(self, request: Dict[str, Any], *, force_refresh: bool) -> codex_stream.StreamResult:
+    async def _stream_once(
+        self,
+        request: Dict[str, Any],
+        *,
+        force_refresh: bool,
+        ttfb_timeout: float,
+        idle_timeout: float,
+    ) -> codex_stream.StreamResult:
         client = await self._ensure_client(force_refresh=force_refresh)
         stream = await client.responses.create(**request, stream=True)
         try:
-            return await codex_stream.consume_stream(stream)
+            return await codex_stream.consume_stream(
+                stream, ttfb_timeout=ttfb_timeout, idle_timeout=idle_timeout
+            )
         finally:
-            await stream.close()
+            # Closing the response is what actually lets go of a wedged
+            # connection, and it must not replace the error that got us here.
+            try:
+                await stream.close()
+            except Exception:  # noqa: BLE001 - the turn already has its outcome
+                logger.debug("Closing the Codex stream failed", exc_info=True)
+
+
+async def _notify(on_notice: Optional[Notice], text: str) -> None:
+    """Tell the person waiting what is happening. Never at the cost of the turn."""
+    if on_notice is None:
+        return
+    try:
+        await on_notice(text)
+    except Exception:  # noqa: BLE001 - a failed notice must not fail the answer
+        logger.debug("Could not deliver the notice %r", text, exc_info=True)
 
 
 def _user_item(text: str, image_parts: List[Dict[str, Any]]) -> Dict[str, Any]:

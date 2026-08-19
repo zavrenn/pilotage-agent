@@ -7,18 +7,35 @@ Two things here decide how fast the agent feels:
   A stable key is the single largest contributor to time-to-first-token.
 * **Encrypted reasoning replay.** The model's reasoning is returned encrypted
   and handed back on the next turn, so it does not have to think it again.
+
+A third thing decides how bad it feels when the backend misbehaves. The Codex
+endpoint has two observed failure modes that are not errors: it accepts the
+connection and never sends a single event, or it sends an opening frame and
+then stops. Neither closes the socket, and the HTTP client's own read timeout
+is far longer, so the stream is watched here and dropped when it goes quiet. A
+fresh connection normally succeeds within seconds.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _TERMINAL_EVENT_TYPES = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
 )
+
+# Waiting for the first event. Long on purpose: a subscription-backed request
+# can spend a minute in backend admission and prompt prefill before it says
+# anything, and killing that would be killing a healthy request.
+DEFAULT_TTFB_TIMEOUT_SECONDS = 120.0
+
+# Waiting between events, once the stream has proved it is alive. Any event
+# counts as life, including the backend's own keepalives.
+DEFAULT_IDLE_TIMEOUT_SECONDS = 12.0
 
 
 class CodexStreamError(RuntimeError):
@@ -28,6 +45,10 @@ class CodexStreamError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.param = param
+
+
+class CodexStreamTimeout(CodexStreamError):
+    """The stream went quiet. Nothing is wrong with the request — reconnect."""
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +112,90 @@ def build_request(
     }
 
 
+# What one picture costs the model to read. A picture is not its base64 text:
+# the encoded blob is megabytes of characters, but the model reads an image,
+# not the characters. Counting the characters turns a single photo into a
+# 300,000-token conversation and buys it three minutes of patience it has not
+# earned. This number is an estimate, and deliberately on the high side —
+# over-counting grants a request more patience, under-counting kills a healthy
+# one.
+IMAGE_TOKEN_COST = 1500
+
+# How much longer than the between-events wait a large request may take to say
+# anything at all. Prefill is where a big request spends its time, so the first
+# event is exactly what a long conversation delays. The reference
+# implementation gave up on scaling this and switched the watchdog off above
+# 10k tokens; switching it off restores the hang it exists to catch, so we
+# scale instead. The factor is a judgement call — we have no measurement of
+# real prefill times yet.
+FIRST_EVENT_BRACKET_FACTOR = 3.0
+
+# The most silence we will ever sit through before deciding nothing is coming.
+# The scaling above is guesswork, and unbounded guesswork ends with someone
+# staring at a chat for nine minutes. Past this point the difference between a
+# slow backend and a dead one stops mattering: either way the person is owed a
+# reconnect. A cutoff set explicitly in configuration is honoured as given —
+# this only bounds what we add on our own.
+MAX_FIRST_EVENT_TIMEOUT_SECONDS = 180.0
+
+
+def estimate_context_tokens(request: Dict[str, Any]) -> int:
+    """Roughly how much this request asks the backend to read, in tokens.
+
+    Four characters to the token over the text, a flat cost per picture. It
+    only has to be right enough to pick a bracket below.
+    """
+    chars = len(str(request.get("instructions") or ""))
+    images = 0
+
+    for item in request.get("input") or []:
+        content = item.get("content") if isinstance(item, dict) else None
+        if not isinstance(content, list):
+            # A plain text turn, or a reasoning item carrying its encrypted
+            # payload. Both are read as text, so their characters count.
+            chars += len(str(item))
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                chars += len(str(part))
+            elif part.get("type") == "input_image":
+                images += 1
+            else:
+                chars += len(str(part.get("text") or ""))
+
+    return chars // 4 + images * IMAGE_TOKEN_COST
+
+
+def stream_timeouts(
+    request: Dict[str, Any],
+    *,
+    ttfb_timeout: float = DEFAULT_TTFB_TIMEOUT_SECONDS,
+    idle_timeout: float = DEFAULT_IDLE_TIMEOUT_SECONDS,
+) -> Tuple[float, float]:
+    """Pick the two cutoffs for one request.
+
+    A big request — long history, a photo — legitimately takes longer to start
+    and pauses longer between events, so both waits grow with it. The brackets
+    are the reference implementation's; the configured value is the floor, so
+    raising it in configuration is never undone here. What we add on our own is
+    capped, because nobody waits out nine minutes of silence. Zero stays zero: a
+    disabled watchdog is not re-enabled by a large request.
+    """
+    estimate = estimate_context_tokens(request)
+    if estimate > 100_000:
+        bracket = 180.0
+    elif estimate > 50_000:
+        bracket = 120.0
+    elif estimate > 10_000:
+        bracket = 60.0
+    else:
+        bracket = 0.0
+    idle = idle_timeout if idle_timeout <= 0 else max(idle_timeout, bracket)
+    scaled = min(bracket * FIRST_EVENT_BRACKET_FACTOR, MAX_FIRST_EVENT_TIMEOUT_SECONDS)
+    ttfb = ttfb_timeout if ttfb_timeout <= 0 else max(ttfb_timeout, scaled)
+    return ttfb, idle
+
+
 # ---------------------------------------------------------------------------
 # Response
 # ---------------------------------------------------------------------------
@@ -141,14 +246,34 @@ async def consume_stream(
     stream: Any,
     *,
     on_text_delta: Optional[Callable[[str], None]] = None,
+    ttfb_timeout: float = DEFAULT_TTFB_TIMEOUT_SECONDS,
+    idle_timeout: float = DEFAULT_IDLE_TIMEOUT_SECONDS,
 ) -> StreamResult:
-    """Drain a Responses stream into text plus the reasoning we replay next turn."""
+    """Drain a Responses stream into text plus the reasoning we replay next turn.
+
+    Raises ``CodexStreamTimeout`` if the stream stops speaking for longer than
+    the caller allows. Either cutoff can be set to zero to wait forever.
+    """
     text_deltas: List[str] = []
     output_items: List[Dict[str, Any]] = []
     result = StreamResult()
     terminal_seen = False
+    first_event_seen = False
 
-    async for event in stream:
+    events = stream.__aiter__()
+    while True:
+        cutoff = idle_timeout if first_event_seen else ttfb_timeout
+        try:
+            if cutoff > 0:
+                event = await asyncio.wait_for(events.__anext__(), cutoff)
+            else:
+                event = await events.__anext__()
+        except StopAsyncIteration:
+            break
+        except asyncio.TimeoutError:
+            raise _silence_error(first_event_seen, cutoff) from None
+        first_event_seen = True
+
         event_type = str(_field(event, "type", "") or "")
 
         if event_type == "error":
@@ -193,6 +318,18 @@ async def consume_stream(
         raise CodexStreamError("The Codex stream ended without a response.")
 
     return result
+
+
+def _silence_error(first_event_seen: bool, cutoff: float) -> CodexStreamTimeout:
+    if first_event_seen:
+        return CodexStreamTimeout(
+            f"The Codex stream sent nothing for {cutoff:g}s after starting.",
+            code="codex_stream_stalled",
+        )
+    return CodexStreamTimeout(
+        f"The Codex stream sent nothing at all within {cutoff:g}s.",
+        code="codex_stream_no_first_byte",
+    )
 
 
 def _text_from_items(items: List[Dict[str, Any]]) -> str:

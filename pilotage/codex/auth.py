@@ -5,6 +5,12 @@ short-lived JWT; the refresh token is single-use and rotates on every refresh.
 That is why we keep our own store and never share ``~/.codex/auth.json``: two
 processes refreshing the same refresh token invalidate each other.
 
+Our own store is shared, though. A profile without its own ChatGPT sign-in uses
+the main agent's credentials, so two agents can reach this file at once. Every
+read-refresh-write therefore happens under a cross-process lock, and the token
+is re-read inside it: whoever waited uses the refresh the other one just did
+instead of spending a token that is already dead.
+
 The login flow is device-code, not a loopback redirect, because agents run
 headless in LXC containers with no browser and no reachable localhost.
 """
@@ -15,12 +21,23 @@ import base64
 import json
 import os
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 import httpx
+
+try:  # POSIX
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+
+try:  # Windows
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX
+    msvcrt = None  # type: ignore[assignment]
 
 CODEX_ISSUER = "https://auth.openai.com"
 CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -31,7 +48,17 @@ DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 # Refresh this many seconds before the JWT actually expires.
 ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
 
-_HTTP_TIMEOUT = httpx.Timeout(20.0)
+# A refresh is one HTTP round trip, but httpx applies this to each phase
+# separately — connect, write, read — so the worst case is three times this.
+REFRESH_TIMEOUT_SECONDS = 10.0
+
+# How long to wait for another process to finish its refresh. It has to be
+# longer than a refresh can legitimately take, or a slow-but-healthy holder
+# looks like a stuck one and the waiting agent fails a turn it could have
+# served. Anything past this really is stuck.
+CREDENTIALS_LOCK_TIMEOUT_SECONDS = 3 * REFRESH_TIMEOUT_SECONDS + 10.0
+
+_HTTP_TIMEOUT = httpx.Timeout(REFRESH_TIMEOUT_SECONDS)
 _USER_AGENT = "pilotage-agent/0.1"
 
 
@@ -59,6 +86,61 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 # Token store
 # ---------------------------------------------------------------------------
+
+
+@contextmanager
+def credentials_lock(
+    path: Path, timeout_seconds: float = CREDENTIALS_LOCK_TIMEOUT_SECONDS
+) -> Iterator[None]:
+    """Hold the credentials file exclusively, against other processes too.
+
+    An ``asyncio.Lock`` only orders the coroutines inside one agent. The
+    process next door is the one that takes our refresh token away.
+
+    The lock is advisory and lives in a sibling ``.lock`` file, so it is never
+    the file we rewrite: a crash while holding it leaves the credentials intact
+    and the kernel drops the lock with the file handle.
+    """
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if fcntl is None and msvcrt is None:  # pragma: no cover - neither POSIX nor Windows
+        yield
+        return
+
+    # msvcrt.locking locks a byte range, so the file needs a byte to lock.
+    if msvcrt is not None and (not lock_path.exists() or lock_path.stat().st_size == 0):
+        lock_path.write_text(" ", encoding="utf-8")
+
+    with lock_path.open("r+" if msvcrt is not None else "a+", encoding="utf-8") as handle:
+        deadline = time.monotonic() + max(1.0, timeout_seconds)
+        while True:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                else:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError as exc:  # BlockingIOError on POSIX, PermissionError on Windows
+                if time.monotonic() >= deadline:
+                    raise AuthError(
+                        f"Timed out waiting for the credentials lock at {lock_path}. "
+                        "Another agent is refreshing the same ChatGPT sign-in.",
+                        code="codex_auth_lock_timeout",
+                    ) from exc
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                else:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:  # pragma: no cover - the handle closes either way
+                pass
 
 
 def read_credentials(path: Path) -> Credentials:
@@ -262,9 +344,20 @@ def resolve_credentials(path: Path, *, force_refresh: bool = False) -> Credentia
     credentials = read_credentials(path)
     if not force_refresh and not access_token_is_expiring(credentials.access_token):
         return credentials
-    refreshed = refresh_credentials(credentials)
-    write_credentials(path, refreshed)
-    return refreshed
+
+    with credentials_lock(path):
+        # Read again now that nobody else can write. Waiting for the lock is
+        # usually waiting for someone else's refresh, and their new token is
+        # ours to use — refreshing again would spend a token that has already
+        # been rotated away and log us both out.
+        latest = read_credentials(path)
+        if latest.access_token != credentials.access_token and not access_token_is_expiring(
+            latest.access_token
+        ):
+            return latest
+        refreshed = refresh_credentials(latest)
+        write_credentials(path, refreshed)
+        return refreshed
 
 
 # ---------------------------------------------------------------------------

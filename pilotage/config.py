@@ -75,6 +75,11 @@ class Config:
     # Turns of history kept per chat, in memory only.
     history_turns: int
     request_timeout_seconds: float
+    # How long a model connection may stay silent before we drop it and
+    # reconnect: the first wait is for the very first sign of life, the second
+    # is for a stream that started and then stopped. Zero waits forever.
+    codex_first_event_timeout_seconds: float
+    codex_quiet_stream_timeout_seconds: float
     # Blue ticks. Off unless the operator asks: an agent that watches a chat
     # should not silently mark everything as read.
     send_read_receipts: bool
@@ -124,5 +129,11 @@ class Config:
             text_batch_split_delay_seconds=_env_float("PILOTAGE_TEXT_BATCH_SPLIT_DELAY", 10.0),
             history_turns=_env_int("PILOTAGE_HISTORY_TURNS", 20),
             request_timeout_seconds=_env_float("PILOTAGE_REQUEST_TIMEOUT", 300.0),
+            codex_first_event_timeout_seconds=_env_float(
+                "PILOTAGE_CODEX_FIRST_EVENT_TIMEOUT", 120.0
+            ),
+            codex_quiet_stream_timeout_seconds=_env_float(
+                "PILOTAGE_CODEX_QUIET_STREAM_TIMEOUT", 12.0
+            ),
             send_read_receipts=_env_str("PILOTAGE_SEND_READ_RECEIPTS", "0") in {"1", "true", "yes"},
         )

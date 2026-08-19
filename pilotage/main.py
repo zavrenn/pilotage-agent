@@ -40,15 +40,21 @@ def command_login(config: Config) -> int:
     except auth.AuthError as exc:
         print(f"Login failed: {exc}", file=sys.stderr)
         return 1
-    auth.write_credentials(config.credentials_path, credentials)
+    # Signing in replaces the tokens another agent may be refreshing right now.
+    with auth.credentials_lock(config.credentials_path):
+        auth.write_credentials(config.credentials_path, credentials)
     print(f"Signed in. Credentials stored at {config.credentials_path}.")
     return 0
 
 
 async def command_ask(config: Config, question: str) -> int:
     agent = Agent(config)
+
+    async def notice(text: str) -> None:
+        print(text, file=sys.stderr)
+
     try:
-        answer = await agent.respond("cli", question)
+        answer = await agent.respond("cli", question, on_notice=notice)
     except auth.AuthError as exc:
         print(f"{exc}", file=sys.stderr)
         return 1
@@ -62,9 +68,15 @@ async def command_run(config: Config) -> int:
 
     async def handle(message: InboundMessage) -> None:
         logger.info("%s: %s", message.sender_number or message.chat_id, message.text[:120])
+
+        async def notice(text: str) -> None:
+            await channel.send(message.chat_id, text)
+
         try:
             async with channel.typing(message.chat_id):
-                answer = await agent.respond(message.chat_id, message.text, message.attachments)
+                answer = await agent.respond(
+                    message.chat_id, message.text, message.attachments, on_notice=notice
+                )
         except Exception:  # noqa: BLE001 - the user gets an answer either way
             logger.exception("The model call failed")
             answer = REPLY_ON_FAILURE
