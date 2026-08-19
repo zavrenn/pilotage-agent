@@ -71,9 +71,12 @@ async def command_run(config: Config) -> int:
 
     async def handle(message: InboundMessage) -> None:
         logger.info("%s: %s", message.sender_number or message.chat_id, message.text[:120])
+        # A batch of messages is one question; quote the last of them, the
+        # one the answer arrives under.
+        quoted = message.message_ids[-1] if message.message_ids else ""
 
         async def notice(text: str) -> None:
-            await channel.send(message.chat_id, text)
+            await channel.send(message.chat_id, text, quoted)
 
         try:
             async with channel.typing(message.chat_id):
@@ -85,11 +88,11 @@ async def command_run(config: Config) -> int:
             answer = REPLY_ON_FAILURE
         if not answer:
             answer = REPLY_ON_FAILURE
-        await channel.send(message.chat_id, answer)
+        await channel.send(message.chat_id, answer, quoted)
 
-    async def reset(chat_id: str) -> None:
+    async def reset(chat_id: str, message_id: str) -> None:
         await agent.forget(chat_id)
-        await channel.send(chat_id, REPLY_ON_RESET)
+        await channel.send(chat_id, REPLY_ON_RESET, message_id)
 
     channel = WhatsAppChannel(config, handle, reset)
 

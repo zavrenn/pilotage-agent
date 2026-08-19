@@ -8,7 +8,7 @@
  *   GET  /messages  -> drains the inbound queue
  *   POST /typing    -> { chatId }
  *   POST /read      -> { key }
- *   POST /send      -> { chatId, message }
+ *   POST /send      -> { chatId, message, replyTo? }
  *
  * The HTTP contract is ours. Everything below it — the reconnect scheduler, the
  * version resolver, the serialized send queue, the message unwrapping, the
@@ -38,6 +38,8 @@ import {
 
 import { expandWhatsAppIdentifiers, normalizeWhatsAppIdentifier } from './allowlist.js';
 import {
+  buildTextSendPayload,
+  createBoundedMessageStore,
   createReconnectScheduler,
   createVersionResolver,
   extractBridgeEvent,
@@ -150,6 +152,14 @@ export function splitLongMessage(message, maxLength = MAX_MESSAGE_LENGTH) {
 }
 
 /**
+ * The recent messages, kept so a reply can quote the message it answers.
+ * Baileys needs the whole original message to build a quote, not just its id,
+ * and it is bounded because a long-running agent would otherwise hold every
+ * message it ever saw. (Hermes)
+ */
+const messageStore = createBoundedMessageStore(512);
+
+/**
  * Every send goes through this single promise chain. Overlapping sends on one
  * Baileys socket can misdeliver: the protocol-level routing does not survive
  * two sendMessage() promises racing on the same socket.
@@ -166,7 +176,7 @@ function enqueueSend(fn) {
  * Baileys can hang forever on a send; never let an HTTP handler wait on that.
  * The clock starts before the queue, so a stuck send ahead of us counts.
  */
-function sendWithTimeout(chatId, payload, timeoutMs = SEND_TIMEOUT_MS) {
+function sendWithTimeout(chatId, payload, options = {}, timeoutMs = SEND_TIMEOUT_MS) {
   let timer;
   const timeoutPromise = new Promise((_, reject) => {
     timer = setTimeout(
@@ -175,7 +185,7 @@ function sendWithTimeout(chatId, payload, timeoutMs = SEND_TIMEOUT_MS) {
     );
   });
   return enqueueSend(() =>
-    Promise.race([sock.sendMessage(chatId, payload), timeoutPromise])
+    Promise.race([sock.sendMessage(chatId, payload, options), timeoutPromise])
       .finally(() => clearTimeout(timer))
   );
 }
@@ -306,6 +316,7 @@ async function startSocket() {
     for (const msg of messages || []) {
       try {
         if (!msg.message) continue;
+        messageStore.remember(msg);
         // The agent runs on its own number. Anything this account sent is
         // either our own reply echoing back or a message the operator typed on
         // the linked device — never something to answer.
@@ -408,7 +419,7 @@ app.post('/read', async (req, res) => {
 });
 
 app.post('/send', async (req, res) => {
-  const { chatId, message } = req.body || {};
+  const { chatId, message, replyTo } = req.body || {};
   if (!connected || !sock) {
     res.status(503).json({ error: 'not connected' });
     return;
@@ -422,9 +433,17 @@ app.post('/send', async (req, res) => {
     const chunks = splitLongMessage(message);
     const messageIds = [];
     for (let i = 0; i < chunks.length; i += 1) {
+      // Only the first chunk quotes: a split answer that quoted the same
+      // message three times would read as three separate replies.
+      const { content, options } = buildTextSendPayload(chunks[i], {
+        replyTo: i === 0 ? replyTo : undefined,
+        messageStore,
+      });
       // eslint-disable-next-line no-await-in-loop
-      const sent = await sendWithTimeout(chatId, { text: chunks[i] });
+      const sent = await sendWithTimeout(chatId, content, options);
       if (sent?.key?.id) messageIds.push(sent.key.id);
+      // Remembered so the person can quote our answer back at us.
+      if (sent) messageStore.remember(sent);
       if (chunks.length > 1 && i < chunks.length - 1) {
         // eslint-disable-next-line no-await-in-loop
         await sleep(CHUNK_DELAY_MS);

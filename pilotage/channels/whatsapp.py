@@ -67,8 +67,9 @@ class InboundMessage:
 
 
 Handler = Callable[[InboundMessage], Awaitable[None]]
-# Called with a chat id when its conversation should start over.
-Reset = Callable[[str], Awaitable[None]]
+# Called with a chat id, and the id of the message that asked, when a
+# conversation should start over.
+Reset = Callable[[str, str], Awaitable[None]]
 
 
 class WhatsAppChannel:
@@ -317,7 +318,9 @@ class WhatsAppChannel:
             if waiting is not None:
                 waiting.cancel()
             self._pending.pop(chat_id, None)
-            self._pending_tasks_background.add(asyncio.create_task(self._reset(chat_id)))
+            self._pending_tasks_background.add(
+                asyncio.create_task(self._reset(chat_id, message_id))
+            )
             return
 
         message = InboundMessage(
@@ -414,10 +417,10 @@ class WhatsAppChannel:
         self._reported_blocked.add(identity)
         logger.warning("Ignored a message from %s.", identity)
 
-    async def _reset(self, chat_id: str) -> None:
+    async def _reset(self, chat_id: str, message_id: str) -> None:
         """Start the conversation over, once whatever is running has finished."""
         try:
-            await self._on_reset(chat_id)
+            await self._on_reset(chat_id, message_id)
         except Exception:  # noqa: BLE001 - one bad command must not stop the channel
             logger.exception("Resetting %s failed", chat_id)
         finally:
@@ -500,7 +503,7 @@ class WhatsAppChannel:
         except httpx.HTTPError:
             pass  # Cosmetic — never worth interrupting a turn.
 
-    async def send(self, chat_id: str, text: str) -> bool:
+    async def send(self, chat_id: str, text: str, reply_to: str = "") -> bool:
         if self._http is None:
             return False
         # Everything leaves through here, so this is the one place the model's
@@ -508,9 +511,15 @@ class WhatsAppChannel:
         body = to_whatsapp(text or "").strip()
         if not body:
             return False
+        payload: Dict[str, Any] = {"chatId": chat_id, "message": body}
+        if reply_to:
+            # Quote the message being answered. One agent can be talking to
+            # several people at once, and an answer that arrives a minute
+            # after the question is otherwise guesswork.
+            payload["replyTo"] = reply_to
         try:
             response = await self._http.post(
-                f"{self._base_url}/send", json={"chatId": chat_id, "message": body}
+                f"{self._base_url}/send", json=payload
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
