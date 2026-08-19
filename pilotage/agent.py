@@ -125,8 +125,17 @@ class Agent:
         if len(history) > limit:
             del history[: len(history) - limit]
 
-    def forget(self, chat_id: str) -> None:
-        self._history.pop(chat_id, None)
+    async def forget(self, chat_id: str) -> None:
+        """Drop a conversation's history.
+
+        Takes the chat's lock rather than clearing outright. A turn already
+        running writes its question and answer back when it finishes, so
+        clearing underneath it would hand back the conversation the person
+        just asked to end.
+        """
+        lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
+        async with lock:
+            self._history.pop(chat_id, None)
 
     # -- the turn -----------------------------------------------------------
 

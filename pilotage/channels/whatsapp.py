@@ -43,6 +43,9 @@ BRIDGE_RESTART_DELAY_SECONDS = 5.0
 SPLIT_THRESHOLD = 6000
 # How much of a quoted message is shown back to the agent. (Hermes)
 QUOTE_SNIPPET_LIMIT = 500
+# Start the conversation over. Typed by a person on a phone keyboard, so case
+# and a trailing space are not mistakes worth punishing.
+RESET_COMMAND = "/new"
 
 
 class ChannelError(RuntimeError):
@@ -64,12 +67,15 @@ class InboundMessage:
 
 
 Handler = Callable[[InboundMessage], Awaitable[None]]
+# Called with a chat id when its conversation should start over.
+Reset = Callable[[str], Awaitable[None]]
 
 
 class WhatsAppChannel:
-    def __init__(self, config: Config, handler: Handler):
+    def __init__(self, config: Config, handler: Handler, on_reset: Reset):
         self._config = config
         self._handler = handler
+        self._on_reset = on_reset
         self._process: Optional[subprocess.Popen] = None
         self._http: Optional[httpx.AsyncClient] = None
         self._poll_task: Optional[asyncio.Task] = None
@@ -302,6 +308,18 @@ class WhatsAppChannel:
             asyncio.create_task(self._mark_read(event.get("readReceiptKey")))
         )
 
+        if text.strip().lower() == RESET_COMMAND:
+            # Drop the batch on the spot rather than inside the task below.
+            # Someone who types this mid-thought has changed their mind about
+            # the thought, and sending it afterwards would answer the
+            # conversation they just ended.
+            waiting = self._pending_tasks.pop(chat_id, None)
+            if waiting is not None:
+                waiting.cancel()
+            self._pending.pop(chat_id, None)
+            self._pending_tasks_background.add(asyncio.create_task(self._reset(chat_id)))
+            return
+
         message = InboundMessage(
             chat_id=chat_id,
             sender_id=sender_id,
@@ -395,6 +413,15 @@ class WhatsAppChannel:
             return
         self._reported_blocked.add(identity)
         logger.warning("Ignored a message from %s.", identity)
+
+    async def _reset(self, chat_id: str) -> None:
+        """Start the conversation over, once whatever is running has finished."""
+        try:
+            await self._on_reset(chat_id)
+        except Exception:  # noqa: BLE001 - one bad command must not stop the channel
+            logger.exception("Resetting %s failed", chat_id)
+        finally:
+            self._pending_tasks_background.discard(asyncio.current_task())
 
     def _enqueue(self, message: InboundMessage) -> None:
         """Merge a message into the pending batch for its chat and restart the timer.

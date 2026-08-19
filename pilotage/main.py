@@ -21,7 +21,10 @@ from .env import load_env_files
 
 logger = logging.getLogger("pilotage")
 
-REPLY_ON_FAILURE = "I could not answer that just now. Please try again."
+# The only two things the agent says on its own. Written in the language its
+# users write in — the model already follows the conversation by itself.
+REPLY_ON_FAILURE = "Je n'ai pas pu répondre pour le moment. Réessayez."
+REPLY_ON_RESET = "On repart de zéro. J'ai oublié notre conversation."
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -84,7 +87,11 @@ async def command_run(config: Config) -> int:
             answer = REPLY_ON_FAILURE
         await channel.send(message.chat_id, answer)
 
-    channel = WhatsAppChannel(config, handle)
+    async def reset(chat_id: str) -> None:
+        await agent.forget(chat_id)
+        await channel.send(chat_id, REPLY_ON_RESET)
+
+    channel = WhatsAppChannel(config, handle, reset)
 
     # Fail before starting the bridge if we are not signed in.
     try:
