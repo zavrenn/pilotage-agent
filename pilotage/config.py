@@ -75,10 +75,27 @@ class Config:
     # Turns of history kept per chat, in memory only.
     history_turns: int
     request_timeout_seconds: float
+    # Blue ticks. Off unless the operator asks: an agent that watches a chat
+    # should not silently mark everything as read.
+    send_read_receipts: bool
 
     @property
     def session_dir(self) -> Path:
         return self.state_dir / "whatsapp"
+
+    @property
+    def media_dir(self) -> Path:
+        """Inbound media, kept outside the session directory.
+
+        Re-pairing deletes the session; a cached voice note should not depend
+        on that. Nothing prunes this directory yet — see docs/skeleton-drops.md.
+        """
+        return self.state_dir / "media"
+
+    @property
+    def media_roots(self) -> tuple[Path, ...]:
+        """The only directories a bridge-reported file path may live under."""
+        return (self.media_dir,)
 
     @property
     def credentials_path(self) -> Path:
@@ -107,4 +124,5 @@ class Config:
             text_batch_split_delay_seconds=_env_float("PILOTAGE_TEXT_BATCH_SPLIT_DELAY", 10.0),
             history_turns=_env_int("PILOTAGE_HISTORY_TURNS", 20),
             request_timeout_seconds=_env_float("PILOTAGE_REQUEST_TIMEOUT", 300.0),
+            send_read_receipts=_env_str("PILOTAGE_SEND_READ_RECEIPTS", "0") in {"1", "true", "yes"},
         )

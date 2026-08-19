@@ -22,7 +22,9 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
 
+from .. import media
 from ..config import Config
+from .dedup import MessageDeduplicator
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,8 @@ BRIDGE_RESTART_DELAY_SECONDS = 5.0
 # A single message this long is almost certainly one chunk of a longer paste, so
 # we wait longer for the rest of it.
 SPLIT_THRESHOLD = 6000
+# How much of a quoted message is shown back to the agent. (Hermes)
+QUOTE_SNIPPET_LIMIT = 500
 
 
 class ChannelError(RuntimeError):
@@ -53,6 +57,9 @@ class InboundMessage:
     text: str
     is_group: bool
     message_ids: List[str] = field(default_factory=list)
+    # Files the bridge downloaded for this turn, already checked against the
+    # media cache roots.
+    attachments: List[media.Attachment] = field(default_factory=list)
 
 
 Handler = Callable[[InboundMessage], Awaitable[None]]
@@ -69,6 +76,12 @@ class WhatsAppChannel:
         self._pending: Dict[str, InboundMessage] = {}
         self._pending_tasks: Dict[str, asyncio.Task] = {}
         self._reported_blocked: set[str] = set()
+        # The bridge replays its queue on reconnect, and a restart can overlap
+        # with messages already answered.
+        self._seen = MessageDeduplicator()
+        # Read receipts run detached; hold a reference so they are not
+        # garbage-collected mid-flight.
+        self._pending_tasks_background: set[asyncio.Task] = set()
         self._base_url = f"http://127.0.0.1:{config.bridge_port}"
         # Set when the channel has given up. Whoever owns the process waits on
         # this, so a dead bridge stops the agent instead of leaving it idle.
@@ -99,6 +112,9 @@ class WhatsAppChannel:
             task.cancel()
         self._pending_tasks.clear()
         self._pending.clear()
+        for task in list(self._pending_tasks_background):
+            task.cancel()
+        self._pending_tasks_background.clear()
         if self._poll_task is not None:
             self._poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -121,6 +137,7 @@ class WhatsAppChannel:
                 f"The bridge dependencies are not installed. Run `npm install` in {self._config.bridge_dir}."
             )
         self._config.session_dir.mkdir(parents=True, exist_ok=True)
+        self._config.media_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def _pidfile(self) -> Path:
@@ -149,6 +166,10 @@ class WhatsAppChannel:
             str(self._config.bridge_port),
             "--session",
             str(self._config.session_dir),
+            "--media",
+            str(self._config.media_dir),
+            "--read-receipts",
+            "1" if self._config.send_read_receipts else "0",
         ]
         # stdout is inherited on purpose: the pairing QR code is printed there.
         self._process = subprocess.Popen(command, cwd=str(self._config.bridge_dir))
@@ -258,6 +279,10 @@ class WhatsAppChannel:
         if is_group and not self._config.answer_groups:
             return
 
+        message_id = str(event.get("messageId") or "")
+        if message_id and self._seen.is_duplicate(message_id):
+            return
+
         sender_id = str(event.get("senderId") or "")
         sender_number = str(event.get("senderNumber") or "")
         raw_identities = event.get("identities")
@@ -266,13 +291,15 @@ class WhatsAppChannel:
             self._report_blocked(sender_id, sender_number)
             return
 
-        if event.get("kind") != "text":
-            logger.info("Ignoring a non-text message from %s", sender_number or sender_id)
+        attachments = media.collect(event, self._config.media_roots)
+        text = self._compose_text(event, attachments)
+        if not text and not attachments:
             return
 
-        text = str(event.get("text") or "").strip()
-        if not text:
-            return
+        # Fire and forget: a slow bridge must not hold up the answer. (Hermes)
+        self._pending_tasks_background.add(
+            asyncio.create_task(self._mark_read(event.get("readReceiptKey")))
+        )
 
         message = InboundMessage(
             chat_id=chat_id,
@@ -281,9 +308,65 @@ class WhatsAppChannel:
             push_name=str(event.get("pushName") or ""),
             text=text,
             is_group=is_group,
-            message_ids=[str(event.get("messageId") or "")],
+            message_ids=[message_id],
+            attachments=attachments,
         )
         self._enqueue(message)
+
+    def _compose_text(
+        self, event: Dict[str, Any], attachments: List[media.Attachment]
+    ) -> str:
+        """Turn a bridge event into the text the model actually sees."""
+        body = str(event.get("body") or "").strip()
+        media_type = str(event.get("mediaType") or "")
+
+        # The bridge writes "[image received]" when media arrives with no
+        # caption. That is a placeholder, not something the sender said, so it
+        # gives way to a description of what we can and cannot read.
+        if body == f"[{media_type} received]":
+            body = ""
+
+        body = media.inline_documents(body, attachments)
+
+        note = media.describe_unreadable(attachments)
+        if note:
+            body = f"{note}\n\n{body}" if body else note
+
+        # Which earlier message a reply points at is not recoverable from
+        # history: the same text can appear more than once. (Hermes)
+        quoted = str(event.get("quotedText") or "").strip()
+        if quoted and event.get("quotedMessageId"):
+            snippet = quoted[:QUOTE_SNIPPET_LIMIT]
+            bot_ids = event.get("botIds")
+            own = isinstance(bot_ids, list) and event.get("quotedParticipant") in bot_ids
+            prefix = (
+                f'[Replying to your previous message: "{snippet}"]'
+                if own
+                else f'[Replying to: "{snippet}"]'
+            )
+            body = f"{prefix}\n\n{body}" if body else prefix
+
+        return body.strip()
+
+    async def _mark_read(self, key: Any) -> None:
+        """Show the blue ticks, if the operator turned them on."""
+        try:
+            if not self._config.send_read_receipts or self._http is None:
+                return
+            if not isinstance(key, dict):
+                return
+            try:
+                response = await self._http.post(
+                    f"{self._base_url}/read", json={"key": key}, timeout=5.0
+                )
+                if response.status_code != 200:
+                    logger.warning(
+                        "Marking a message read failed with HTTP %s", response.status_code
+                    )
+            except httpx.HTTPError as exc:
+                logger.warning("Marking a message read failed: %s", exc)
+        finally:
+            self._pending_tasks_background.discard(asyncio.current_task())
 
     def _is_allowed(self, sender_id: str, sender_number: str, identities: List[str]) -> bool:
         allowed = self._config.allowed_senders
@@ -320,8 +403,14 @@ class WhatsAppChannel:
         if pending is None:
             self._pending[key] = message
         else:
-            pending.text = f"{pending.text}\n{message.text}"
+            if message.text:
+                pending.text = (
+                    f"{pending.text}\n{message.text}" if pending.text else message.text
+                )
             pending.message_ids.extend(message.message_ids)
+            # A picture and the question about it arrive as two messages.
+            # Losing the picture here loses the point of the turn. (Hermes)
+            pending.attachments.extend(message.attachments)
 
         task = self._pending_tasks.pop(key, None)
         if task is not None:

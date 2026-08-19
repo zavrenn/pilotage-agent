@@ -7,19 +7,21 @@
  *   GET  /health    -> { status, pid, connected, me }
  *   GET  /messages  -> drains the inbound queue
  *   POST /typing    -> { chatId }
+ *   POST /read      -> { key }
  *   POST /send      -> { chatId, message }
  *
  * The HTTP contract is ours. Everything below it — the reconnect scheduler, the
  * version resolver, the serialized send queue, the message unwrapping, the
- * identifier resolution — is the Hermes bridge's proven code
- * (scripts/whatsapp-bridge/{bridge,bridge_helpers,allowlist}.js), kept as it
- * stands rather than reimplemented.
+ * media extraction, the identifier resolution — is the Hermes bridge's proven
+ * code (scripts/whatsapp-bridge/{bridge,bridge_helpers,allowlist}.js), kept as
+ * it stands rather than reimplemented.
  *
- * Text only. Media, quoting, read receipts, polls, locations and group
- * metadata are deliberately absent — see docs/skeleton-drops.md.
+ * Inbound is complete: text, media, quotes, locations, contacts, reactions and
+ * polls. Outbound is still text only — see docs/skeleton-drops.md.
  */
 
 import process from 'node:process';
+import path from 'node:path';
 import { mkdirSync } from 'node:fs';
 
 import express from 'express';
@@ -30,10 +32,17 @@ import {
   makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
 } from '@whiskeysockets/baileys';
 
 import { expandWhatsAppIdentifiers, normalizeWhatsAppIdentifier } from './allowlist.js';
+import {
+  createReconnectScheduler,
+  createVersionResolver,
+  extractBridgeEvent,
+  inboundReadReceiptKeys,
+} from './bridge_helpers.js';
 
 // ---------------------------------------------------------------------------
 // Arguments
@@ -48,8 +57,26 @@ function readArg(name, fallback) {
   return fallback;
 }
 
+function readFlag(name, envName, fallback = false) {
+  const raw = readArg(name, undefined) ?? process.env[envName];
+  if (raw === undefined || raw === '') return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(String(raw).toLowerCase());
+}
+
 const PORT = Number.parseInt(readArg('port', '8765'), 10);
 const SESSION_DIR = readArg('session', './session');
+// Inbound media is written here, outside the session directory: re-pairing
+// deletes the session, and a cached voice note should not depend on that.
+const MEDIA_DIR = readArg('media', './media');
+// Read receipts (the blue ticks) are off unless the operator asks for them, so
+// an agent watching a chat does not silently mark everything as read. (Hermes)
+const SEND_READ_RECEIPTS = readFlag('read-receipts', 'PILOTAGE_SEND_READ_RECEIPTS', false);
+
+const CACHE_DIRS = {
+  image: path.join(MEDIA_DIR, 'images'),
+  document: path.join(MEDIA_DIR, 'documents'),
+  audio: path.join(MEDIA_DIR, 'audio'),
+};
 
 const MAX_QUEUE_SIZE = 100;
 const MAX_MESSAGE_LENGTH = 4096;
@@ -62,6 +89,7 @@ const RESTART_DELAY_MS = 1_000;
 const logger = pino({ level: 'silent' });
 
 mkdirSync(SESSION_DIR, { recursive: true });
+for (const dir of Object.values(CACHE_DIRS)) mkdirSync(dir, { recursive: true });
 
 // ---------------------------------------------------------------------------
 // State
@@ -80,58 +108,14 @@ function log(...args) {
 // Connection guards (Hermes bridge_helpers.js)
 // ---------------------------------------------------------------------------
 
-/**
- * Reconnect scheduling guard. startSocket() awaits network I/O before it
- * creates a socket or registers event handlers, so a bare
- * `setTimeout(startSocket, ...)` has two unrecoverable failure modes: a
- * rejection is unhandled (crashes the process on modern Node), and a hang
- * leaves the bridge permanently disconnected with nothing left to retry.
- * Every (re)connect must go through the scheduler this returns.
- */
-function createReconnectScheduler(startFn, { retryDelayMs = 5000 } = {}) {
-  function scheduleReconnect(delayMs) {
-    setTimeout(() => {
-      Promise.resolve()
-        .then(startFn)
-        .catch((err) => {
-          log(`reconnect failed (${err?.message || err}); retrying in ${Math.round(retryDelayMs / 1000)}s`);
-          scheduleReconnect(retryDelayMs);
-        });
-    }, delayMs);
-  }
-  return scheduleReconnect;
-}
-
-/**
- * Version resolution guard. fetchLatestBaileysVersion() is a plain fetch to
- * raw.githubusercontent.com with no AbortSignal; a stalled connection can pend
- * forever and wedge the reconnect path (the scheduler above cannot retry past
- * an await that never settles). Bound the fetch and fall back to the last
- * known-good version, or the Baileys default before first success.
- */
-function createVersionResolver(fetchVersionFn, { timeoutMs = VERSION_FETCH_TIMEOUT_MS } = {}) {
-  let cachedVersion = null;
-  return async function resolveVersion() {
-    let timer = null;
-    try {
-      const { version } = await Promise.race([
-        fetchVersionFn(),
-        new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error('version fetch timed out')), timeoutMs);
-        }),
-      ]);
-      cachedVersion = version;
-    } catch (err) {
-      log(`Baileys version fetch failed (${err?.message || err}); using ${cachedVersion ? 'cached version' : 'library default'}`);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-    return cachedVersion;
-  };
-}
-
-const scheduleReconnect = createReconnectScheduler(() => startSocket());
-const getWAVersion = createVersionResolver(fetchLatestBaileysVersion);
+// Both guards exist because Baileys can hang rather than fail: startSocket()
+// awaits network I/O before it registers any handler, and the version fetch
+// has no AbortSignal. See bridge_helpers.js for the full reasoning.
+const scheduleReconnect = createReconnectScheduler(() => startSocket(), { log });
+const getWAVersion = createVersionResolver(fetchLatestBaileysVersion, {
+  timeoutMs: VERSION_FETCH_TIMEOUT_MS,
+  log,
+});
 
 // ---------------------------------------------------------------------------
 // Outbound
@@ -204,32 +188,21 @@ function sleep(ms) {
 // Inbound
 // ---------------------------------------------------------------------------
 
-/** Unwrap the envelopes WhatsApp puts around the real message. (Hermes) */
-function getMessageContent(msg) {
-  const content = msg?.message || {};
-  if (content.ephemeralMessage?.message) return content.ephemeralMessage.message;
-  if (content.viewOnceMessage?.message) return content.viewOnceMessage.message;
-  if (content.viewOnceMessageV2?.message) return content.viewOnceMessageV2.message;
-  if (content.documentWithCaptionMessage?.message) return content.documentWithCaptionMessage.message;
-  if (content.templateMessage?.hydratedTemplate) return content.templateMessage.hydratedTemplate;
-  if (content.buttonsMessage) return content.buttonsMessage;
-  if (content.listMessage) return content.listMessage;
-  return content;
-}
-
-function extractText(content) {
-  if (!content) return null;
-  if (typeof content.conversation === 'string') return content.conversation;
-  if (content.extendedTextMessage?.text) return content.extendedTextMessage.text;
-  return null;
-}
-
 function digitsOf(value) {
   const normalized = normalizeWhatsAppIdentifier(value);
   return /^\d+$/.test(normalized) ? normalized : '';
 }
 
-function buildEvent(msg) {
+/**
+ * Turn a raw Baileys message into the event the Python runtime consumes.
+ *
+ * The body, the media download and every non-text form — voice notes,
+ * documents, stickers, locations, contacts, reactions, polls — come from
+ * Hermes' extractBridgeEvent unchanged. What is added here is ours: the
+ * identifier expansion the allowlist needs, and a plain-number timestamp
+ * (Baileys hands back a protobuf Long, which does not survive JSON).
+ */
+async function buildEvent(msg) {
   const chatId = msg.key?.remoteJid;
   if (!chatId || chatId === 'status@broadcast') return null;
 
@@ -237,7 +210,7 @@ function buildEvent(msg) {
   const senderId = (isGroup ? msg.key?.participant : chatId) || chatId;
   // `senderPn` carries the real phone number when the jid is a @lid alias.
   const senderPn = msg.key?.senderPn || msg.key?.participantPn || null;
-  const text = extractText(getMessageContent(msg));
+  const senderNumber = digitsOf(senderPn) || digitsOf(senderId);
 
   // Every form this person is known by — phone and LID — resolved from the
   // session's mapping files, so the allowlist matches whichever one arrives.
@@ -248,15 +221,26 @@ function buildEvent(msg) {
     }
   }
 
-  return {
-    kind: text === null ? 'unsupported' : 'text',
-    messageId: msg.key?.id || null,
+  const event = await extractBridgeEvent({
+    msg,
     chatId,
     senderId,
-    senderNumber: digitsOf(senderPn) || digitsOf(senderId),
-    identities: Array.from(identities),
+    senderNumber,
+    botIds: meId ? [meId] : [],
     isGroup,
-    text: text ?? '',
+    downloadMedia: async (mediaMsg) => downloadMediaMessage(
+      mediaMsg,
+      'buffer',
+      {},
+      { logger, reuploadRequest: sock.updateMediaMessage },
+    ),
+    cacheDirs: CACHE_DIRS,
+  });
+
+  return {
+    ...event,
+    senderNumber,
+    identities: Array.from(identities),
     pushName: msg.pushName || '',
     timestamp: Number(msg.messageTimestamp) || 0,
   };
@@ -316,7 +300,7 @@ async function startSocket() {
     }
   });
 
-  sock.ev.on('messages.upsert', ({ messages, type }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify' && type !== 'append') return;
 
     for (const msg of messages || []) {
@@ -327,8 +311,13 @@ async function startSocket() {
         // the linked device — never something to answer.
         if (msg.key?.fromMe) continue;
 
-        const event = buildEvent(msg);
+        // eslint-disable-next-line no-await-in-loop
+        const event = await buildEvent(msg);
         if (!event) continue;
+        // Nothing to answer and nothing attached: a receipt, an empty
+        // protocol message, or a form we do not read. (Hermes)
+        if (!event.body && !event.hasMedia) continue;
+
         messageQueue.push(event);
         if (messageQueue.length > MAX_QUEUE_SIZE) messageQueue.shift();
       } catch (error) {
@@ -365,6 +354,7 @@ app.get('/health', (_req, res) => {
     pid: process.pid,
     me: meId,
     queued: messageQueue.length,
+    sendReadReceipts: SEND_READ_RECEIPTS,
   });
 });
 
@@ -389,6 +379,31 @@ app.post('/typing', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     res.json({ success: false });
+  }
+});
+
+// Mark an inbound message as read, but only once the runtime has accepted it
+// through the allowlist — a blocked sender must not learn the agent is
+// watching. (Hermes)
+app.post('/read', async (req, res) => {
+  if (!connected || !sock) {
+    res.status(503).json({ error: 'not connected' });
+    return;
+  }
+  const receiptKeys = inboundReadReceiptKeys({
+    key: req.body?.key,
+    enabled: SEND_READ_RECEIPTS,
+  });
+  if (receiptKeys.length === 0) {
+    res.json({ success: true, marked: false });
+    return;
+  }
+  try {
+    await sock.readMessages(receiptKeys);
+    res.json({ success: true, marked: true });
+  } catch (error) {
+    log(`read receipt failed: ${error.message}`);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -431,7 +446,7 @@ app.post('/send', async (req, res) => {
 // ---------------------------------------------------------------------------
 
 const server = app.listen(PORT, '127.0.0.1', () => {
-  log(`listening on http://127.0.0.1:${PORT} (session: ${SESSION_DIR})`);
+  log(`listening on http://127.0.0.1:${PORT} (session: ${SESSION_DIR}, media: ${MEDIA_DIR})`);
 });
 
 function shutdown() {

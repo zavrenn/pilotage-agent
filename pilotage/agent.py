@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from openai import APIStatusError, AsyncOpenAI
 
+from . import media
 from .codex import auth, client as codex_client, stream as codex_stream
 from .config import Config
 
@@ -26,6 +27,8 @@ class Turn:
     # Encrypted reasoning from the model, replayed on the next turn so it does
     # not have to think the same thoughts again.
     reasoning_items: List[Dict[str, Any]] = field(default_factory=list)
+    # Images sent with a user turn, as `input_image` parts.
+    image_parts: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class Agent:
@@ -66,11 +69,15 @@ class Agent:
 
     # -- history ------------------------------------------------------------
 
-    def _build_input(self, chat_id: str, user_text: str) -> List[Dict[str, Any]]:
+    def _build_input(
+        self, chat_id: str, user_text: str, image_parts: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
+        # Only the newest user turn still carries its pictures; `_remember`
+        # clears the rest.
         for turn in self._history.get(chat_id, []):
             if turn.role == "user":
-                items.append({"role": "user", "content": turn.content})
+                items.append(_user_item(turn.content, turn.image_parts))
                 continue
             for item in turn.reasoning_items:
                 # `store: False` means the server cannot resolve item ids, so a
@@ -79,12 +86,26 @@ class Agent:
             # A reasoning item must be followed by a message, even an empty one,
             # or the API rejects the input with `missing_following_item`.
             items.append({"role": "assistant", "content": turn.content})
-        items.append({"role": "user", "content": user_text})
+        items.append(_user_item(user_text, image_parts))
         return items
 
-    def _remember(self, chat_id: str, user_text: str, result: codex_stream.StreamResult) -> None:
+    def _remember(
+        self,
+        chat_id: str,
+        user_text: str,
+        image_parts: List[Dict[str, Any]],
+        result: codex_stream.StreamResult,
+    ) -> None:
         history = self._history.setdefault(chat_id, [])
-        history.append(Turn(role="user", content=user_text))
+        # Images are heavy — a base64 photo is a third larger than the file —
+        # and replaying every one of them on every turn would grow the request
+        # and the process without bound. Only the newest user turn keeps its
+        # pictures, so a follow-up about the photo just sent still works and
+        # nothing older is held in memory. Hermes strips old image parts the
+        # same way, in its context compressor.
+        for turn in history:
+            turn.image_parts = []
+        history.append(Turn(role="user", content=user_text, image_parts=image_parts))
         history.append(
             Turn(role="assistant", content=result.text, reasoning_items=result.reasoning_items)
         )
@@ -97,18 +118,30 @@ class Agent:
 
     # -- the turn -----------------------------------------------------------
 
-    async def respond(self, chat_id: str, user_text: str) -> str:
+    async def respond(
+        self,
+        chat_id: str,
+        user_text: str,
+        attachments: Sequence[media.Attachment] = (),
+    ) -> str:
+        # Reading the files is blocking I/O and base64 of a few megabytes is not
+        # free, so it happens off the event loop.
+        image_parts = (
+            await asyncio.to_thread(media.image_parts, attachments) if attachments else []
+        )
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
-            result = await self._run_turn(chat_id, user_text)
-            self._remember(chat_id, user_text, result)
+            result = await self._run_turn(chat_id, user_text, image_parts)
+            self._remember(chat_id, user_text, image_parts, result)
             return result.text
 
-    async def _run_turn(self, chat_id: str, user_text: str) -> codex_stream.StreamResult:
+    async def _run_turn(
+        self, chat_id: str, user_text: str, image_parts: List[Dict[str, Any]]
+    ) -> codex_stream.StreamResult:
         request = codex_stream.build_request(
             model=self._config.model,
             instructions=self._config.instructions,
-            input_items=self._build_input(chat_id, user_text),
+            input_items=self._build_input(chat_id, user_text, image_parts),
             session_id=chat_id,
             reasoning_effort=self._config.reasoning_effort,
         )
@@ -129,3 +162,14 @@ class Agent:
             return await codex_stream.consume_stream(stream)
         finally:
             await stream.close()
+
+
+def _user_item(text: str, image_parts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """A user message, as plain text or as text plus pictures."""
+    if not image_parts:
+        return {"role": "user", "content": text}
+    parts: List[Dict[str, Any]] = []
+    if text:
+        parts.append({"type": "input_text", "text": text})
+    parts.extend(image_parts)
+    return {"role": "user", "content": parts}

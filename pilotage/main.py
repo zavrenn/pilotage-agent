@@ -64,7 +64,7 @@ async def command_run(config: Config) -> int:
         logger.info("%s: %s", message.sender_number or message.chat_id, message.text[:120])
         try:
             async with channel.typing(message.chat_id):
-                answer = await agent.respond(message.chat_id, message.text)
+                answer = await agent.respond(message.chat_id, message.text, message.attachments)
         except Exception:  # noqa: BLE001 - the user gets an answer either way
             logger.exception("The model call failed")
             answer = REPLY_ON_FAILURE
