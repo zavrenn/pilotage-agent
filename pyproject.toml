@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pilotage-agent"
+version = "0.1.0"
+description = "A small runtime for focused, long-lived agents."
+requires-python = ">=3.10"
+dependencies = [
+    "openai==2.24.0",
+    "httpx[socks]==0.28.1",
+]
+
+[project.scripts]
+pilotage = "pilotage.main:main"
+
+[tool.setuptools.packages.find]
+include = ["pilotage*"]
