@@ -7,13 +7,16 @@ entirely, and clear history that a turn already running is about to write back.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any, Dict, List
 
 from pilotage.agent import Agent
 from pilotage.channels.whatsapp import RESET_COMMAND, InboundMessage, WhatsAppChannel
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
+from pilotage.history import ConversationStore
 
 
 def _event(text: str, chat_id: str = "chat", message_id: str = "m1") -> Dict[str, Any]:
@@ -80,7 +83,11 @@ class ForgetTests(unittest.IsolatedAsyncioTestCase):
     """Clearing history is not just popping a dict — a turn may be mid-flight."""
 
     def setUp(self):
-        self.agent = Agent(Config.load())
+        # A store of its own: a test must never write into the real agent's
+        # conversations, and "/new" here is a real write.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.agent = Agent(Config.load(), ConversationStore(Path(tmp.name) / "conversations.db"))
 
     async def test_history_is_cleared(self):
         open_gate = asyncio.Event()

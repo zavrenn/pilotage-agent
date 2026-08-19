@@ -90,7 +90,7 @@ class Config:
     # Quiet period before a burst of inbound messages is treated as one turn.
     text_batch_delay_seconds: float
     text_batch_split_delay_seconds: float
-    # Turns of history kept per chat, in memory only.
+    # Turns of history kept per chat, in memory and on disk.
     history_turns: int
     request_timeout_seconds: float
     # How long a model connection may stay silent before we drop it and
@@ -119,6 +119,11 @@ class Config:
     def media_roots(self) -> tuple[Path, ...]:
         """The only directories a bridge-reported file path may live under."""
         return (self.media_dir,)
+
+    @property
+    def conversations_path(self) -> Path:
+        """Every turn of every chat. Survives re-pairing; only login state does not."""
+        return self.state_dir / "conversations.db"
 
     @property
     def credentials_path(self) -> Path:

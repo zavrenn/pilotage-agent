@@ -1,7 +1,8 @@
 """One turn: a message arrives, the model answers.
 
-History is per chat and lives in memory only — restarting the process forgets
-every conversation. Persistence is a later slice, deliberately.
+History is per chat. The working copy is in memory; every turn is also written
+to disk so a restart does not silently end every conversation at once. See
+``history.py`` for what is kept and what is deliberately not.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from openai import APIStatusError, AsyncOpenAI
 from . import media
 from .codex import auth, client as codex_client, stream as codex_stream
 from .config import Config
+from .history import ConversationStore
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +46,13 @@ class Turn:
 
 
 class Agent:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, store: Optional[ConversationStore] = None):
         self._config = config
+        self._store = store or ConversationStore(config.conversations_path)
         self._history: Dict[str, List[Turn]] = {}
+        # Chats whose stored history has already been looked for. Reading is
+        # worth doing once per chat, not once per message.
+        self._restored: set[str] = set()
         self._credentials: Optional[auth.Credentials] = None
         self._client: Optional[AsyncOpenAI] = None
         self._auth_lock = asyncio.Lock()
@@ -121,9 +127,32 @@ class Agent:
         history.append(
             Turn(role="assistant", content=result.text, reasoning_items=result.reasoning_items)
         )
-        limit = max(2, self._config.history_turns * 2)
+        limit = self._history_limit()
         if len(history) > limit:
             del history[: len(history) - limit]
+
+    async def _restore(self, chat_id: str) -> None:
+        """Bring a chat's stored history back, once, after a restart.
+
+        Only the words come back. A turn restored this way has no reasoning
+        items and no pictures, which is what ``history.py`` explains.
+        """
+        if chat_id in self._restored:
+            return
+        self._restored.add(chat_id)
+        if chat_id in self._history:
+            return
+        stored = await asyncio.to_thread(
+            self._store.load, chat_id, self._history_limit()
+        )
+        if not stored:
+            return
+        self._history[chat_id] = [Turn(role=role, content=content) for role, content in stored]
+        logger.info("Picked up %d stored turns for %s", len(stored), chat_id)
+
+    def _history_limit(self) -> int:
+        """Turns kept per chat — a question and its answer count as two."""
+        return max(2, self._config.history_turns * 2)
 
     async def forget(self, chat_id: str) -> None:
         """Drop a conversation's history.
@@ -136,6 +165,12 @@ class Agent:
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
             self._history.pop(chat_id, None)
+            # The stored conversation is left where it is and a new one
+            # begins, so a restart cannot hand back what was just ended.
+            await asyncio.to_thread(self._store.new_session, chat_id)
+            # Held even if that write failed: a chat cannot be un-forgotten by
+            # the next message going looking for it on disk.
+            self._restored.add(chat_id)
 
     # -- the turn -----------------------------------------------------------
 
@@ -153,8 +188,14 @@ class Agent:
         )
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
+            await self._restore(chat_id)
             result = await self._run_turn(chat_id, user_text, image_parts, on_notice)
             self._remember(chat_id, user_text, image_parts, result)
+            await asyncio.to_thread(
+                self._store.append,
+                chat_id,
+                [("user", user_text), ("assistant", result.text)],
+            )
             return result.text
 
     async def _run_turn(

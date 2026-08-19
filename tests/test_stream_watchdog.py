@@ -8,7 +8,9 @@ says one thing and then stops forever. Both are the observed Codex failures.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, List
 
@@ -19,6 +21,7 @@ from pilotage import agent as agent_module
 from pilotage.agent import Agent
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
+from pilotage.history import ConversationStore
 
 # A step in a staged stream that never finishes.
 HANG = object()
@@ -167,7 +170,11 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
     """One quiet connection is retried; a second one is the backend, not the socket."""
 
     def setUp(self):
-        self.agent = Agent(Config.load())
+        # Nothing here touches history, but an Agent writes one; keep it out of
+        # the real state directory.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.agent = Agent(Config.load(), ConversationStore(Path(tmp.name) / "conversations.db"))
         self.attempts: List[bool] = []
         self.notices: List[str] = []
 

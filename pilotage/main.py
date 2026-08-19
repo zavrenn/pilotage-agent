@@ -18,6 +18,7 @@ from .channels.whatsapp import ChannelError, InboundMessage, WhatsAppChannel
 from .codex import auth
 from .config import Config
 from .env import load_env_files
+from .history import ConversationStore
 
 logger = logging.getLogger("pilotage")
 
@@ -51,7 +52,10 @@ def command_login(config: Config) -> int:
 
 
 async def command_ask(config: Config, question: str) -> int:
-    agent = Agent(config)
+    # Nowhere to write. This is the one-shot you run to find out whether the
+    # login and the model still work, so it has to answer the same way today as
+    # it did yesterday, and it must not add to a running agent's conversations.
+    agent = Agent(config, ConversationStore(path=None))
 
     async def notice(text: str) -> None:
         print(text, file=sys.stderr)
