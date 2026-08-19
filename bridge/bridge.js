@@ -6,6 +6,7 @@
  *
  *   GET  /health    -> { status, pid, connected, me }
  *   GET  /messages  -> drains the inbound queue
+ *   POST /typing    -> { chatId }
  *   POST /send      -> { chatId, message }
  *
  * The HTTP contract is ours. Everything below it — the reconnect scheduler, the
@@ -369,6 +370,26 @@ app.get('/health', (_req, res) => {
 
 app.get('/messages', (_req, res) => {
   res.json(messageQueue.splice(0, messageQueue.length));
+});
+
+// Presence, not a message: deliberately outside the send queue, so a slow
+// reply in flight never delays the indicator that explains the wait. (Hermes)
+app.post('/typing', async (req, res) => {
+  const { chatId } = req.body || {};
+  if (!connected || !sock) {
+    res.status(503).json({ error: 'not connected' });
+    return;
+  }
+  if (!chatId) {
+    res.status(400).json({ error: 'chatId is required' });
+    return;
+  }
+  try {
+    await sock.sendPresenceUpdate('composing', chatId);
+    res.json({ success: true });
+  } catch (error) {
+    res.json({ success: false });
+  }
 });
 
 app.post('/send', async (req, res) => {

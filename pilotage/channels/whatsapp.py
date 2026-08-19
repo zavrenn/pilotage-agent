@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 1.0
 POLL_ERROR_BACKOFF_SECONDS = 5.0
+# WhatsApp clears the "typing…" indicator by itself after a few seconds, so it
+# has to be renewed for as long as the model is still thinking.
+TYPING_REFRESH_SECONDS = 8.0
 HTTP_TIMEOUT_SECONDS = 30.0
 BRIDGE_READY_TIMEOUT_SECONDS = 120.0
 BRIDGE_RESTART_ATTEMPTS = 3
@@ -345,6 +348,37 @@ class WhatsAppChannel:
             logger.exception("Handling a message from %s failed", message.chat_id)
 
     # -- outbound -----------------------------------------------------------
+
+    @contextlib.asynccontextmanager
+    async def typing(self, chat_id: str):
+        """Show "typing…" in the chat for as long as the block runs.
+
+        The wait for a model is long enough that silence reads as a broken
+        agent. The indicator is cosmetic, so every failure here is swallowed:
+        it must never cost a reply.
+        """
+        task = asyncio.create_task(self._typing_loop(chat_id))
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    async def _typing_loop(self, chat_id: str) -> None:
+        while True:
+            await self._send_typing(chat_id)
+            await asyncio.sleep(TYPING_REFRESH_SECONDS)
+
+    async def _send_typing(self, chat_id: str) -> None:
+        if self._http is None:
+            return
+        try:
+            await self._http.post(
+                f"{self._base_url}/typing", json={"chatId": chat_id}, timeout=5.0
+            )
+        except httpx.HTTPError:
+            pass  # Cosmetic — never worth interrupting a turn.
 
     async def send(self, chat_id: str, text: str) -> bool:
         if self._http is None:
