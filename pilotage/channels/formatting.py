@@ -26,10 +26,14 @@ _ODD_SPACE = re.compile(r"[\u00a0\u1680\u180e\u2000-\u200a\u202f\u205f\u3000]")
 
 _FENCED_CODE = re.compile(r"```[\s\S]*?```")
 _INLINE_CODE = re.compile(r"`[^`\n]+`")
+# ***both at once*** has to be recognised before either rule for one of them:
+# read as bold it keeps a stray asterisk, read as italic it keeps two.
+_COMBINED = re.compile(r"\*\*\*(?=\S)(.+?)(?<=\S)\*\*\*")
+# The delimiters hug a non-space, so "2 ** 3 ** 4" stays arithmetic.
+_BOLD = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
 # One asterisk pair — but not half of a **bold** one, and not a list bullet
 # ("* item"), which is why the delimiters must hug a non-space.
 _ITALIC = re.compile(r"(?<!\*)\*(?!\s|\*)([^*\n]*?\S[^*\n]*?)\*(?!\*)")
-_BOLD = re.compile(r"\*\*(.+?)\*\*")
 _STRIKETHROUGH = re.compile(r"~~(.+?)~~")
 _HEADING = re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE)
 _LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
@@ -39,17 +43,7 @@ _LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 # ordinary words in a technical answer. The rule would cost more than it pays.
 
 _MARK = "\x00"
-
-
-def _heading_to_bold(match: "re.Match[str]") -> str:
-    """A heading becomes a bold line — WhatsApp offers nothing else."""
-    title = match.group(1).strip()
-    # "## **Title**" has already been through the bold rule and arrived here as
-    # "*Title*". Wrapping it again would show the asterisks instead of hiding
-    # them.
-    while len(title) > 1 and title.startswith("*") and title.endswith("*"):
-        title = title[1:-1].strip()
-    return f"*{title}*"
+_PLACEHOLDER = re.compile(rf"{_MARK}(\d+){_MARK}")
 
 
 def to_whatsapp(text: str) -> str:
@@ -59,23 +53,66 @@ def to_whatsapp(text: str) -> str:
 
     result = _ODD_SPACE.sub(" ", _INVISIBLE.sub("", text))
 
-    quoted: list[str] = []
+    # Text that must not be read again — quoted code, and emphasis already
+    # converted — waits here and is put back at the end.
+    parked: list[str] = []
 
-    def _park(match: "re.Match[str]") -> str:
-        quoted.append(match.group(0))
-        return f"{_MARK}{len(quoted) - 1}{_MARK}"
+    def park(snippet: str) -> str:
+        parked.append(snippet)
+        return f"{_MARK}{len(parked) - 1}{_MARK}"
 
-    result = _FENCED_CODE.sub(_park, result)
-    result = _INLINE_CODE.sub(_park, result)
+    def park_match(match: "re.Match[str]") -> str:
+        return park(match.group(0))
 
-    # Italic first: *one* means italic in markdown but bold in WhatsApp, so it
-    # has to move out of the way before **two** collapses down to one.
-    result = _ITALIC.sub(r"_\1_", result)
-    result = _BOLD.sub(r"*\1*", result)
+    def combined_to_whatsapp(match: "re.Match[str]") -> str:
+        return park(f"_*{match.group(1)}*_")
+
+    def bold_to_whatsapp(match: "re.Match[str]") -> str:
+        # The italic inside a bold span is converted here, while the span is
+        # still whole text. A moment later it is one placeholder, and the
+        # italic rule can no longer see into it.
+        inner = _ITALIC.sub(r"_\1_", match.group(1))
+        return park(f"*{inner}*")
+
+    def unbold(title: str) -> str:
+        # A heading line is made bold as a whole. Bold inside it would close
+        # that emphasis halfway through and show the marks instead of hiding
+        # them, so the inner pair comes off. Code in a heading stays as it is.
+        def bare(match: "re.Match[str]") -> str:
+            snippet = parked[int(match.group(1))]
+            if snippet.startswith("_*") and snippet.endswith("*_"):
+                return f"_{snippet[2:-2]}_"
+            if snippet.startswith("*") and snippet.endswith("*"):
+                return snippet[1:-1]
+            return match.group(0)
+
+        return _PLACEHOLDER.sub(bare, title)
+
+    def heading_to_bold(match: "re.Match[str]") -> str:
+        return f"*{unbold(match.group(1).strip())}*"
+
+    result = _FENCED_CODE.sub(park_match, result)
+    result = _INLINE_CODE.sub(park_match, result)
+
+    # Struck-through text and links go first, while the reply is still plain
+    # text throughout. They are the two rules that have to reach inside an
+    # emphasis span — "**~~dropped~~**", "**[the report](...)**" — and a span
+    # stops being readable the moment it is parked.
     result = _STRIKETHROUGH.sub(r"~\1~", result)
-    result = _HEADING.sub(_heading_to_bold, result)
     result = _LINK.sub(r"\1 (\2)", result)
 
-    for index, snippet in enumerate(quoted):
-        result = result.replace(f"{_MARK}{index}{_MARK}", snippet)
+    # Emphasis is converted from the outside in, and each span is parked as
+    # soon as it is converted. WhatsApp writes bold with the single asterisk
+    # markdown uses for italic, so a converted span left in place would be read
+    # a second time by the next rule and turned back into markup.
+    result = _COMBINED.sub(combined_to_whatsapp, result)
+    result = _BOLD.sub(bold_to_whatsapp, result)
+    result = _ITALIC.sub(r"_\1_", result)
+
+    result = _HEADING.sub(heading_to_bold, result)
+
+    # Newest first: a parked span can contain a placeholder made before it,
+    # never one made after it.
+    for index in reversed(range(len(parked))):
+        result = result.replace(f"{_MARK}{index}{_MARK}", parked[index])
     return result

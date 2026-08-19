@@ -26,8 +26,25 @@ class EmphasisTests(unittest.TestCase):
         """The two collide: one asterisk means italic here and bold there."""
         self.assertEqual(to_whatsapp("**Firm** but *soft*."), "*Firm* but _soft_.")
 
+    def test_bold_and_italic_at_once_keep_both(self):
+        """***three*** is one mark short of bold and one over italic."""
+        self.assertEqual(to_whatsapp("It was ***huge***."), "It was _*huge*_.")
+
+    def test_italic_inside_bold_survives(self):
+        self.assertEqual(to_whatsapp("**a *b* c**"), "*a _b_ c*")
+
+    def test_bold_inside_italic_survives(self):
+        self.assertEqual(to_whatsapp("*a **b** c*"), "_a *b* c_")
+
+    def test_spaced_asterisks_are_arithmetic(self):
+        """A power in a technical answer, not an emphasis nobody closed."""
+        self.assertEqual(to_whatsapp("2 ** 3 ** 4"), "2 ** 3 ** 4")
+
     def test_strikethrough_loses_one_tilde(self):
         self.assertEqual(to_whatsapp("~~cancelled~~"), "~cancelled~")
+
+    def test_strikethrough_inside_bold_still_converts(self):
+        self.assertEqual(to_whatsapp("**~~dropped~~**"), "*~dropped~*")
 
     def test_underscore_italic_is_already_right(self):
         self.assertEqual(to_whatsapp("_already_"), "_already_")
@@ -49,6 +66,22 @@ class StructureTests(unittest.TestCase):
             to_whatsapp("See [the report](http://x.y/a)."),
             "See the report (http://x.y/a).",
         )
+
+    def test_a_link_inside_bold_still_keeps_its_address(self):
+        self.assertEqual(
+            to_whatsapp("See **[the report](http://x.y/a)**."),
+            "See *the report (http://x.y/a)*.",
+        )
+
+    def test_bold_inside_a_heading_is_dropped(self):
+        """The line is already bold; an inner pair would close it halfway."""
+        self.assertEqual(to_whatsapp("## The **key** finding"), "*The key finding*")
+
+    def test_a_bold_italic_heading_keeps_the_italic(self):
+        self.assertEqual(to_whatsapp("## ***Results***"), "*_Results_*")
+
+    def test_code_inside_a_heading_survives(self):
+        self.assertEqual(to_whatsapp("## Run `make` first"), "*Run `make` first*")
 
     def test_a_bullet_list_is_not_read_as_italic(self):
         self.assertEqual(to_whatsapp("* one\n* two"), "* one\n* two")
