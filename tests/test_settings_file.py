@@ -216,7 +216,7 @@ class ConfigFileTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PILOTAGE_CONFIG": str(template)}):
             config = Config.load(channel="whatsapp")
         self.assertEqual(config.model, "gpt-5.6-sol")
-        self.assertEqual(config.settings.names("tools.enabled"), ["todo", "terminal"])
+        self.assertEqual(config.settings.names("tools.enabled"), ["todo", "terminal", "file"])
 
     def test_the_operators_instructions_keep_the_formatting_note(self):
         self._write("agent:\n  instructions: Answer in French.\n")

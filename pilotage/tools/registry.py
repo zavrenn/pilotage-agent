@@ -196,6 +196,37 @@ def cap_result(result: str, limit: int) -> str:
     """Trim a result to what a conversation can afford to carry."""
     if limit <= 0 or len(result) <= limit:
         return result
+
+    # Tool handlers normally return JSON. Raw slicing would leave an invalid
+    # fragment exactly when the model most needs a readable recovery path.
+    try:
+        json.loads(result)
+    except (TypeError, ValueError):
+        pass
+    else:
+        if limit <= 1:
+            return "0"
+        if limit == 2:
+            return "{}"
+        envelope: Dict[str, Any] = {
+            "truncated": True,
+            "original_chars": len(result),
+            "prefix": "",
+        }
+        base = json.dumps(envelope, ensure_ascii=False)
+        if len(base) > limit:
+            return "{}"
+        low, high = 0, len(result)
+        while low < high:
+            middle = (low + high + 1) // 2
+            envelope["prefix"] = result[:middle]
+            if len(json.dumps(envelope, ensure_ascii=False)) <= limit:
+                low = middle
+            else:
+                high = middle - 1
+        envelope["prefix"] = result[:low]
+        return json.dumps(envelope, ensure_ascii=False)
+
     dropped = len(result) - limit
     return result[:limit] + f"\n{TRUNCATION_MARKER} {dropped} characters cut."
 

@@ -5,10 +5,10 @@ string check on purpose: knowing whether to read a path as text must not cost
 a stat call, and the answer must be the same on a path that does not exist yet.
 
 Two lists, and the difference between them matters. A binary file cannot be
-shown to the model at all. An opaque document — .docx and its relatives — can
-be shown, because we extract text out of it, but must never be written back
-as text: the model would read the extracted text, edit it, write it, and
-destroy the document while reporting success.
+shown to the model at all. An opaque document — .docx and its relatives — must
+never be written as text: doing so would destroy the document while reporting
+success. Document text extraction belongs to the later document/vision slice,
+not to this file group.
 
 .pdf is deliberately in neither list. Its syntax is text, so writing a new one
 is legitimate; only overwriting an existing one is dangerous, and that is the

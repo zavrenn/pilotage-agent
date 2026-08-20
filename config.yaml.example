@@ -21,10 +21,12 @@ tools:
   enabled:
     - todo
     - terminal
+    - file
   max_iterations: 90
   max_result_chars: 100000
   max_step_chars: 200000
 
 terminal:
+  # Relative file-tool paths follow this terminal session's current directory.
   # cwd: /srv/agents/my-agent
   timeout: 120

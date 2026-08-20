@@ -161,6 +161,17 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
         result = await self.registry.dispatch("small", "{}", _context())
         self.assertLess(len(result), 300)
 
+    async def test_a_cut_json_result_remains_valid_json(self):
+        self.registry.register(
+            _tool("json_flood", handler=lambda args, context: tool_result(value="\\" * 5_000))
+        )
+        result = await self.registry.dispatch(
+            "json_flood", "{}", _context(), max_result_chars=1_000
+        )
+        parsed = json.loads(result)
+        self.assertTrue(parsed["truncated"])
+        self.assertIn("prefix", parsed)
+
 
 class StepTests(unittest.IsolatedAsyncioTestCase):
     """Several calls in one step: the model asks for them together on purpose."""
@@ -272,8 +283,13 @@ class EnabledGroupTests(unittest.TestCase):
 class BuiltRegistryTests(unittest.TestCase):
     def test_the_registry_this_build_ships_has_the_tools_built_so_far(self):
         registry = build_registry()
+        self.assertIn("file", registry.groups())
         self.assertIn("todo", registry.groups())
         self.assertIn("terminal", registry.groups())
+        self.assertEqual(
+            {"patch", "read_file", "search_files", "write_file"},
+            set(registry.names(["file"])),
+        )
         self.assertIsNotNone(registry.get("todo"))
         self.assertIsNotNone(registry.get("terminal"))
 

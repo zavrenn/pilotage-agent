@@ -188,6 +188,13 @@ def get_read_block_error(path: str) -> Optional[str]:
                 f"{_NOT_A_BOUNDARY}"
             )
 
+    for blocked_prefix in _state_prefixes():
+        if str(resolved).startswith(blocked_prefix):
+            return (
+                f"Access denied: {path} is agent authentication state and cannot "
+                f"be read directly. {_NOT_A_BOUNDARY}"
+            )
+
     if resolved.name.lower() in BLOCKED_ENV_BASENAMES:
         return (
             f"Access denied: {path} carries secrets and cannot be read. Read "

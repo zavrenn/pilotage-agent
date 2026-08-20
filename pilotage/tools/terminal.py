@@ -31,7 +31,13 @@ class TerminalSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
-def _session(context: ToolContext) -> TerminalSession:
+def get_terminal_session(context: ToolContext) -> TerminalSession:
+    """Return the chat's shared terminal state.
+
+    File tools use the same lock while resolving the terminal cwd, so a
+    parallel ``cd`` cannot move the base directory halfway through a file
+    operation.
+    """
     session = context.state.get(STATE_KEY)
     if not isinstance(session, TerminalSession):
         session = TerminalSession()
@@ -88,7 +94,7 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
     if not isinstance(workdir, str):
         return tool_error("workdir must be a path string")
 
-    session = _session(context)
+    session = get_terminal_session(context)
     async with session.lock:
         if session.shell is None:
             try:
@@ -169,4 +175,10 @@ TERMINAL_TOOL = Tool(
 )
 
 
-__all__ = ["TERMINAL_SCHEMA", "TERMINAL_TOOL", "TerminalSession", "handle"]
+__all__ = [
+    "TERMINAL_SCHEMA",
+    "TERMINAL_TOOL",
+    "TerminalSession",
+    "get_terminal_session",
+    "handle",
+]

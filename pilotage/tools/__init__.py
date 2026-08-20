@@ -30,6 +30,7 @@ from .registry import (
     tool_error,
     tool_result,
 )
+from .files import FILE_TOOLS
 from .terminal import TERMINAL_TOOL
 from .todo import TODO_TOOL
 
@@ -46,7 +47,7 @@ __all__ = [
 ]
 
 # Every tool the runtime has. Slices add to this list; nothing else changes.
-ALL_TOOLS: Sequence[Tool] = (TERMINAL_TOOL, TODO_TOOL)
+ALL_TOOLS: Sequence[Tool] = (*FILE_TOOLS, TERMINAL_TOOL, TODO_TOOL)
 
 
 def build_registry() -> Registry:

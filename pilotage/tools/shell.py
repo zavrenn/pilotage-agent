@@ -501,9 +501,9 @@ def _quote_cwd_for_cd(cwd: str) -> str:
 class Shell:
     """A bash session on this machine.
 
-    ``execute`` is the whole interface, and everything else in the runtime that
-    touches the filesystem goes through it — the file tools included. That is
-    the reason it is worth having exactly one of these.
+    ``execute`` is the whole interface, and the extracted Hermes file stack
+    uses it too. This keeps file operations on the same persistent cwd and
+    environment as terminal calls.
     """
 
     def __init__(self, cwd: str = "", timeout: int = DEFAULT_TIMEOUT_SECONDS,
@@ -875,9 +875,9 @@ class Shell:
         caller must not credit this command with a directory it never reported.
 
         ``track`` is false when the caller named a directory for this one
-        command. That is a scope, not a move: a file tool reading something
-        under /srv must not relocate the person's terminal to /srv. (Hermes
-        moves the session in that case; we deliberately do not.)
+        command. That is a scope, not a move: a one-command workdir under /srv
+        must not relocate the person's terminal there. (Hermes moves the
+        session in that case; we deliberately do not.)
         """
         output = result.get("output", "")
         marker = self._marker
