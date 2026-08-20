@@ -38,7 +38,9 @@ def _channel() -> WhatsAppChannel:
     async def handler(message: InboundMessage) -> None:  # pragma: no cover
         raise AssertionError("no turn should run here")
 
-    async def on_reset(chat_id: str, message_id: str) -> None:  # pragma: no cover
+    async def on_reset(
+        chat_id: str, session_id: str, message_id: str
+    ) -> None:  # pragma: no cover
         raise AssertionError("nothing should reset here")
 
     config = Config.load()
@@ -90,6 +92,74 @@ class BatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending.message_ids, ["m1", "m2", "m3"])
         # main.py quotes the last of them.
         self.assertEqual(pending.message_ids[-1], "m3")
+
+    def tearDown(self):
+        for task in list(self.channel._pending_tasks.values()):
+            task.cancel()
+
+
+class GroupIsolationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.channel = _channel()
+        object.__setattr__(self.channel._config, "answer_groups", True)
+        object.__setattr__(
+            self.channel._config,
+            "allowed_senders",
+            frozenset({"212600000000", "212611111111"}),
+        )
+
+    def _event(
+        self,
+        participant: str,
+        message_id: str,
+        *,
+        sender_number: str = "",
+        identities: List[str] | None = None,
+    ) -> Dict[str, Any]:
+        return {
+            "chatId": "120363000000000000@g.us",
+            "messageId": message_id,
+            "senderId": participant,
+            "senderNumber": sender_number,
+            "identities": identities or [],
+            "isGroup": True,
+            "body": "question",
+        }
+
+    async def test_group_participants_never_share_a_batch_or_session(self):
+        self.channel._accept(
+            self._event("212600000000@s.whatsapp.net", "m1", sender_number="212600000000")
+        )
+        self.channel._accept(
+            self._event("212611111111@s.whatsapp.net", "m2", sender_number="212611111111")
+        )
+
+        self.assertEqual(len(self.channel._pending), 2)
+        self.assertEqual(
+            {message.session_id for message in self.channel._pending.values()},
+            {
+                "120363000000000000@g.us:212600000000",
+                "120363000000000000@g.us:212611111111",
+            },
+        )
+
+    async def test_phone_and_lid_aliases_share_one_participant_session(self):
+        self.channel._accept(
+            self._event(
+                "999999999999999@lid",
+                "m1",
+                sender_number="999999999999999",
+                identities=["999999999999999", "212600000000"],
+            )
+        )
+        self.channel._accept(
+            self._event("212600000000@s.whatsapp.net", "m2", sender_number="212600000000")
+        )
+
+        self.assertEqual(len(self.channel._pending), 1)
+        pending = next(iter(self.channel._pending.values()))
+        self.assertEqual(pending.message_ids, ["m1", "m2"])
+        self.assertEqual(pending.session_id, "120363000000000000@g.us:212600000000")
 
     def tearDown(self):
         for task in list(self.channel._pending_tasks.values()):

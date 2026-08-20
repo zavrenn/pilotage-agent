@@ -48,6 +48,44 @@ QUOTE_SNIPPET_LIMIT = 500
 RESET_COMMAND = "/new"
 
 
+def _bare_whatsapp_id(value: str) -> str:
+    """Normalize a JID or bridge-resolved identity to its stable bare id."""
+    written = str(value or "").strip().lstrip("+")
+    if "@" in written:
+        written = written.split("@", 1)[0]
+    if ":" in written:
+        written = written.split(":", 1)[0]
+    return written
+
+
+def _session_id(
+    chat_id: str,
+    is_group: bool,
+    sender_id: str,
+    sender_number: str,
+    identities: List[str],
+) -> str:
+    """Build the production conversation boundary for one inbound message.
+
+    The bridge prefers the phone number in ``sender_number``. If WhatsApp only
+    supplied a LID, its ordered identity expansion carries the mapped phone id
+    immediately after that LID; prefer the first distinct alias so future
+    phone-JID messages resolve to the same session.
+    """
+    if not is_group:
+        return chat_id
+
+    raw_sender = _bare_whatsapp_id(sender_id)
+    participant = _bare_whatsapp_id(sender_number) or raw_sender
+    if sender_id.lower().endswith("@lid") and participant == raw_sender:
+        for identity in identities:
+            resolved = _bare_whatsapp_id(identity)
+            if resolved and resolved != raw_sender:
+                participant = resolved
+                break
+    return f"{chat_id}:{participant}" if participant else chat_id
+
+
 class ChannelError(RuntimeError):
     """The channel cannot start, or cannot keep running."""
 
@@ -55,6 +93,9 @@ class ChannelError(RuntimeError):
 @dataclass
 class InboundMessage:
     chat_id: str
+    # Conversation state key. DMs use the chat; groups add the canonical
+    # participant so one room can never share history or tool state.
+    session_id: str
     sender_id: str
     sender_number: str
     push_name: str
@@ -67,9 +108,9 @@ class InboundMessage:
 
 
 Handler = Callable[[InboundMessage], Awaitable[None]]
-# Called with a chat id, and the id of the message that asked, when a
-# conversation should start over.
-Reset = Callable[[str, str], Awaitable[None]]
+# Called with the delivery chat, isolated session, and requesting message id
+# when a conversation should start over.
+Reset = Callable[[str, str, str], Awaitable[None]]
 
 
 class WhatsAppChannel:
@@ -304,6 +345,8 @@ class WhatsAppChannel:
         if not text and not attachments:
             return
 
+        session_id = _session_id(chat_id, is_group, sender_id, sender_number, identities)
+
         # Fire and forget: a slow bridge must not hold up the answer. (Hermes)
         self._pending_tasks_background.add(
             asyncio.create_task(self._mark_read(event.get("readReceiptKey")))
@@ -314,17 +357,18 @@ class WhatsAppChannel:
             # Someone who types this mid-thought has changed their mind about
             # the thought, and sending it afterwards would answer the
             # conversation they just ended.
-            waiting = self._pending_tasks.pop(chat_id, None)
+            waiting = self._pending_tasks.pop(session_id, None)
             if waiting is not None:
                 waiting.cancel()
-            self._pending.pop(chat_id, None)
+            self._pending.pop(session_id, None)
             self._pending_tasks_background.add(
-                asyncio.create_task(self._reset(chat_id, message_id))
+                asyncio.create_task(self._reset(chat_id, session_id, message_id))
             )
             return
 
         message = InboundMessage(
             chat_id=chat_id,
+            session_id=session_id,
             sender_id=sender_id,
             sender_number=sender_number,
             push_name=str(event.get("pushName") or ""),
@@ -417,10 +461,10 @@ class WhatsAppChannel:
         self._reported_blocked.add(identity)
         logger.warning("Ignored a message from %s.", identity)
 
-    async def _reset(self, chat_id: str, message_id: str) -> None:
+    async def _reset(self, chat_id: str, session_id: str, message_id: str) -> None:
         """Start the conversation over, once whatever is running has finished."""
         try:
-            await self._on_reset(chat_id, message_id)
+            await self._on_reset(chat_id, session_id, message_id)
         except Exception:  # noqa: BLE001 - one bad command must not stop the channel
             logger.exception("Resetting %s failed", chat_id)
         finally:
@@ -432,7 +476,7 @@ class WhatsAppChannel:
         People send three messages in a row and mean one question. Answering the
         first one before the other two land wastes a turn and reads as rude.
         """
-        key = message.chat_id
+        key = message.session_id
         pending = self._pending.get(key)
         if pending is None:
             self._pending[key] = message

@@ -35,13 +35,13 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         object.__setattr__(config, "allowed_senders", frozenset({"212600000000"}))
         object.__setattr__(config, "text_batch_delay_seconds", 30.0)
         self.answered: List[InboundMessage] = []
-        self.reset_for: List[tuple[str, str]] = []
+        self.reset_for: List[tuple[str, str, str]] = []
 
         async def handler(message: InboundMessage) -> None:
             self.answered.append(message)
 
-        async def on_reset(chat_id: str, message_id: str) -> None:
-            self.reset_for.append((chat_id, message_id))
+        async def on_reset(chat_id: str, session_id: str, message_id: str) -> None:
+            self.reset_for.append((chat_id, session_id, message_id))
 
         self.channel = WhatsAppChannel(config, handler, on_reset)
 
@@ -53,13 +53,13 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_command_resets_and_never_reaches_the_model(self):
         self.channel._accept(_event(RESET_COMMAND))
         await self._settle()
-        self.assertEqual(self.reset_for, [("chat", "m1")])
+        self.assertEqual(self.reset_for, [("chat", "chat", "m1")])
         self.assertEqual(self.answered, [])
 
     async def test_case_and_stray_spaces_still_count(self):
         self.channel._accept(_event("  /NEW  "))
         await self._settle()
-        self.assertEqual(self.reset_for, [("chat", "m1")])
+        self.assertEqual(self.reset_for, [("chat", "chat", "m1")])
 
     async def test_the_word_inside_a_sentence_is_just_a_message(self):
         self.channel._accept(_event("what is /new for?"))
@@ -76,7 +76,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.channel._pending, {})
         self.assertEqual(self.answered, [])
         # The confirmation quotes the command, not the abandoned question.
-        self.assertEqual(self.reset_for, [("chat", "m2")])
+        self.assertEqual(self.reset_for, [("chat", "chat", "m2")])
 
 
 class ForgetTests(unittest.IsolatedAsyncioTestCase):

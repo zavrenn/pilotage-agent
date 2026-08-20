@@ -24,6 +24,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .call_ids import clamp_call_id, deterministic_call_id
+
 _TERMINAL_EVENT_TYPES = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
 )
@@ -82,19 +84,20 @@ def build_request(
     input_items: List[Dict[str, Any]],
     session_id: str,
     reasoning_effort: str,
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Build the kwargs for ``responses.create``.
 
-    No ``tools`` key is set: the SDK iterates ``tools`` without a None guard, so
-    an empty tool set must be omitted entirely rather than passed as ``[]``.
-    No ``max_output_tokens`` either — the Codex backend rejects it.
+    An empty tool set omits the ``tools`` key entirely rather than passing
+    ``[]``: the SDK iterates ``tools`` without a None guard. No
+    ``max_output_tokens`` either — the Codex backend rejects it.
     """
-    cache_key = content_cache_key(instructions, None, session_id) or session_id
+    cache_key = content_cache_key(instructions, tools, session_id) or session_id
     # The session id is a WhatsApp chat id — a phone number. It is only ever an
     # opaque conversation handle to the backend, so it goes out hashed.
     opaque_session = "s_" + hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:24]
 
-    return {
+    request: Dict[str, Any] = {
         "model": model,
         "instructions": instructions,
         "input": input_items,
@@ -110,6 +113,15 @@ def build_request(
             "x-client-request-id": cache_key,
         },
     }
+
+    if tools:
+        request["tools"] = tools
+        # The model decides whether it needs a tool, and may ask for several
+        # at once when they do not depend on each other.
+        request["tool_choice"] = "auto"
+        request["parallel_tool_calls"] = True
+
+    return request
 
 
 # What one picture costs the model to read. A picture is not its base64 text:
@@ -205,6 +217,11 @@ def stream_timeouts(
 class StreamResult:
     text: str = ""
     reasoning_items: List[Dict[str, Any]] = field(default_factory=list)
+    # What the model asked to run, in the order it asked. Each is
+    # ``{"call_id", "name", "arguments"}`` — arguments as the JSON text the
+    # model wrote, passed through untouched so the request we replay next turn
+    # is byte-identical to the one the cache already holds.
+    tool_calls: List[Dict[str, str]] = field(default_factory=list)
     status: str = ""
     usage: Any = None
     response_id: str = ""
@@ -313,6 +330,7 @@ async def consume_stream(
         for item in output_items
         if item.get("type") == "reasoning" and item.get("encrypted_content")
     ]
+    result.tool_calls = _tool_calls_from_items(output_items)
 
     if not terminal_seen and not result.text and not output_items:
         raise CodexStreamError("The Codex stream ended without a response.")
@@ -330,6 +348,37 @@ def _silence_error(first_event_seen: bool, cutoff: float) -> CodexStreamTimeout:
         f"The Codex stream sent nothing at all within {cutoff:g}s.",
         code="codex_stream_no_first_byte",
     )
+
+
+def _tool_calls_from_items(items: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """The calls the model made, ready to be run and then replayed.
+
+    A call without an id gets one derived from its own name and arguments.
+    That is not cosmetic: the id goes back to the API inside the request
+    prefix, so a random one would give every turn a unique prefix and throw
+    away the prompt cache. The index keeps two identical calls in one response
+    apart.
+    """
+    calls: List[Dict[str, str]] = []
+    for index, item in enumerate(items):
+        if item.get("type") != "function_call":
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            # Nothing to run and nothing to answer with; the model will be
+            # told what happened when it sees no result for it.
+            continue
+        arguments = item.get("arguments")
+        if isinstance(arguments, dict):
+            arguments = json.dumps(arguments, ensure_ascii=False)
+        arguments = str(arguments or "").strip() or "{}"
+        call_id = str(item.get("call_id") or item.get("id") or "").strip()
+        if not call_id:
+            call_id = deterministic_call_id(name, arguments, index)
+        calls.append(
+            {"call_id": clamp_call_id(call_id), "name": name, "arguments": arguments}
+        )
+    return calls
 
 
 def _text_from_items(items: List[Dict[str, Any]]) -> str:

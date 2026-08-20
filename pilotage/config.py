@@ -1,14 +1,24 @@
-"""Runtime configuration for the walking skeleton.
+"""What this agent is and how it behaves.
 
-Environment variables only. A real configuration file arrives with the operator
-commands, once the skeleton walks.
+Behaviour is written in a configuration file the operator edits and can diff
+against another machine; the environment carries secrets and the few things
+that are properties of the box rather than of the agent. Where both speak, the
+file wins — it is the deliberate statement, an environment variable is
+whatever the last person exported.
+
+A missing file leaves every default in place, so an agent that has never been
+configured still runs. A broken file stops the agent instead of falling back,
+because a default can silently re-enable something the operator switched off.
 """
 
 from __future__ import annotations
 
+import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from .settings import ConfigError, Settings, config_path
 
 DEFAULT_MODEL = "gpt-5.6-sol"
 DEFAULT_REASONING_EFFORT = "medium"
@@ -31,6 +41,18 @@ FORMATTING_NOTE = (
     "render at all — use short lines or bullets instead."
 )
 
+# How many times the model may call tools and look at the results before it has
+# to answer with what it has. Hermes' number. It is a runaway guard, not a
+# budget: real work finishes far inside it, and a loop that reaches it was
+# going nowhere.
+DEFAULT_MAX_TOOL_ITERATIONS = 90
+
+# What one tool result may carry, and what one round of them may carry between
+# them. Every result is replayed on every later request of the conversation, so
+# these are the difference between an expensive turn and an expensive chat.
+DEFAULT_MAX_RESULT_CHARS = 100_000
+DEFAULT_MAX_STEP_CHARS = 200_000
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -47,7 +69,7 @@ def _env_float(name: str, default: float) -> float:
         value = float(raw)
     except ValueError:
         return default
-    return value if value >= 0 else default
+    return value if math.isfinite(value) and value >= 0 else default
 
 
 def _env_int(name: str, default: int) -> int:
@@ -60,6 +82,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 def state_dir() -> Path:
     """Where credentials, the WhatsApp session and logs live."""
     override = os.environ.get("PILOTAGE_HOME", "").strip()
@@ -67,11 +96,28 @@ def state_dir() -> Path:
     return root
 
 
-def _instructions() -> str:
+def _instructions(settings: Settings) -> str:
     """The operator's instructions, plus the formatting note they cannot drop."""
     # A blank setting means the default, so there is always something here.
-    written = _env_str("PILOTAGE_INSTRUCTIONS", DEFAULT_INSTRUCTIONS)
-    return f"{written}\n\n{FORMATTING_NOTE}"
+    written = settings.text("agent.instructions", _env_str("PILOTAGE_INSTRUCTIONS", ""))
+    return f"{written or DEFAULT_INSTRUCTIONS}\n\n{FORMATTING_NOTE}"
+
+
+def _count_in_range(
+    name: str, value: int, *, minimum: int, maximum: int | None = None
+) -> int:
+    if value < minimum or (maximum is not None and value > maximum):
+        expected = f"between {minimum} and {maximum}" if maximum is not None else f"at least {minimum}"
+        raise ConfigError(f"{name} must be {expected}, not {value!r}")
+    return value
+
+
+def _number_in_range(name: str, value: float, *, minimum: float, inclusive: bool) -> float:
+    valid = value >= minimum if inclusive else value > minimum
+    if not math.isfinite(value) or not valid:
+        relation = "at least" if inclusive else "greater than"
+        raise ConfigError(f"{name} must be {relation} {minimum:g}, not {value!r}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -101,6 +147,13 @@ class Config:
     # Blue ticks. Off unless the operator asks: an agent that watches a chat
     # should not silently mark everything as read.
     send_read_receipts: bool
+    # The tool loop.
+    max_tool_iterations: int
+    max_tool_result_chars: int
+    max_tool_step_chars: int
+    # The file itself, so a tool added in a later slice can read its own
+    # settings without this dataclass growing a field for every one of them.
+    settings: Settings = field(default_factory=Settings, compare=False, repr=False)
 
     @property
     def session_dir(self) -> Path:
@@ -133,30 +186,129 @@ class Config:
     def bridge_script(self) -> Path:
         return self.bridge_dir / "bridge.js"
 
+    def for_channel(self, channel: str) -> "Config":
+        """The same agent as seen from one channel.
+
+        A channel may run with fewer tools or a different model than the
+        agent's common settings — a group chat on WhatsApp is not the console.
+        """
+        if not channel:
+            return self
+        return Config.load(channel=channel)
+
     @classmethod
-    def load(cls) -> "Config":
-        raw_senders = _env_str("PILOTAGE_ALLOWED_SENDERS", "")
-        senders = frozenset(
-            part.strip() for part in raw_senders.replace(";", ",").split(",") if part.strip()
+    def load(cls, channel: str = "") -> "Config":
+        """Read the configuration. Raises ConfigError if the file is unusable."""
+        home = state_dir()
+        settings = Settings.load(config_path(home))
+        if channel:
+            settings = settings.for_channel(channel)
+
+        env_senders = _env_str("PILOTAGE_ALLOWED_SENDERS", "")
+        senders = settings.names(
+            "whatsapp.allowed_senders",
+            [part.strip() for part in env_senders.replace(";", ",").split(",") if part.strip()],
         )
+
+        # Validate tool-owned settings at startup as well. Waiting until a
+        # model first calls the tool would turn an operator typo into a partial
+        # production failure rather than a clear startup error.
+        settings.names("tools.enabled")
+        settings.names("tools.disabled")
+        settings.text("terminal.cwd", "")
+        _count_in_range(
+            "terminal.timeout",
+            settings.count("terminal.timeout", 120),
+            minimum=1,
+        )
+
         return cls(
-            model=_env_str("PILOTAGE_MODEL", DEFAULT_MODEL),
-            reasoning_effort=_env_str("PILOTAGE_REASONING_EFFORT", DEFAULT_REASONING_EFFORT),
-            instructions=_instructions(),
-            allowed_senders=senders,
-            answer_groups=_env_str("PILOTAGE_ANSWER_GROUPS", "0") in {"1", "true", "yes"},
-            bridge_port=_env_int("PILOTAGE_BRIDGE_PORT", 8765),
+            model=settings.text("agent.model", _env_str("PILOTAGE_MODEL", DEFAULT_MODEL)),
+            reasoning_effort=settings.text(
+                "agent.reasoning_effort",
+                _env_str("PILOTAGE_REASONING_EFFORT", DEFAULT_REASONING_EFFORT),
+            ),
+            instructions=_instructions(settings),
+            allowed_senders=frozenset(senders),
+            answer_groups=settings.flag(
+                "whatsapp.answer_groups", _env_flag("PILOTAGE_ANSWER_GROUPS")
+            ),
+            bridge_port=_count_in_range(
+                "whatsapp.bridge_port",
+                settings.count("whatsapp.bridge_port", _env_int("PILOTAGE_BRIDGE_PORT", 8765)),
+                minimum=1,
+                maximum=65535,
+            ),
             bridge_dir=Path(_env_str("PILOTAGE_BRIDGE_DIR", str(REPO_ROOT / "bridge"))),
-            state_dir=state_dir(),
-            text_batch_delay_seconds=_env_float("PILOTAGE_TEXT_BATCH_DELAY", 5.0),
-            text_batch_split_delay_seconds=_env_float("PILOTAGE_TEXT_BATCH_SPLIT_DELAY", 10.0),
-            history_turns=_env_int("PILOTAGE_HISTORY_TURNS", 20),
-            request_timeout_seconds=_env_float("PILOTAGE_REQUEST_TIMEOUT", 300.0),
-            codex_first_event_timeout_seconds=_env_float(
-                "PILOTAGE_CODEX_FIRST_EVENT_TIMEOUT", 120.0
+            state_dir=home,
+            text_batch_delay_seconds=_number_in_range(
+                "whatsapp.batch_delay",
+                settings.number(
+                    "whatsapp.batch_delay", _env_float("PILOTAGE_TEXT_BATCH_DELAY", 5.0)
+                ),
+                minimum=0,
+                inclusive=True,
             ),
-            codex_quiet_stream_timeout_seconds=_env_float(
-                "PILOTAGE_CODEX_QUIET_STREAM_TIMEOUT", 12.0
+            text_batch_split_delay_seconds=_number_in_range(
+                "whatsapp.batch_split_delay",
+                settings.number(
+                    "whatsapp.batch_split_delay",
+                    _env_float("PILOTAGE_TEXT_BATCH_SPLIT_DELAY", 10.0),
+                ),
+                minimum=0,
+                inclusive=True,
             ),
-            send_read_receipts=_env_str("PILOTAGE_SEND_READ_RECEIPTS", "0") in {"1", "true", "yes"},
+            history_turns=_count_in_range(
+                "agent.history_turns",
+                settings.count("agent.history_turns", _env_int("PILOTAGE_HISTORY_TURNS", 20)),
+                minimum=1,
+            ),
+            request_timeout_seconds=_number_in_range(
+                "agent.request_timeout",
+                settings.number(
+                    "agent.request_timeout", _env_float("PILOTAGE_REQUEST_TIMEOUT", 300.0)
+                ),
+                minimum=0,
+                inclusive=False,
+            ),
+            codex_first_event_timeout_seconds=_number_in_range(
+                "agent.first_event_timeout",
+                settings.number(
+                    "agent.first_event_timeout",
+                    _env_float("PILOTAGE_CODEX_FIRST_EVENT_TIMEOUT", 120.0),
+                ),
+                minimum=0,
+                inclusive=True,
+            ),
+            codex_quiet_stream_timeout_seconds=_number_in_range(
+                "agent.quiet_stream_timeout",
+                settings.number(
+                    "agent.quiet_stream_timeout",
+                    _env_float("PILOTAGE_CODEX_QUIET_STREAM_TIMEOUT", 12.0),
+                ),
+                minimum=0,
+                inclusive=True,
+            ),
+            send_read_receipts=settings.flag(
+                "whatsapp.read_receipts", _env_flag("PILOTAGE_SEND_READ_RECEIPTS")
+            ),
+            max_tool_iterations=_count_in_range(
+                "tools.max_iterations",
+                settings.count("tools.max_iterations", DEFAULT_MAX_TOOL_ITERATIONS),
+                minimum=1,
+            ),
+            max_tool_result_chars=_count_in_range(
+                "tools.max_result_chars",
+                settings.count("tools.max_result_chars", DEFAULT_MAX_RESULT_CHARS),
+                minimum=1,
+            ),
+            max_tool_step_chars=_count_in_range(
+                "tools.max_step_chars",
+                settings.count("tools.max_step_chars", DEFAULT_MAX_STEP_CHARS),
+                minimum=1,
+            ),
+            settings=settings,
         )
+
+
+__all__ = ["Config", "ConfigError", "state_dir"]

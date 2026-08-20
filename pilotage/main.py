@@ -16,7 +16,7 @@ import sys
 from .agent import Agent
 from .channels.whatsapp import ChannelError, InboundMessage, WhatsAppChannel
 from .codex import auth
-from .config import Config
+from .config import Config, ConfigError
 from .env import load_env_files
 from .history import ConversationStore
 
@@ -85,7 +85,7 @@ async def command_run(config: Config) -> int:
         try:
             async with channel.typing(message.chat_id):
                 answer = await agent.respond(
-                    message.chat_id, message.text, message.attachments, on_notice=notice
+                    message.session_id, message.text, message.attachments, on_notice=notice
                 )
         except Exception:  # noqa: BLE001 - the user gets an answer either way
             logger.exception("The model call failed")
@@ -94,8 +94,8 @@ async def command_run(config: Config) -> int:
             answer = REPLY_ON_FAILURE
         await channel.send(message.chat_id, answer, quoted)
 
-    async def reset(chat_id: str, message_id: str) -> None:
-        await agent.forget(chat_id)
+    async def reset(chat_id: str, session_id: str, message_id: str) -> None:
+        await agent.forget(session_id)
         await channel.send(chat_id, REPLY_ON_RESET, message_id)
 
     channel = WhatsAppChannel(config, handle, reset)
@@ -153,7 +153,17 @@ def main(argv: list[str] | None = None) -> int:
     _configure_logging(args.verbose)
     for path in load_env_files():
         logger.info("Read settings from %s", path)
-    config = Config.load()
+    try:
+        # Parse the exact view that will run while still inside the guarded
+        # startup boundary. A malformed channel override must be a clean
+        # startup error, not a traceback after the common config passed.
+        channel = "whatsapp" if args.command == "run" else ""
+        config = Config.load(channel=channel)
+    except ConfigError as exc:
+        # A broken configuration file stops the agent rather than starting it
+        # with defaults: a default can silently re-enable what was switched off.
+        logger.error("%s", exc)
+        return 1
 
     if args.command == "login":
         return command_login(config)
