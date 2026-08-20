@@ -89,6 +89,9 @@ def build_write_denied_prefixes(home: str) -> list[str]:
             os.path.join(home, ".azure"),
             os.path.join(home, ".config", "gh"),
             os.path.join(home, ".config", "gcloud"),
+            # Skill mutation always requires approval. Until that approval
+            # workflow exists, the ordinary file tools must fail closed.
+            str(state_dir() / "skills"),
         ]
     ] + list(_state_prefixes())
 

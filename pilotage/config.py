@@ -193,6 +193,7 @@ class Config:
         # production failure rather than a clear startup error.
         settings.names("tools.enabled")
         settings.names("tools.disabled")
+        settings.names("skills.disabled")
         settings.text("terminal.cwd", "")
         _count_in_range(
             "terminal.timeout",

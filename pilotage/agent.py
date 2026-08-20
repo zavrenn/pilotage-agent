@@ -24,7 +24,13 @@ from . import media
 from .codex import auth, client as codex_client, stream as codex_stream
 from .config import Config
 from .history import ConversationStore
-from .tools import ToolContext, build_registry, enabled_groups, run_calls
+from .tools import (
+    ToolContext,
+    build_registry,
+    build_skills_prompt,
+    enabled_groups,
+    run_calls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +103,11 @@ class Agent:
         self._registry = build_registry()
         self._tool_groups = enabled_groups(config.settings, self._registry)
         self._tools = self._registry.definitions(self._tool_groups)
+        self._instructions = config.instructions
+        if "skills" in self._tool_groups:
+            skills_prompt = build_skills_prompt(config)
+            if skills_prompt:
+                self._instructions = f"{self._instructions}\n\n{skills_prompt}"
         if self._tools:
             logger.info("Tools enabled: %s", ", ".join(self._registry.names(self._tool_groups)))
         # Whatever the tools of one chat need to remember between calls.
@@ -300,7 +311,7 @@ class Agent:
         """One call to the model, retried when the connection rather than the request fails."""
         request = codex_stream.build_request(
             model=self._config.model,
-            instructions=self._config.instructions,
+            instructions=self._instructions,
             input_items=input_items,
             session_id=chat_id,
             reasoning_effort=self._config.reasoning_effort,

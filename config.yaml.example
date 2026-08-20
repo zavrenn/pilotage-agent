@@ -22,6 +22,7 @@ tools:
     - todo
     - terminal
     - file
+    - skills
   max_iterations: 90
   max_result_chars: 100000
   max_step_chars: 200000
@@ -30,3 +31,7 @@ terminal:
   # Relative file-tool paths follow this terminal session's current directory.
   # cwd: /srv/agents/my-agent
   timeout: 120
+
+skills:
+  # Skills are installed per profile under ~/.pilotage-agent/skills.
+  # disabled: [skill-name]

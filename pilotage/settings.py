@@ -51,6 +51,11 @@ class Settings:
         self._data: Dict[str, Any] = data if isinstance(data, dict) else {}
         self._channel = channel
 
+    @property
+    def channel(self) -> str:
+        """The channel this settings view belongs to, if any."""
+        return self._channel
+
     # -- loading ------------------------------------------------------------
 
     @classmethod

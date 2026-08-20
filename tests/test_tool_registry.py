@@ -284,6 +284,7 @@ class BuiltRegistryTests(unittest.TestCase):
     def test_the_registry_this_build_ships_has_the_tools_built_so_far(self):
         registry = build_registry()
         self.assertIn("file", registry.groups())
+        self.assertIn("skills", registry.groups())
         self.assertIn("todo", registry.groups())
         self.assertIn("terminal", registry.groups())
         self.assertEqual(
@@ -292,6 +293,10 @@ class BuiltRegistryTests(unittest.TestCase):
         )
         self.assertIsNotNone(registry.get("todo"))
         self.assertIsNotNone(registry.get("terminal"))
+        self.assertEqual(
+            {"skill_view", "skills_list"},
+            set(registry.names(["skills"])),
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
