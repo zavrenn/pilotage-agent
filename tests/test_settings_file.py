@@ -190,17 +190,33 @@ class ConfigFileTests(unittest.TestCase):
         self._write("agent:\n  model: gpt-from-file\n")
         self.assertEqual(Config.load().model, "gpt-from-file")
 
-    def test_the_file_beats_the_environment(self):
+    def test_behavior_comes_from_the_file_not_the_environment(self):
         self._write("agent:\n  model: gpt-from-file\n")
         with mock.patch.dict(os.environ, {"PILOTAGE_MODEL": "gpt-from-env"}):
             self.assertEqual(Config.load().model, "gpt-from-file")
 
-    def test_the_environment_still_works_where_the_file_is_silent(self):
+    def test_behavior_environment_variables_are_not_a_second_configuration(self):
         self._write("agent:\n  history_turns: 5\n")
         with mock.patch.dict(os.environ, {"PILOTAGE_MODEL": "gpt-from-env"}):
             config = Config.load()
-        self.assertEqual(config.model, "gpt-from-env")
+        self.assertEqual(config.model, "gpt-5.6-sol")
         self.assertEqual(config.history_turns, 5)
+
+    def test_sensitive_allowed_senders_come_from_the_environment(self):
+        with mock.patch.dict(os.environ, {"PILOTAGE_ALLOWED_SENDERS": "212600000000"}):
+            self.assertEqual(Config.load().allowed_senders, frozenset({"212600000000"}))
+
+    def test_allowed_senders_are_refused_in_behavioral_configuration(self):
+        self._write("whatsapp:\n  allowed_senders: ['212600000000']\n")
+        with self.assertRaises(ConfigError):
+            Config.load()
+
+    def test_the_installed_configuration_template_is_valid(self):
+        template = Path(__file__).resolve().parent.parent / "config.yaml.example"
+        with mock.patch.dict(os.environ, {"PILOTAGE_CONFIG": str(template)}):
+            config = Config.load(channel="whatsapp")
+        self.assertEqual(config.model, "gpt-5.6-sol")
+        self.assertEqual(config.settings.names("tools.enabled"), ["todo", "terminal"])
 
     def test_the_operators_instructions_keep_the_formatting_note(self):
         self._write("agent:\n  instructions: Answer in French.\n")

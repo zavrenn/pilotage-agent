@@ -186,10 +186,17 @@ class StepTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_results_come_back_in_the_order_they_were_asked_for(self):
         """They run together, but the request built from them must be stable."""
+        both_started = asyncio.Event()
+        started = []
         finished = []
 
         async def _uneven(args, context):
-            await asyncio.sleep(0.02 - 0.01 * args["v"])
+            started.append(args["v"])
+            if len(started) == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=1)
+            if args["v"] == 0:
+                await asyncio.sleep(0.01)
             finished.append(args["v"])
             return tool_result(v=args["v"])
 

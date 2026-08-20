@@ -1,8 +1,8 @@
-"""Reading settings from a `.env` file.
+"""Reading sensitive deployment values from a `.env` file.
 
-The agent runs headless. Settings have to live somewhere the operator can edit
-without touching a systemd unit, so a plain `.env` next to the agent state is
-read at startup. Real environment variables always win over the file.
+The allowlisted identities live beside the agent state rather than in the
+behavioral configuration. Real environment variables always win over the
+file, which keeps service-manager secret injection possible.
 """
 
 from __future__ import annotations

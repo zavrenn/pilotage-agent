@@ -25,6 +25,10 @@ _INVISIBLE = re.compile(r"[\x00\u200b\u2060\u2063\ufeff]")
 _ODD_SPACE = re.compile(r"[\u00a0\u1680\u180e\u2000-\u200a\u202f\u205f\u3000]")
 
 _FENCED_CODE = re.compile(r"```[\s\S]*?```")
+# Markdown accepts an info string after an opening fence (usually ``text`` or
+# ``python``). WhatsApp supports the fence but not that info string: it renders
+# it as the first line of the message, as the production smoke test confirmed.
+_FENCE_OPENING = re.compile(r"\A```[^\r\n`]*\r?\n")
 _INLINE_CODE = re.compile(r"`[^`\n]+`")
 # ***both at once*** has to be recognised before either rule for one of them:
 # read as bold it keeps a stray asterisk, read as italic it keeps two.
@@ -62,7 +66,9 @@ def to_whatsapp(text: str) -> str:
         return f"{_MARK}{len(parked) - 1}{_MARK}"
 
     def park_match(match: "re.Match[str]") -> str:
-        return park(match.group(0))
+        snippet = match.group(0)
+        snippet = _FENCE_OPENING.sub("```\n", snippet)
+        return park(snippet)
 
     def combined_to_whatsapp(match: "re.Match[str]") -> str:
         return park(f"_*{match.group(1)}*_")

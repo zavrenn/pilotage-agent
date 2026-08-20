@@ -1,10 +1,10 @@
 """What this agent is and how it behaves.
 
 Behaviour is written in a configuration file the operator edits and can diff
-against another machine; the environment carries secrets and the few things
-that are properties of the box rather than of the agent. Where both speak, the
-file wins — it is the deliberate statement, an environment variable is
-whatever the last person exported.
+against another machine; the environment carries sensitive identities,
+secrets, and the few things that are properties of the box rather than of the
+agent. Each setting has one canonical home, so two files cannot disagree about
+which behaviour is running.
 
 A missing file leaves every default in place, so an agent that has never been
 configured still runs. A broken file stops the agent instead of falling back,
@@ -61,34 +61,6 @@ def _env_str(name: str, default: str) -> str:
     return value or default
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        return default
-    return value if math.isfinite(value) and value >= 0 else default
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def _env_flag(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name, "").strip().lower()
-    if not raw:
-        return default
-    return raw in {"1", "true", "yes", "on"}
-
-
 def state_dir() -> Path:
     """Where credentials, the WhatsApp session and logs live."""
     override = os.environ.get("PILOTAGE_HOME", "").strip()
@@ -99,7 +71,7 @@ def state_dir() -> Path:
 def _instructions(settings: Settings) -> str:
     """The operator's instructions, plus the formatting note they cannot drop."""
     # A blank setting means the default, so there is always something here.
-    written = settings.text("agent.instructions", _env_str("PILOTAGE_INSTRUCTIONS", ""))
+    written = settings.text("agent.instructions", "")
     return f"{written or DEFAULT_INSTRUCTIONS}\n\n{FORMATTING_NOTE}"
 
 
@@ -204,11 +176,17 @@ class Config:
         if channel:
             settings = settings.for_channel(channel)
 
+        if settings.get("whatsapp.allowed_senders") is not None:
+            raise ConfigError(
+                "whatsapp.allowed_senders contains sensitive identities; "
+                "set PILOTAGE_ALLOWED_SENDERS in ~/.pilotage-agent/.env instead"
+            )
         env_senders = _env_str("PILOTAGE_ALLOWED_SENDERS", "")
-        senders = settings.names(
-            "whatsapp.allowed_senders",
-            [part.strip() for part in env_senders.replace(";", ",").split(",") if part.strip()],
-        )
+        senders = [
+            part.strip()
+            for part in env_senders.replace(";", ",").split(",")
+            if part.strip()
+        ]
 
         # Validate tool-owned settings at startup as well. Waiting until a
         # model first calls the tool would turn an operator typo into a partial
@@ -223,19 +201,14 @@ class Config:
         )
 
         return cls(
-            model=settings.text("agent.model", _env_str("PILOTAGE_MODEL", DEFAULT_MODEL)),
-            reasoning_effort=settings.text(
-                "agent.reasoning_effort",
-                _env_str("PILOTAGE_REASONING_EFFORT", DEFAULT_REASONING_EFFORT),
-            ),
+            model=settings.text("agent.model", DEFAULT_MODEL),
+            reasoning_effort=settings.text("agent.reasoning_effort", DEFAULT_REASONING_EFFORT),
             instructions=_instructions(settings),
             allowed_senders=frozenset(senders),
-            answer_groups=settings.flag(
-                "whatsapp.answer_groups", _env_flag("PILOTAGE_ANSWER_GROUPS")
-            ),
+            answer_groups=settings.flag("whatsapp.answer_groups", False),
             bridge_port=_count_in_range(
                 "whatsapp.bridge_port",
-                settings.count("whatsapp.bridge_port", _env_int("PILOTAGE_BRIDGE_PORT", 8765)),
+                settings.count("whatsapp.bridge_port", 8765),
                 minimum=1,
                 maximum=65535,
             ),
@@ -243,9 +216,7 @@ class Config:
             state_dir=home,
             text_batch_delay_seconds=_number_in_range(
                 "whatsapp.batch_delay",
-                settings.number(
-                    "whatsapp.batch_delay", _env_float("PILOTAGE_TEXT_BATCH_DELAY", 5.0)
-                ),
+                settings.number("whatsapp.batch_delay", 5.0),
                 minimum=0,
                 inclusive=True,
             ),
@@ -253,21 +224,19 @@ class Config:
                 "whatsapp.batch_split_delay",
                 settings.number(
                     "whatsapp.batch_split_delay",
-                    _env_float("PILOTAGE_TEXT_BATCH_SPLIT_DELAY", 10.0),
+                    10.0,
                 ),
                 minimum=0,
                 inclusive=True,
             ),
             history_turns=_count_in_range(
                 "agent.history_turns",
-                settings.count("agent.history_turns", _env_int("PILOTAGE_HISTORY_TURNS", 20)),
+                settings.count("agent.history_turns", 20),
                 minimum=1,
             ),
             request_timeout_seconds=_number_in_range(
                 "agent.request_timeout",
-                settings.number(
-                    "agent.request_timeout", _env_float("PILOTAGE_REQUEST_TIMEOUT", 300.0)
-                ),
+                settings.number("agent.request_timeout", 300.0),
                 minimum=0,
                 inclusive=False,
             ),
@@ -275,7 +244,7 @@ class Config:
                 "agent.first_event_timeout",
                 settings.number(
                     "agent.first_event_timeout",
-                    _env_float("PILOTAGE_CODEX_FIRST_EVENT_TIMEOUT", 120.0),
+                    120.0,
                 ),
                 minimum=0,
                 inclusive=True,
@@ -284,14 +253,12 @@ class Config:
                 "agent.quiet_stream_timeout",
                 settings.number(
                     "agent.quiet_stream_timeout",
-                    _env_float("PILOTAGE_CODEX_QUIET_STREAM_TIMEOUT", 12.0),
+                    12.0,
                 ),
                 minimum=0,
                 inclusive=True,
             ),
-            send_read_receipts=settings.flag(
-                "whatsapp.read_receipts", _env_flag("PILOTAGE_SEND_READ_RECEIPTS")
-            ),
+            send_read_receipts=settings.flag("whatsapp.read_receipts", False),
             max_tool_iterations=_count_in_range(
                 "tools.max_iterations",
                 settings.count("tools.max_iterations", DEFAULT_MAX_TOOL_ITERATIONS),

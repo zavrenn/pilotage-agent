@@ -1,0 +1,30 @@
+# Pilotage Agent behavior. Copied to ~/.pilotage-agent/config.yaml by
+# scripts/install.sh. Sensitive values belong in ~/.pilotage-agent/.env.
+
+agent:
+  model: gpt-5.6-sol
+  reasoning_effort: medium
+  # instructions: Answer briefly and in French.
+  history_turns: 20
+  request_timeout: 300
+  first_event_timeout: 120
+  quiet_stream_timeout: 12
+
+whatsapp:
+  answer_groups: false
+  batch_delay: 5
+  batch_split_delay: 10
+  bridge_port: 8765
+  read_receipts: false
+
+tools:
+  enabled:
+    - todo
+    - terminal
+  max_iterations: 90
+  max_result_chars: 100000
+  max_step_chars: 200000
+
+terminal:
+  # cwd: /srv/agents/my-agent
+  timeout: 120

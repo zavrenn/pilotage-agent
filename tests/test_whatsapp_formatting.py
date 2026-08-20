@@ -8,7 +8,9 @@ the ones where translating goes too far — a bullet, a formula, a line of code.
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from pilotage.channels.formatting import to_whatsapp
@@ -91,8 +93,15 @@ class CodeTests(unittest.TestCase):
     def test_inline_code_is_untouched(self):
         self.assertEqual(to_whatsapp("Run `a **b** c`."), "Run `a **b** c`.")
 
-    def test_a_fenced_block_is_untouched(self):
+    def test_code_inside_a_fenced_block_is_untouched(self):
         source = "```py\nx = **2**\n# not a heading\n```"
+        self.assertEqual(to_whatsapp(source), "```\nx = **2**\n# not a heading\n```")
+
+    def test_a_fence_language_does_not_become_visible_whatsapp_text(self):
+        self.assertEqual(to_whatsapp("```text\nworks\n/tmp\n```"), "```\nworks\n/tmp\n```")
+
+    def test_a_bare_fence_is_untouched(self):
+        source = "```\nraw **code**\n```"
         self.assertEqual(to_whatsapp(source), source)
 
     def test_text_around_a_fence_is_still_converted(self):
@@ -122,14 +131,20 @@ class InstructionTests(unittest.TestCase):
         self.assertIn(FORMATTING_NOTE, Config.load().instructions)
 
     def test_custom_instructions_cannot_drop_the_note(self):
-        with mock.patch.dict(os.environ, {"PILOTAGE_INSTRUCTIONS": "Be terse."}):
-            instructions = Config.load().instructions
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.yaml"
+            path.write_text("agent:\n  instructions: Be terse.\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"PILOTAGE_CONFIG": str(path)}):
+                instructions = Config.load().instructions
         self.assertTrue(instructions.startswith("Be terse."))
         self.assertIn(FORMATTING_NOTE, instructions)
 
     def test_emptied_instructions_fall_back_and_keep_the_note(self):
-        with mock.patch.dict(os.environ, {"PILOTAGE_INSTRUCTIONS": "   "}):
-            instructions = Config.load().instructions
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.yaml"
+            path.write_text("agent:\n  instructions: '   '\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"PILOTAGE_CONFIG": str(path)}):
+                instructions = Config.load().instructions
         self.assertTrue(instructions.startswith(DEFAULT_INSTRUCTIONS))
         self.assertIn(FORMATTING_NOTE, instructions)
 

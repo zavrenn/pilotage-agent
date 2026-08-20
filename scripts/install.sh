@@ -37,14 +37,27 @@ echo "==> WhatsApp bridge"
 (cd bridge && npm install --silent --no-fund --no-audit)
 
 state_dir="${PILOTAGE_HOME:-$HOME/.pilotage-agent}"
+umask 077
 mkdir -p "$state_dir"
+chmod 700 "$state_dir"
 if [ ! -f "$state_dir/.env" ] && [ -f .env.example ]; then
   cp .env.example "$state_dir/.env"
-  echo "==> Wrote $state_dir/.env — edit it before starting the agent."
+  echo "==> Wrote $state_dir/.env — set PILOTAGE_ALLOWED_SENDERS before starting."
+fi
+if [ -f "$state_dir/.env" ]; then
+  chmod 600 "$state_dir/.env"
+fi
+if [ ! -f "$state_dir/config.yaml" ] && [ -f config.yaml.example ]; then
+  cp config.yaml.example "$state_dir/config.yaml"
+  echo "==> Wrote $state_dir/config.yaml — review the agent behavior before starting."
+fi
+if [ -f "$state_dir/config.yaml" ]; then
+  chmod 600 "$state_dir/config.yaml"
 fi
 
 echo
 echo "Installed. Next:"
 echo "  1. edit $state_dir/.env and set PILOTAGE_ALLOWED_SENDERS"
-echo "  2. ./.venv/bin/pilotage login"
-echo "  3. ./.venv/bin/pilotage run"
+echo "  2. review $state_dir/config.yaml"
+echo "  3. ./.venv/bin/pilotage login"
+echo "  4. ./.venv/bin/pilotage run"

@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
     for path in load_env_files():
-        logger.info("Read settings from %s", path)
+        logger.info("Read environment from %s", path)
     try:
         # Parse the exact view that will run while still inside the guarded
         # startup boundary. A malformed channel override must be a clean
