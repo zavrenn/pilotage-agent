@@ -134,6 +134,7 @@ class SchemaTests(unittest.TestCase):
                     "bridge.pid",
                     "codex-auth.json.lock",
                     "conversations.db-wal",
+                    "SOUL.md",
                     "cron/.jobs.lock",
                     "cron/jobs.json",
                 ):

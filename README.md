@@ -66,9 +66,9 @@ bash scripts/install-service.sh --profile work
 ./.venv/bin/pilotage cron list --all
 ```
 
-Each named profile owns its configuration, WhatsApp session, conversations,
-memory, skills, workspace, cron jobs, and an automatically assigned bridge
-port. Only one live runtime may own a profile. A named profile may fall back
+Each named profile owns its `SOUL.md` identity, configuration, WhatsApp session,
+conversations, memory, skills, workspace, cron jobs, and an automatically assigned
+bridge port. Only one live runtime may own a profile. A named profile may fall back
 only to the default profile's ChatGPT authentication.
 
 ## Origin

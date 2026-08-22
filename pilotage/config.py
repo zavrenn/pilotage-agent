@@ -1,14 +1,14 @@
 """What this agent is and how it behaves.
 
-Behaviour is written in a configuration file the operator edits and can diff
-against another machine; the environment carries sensitive identities,
-secrets, and the few things that are properties of the box rather than of the
-agent. Each setting has one canonical home, so two files cannot disagree about
-which behaviour is running.
+Behaviour settings live in a configuration file the operator can diff against
+another machine; profile identity lives in its small ``SOUL.md`` file. The
+environment carries secrets, channel identities, and the few things that are
+properties of the box rather than of the agent. Each concern has one canonical
+home.
 
-A missing file leaves every default in place, so an agent that has never been
-configured still runs. A broken file stops the agent instead of falling back,
-because a default can silently re-enable something the operator switched off.
+Missing files leave defaults in place, so an unconfigured agent still runs.
+Broken configuration or an unreadable/unsafe identity stops startup instead of
+silently running with a different contract.
 """
 
 from __future__ import annotations
@@ -24,6 +24,11 @@ from .settings import ConfigError, Settings, config_path
 
 DEFAULT_MODEL = "gpt-5.6-sol"
 DEFAULT_REASONING_EFFORT = "medium"
+
+# Hermes's conservative context-file floor; profile identities should normally
+# remain far smaller than this.
+SOUL_FILENAME = "SOUL.md"
+SOUL_MAX_CHARS = 20_000
 
 DEFAULT_INSTRUCTIONS = (
     "You are a Pilotage agent. You answer over WhatsApp, so keep replies short "
@@ -84,11 +89,43 @@ def state_dir() -> Path:
     return root
 
 
-def _instructions(settings: Settings) -> str:
-    """The operator's instructions, plus the formatting note they cannot drop."""
-    # A blank setting means the default, so there is always something here.
+def _load_soul(home: Path) -> str:
+    """Load exactly this profile's optional Hermes-compatible identity file."""
+    path = home / SOUL_FILENAME
+    try:
+        content = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    except (OSError, UnicodeError) as exc:
+        raise ConfigError(f"Could not read {path}: {exc}") from exc
+
+    content = content.removeprefix("\ufeff").strip()
+    if not content:
+        return ""
+    if len(content) > SOUL_MAX_CHARS:
+        raise ConfigError(
+            f"{path} exceeds the {SOUL_MAX_CHARS:,}-character identity limit"
+        )
+
+    from .tools.threat_patterns import scan_for_threats
+
+    findings = scan_for_threats(content, scope="context")
+    if findings:
+        raise ConfigError(
+            f"{path} contains potentially unsafe instructions: {', '.join(findings)}"
+        )
+    return content
+
+
+def _instructions(settings: Settings, home: Path) -> str:
+    """Assemble profile identity, optional operator overlay, and channel rules."""
     written = settings.text("agent.instructions", "")
-    return f"{written or DEFAULT_INSTRUCTIONS}\n\n{FORMATTING_NOTE}"
+    soul = _load_soul(home)
+    parts = [soul or written or DEFAULT_INSTRUCTIONS]
+    if soul and written:
+        parts.append(written)
+    parts.append(FORMATTING_NOTE)
+    return "\n\n".join(parts)
 
 
 def _count_in_range(
@@ -283,7 +320,7 @@ class Config:
         return cls(
             model=settings.text("agent.model", DEFAULT_MODEL),
             reasoning_effort=settings.text("agent.reasoning_effort", DEFAULT_REASONING_EFFORT),
-            instructions=_instructions(settings),
+            instructions=_instructions(settings, home),
             allowed_senders=frozenset(senders),
             answer_groups=answer_groups,
             bridge_port=_count_in_range(

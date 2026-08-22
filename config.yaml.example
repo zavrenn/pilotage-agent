@@ -4,7 +4,8 @@
 agent:
   model: gpt-5.6-sol
   reasoning_effort: medium
-  # instructions: Answer briefly and in French.
+  # Identity is read from the profile-local SOUL.md file.
+  # instructions: Optional runtime overlay applied after SOUL.md.
   history_turns: 20
   request_timeout: 300
   first_event_timeout: 120

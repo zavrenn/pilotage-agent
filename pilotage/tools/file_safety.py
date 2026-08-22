@@ -68,6 +68,7 @@ def _state_files() -> tuple[str, ...]:
         _real(str(home / "codex-auth.json")),
         _real(str(home / "codex-auth.json.lock")),
         _real(str(home / "config.yaml")),
+        _real(str(home / "SOUL.md")),
         _real(str(home / "conversations.db")),
         _real(str(home / "conversations.db-journal")),
         _real(str(home / "conversations.db-shm")),

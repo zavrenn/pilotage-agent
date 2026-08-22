@@ -272,6 +272,7 @@ def create_profile(name: str) -> Path:
         config_path = profile_dir / "config.yaml"
         config_path.write_text(
             "# Profile-local settings. This port must stay unique on the host.\n"
+            "# Put this profile's identity in SOUL.md beside this file.\n"
             "whatsapp:\n"
             f"  bridge_port: {bridge_port}\n",
             encoding="utf-8",
