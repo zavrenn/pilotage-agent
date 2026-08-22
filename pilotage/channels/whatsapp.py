@@ -35,6 +35,7 @@ POLL_ERROR_BACKOFF_SECONDS = 5.0
 # has to be renewed for as long as the model is still thinking.
 TYPING_REFRESH_SECONDS = 8.0
 HTTP_TIMEOUT_SECONDS = 30.0
+MEDIA_HTTP_TIMEOUT_SECONDS = 120.0
 BRIDGE_READY_TIMEOUT_SECONDS = 120.0
 BRIDGE_RESTART_ATTEMPTS = 3
 BRIDGE_RESTART_DELAY_SECONDS = 5.0
@@ -724,22 +725,45 @@ class WhatsAppChannel:
     async def send(self, chat_id: str, text: str, reply_to: str = "") -> bool:
         if self._http is None:
             return False
+
+        attachments, cleaned = media.extract_outbound(
+            text or "", (self._config.workspace_dir,)
+        )
         # Everything leaves through here, so this is the one place the model's
-        # markdown has to become WhatsApp's.
-        body = to_whatsapp(text or "").strip()
-        if not body:
+        # markdown has to become WhatsApp's. MEDIA directives are removed first
+        # and become native bridge uploads below. This is Hermes' send order:
+        # visible text first, then each attachment through the serialized queue.
+        body = to_whatsapp(cleaned).strip()
+        if not body and not attachments:
             return False
-        payload: Dict[str, Any] = {"chatId": chat_id, "message": body}
-        if reply_to:
-            # Quote the message being answered. One agent can be talking to
-            # several people at once, and an answer that arrives a minute
-            # after the question is otherwise guesswork.
-            payload["replyTo"] = reply_to
+
         try:
-            response = await self._http.post(
-                f"{self._base_url}/send", json=payload
-            )
-            response.raise_for_status()
+            if body:
+                payload: Dict[str, Any] = {"chatId": chat_id, "message": body}
+                if reply_to:
+                    # Quote the message being answered. One agent can be talking
+                    # to several people at once, and an answer that arrives a
+                    # minute after the question is otherwise guesswork.
+                    payload["replyTo"] = reply_to
+                response = await self._http.post(
+                    f"{self._base_url}/send", json=payload
+                )
+                response.raise_for_status()
+
+            for attachment in attachments:
+                payload = {
+                    "chatId": chat_id,
+                    "filePath": str(attachment.path),
+                    "mediaType": attachment.media_type,
+                }
+                if attachment.media_type == "document":
+                    payload["fileName"] = attachment.file_name
+                response = await self._http.post(
+                    f"{self._base_url}/send-media",
+                    json=payload,
+                    timeout=MEDIA_HTTP_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.error("Sending to %s failed: %s", chat_id, exc)
             return False

@@ -1,4 +1,4 @@
-"""Inbound attachments: what the bridge downloaded, and what the model can read.
+"""Media crossing the bridge boundary.
 
 The bridge is a separate process that writes inbound media to disk and hands
 back absolute paths. Those paths are checked against the cache roots before
@@ -14,12 +14,19 @@ What the model can actually take differs by kind:
 * **Voice notes, audio and video** cannot be read at all. ChatGPT's OAuth
   session does not carry the transcription API, so they are announced to the
   model rather than silently dropped.
+
+Outbound files take the reverse path. The model names a generated file with
+Hermes' ``MEDIA:/absolute/path`` directive; the directive is removed from the
+visible answer and the resolved file is accepted only when it is a regular
+file inside this profile's workspace. The WhatsApp channel then hands that
+validated path to the private bridge as a native attachment.
 """
 
 from __future__ import annotations
 
 import base64
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -44,6 +51,39 @@ TEXT_DOCUMENT_SUFFIXES = frozenset(
     }
 )
 
+
+# Hermes' single media-delivery extension set. Keeping one list prevents the
+# extractor and transport router from disagreeing about whether a directive is
+# deliverable. Pilotage currently routes audio as a document; native voice
+# output is outside this slice.
+MEDIA_DELIVERY_SUFFIXES = (
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".svg",
+    ".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp",
+    ".mp3", ".m2a", ".wav", ".ogg", ".opus", ".m4a", ".flac",
+    ".pdf", ".docx", ".doc", ".odt", ".rtf", ".txt", ".md", ".epub",
+    ".xlsx", ".xls", ".ods", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml",
+    ".kmz", ".kml", ".geojson", ".gpx",
+    ".pptx", ".ppt", ".odp", ".key",
+    ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".apk", ".ipa",
+    ".html", ".htm",
+)
+
+_IMAGE_DELIVERY_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif"})
+_VIDEO_DELIVERY_SUFFIXES = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"})
+_MEDIA_EXT_ALTERNATION = "|".join(
+    sorted((suffix.lstrip(".") for suffix in MEDIA_DELIVERY_SUFFIXES), key=len, reverse=True)
+)
+
+# Ported from Hermes' MEDIA_TAG_CLEANUP_RE. It accepts ordinary, quoted,
+# backticked and markdown-emphasized directives while anchoring every match to
+# an absolute path and a deliverable extension.
+MEDIA_TAG_RE = re.compile(
+    r'''[`"'*_]{0,3}MEDIA:\s*'''
+    r'''(?P<path>`[^`\n]+?`|"[^"\n]+?"|'[^'\n]+?'|'''
+    r'''(?:~/|/|[A-Za-z]:[/\\])\S+?(?:[^\S\n]+\S+?)*?\.(?:''' + _MEDIA_EXT_ALTERNATION + r'''))'''
+    r'''(?=[\s`"'*_,;:)\]}\[]|MEDIA:|\.(?:\s|$)|$)[`"'*_]{0,3}\.?''',
+    re.IGNORECASE,
+)
 
 @dataclass(frozen=True)
 class Attachment:
@@ -72,6 +112,18 @@ class Attachment:
             return self.file_name
         parts = self.path.name.split("_", 2)
         return parts[2] if len(parts) >= 3 else self.path.name
+
+
+@dataclass(frozen=True)
+class OutboundAttachment:
+    """One validated workspace file to deliver through WhatsApp."""
+
+    path: Path
+    media_type: str
+
+    @property
+    def file_name(self) -> str:
+        return self.path.name
 
 
 def collect(event: Dict[str, Any], roots: Sequence[Path]) -> List[Attachment]:
@@ -112,6 +164,110 @@ def _accept_path(raw: str, roots: Sequence[Path]) -> Optional[Path]:
             continue
         return resolved
     return None
+
+
+def _normalize_media_tag_path(raw: str) -> str:
+    path = str(raw or "").strip()
+    if len(path) >= 2 and path[0] == path[-1] and path[0] in "`\"'":
+        path = path[1:-1].strip()
+    return path.lstrip("`\"'").rstrip("`\"',.;:)}]")
+
+
+def _accept_outbound_path(raw: str, roots: Sequence[Path]) -> Optional[Path]:
+    try:
+        expanded = Path(raw).expanduser()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return _accept_path(str(expanded), roots)
+
+
+def _outbound_media_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in _IMAGE_DELIVERY_SUFFIXES:
+        return "image"
+    if suffix in _VIDEO_DELIVERY_SUFFIXES:
+        return "video"
+    return "document"
+
+
+def _mask_protected_media_spans(content: str, roots: Sequence[Path]) -> str:
+    """Port Hermes' guard against treating examples as live attachments."""
+    chars = list(content)
+    spans: List[tuple[int, int]] = []
+
+    for match in re.finditer(r"```[^\n]*\n.*?```", content, re.DOTALL):
+        spans.append((match.start(), match.end()))
+
+    for match in re.finditer(r"`[^`\n]+`", content):
+        start = match.start()
+        prefix = content[max(0, start - 20):start]
+        if re.search(r"MEDIA:\s*$", prefix):
+            continue
+        inner = match.group(0)[1:-1].strip()
+        if inner.upper().startswith("MEDIA:"):
+            candidate = _normalize_media_tag_path(inner[6:])
+            if candidate and _accept_outbound_path(candidate, roots):
+                continue
+        spans.append((start, match.end()))
+
+    for match in re.finditer(r"^>.*$", content, re.MULTILINE):
+        spans.append((match.start(), match.end()))
+
+    for start, end in spans:
+        for index in range(start, end):
+            if chars[index] != "\n":
+                chars[index] = " "
+    return "".join(chars)
+
+
+def _mask_json_media_values(content: str) -> str:
+    """Port Hermes' guard against replaying a stored MEDIA string."""
+    if '"' not in content or "MEDIA:" not in content:
+        return content
+    chars = list(content)
+    for match in re.finditer(r'(?<=[:,{\[])\s*"((?:[^"\\\n]|\\.)*)"', content):
+        if re.search(r"MEDIA:\s*(?:~/|/|[A-Za-z]:[/\\])", match.group(1)):
+            for index in range(match.start(1), match.end(1)):
+                if chars[index] != "\n":
+                    chars[index] = " "
+    return "".join(chars)
+
+
+def extract_outbound(
+    content: str, roots: Sequence[Path]
+) -> tuple[List[OutboundAttachment], str]:
+    """Extract safe Hermes ``MEDIA:`` directives and clean the visible text."""
+    if "MEDIA:" not in content:
+        return [], content
+
+    scan = _mask_protected_media_spans(content, roots)
+    scan = _mask_json_media_values(scan)
+    attachments: List[OutboundAttachment] = []
+    seen: set[Path] = set()
+    spans: List[tuple[int, int]] = []
+
+    for match in MEDIA_TAG_RE.finditer(scan):
+        spans.append(match.span())
+        raw = _normalize_media_tag_path(match.group("path"))
+        accepted = _accept_outbound_path(raw, roots)
+        if accepted is None:
+            logger.warning("Rejected an outbound MEDIA path outside the workspace")
+            continue
+        if accepted in seen:
+            continue
+        seen.add(accepted)
+        attachments.append(
+            OutboundAttachment(path=accepted, media_type=_outbound_media_type(accepted))
+        )
+
+    if not spans:
+        return attachments, content
+
+    chars = list(content)
+    for start, end in reversed(spans):
+        del chars[start:end]
+    cleaned = re.sub(r"\n{3,}", "\n\n", "".join(chars)).strip()
+    return attachments, cleaned
 
 
 def inline_documents(text: str, attachments: Sequence[Attachment]) -> str:

@@ -36,8 +36,8 @@ allowlisted WhatsApp messaging, persistent conversations with native context
 compaction, curated memory, profile-local tools and skills, isolated profiles,
 management commands, and durable cron jobs. WhatsApp group mode remains closed
 until its mention policy is implemented. This Genesis slice is not
-production-complete: Telegram, voice transcription, outbound file delivery, and
-the approval workflow are not implemented yet. There is no stable public API.
+production-complete: Telegram, voice transcription, and the approval workflow
+are not implemented yet. There is no stable public API.
 
 ## Install on Ubuntu
 

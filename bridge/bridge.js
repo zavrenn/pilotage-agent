@@ -9,6 +9,7 @@
  *   POST /typing    -> { chatId }
  *   POST /read      -> { key }
  *   POST /send      -> { chatId, message, replyTo? }
+ *   POST /send-media -> { chatId, filePath, mediaType?, fileName? }
  *
  * The HTTP contract is ours. Everything below it — the reconnect scheduler, the
  * version resolver, the serialized send queue, the message unwrapping, the
@@ -16,13 +17,13 @@
  * code (scripts/whatsapp-bridge/{bridge,bridge_helpers,allowlist}.js), kept as
  * it stands rather than reimplemented.
  *
- * Inbound is complete: text, media, quotes, locations, contacts, reactions and
- * polls. Outbound is still text only — see docs/skeleton-drops.md.
+ * Inbound is complete. Outbound supports text plus native generated files;
+ * polls, locations and reactions remain outside the production requirement.
  */
 
 import process from 'node:process';
 import path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 
 import express from 'express';
 import pino from 'pino';
@@ -49,6 +50,7 @@ import {
   createVersionResolver,
   extractBridgeEvent,
   inboundReadReceiptKeys,
+  mediaPayloadForFile,
 } from './bridge_helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -499,6 +501,48 @@ app.post('/send', async (req, res) => {
     });
   } catch (error) {
     log(`send failed: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Hermes' native-file handoff. Python has already resolved the path and
+// confined it to this profile's workspace; the private, token-authenticated
+// bridge only turns those bytes into the correct Baileys payload.
+app.post('/send-media', async (req, res) => {
+  const { chatId, filePath, mediaType, fileName } = req.body || {};
+  if (!connected || !sock) {
+    res.status(503).json({ error: 'not connected' });
+    return;
+  }
+  if (!chatId || typeof filePath !== 'string' || !filePath) {
+    res.status(400).json({ error: 'chatId and filePath are required' });
+    return;
+  }
+  if (mediaType && !['image', 'video', 'document'].includes(mediaType)) {
+    res.status(400).json({ error: 'unsupported mediaType' });
+    return;
+  }
+
+  try {
+    if (!existsSync(filePath)) {
+      res.status(404).json({ error: 'file not found' });
+      return;
+    }
+    const content = mediaPayloadForFile({
+      buffer: readFileSync(filePath),
+      filePath,
+      mediaType,
+      fileName,
+    });
+    if (!content) {
+      res.status(400).json({ error: 'unsupported media file' });
+      return;
+    }
+    const sent = await sendWithTimeout(chatId, content);
+    if (sent) messageStore.remember(sent);
+    res.json({ success: true, messageId: sent?.key?.id });
+  } catch (error) {
+    log(`media send failed: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
 });

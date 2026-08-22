@@ -48,6 +48,15 @@ FORMATTING_NOTE = (
     "render at all — use short lines or bullets instead."
 )
 
+WHATSAPP_MEDIA_NOTE = (
+    "You can send generated files natively on WhatsApp. To deliver a local "
+    "file, include MEDIA:/absolute/path/to/file on its own line in your "
+    "response. Images (.jpg, .png, .webp) appear as photos; PDFs, spreadsheets "
+    "and other files arrive as downloadable documents. The file must be inside "
+    "this profile's workspace. Use MEDIA: for local files, never a markdown "
+    "link or sandbox: URL."
+)
+
 # How many times the model may call tools and look at the results before it has
 # to answer with what it has. Hermes' number. It is a runaway guard, not a
 # budget: real work finishes far inside it, and a loop that reaches it was
@@ -117,7 +126,7 @@ def _load_soul(home: Path) -> str:
     return content
 
 
-def _instructions(settings: Settings, home: Path) -> str:
+def _instructions(settings: Settings, home: Path, channel: str = "") -> str:
     """Assemble profile identity, optional operator overlay, and channel rules."""
     written = settings.text("agent.instructions", "")
     soul = _load_soul(home)
@@ -125,6 +134,8 @@ def _instructions(settings: Settings, home: Path) -> str:
     if soul and written:
         parts.append(written)
     parts.append(FORMATTING_NOTE)
+    if channel == "whatsapp":
+        parts.append(WHATSAPP_MEDIA_NOTE)
     return "\n\n".join(parts)
 
 
@@ -320,7 +331,7 @@ class Config:
         return cls(
             model=settings.text("agent.model", DEFAULT_MODEL),
             reasoning_effort=settings.text("agent.reasoning_effort", DEFAULT_REASONING_EFFORT),
-            instructions=_instructions(settings, home),
+            instructions=_instructions(settings, home, channel),
             allowed_senders=frozenset(senders),
             answer_groups=answer_groups,
             bridge_port=_count_in_range(
