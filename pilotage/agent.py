@@ -21,9 +21,16 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 from openai import APIStatusError, AsyncOpenAI
 
 from . import media
-from .codex import auth, client as codex_client, stream as codex_stream
+from .codex import (
+    auth,
+    client as codex_client,
+    compaction,
+    stream as codex_stream,
+)
 from .config import Config
+from .cron.jobs import CronStore
 from .history import ConversationStore
+from .tools.memory import MemoryStore
 from .tools import (
     ToolContext,
     build_registry,
@@ -83,7 +90,15 @@ class TurnResult:
 
 
 class Agent:
-    def __init__(self, config: Config, store: Optional[ConversationStore] = None):
+    def __init__(
+        self,
+        config: Config,
+        store: Optional[ConversationStore] = None,
+        *,
+        cron_store: Optional[CronStore] = None,
+        cron_wake: Optional[Callable[[], None]] = None,
+        disabled_tool_groups: Sequence[str] = (),
+    ):
         self._config = config
         self._store = store or ConversationStore(config.conversations_path)
         self._history: Dict[str, List[Turn]] = {}
@@ -101,17 +116,68 @@ class Agent:
         # conversation would invalidate its prompt cache and confuse the model
         # about what it just used.
         self._registry = build_registry()
-        self._tool_groups = enabled_groups(config.settings, self._registry)
+        disabled = set(disabled_tool_groups)
+        self._tool_groups = [
+            group for group in enabled_groups(config.settings, self._registry)
+            if group not in disabled
+        ]
         self._tools = self._registry.definitions(self._tool_groups)
         self._instructions = config.instructions
         if "skills" in self._tool_groups:
             skills_prompt = build_skills_prompt(config)
             if skills_prompt:
                 self._instructions = f"{self._instructions}\n\n{skills_prompt}"
+
+        self._memory_store: Optional[MemoryStore] = None
+        if "memory" in self._tool_groups:
+            self._memory_store = MemoryStore(
+                config.memory_dir,
+                memory_char_limit=config.memory_char_limit,
+                user_char_limit=config.user_memory_char_limit,
+            )
+            self._memory_store.load_from_disk()
+        # One frozen memory snapshot per chat session. Pilotage serves several
+        # chats with one Agent instance; a single process-wide snapshot would
+        # keep new memory invisible until restart.
+        self._session_instructions: Dict[str, str] = {}
+
+        self._cron_store: Optional[CronStore] = None
+        self._cron_wake = cron_wake
+        if "cron" in self._tool_groups:
+            self._cron_store = cron_store or CronStore(
+                config.state_dir,
+                timezone_name=config.cron_timezone,
+                claim_ttl_seconds=config.cron_claim_ttl_seconds,
+                output_retention=config.cron_output_retention,
+            )
+
         if self._tools:
             logger.info("Tools enabled: %s", ", ".join(self._registry.names(self._tool_groups)))
         # Whatever the tools of one chat need to remember between calls.
         self._tool_state: Dict[str, Dict[str, Any]] = {}
+
+    def _instructions_for_session(self, chat_id: str) -> str:
+        cached = self._session_instructions.get(chat_id)
+        if cached is not None:
+            return cached
+        if self._memory_store is None:
+            self._session_instructions[chat_id] = self._instructions
+            return self._instructions
+
+        snapshot = MemoryStore(
+            self._config.memory_dir,
+            memory_char_limit=self._config.memory_char_limit,
+            user_char_limit=self._config.user_memory_char_limit,
+        )
+        snapshot.load_from_disk()
+        blocks = [
+            block
+            for target in ("memory", "user")
+            if (block := snapshot.format_for_system_prompt(target))
+        ]
+        instructions = "\n\n".join([self._instructions, *blocks])
+        self._session_instructions[chat_id] = instructions
+        return instructions
 
     # -- credentials --------------------------------------------------------
 
@@ -127,6 +193,7 @@ class Agent:
             credentials = await asyncio.to_thread(
                 auth.resolve_credentials,
                 self._config.credentials_path,
+                fallback_path=self._config.main_credentials_path,
                 force_refresh=force_refresh,
             )
             if self._client is None or credentials.access_token != (
@@ -176,28 +243,84 @@ class Agent:
             turn.image_parts = []
         history.append(Turn(role="user", content=user_text, image_parts=image_parts))
         history.append(Turn(role="assistant", content=result.text, items=result.items))
-        limit = self._history_limit()
-        if len(history) > limit:
-            del history[: len(history) - limit]
+        if self._native_compaction_active():
+            self._prune_native_history(history)
+        else:
+            limit = self._history_limit()
+            if len(history) > limit:
+                del history[: len(history) - limit]
+
+    def _native_compaction_active(self) -> bool:
+        return (
+            self._config.codex_native_compaction
+            and compaction.is_native_compaction_model(self._config.model)
+        )
+
+    def _prune_native_history(self, history: List[Turn]) -> None:
+        """Bound local state around the newest opaque compaction checkpoint."""
+        checkpoint_index: Optional[int] = None
+        for index, turn in enumerate(history):
+            if turn.role == "assistant" and compaction.has_compaction_checkpoint(
+                turn.items
+            ):
+                checkpoint_index = index
+        if checkpoint_index is None:
+            return
+
+        remaining = compaction.RETAINED_USER_MESSAGE_TOKEN_BUDGET
+        retained_reversed: List[Turn] = []
+        for turn in reversed(history[:checkpoint_index]):
+            if turn.role != "user" or not turn.content.strip():
+                continue
+            if remaining <= 0:
+                break
+            cost = max(1, len(turn.content) // 4)
+            if cost <= remaining:
+                retained_reversed.append(turn)
+                remaining -= cost
+                continue
+            truncated = turn.content[: remaining * 4]
+            if truncated.strip():
+                retained_reversed.append(
+                    Turn(
+                        role="user",
+                        content=truncated,
+                        image_parts=list(turn.image_parts),
+                    )
+                )
+            remaining = 0
+
+        history[:] = list(reversed(retained_reversed)) + history[checkpoint_index:]
 
     async def _restore(self, chat_id: str) -> None:
         """Bring a chat's stored history back, once, after a restart.
 
-        Only the words come back. A turn restored this way has no reasoning
-        items and no pictures, which is what ``history.py`` explains.
+        Normal reasoning and pictures stay process-local. Eligible sessions
+        also restore the opaque compaction checkpoint required for continuity.
         """
         if chat_id in self._restored:
             return
         self._restored.add(chat_id)
         if chat_id in self._history:
             return
-        stored = await asyncio.to_thread(
-            self._store.load, chat_id, self._history_limit()
-        )
-        if not stored:
-            return
-        self._history[chat_id] = [Turn(role=role, content=content) for role, content in stored]
-        logger.info("Picked up %d stored turns for %s", len(stored), chat_id)
+        if self._native_compaction_active():
+            stored = await asyncio.to_thread(self._store.load_with_replay, chat_id)
+            history: List[Turn] = []
+            for role, content, replay in stored:
+                items: List[Dict[str, Any]] = []
+                if role == "assistant" and replay:
+                    items = [dict(item) for item in replay]
+                    items.append({"role": "assistant", "content": content})
+                history.append(Turn(role=role, content=content, items=items))
+            self._prune_native_history(history)
+        else:
+            stored = await asyncio.to_thread(
+                self._store.load, chat_id, self._history_limit()
+            )
+            history = [Turn(role=role, content=content) for role, content in stored]
+        if history:
+            self._history[chat_id] = history
+            logger.info("Picked up %d stored turns for %s", len(stored), chat_id)
 
     def _history_limit(self) -> int:
         """Turns kept per chat — a question and its answer count as two."""
@@ -213,14 +336,16 @@ class Agent:
         """
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
+            # Record the boundary before changing live state. If this fails,
+            # /new reports failure and the old conversation remains intact.
+            await asyncio.to_thread(self._store.new_session, chat_id)
             self._history.pop(chat_id, None)
             # The task list belonged to work that has just been abandoned.
             self._tool_state.pop(chat_id, None)
-            # The stored conversation is left where it is and a new one
-            # begins, so a restart cannot hand back what was just ended.
-            await asyncio.to_thread(self._store.new_session, chat_id)
-            # Held even if that write failed: a chat cannot be un-forgotten by
-            # the next message going looking for it on disk.
+            # Memory written during the old session becomes visible in the
+            # frozen prompt of the next one.
+            self._session_instructions.pop(chat_id, None)
+            # Do not reload the conversation that the durable boundary ended.
             self._restored.add(chat_id)
 
     # -- the turn -----------------------------------------------------------
@@ -231,6 +356,8 @@ class Agent:
         user_text: str,
         attachments: Sequence[media.Attachment] = (),
         on_notice: Optional[Notice] = None,
+        *,
+        origin: Optional[Dict[str, str]] = None,
     ) -> str:
         # Reading the files is blocking I/O and base64 of a few megabytes is not
         # free, so it happens off the event loop.
@@ -240,12 +367,24 @@ class Agent:
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
             await self._restore(chat_id)
-            result = await self._run_turn(chat_id, user_text, image_parts, on_notice)
+            if self._memory_store is not None:
+                self._memory_store.reset_consolidation_failures()
+            result = await self._run_turn(
+                chat_id, user_text, image_parts, on_notice, origin=origin
+            )
             self._remember(chat_id, user_text, image_parts, result)
+            checkpoints = (
+                compaction.persistent_compaction_items(result.items)
+                if self._native_compaction_active()
+                else []
+            )
             await asyncio.to_thread(
-                self._store.append,
+                self._store.append_with_replay,
                 chat_id,
-                [("user", user_text), ("assistant", result.text)],
+                [
+                    ("user", user_text, []),
+                    ("assistant", result.text, checkpoints),
+                ],
             )
             return result.text
 
@@ -255,13 +394,20 @@ class Agent:
         user_text: str,
         image_parts: List[Dict[str, Any]],
         on_notice: Optional[Notice] = None,
+        *,
+        origin: Optional[Dict[str, str]] = None,
     ) -> TurnResult:
         """Call the model, run what it asks for, call it again — until it answers."""
+        self._instructions_for_session(chat_id)
         history = self._build_input(chat_id, user_text, image_parts)
         context = ToolContext(
             chat_id=chat_id,
             config=self._config,
             state=self._tool_state.setdefault(chat_id, {}),
+            memory_store=self._memory_store,
+            cron_store=self._cron_store,
+            origin=origin,
+            cron_wake=self._cron_wake,
         )
         # Everything the assistant does this turn, in order, ready to be sent
         # back on the next call and kept as history afterwards.
@@ -311,11 +457,13 @@ class Agent:
         """One call to the model, retried when the connection rather than the request fails."""
         request = codex_stream.build_request(
             model=self._config.model,
-            instructions=self._instructions,
+            instructions=self._instructions_for_session(chat_id),
             input_items=input_items,
             session_id=chat_id,
             reasoning_effort=self._config.reasoning_effort,
             tools=tools,
+            native_compaction_enabled=self._config.codex_native_compaction,
+            compact_threshold=self._config.codex_compact_threshold,
         )
         # Recomputed per call: a turn grows as tools return, and a request that
         # has grown legitimately takes longer to start.

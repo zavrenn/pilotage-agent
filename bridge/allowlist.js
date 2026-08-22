@@ -1,9 +1,9 @@
 /**
  * WhatsApp identifier resolution.
  *
- * Copied from the Hermes bridge (scripts/whatsapp-bridge/allowlist.js), minus
- * the gating helpers: the allowlist itself is enforced in Python, so this file
- * only answers "which identifiers are the same person?".
+ * Copied from the Hermes bridge (scripts/whatsapp-bridge/allowlist.js). The
+ * bridge gates before media extraction; Python repeats the check as defence in
+ * depth before dispatch.
  *
  * WhatsApp now addresses people by two different identifiers — the phone number
  * (`34600111222@s.whatsapp.net`) and a LID alias (`67427329167522@lid`) — and
@@ -22,6 +22,15 @@ export function normalizeWhatsAppIdentifier(value) {
     .replace(/:.*@/, '@')
     .replace(/@.*/, '')
     .replace(/^\+/, '');
+}
+
+export function parseAllowedUsers(rawValue) {
+  return new Set(
+    String(rawValue || '')
+      .split(',')
+      .map((value) => normalizeWhatsAppIdentifier(value))
+      .filter(Boolean)
+  );
 }
 
 function readMappingFile(sessionDir, identifier, suffix = '') {
@@ -67,4 +76,23 @@ export function expandWhatsAppIdentifiers(identifier, sessionDir) {
   }
 
   return resolved;
+}
+
+export function matchesAllowedUser(senderId, allowedUsers, sessionDir) {
+  if (!allowedUsers || allowedUsers.size === 0) {
+    return false;
+  }
+
+  if (allowedUsers.has('*')) {
+    return true;
+  }
+
+  const aliases = expandWhatsAppIdentifiers(senderId, sessionDir);
+  for (const alias of aliases) {
+    if (allowedUsers.has(alias)) {
+      return true;
+    }
+  }
+
+  return false;
 }

@@ -6,7 +6,8 @@
   "description": "Minimal Baileys bridge: holds the WhatsApp connection, exposes a loopback HTTP API.",
   "main": "bridge.js",
   "scripts": {
-    "start": "node bridge.js"
+    "start": "node bridge.js",
+    "test": "node --test *.test.mjs"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc13",

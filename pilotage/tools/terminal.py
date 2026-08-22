@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .registry import Tool, ToolContext, tool_error
@@ -52,6 +54,29 @@ def _setting(context: ToolContext, name: str, default: Any) -> Any:
     if isinstance(default, int):
         return settings.count(name, default)
     return settings.text(name, default)
+
+
+def shell_cwd(context: ToolContext) -> str:
+    """Resolve the terminal root without letting profiles share process cwd."""
+    configured = str(_setting(context, "terminal.cwd", "")).strip()
+    if configured:
+        return os.path.expanduser(configured)
+    state_dir = getattr(context.config, "state_dir", None)
+    if state_dir is None:
+        return ""
+    workspace = Path(state_dir) / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    return str(workspace)
+
+
+def shell_env(context: ToolContext) -> Dict[str, str]:
+    """Expose the active profile/session to reused Hermes skill scripts."""
+    env = {"HERMES_SESSION_ID": str(context.chat_id)}
+    state_dir = getattr(context.config, "state_dir", None)
+    if state_dir is not None:
+        home = str(Path(state_dir))
+        env.update({"PILOTAGE_HOME": home, "HERMES_HOME": home})
+    return env
 
 
 def _capture_limit(context: ToolContext) -> Optional[int]:
@@ -105,9 +130,9 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
                 return tool_error(f"terminal.timeout is invalid: {exc}")
             if default_timeout <= 0:
                 return tool_error("terminal.timeout must be greater than zero")
-            cwd = str(_setting(context, "terminal.cwd", ""))
+            cwd = shell_cwd(context)
             session.shell = await asyncio.to_thread(
-                Shell, cwd=cwd, timeout=default_timeout
+                Shell, cwd=cwd, timeout=default_timeout, env=shell_env(context)
             )
 
         result = await asyncio.to_thread(

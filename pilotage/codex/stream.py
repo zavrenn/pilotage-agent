@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .call_ids import clamp_call_id, deterministic_call_id
+from . import compaction
 
 _TERMINAL_EVENT_TYPES = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
@@ -85,6 +86,8 @@ def build_request(
     session_id: str,
     reasoning_effort: str,
     tools: Optional[List[Dict[str, Any]]] = None,
+    native_compaction_enabled: bool = False,
+    compact_threshold: int = compaction.DEFAULT_COMPACT_THRESHOLD,
 ) -> Dict[str, Any]:
     """Build the kwargs for ``responses.create``.
 
@@ -96,11 +99,20 @@ def build_request(
     # The session id is a WhatsApp chat id — a phone number. It is only ever an
     # opaque conversation handle to the backend, so it goes out hashed.
     opaque_session = "s_" + hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:24]
+    context_management = compaction.context_management(
+        model=model,
+        enabled=native_compaction_enabled,
+        compact_threshold=compact_threshold,
+    )
+    prepared_input = compaction.prepare_input_items(
+        input_items,
+        native_compaction_active=bool(context_management),
+    )
 
     request: Dict[str, Any] = {
         "model": model,
         "instructions": instructions,
-        "input": input_items,
+        "input": prepared_input,
         # We keep the conversation ourselves; nothing is stored server-side.
         "store": False,
         "prompt_cache_key": cache_key,
@@ -113,6 +125,9 @@ def build_request(
             "x-client-request-id": cache_key,
         },
     }
+
+    if context_management:
+        request["context_management"] = context_management
 
     if tools:
         request["tools"] = tools
@@ -325,11 +340,16 @@ async def consume_stream(
     result.text = "".join(text_deltas).strip()
     if not result.text:
         result.text = _text_from_items(output_items)
-    result.reasoning_items = [
-        item
-        for item in output_items
-        if item.get("type") == "reasoning" and item.get("encrypted_content")
-    ]
+    result.reasoning_items = []
+    for item in output_items:
+        item_type = item.get("type")
+        encrypted = item.get("encrypted_content")
+        if item_type == "reasoning" and encrypted:
+            result.reasoning_items.append(item)
+        elif item_type == "compaction" and isinstance(encrypted, str) and encrypted:
+            result.reasoning_items.append(
+                {"type": "compaction", "encrypted_content": encrypted}
+            )
     result.tool_calls = _tool_calls_from_items(output_items)
 
     if not terminal_seen and not result.text and not output_items:

@@ -9,6 +9,7 @@ setting written under a channel applies to that channel and to no other.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import tempfile
 import unittest
@@ -206,6 +207,11 @@ class ConfigFileTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PILOTAGE_ALLOWED_SENDERS": "212600000000"}):
             self.assertEqual(Config.load().allowed_senders, frozenset({"212600000000"}))
 
+
+    def test_wildcard_sender_allowlist_is_refused(self):
+        with mock.patch.dict(os.environ, {"PILOTAGE_ALLOWED_SENDERS": "*"}):
+            with self.assertRaisesRegex(ConfigError, "explicit senders"):
+                Config.load()
     def test_allowed_senders_are_refused_in_behavioral_configuration(self):
         self._write("whatsapp:\n  allowed_senders: ['212600000000']\n")
         with self.assertRaises(ConfigError):
@@ -218,8 +224,14 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(config.model, "gpt-5.6-sol")
         self.assertEqual(
             config.settings.names("tools.enabled"),
-            ["todo", "terminal", "file", "skills"],
+            ["todo", "terminal", "file", "skills", "memory", "cron"],
         )
+        self.assertTrue(config.cron_enabled)
+        self.assertEqual(config.cron_output_retention, 50)
+        self.assertTrue(config.codex_native_compaction)
+        self.assertEqual(config.codex_compact_threshold, 200_000)
+        self.assertEqual(config.text_batch_hard_cap_seconds, 20.0)
+        self.assertFalse(config.answer_groups)
 
     def test_the_operators_instructions_keep_the_formatting_note(self):
         self._write("agent:\n  instructions: Answer in French.\n")
@@ -244,6 +256,31 @@ class ConfigFileTests(unittest.TestCase):
         self._write("agent:\n  model: [unclosed\n")
         with self.assertRaises(ConfigError):
             Config.load()
+
+    def test_status_validates_the_whatsapp_channel_view(self):
+        from pilotage import main
+
+        self._write(
+            "agent:\n"
+            "  model: common-model\n"
+            "channels:\n"
+            "  whatsapp:\n"
+            "    agent:\n"
+            "      model: whatsapp-model\n"
+        )
+        seen = {}
+
+        def status(config, profile_name):
+            seen["config"] = config
+            seen["profile"] = profile_name
+            return 0
+
+        with mock.patch.object(main, "command_status", status):
+            self.assertEqual(main.main(["status"]), 0)
+
+        self.assertEqual(seen["config"].settings.channel, "whatsapp")
+        self.assertEqual(seen["config"].model, "whatsapp-model")
+        self.assertEqual(seen["profile"], "default")
 
     def test_a_broken_file_exits_instead_of_starting(self):
         from pilotage import main
@@ -273,8 +310,135 @@ class ConfigFileTests(unittest.TestCase):
                 with self.assertRaises(ConfigError):
                     Config.load()
 
+    def test_invalid_cron_guardrails_stop_startup(self):
+        for body in (
+            "tick_seconds: 0",
+            "claim_ttl_seconds: 0",
+            "max_concurrent: 0",
+            "output_retention: 0",
+            "timezone: Mars/Olympus",
+        ):
+            with self.subTest(body=body):
+                self._write(f"cron:\n  {body}\n")
+                with self.assertRaises(ConfigError):
+                    Config.load()
+
+    def test_unknown_tool_groups_stop_startup(self):
+        for key in ("enabled", "disabled"):
+            with self.subTest(key=key):
+                self._write(f"tools:\n  {key}: [typo]\n")
+                with self.assertRaisesRegex(ConfigError, f"tools.{key}.*typo"):
+                    Config.load()
+
+    def test_an_invalid_terminal_working_directory_stops_startup(self):
+        missing = (self.home / "does-not-exist").as_posix()
+        self._write(f"terminal:\n  cwd: '{missing}'\n")
+        with self.assertRaisesRegex(ConfigError, "terminal.cwd"):
+            Config.load()
+
+    def test_group_mode_stays_closed_at_this_stage(self):
+        self._write("whatsapp:\n  answer_groups: true\n")
+        with self.assertRaisesRegex(ConfigError, "answer_groups"):
+            Config.load()
+
+    def test_non_positive_batch_hard_cap_is_refused(self):
+        self._write("whatsapp:\n  batch_hard_cap: 0\n")
+        with self.assertRaisesRegex(ConfigError, "batch_hard_cap"):
+            Config.load()
+
+    def test_too_small_native_compaction_threshold_is_refused(self):
+        self._write(
+            "compression:\n"
+            "  codex_responses_native: true\n"
+            "  codex_responses_compact_threshold: 1000\n"
+        )
+        with self.assertRaisesRegex(ConfigError, "compact_threshold"):
+            Config.load()
+
 
 class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejected_scheduled_send_is_a_visible_delivery_failure(self):
+        from pilotage import main
+        from pilotage.channels.whatsapp import ChannelError
+
+        class RejectingChannel:
+            async def send(self, _chat_id, _text):
+                return False
+
+        with self.assertRaisesRegex(ChannelError, "rejected"):
+            await main._deliver_scheduled(
+                RejectingChannel(),
+                {"channel": "whatsapp", "chat_id": "123@c.us"},
+                "result",
+            )
+
+    async def test_whatsapp_origin_is_stamped_on_the_agent_turn(self):
+        from pilotage import main
+        from pilotage.channels.whatsapp import InboundMessage
+
+        channel_config = Config.load(channel="whatsapp")
+        object.__setattr__(channel_config, "cron_enabled", False)
+        seen = {}
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def respond(
+                self,
+                _session_id,
+                _text,
+                _attachments,
+                *,
+                on_notice,
+                origin,
+            ):
+                seen["origin"] = origin
+                return "answer"
+
+        class FakeChannel:
+            def __init__(self, _config, handler, _manage):
+                self.handler = handler
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            @contextlib.asynccontextmanager
+            async def typing(self, _chat_id):
+                yield
+
+            async def send(self, *_args):
+                return True
+
+            async def start(self):
+                await self.handler(
+                    InboundMessage(
+                        chat_id="123@c.us",
+                        session_id="123@c.us",
+                        sender_id="123@s.whatsapp.net",
+                        sender_number="123",
+                        push_name="User",
+                        text="hello",
+                        is_group=False,
+                        message_ids=["m1"],
+                    )
+                )
+                self.stopped.set()
+
+            async def stop(self):
+                pass
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            self.assertEqual(await main.command_run(channel_config), 0)
+
+        self.assertEqual(
+            seen["origin"],
+            {"channel": "whatsapp", "chat_id": "123@c.us"},
+        )
+
     async def test_whatsapp_runs_with_its_channel_configuration(self):
         from pilotage import main
 
@@ -283,7 +447,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         seen = {}
 
         class FakeAgent:
-            def __init__(self, config):
+            def __init__(self, config, **_runtime_dependencies):
                 seen["agent"] = config
 
         class FakeChannel:

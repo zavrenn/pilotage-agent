@@ -16,7 +16,7 @@ from pilotage.agent import Agent
 from pilotage.channels.whatsapp import RESET_COMMAND, InboundMessage, WhatsAppChannel
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
-from pilotage.history import ConversationStore
+from pilotage.history import ConversationError, ConversationStore
 
 
 def _event(text: str, chat_id: str = "chat", message_id: str = "m1") -> Dict[str, Any]:
@@ -40,13 +40,15 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         async def handler(message: InboundMessage) -> None:
             self.answered.append(message)
 
-        async def on_reset(chat_id: str, session_id: str, message_id: str) -> None:
+        async def on_command(
+            chat_id: str, session_id: str, message_id: str, _invocation
+        ) -> None:
             self.reset_for.append((chat_id, session_id, message_id))
 
-        self.channel = WhatsAppChannel(config, handler, on_reset)
+        self.channel = WhatsAppChannel(config, handler, on_command)
 
     async def _settle(self) -> None:
-        """Let the detached reset task run."""
+        """Let the detached command task run."""
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
@@ -60,6 +62,12 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.channel._accept(_event("  /NEW  "))
         await self._settle()
         self.assertEqual(self.reset_for, [("chat", "chat", "m1")])
+
+    async def test_reset_alias_uses_the_same_command(self):
+        self.channel._accept(_event("/reset"))
+        await self._settle()
+        self.assertEqual(self.reset_for, [("chat", "chat", "m1")])
+
 
     async def test_the_word_inside_a_sentence_is_just_a_message(self):
         self.channel._accept(_event("what is /new for?"))
@@ -97,6 +105,28 @@ class ForgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("chat", self.agent._history)
         await self.agent.forget("chat")
         self.assertNotIn("chat", self.agent._history)
+
+    async def test_failed_durable_reset_keeps_the_live_conversation(self):
+        gate = asyncio.Event()
+        gate.set()
+        self.agent._stream_once = self._answering(gate)
+        await self.agent.respond("chat", "remember this")
+        self.agent._tool_state["chat"] = {"todo": ["keep"]}
+        self.agent._session_instructions["chat"] = "keep instructions"
+
+        def _fail(_chat_id: str) -> None:
+            raise ConversationError("disk unavailable")
+
+        self.agent._store.new_session = _fail
+        with self.assertRaisesRegex(ConversationError, "disk unavailable"):
+            await self.agent.forget("chat")
+
+        self.assertIn("chat", self.agent._history)
+        self.assertEqual(self.agent._tool_state["chat"], {"todo": ["keep"]})
+        self.assertEqual(
+            self.agent._session_instructions["chat"], "keep instructions"
+        )
+
 
     def _answering(self, gate: asyncio.Event):
         async def _stream_once(request, *, force_refresh, ttfb_timeout, idle_timeout):

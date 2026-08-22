@@ -34,7 +34,7 @@ fi
 ./.venv/bin/pip install --editable . --quiet
 
 echo "==> WhatsApp bridge"
-(cd bridge && npm install --silent --no-fund --no-audit)
+(cd bridge && npm ci --silent --no-fund --no-audit)
 
 state_dir="${PILOTAGE_HOME:-$HOME/.pilotage-agent}"
 umask 077
@@ -60,4 +60,5 @@ echo "Installed. Next:"
 echo "  1. edit $state_dir/.env and set PILOTAGE_ALLOWED_SENDERS"
 echo "  2. review $state_dir/config.yaml"
 echo "  3. ./.venv/bin/pilotage login"
-echo "  4. ./.venv/bin/pilotage run"
+echo "  4. ./.venv/bin/pilotage run  # pair and test WhatsApp"
+echo "  5. bash scripts/install-service.sh # keep it running under systemd"

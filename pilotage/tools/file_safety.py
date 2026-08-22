@@ -14,11 +14,10 @@ most of the time. And an attempt to read credentials leaves a named refusal in
 the log, which is far easier to notice than a `cat` among a hundred other
 commands. Treat it as "usually helps", never as "cannot be bypassed".
 
-Dropped from the Hermes version: profile mirroring, sandbox and container path
-classification, and the approval gate on `~/.ssh/config`. We have one home
-directory and no approval prompts — `approvals.mode: off` — so an
-approval-gated path would only ever fail closed, which is a deny with extra
-steps. `~/.ssh` is denied by prefix instead.
+Dropped from the Hermes version: sandbox and container path classification, and
+the approval gate on `~/.ssh/config`. Pilotage adds a small profile-routing
+guard so ordinary file calls cannot enter default or sibling profile state.
+This is still good-faith enforcement; the terminal remains able to bypass it.
 """
 
 from __future__ import annotations
@@ -28,10 +27,29 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 from ..config import state_dir
+from ..profiles import default_state_root
 
 
 def _real(path: str) -> str:
     return os.path.realpath(os.path.expanduser(str(path)))
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_other_profile_state(path: str) -> bool:
+    """Keep the file tool inside the selected profile's state ownership."""
+    selected = Path(_real(str(state_dir())))
+    main = Path(_real(str(default_state_root())))
+    resolved = Path(_real(path))
+    if selected == main:
+        return _within(resolved, main / "profiles")
+    return _within(resolved, main) and not _within(resolved, selected)
 
 
 def _state_files() -> tuple[str, ...]:
@@ -44,9 +62,18 @@ def _state_files() -> tuple[str, ...]:
     """
     home = state_dir()
     return (
+        _real(str(home / ".runtime.lock")),
+        _real(str(home / "active_profile")),
+        _real(str(home / "bridge.pid")),
         _real(str(home / "codex-auth.json")),
-        _real(str(home / "conversations.db")),
+        _real(str(home / "codex-auth.json.lock")),
         _real(str(home / "config.yaml")),
+        _real(str(home / "conversations.db")),
+        _real(str(home / "conversations.db-journal")),
+        _real(str(home / "conversations.db-shm")),
+        _real(str(home / "conversations.db-wal")),
+        _real(str(home / "cron" / ".jobs.lock")),
+        _real(str(home / "cron" / "jobs.json")),
     )
 
 
@@ -89,6 +116,10 @@ def build_write_denied_prefixes(home: str) -> list[str]:
             os.path.join(home, ".azure"),
             os.path.join(home, ".config", "gh"),
             os.path.join(home, ".config", "gcloud"),
+            # These stores have dedicated validated mutation tools. Direct file
+            # writes would bypass their threat scans, ownership, and locking.
+            str(state_dir() / "cron"),
+            str(state_dir() / "memories"),
             # Skill mutation always requires approval. Until that approval
             # workflow exists, the ordinary file tools must fail closed.
             str(state_dir() / "skills"),
@@ -120,6 +151,8 @@ def _classify_write_denial(path: str, safe_roots: Sequence[str] = ()) -> Optiona
     home = _real("~")
     resolved = _real(path)
 
+    if _is_other_profile_state(resolved):
+        return "profile"
     if resolved in build_write_denied_paths(home):
         return "credential"
     for prefix in build_write_denied_prefixes(home):
@@ -152,6 +185,8 @@ def get_write_denied_error(
             f"{verb} denied: '{path}' is outside the directories this agent may "
             f"write to ({listed}). Change tools.write_safe_roots to widen it."
         )
+    if denial == "profile":
+        return f"{verb} denied: '{path}' belongs to another agent profile."
     return f"{verb} denied: '{path}' is a protected system or credential file."
 
 
@@ -183,6 +218,12 @@ def get_read_block_error(path: str) -> Optional[str]:
     which is not the same directory.
     """
     resolved = Path(path).expanduser().resolve()
+
+    if _is_other_profile_state(str(resolved)):
+        return (
+            f"Access denied: {path} belongs to another agent profile. "
+            f"{_NOT_A_BOUNDARY}"
+        )
 
     for blocked in _state_files():
         if str(resolved) == blocked:

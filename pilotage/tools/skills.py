@@ -4,7 +4,8 @@ The discovery, frontmatter, sorting, linked-file and path-containment behavior
 comes from ``tmp/hermes-agent/tools/skills_tool.py`` and
 ``tmp/hermes-agent/agent/prompt_builder.py``. Pilotage keeps one trusted,
 profile-local skills directory. Plugin skills, external trees, marketplaces,
-syncing, preprocessing and mutation are deliberately not carried over.
+syncing and mutation are deliberately not carried over. Hermes' small,
+optional SKILL.md preprocessor is retained for compatibility.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .file_safety import get_read_block_error
 from .path_security import has_traversal_component, validate_within_dir
 from .registry import Tool, ToolContext, tool_error
+from .skill_preprocessing import preprocess_skill_content
 from .skill_utils import (
     extract_skill_description,
     iter_skill_index_files,
@@ -397,7 +399,12 @@ def _read_blocked(path: Path) -> Optional[str]:
         return f"Access denied: the credential guard failed: {exc}"
 
 
-def skill_view(config: Any, name: str, file_path: Optional[str] = None) -> str:
+def skill_view(
+    config: Any,
+    name: str,
+    file_path: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> str:
     """Load one SKILL.md or one contained linked file."""
     entry, error = _resolve_skill(config, name)
     if error or entry is None:
@@ -454,6 +461,17 @@ def skill_view(config: Any, name: str, file_path: Optional[str] = None) -> str:
             }
         )
 
+    rendered_content = content
+    try:
+        rendered_content = preprocess_skill_content(
+            content,
+            skill_dir,
+            session_id=session_id,
+            skills_cfg=config.settings.section("skills"),
+        )
+    except Exception:
+        logger.debug("Could not preprocess skill content for %s", name, exc_info=True)
+
     frontmatter = entry["_frontmatter"]
     metadata = frontmatter.get("metadata")
     hermes_meta = metadata.get("hermes", {}) if isinstance(metadata, dict) else {}
@@ -469,7 +487,7 @@ def skill_view(config: Any, name: str, file_path: Optional[str] = None) -> str:
         "version": entry["version"],
         "tags": tags,
         "related_skills": related,
-        "content": content,
+        "content": rendered_content,
         "path": entry["identifier"] + "/SKILL.md",
         "skill_dir": str(skill_dir),
         "linked_files": linked,
@@ -540,7 +558,13 @@ async def handle_skill_view(args: Dict[str, Any], context: ToolContext) -> str:
     file_path = args.get("file_path")
     if file_path is not None and not isinstance(file_path, str):
         return tool_error("file_path must be text")
-    raw = await asyncio.to_thread(skill_view, context.config, name, file_path)
+    raw = await asyncio.to_thread(
+        skill_view,
+        context.config,
+        name,
+        file_path,
+        context.chat_id,
+    )
     return _deduplicate_view(raw, args, context)
 
 

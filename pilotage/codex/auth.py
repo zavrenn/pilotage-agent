@@ -143,18 +143,32 @@ def credentials_lock(
                 pass
 
 
-def read_credentials(path: Path) -> Credentials:
-    if not path.exists():
+def credentials_source_path(path: Path, fallback_path: Path | None = None) -> Path:
+    """Choose profile credentials first, then the main profile credentials.
+
+    Existence is enough to shadow the fallback. A malformed profile file must
+    fail closed rather than silently changing which ChatGPT identity is used.
+    """
+    if path.exists():
+        return path
+    if fallback_path is not None and fallback_path != path and fallback_path.exists():
+        return fallback_path
+    return path
+
+
+def read_credentials(path: Path, *, fallback_path: Path | None = None) -> Credentials:
+    source_path = credentials_source_path(path, fallback_path)
+    if not source_path.exists():
         raise AuthError(
-            f"No Codex credentials at {path}. Run `pilotage login` first.",
+            f"No Codex credentials at {source_path}. Run `pilotage login` first.",
             code="codex_auth_missing",
             relogin_required=True,
         )
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(source_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise AuthError(
-            f"Codex credentials at {path} are unreadable: {exc}",
+            f"Codex credentials at {source_path} are unreadable: {exc}",
             code="codex_auth_invalid_shape",
             relogin_required=True,
         ) from exc
@@ -162,7 +176,7 @@ def read_credentials(path: Path) -> Credentials:
     tokens = data.get("tokens") if isinstance(data, dict) else None
     if not isinstance(tokens, dict):
         raise AuthError(
-            f"Codex credentials at {path} have an unexpected shape.",
+            f"Codex credentials at {source_path} have an unexpected shape.",
             code="codex_auth_invalid_shape",
             relogin_required=True,
         )
@@ -339,24 +353,30 @@ def _refresh_error(response: httpx.Response) -> AuthError:
     )
 
 
-def resolve_credentials(path: Path, *, force_refresh: bool = False) -> Credentials:
+def resolve_credentials(
+    path: Path,
+    *,
+    fallback_path: Path | None = None,
+    force_refresh: bool = False,
+) -> Credentials:
     """Read the stored credentials, refreshing them if the access token is stale."""
-    credentials = read_credentials(path)
+    source_path = credentials_source_path(path, fallback_path)
+    credentials = read_credentials(source_path)
     if not force_refresh and not access_token_is_expiring(credentials.access_token):
         return credentials
 
-    with credentials_lock(path):
+    with credentials_lock(source_path):
         # Read again now that nobody else can write. Waiting for the lock is
         # usually waiting for someone else's refresh, and their new token is
         # ours to use — refreshing again would spend a token that has already
         # been rotated away and log us both out.
-        latest = read_credentials(path)
+        latest = read_credentials(source_path)
         if latest.access_token != credentials.access_token and not access_token_is_expiring(
             latest.access_token
         ):
             return latest
         refreshed = refresh_credentials(latest)
-        write_credentials(path, refreshed)
+        write_credentials(source_path, refreshed)
         return refreshed
 
 

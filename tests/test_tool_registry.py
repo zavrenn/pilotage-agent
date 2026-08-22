@@ -13,7 +13,7 @@ import asyncio
 import json
 import unittest
 
-from pilotage.settings import Settings
+from pilotage.settings import ConfigError, Settings
 from pilotage.tools import Registry, Tool, ToolContext, build_registry, enabled_groups, run_calls
 from pilotage.tools.registry import DEFAULT_STEP_BUDGET_CHARS, tool_result
 
@@ -271,8 +271,13 @@ class EnabledGroupTests(unittest.TestCase):
         data = {"tools": {"enabled": ["todo", "terminal"], "disabled": ["terminal"]}}
         self.assertEqual(self._groups(data), ["todo"])
 
-    def test_a_group_that_does_not_exist_is_ignored_not_invented(self):
-        self.assertEqual(self._groups({"tools": {"enabled": ["todo", "typo"]}}), ["todo"])
+    def test_an_unknown_enabled_group_stops_startup(self):
+        with self.assertRaisesRegex(ConfigError, "tools.enabled.*typo"):
+            self._groups({"tools": {"enabled": ["todo", "typo"]}})
+
+    def test_an_unknown_disabled_group_stops_startup(self):
+        with self.assertRaisesRegex(ConfigError, "tools.disabled.*typo"):
+            self._groups({"tools": {"disabled": ["typo"]}})
 
     def test_a_channel_can_run_with_fewer_tools(self):
         data = {"channels": {"whatsapp": {"tools": {"disabled": ["terminal"]}}}}
@@ -285,6 +290,7 @@ class BuiltRegistryTests(unittest.TestCase):
         registry = build_registry()
         self.assertIn("file", registry.groups())
         self.assertIn("skills", registry.groups())
+        self.assertIn("memory", registry.groups())
         self.assertIn("todo", registry.groups())
         self.assertIn("terminal", registry.groups())
         self.assertEqual(
@@ -292,6 +298,7 @@ class BuiltRegistryTests(unittest.TestCase):
             set(registry.names(["file"])),
         )
         self.assertIsNotNone(registry.get("todo"))
+        self.assertIsNotNone(registry.get("memory"))
         self.assertIsNotNone(registry.get("terminal"))
         self.assertEqual(
             {"skill_view", "skills_list"},

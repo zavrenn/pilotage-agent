@@ -12,10 +12,9 @@ import contextlib
 import json
 import logging
 import os
+import secrets
 import shutil
-import signal
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -23,6 +22,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 import httpx
 
 from .. import media
+from ..commands import CommandInvocation, parse_command
 from ..config import Config
 from .dedup import MessageDeduplicator
 from .formatting import to_whatsapp
@@ -38,6 +38,7 @@ HTTP_TIMEOUT_SECONDS = 30.0
 BRIDGE_READY_TIMEOUT_SECONDS = 120.0
 BRIDGE_RESTART_ATTEMPTS = 3
 BRIDGE_RESTART_DELAY_SECONDS = 5.0
+BRIDGE_TOKEN_HEADER = "X-Pilotage-Bridge-Token"
 # A single message this long is almost certainly one chunk of a longer paste, so
 # we wait longer for the rest of it.
 SPLIT_THRESHOLD = 6000
@@ -58,6 +59,16 @@ def _bare_whatsapp_id(value: str) -> str:
     return written
 
 
+def _canonical_whatsapp_identity(*values: str) -> str:
+    """Collapse phone-JID/LID aliases with Hermes' stable selection rule."""
+    aliases = {
+        normalized
+        for value in values
+        if (normalized := _bare_whatsapp_id(value))
+    }
+    return min(aliases, key=lambda candidate: (len(candidate), candidate)) if aliases else ""
+
+
 def _session_id(
     chat_id: str,
     is_group: bool,
@@ -67,22 +78,15 @@ def _session_id(
 ) -> str:
     """Build the production conversation boundary for one inbound message.
 
-    The bridge prefers the phone number in ``sender_number``. If WhatsApp only
-    supplied a LID, its ordered identity expansion carries the mapped phone id
-    immediately after that LID; prefer the first distinct alias so future
-    phone-JID messages resolve to the same session.
+    WhatsApp can flip both DM chat ids and group participant ids between phone
+    and LID forms. The bridge supplies their resolved alias set.
     """
+    candidates = [sender_number, sender_id, *identities]
     if not is_group:
-        return chat_id
+        candidates.insert(0, chat_id)
+        return _canonical_whatsapp_identity(*candidates) or chat_id
 
-    raw_sender = _bare_whatsapp_id(sender_id)
-    participant = _bare_whatsapp_id(sender_number) or raw_sender
-    if sender_id.lower().endswith("@lid") and participant == raw_sender:
-        for identity in identities:
-            resolved = _bare_whatsapp_id(identity)
-            if resolved and resolved != raw_sender:
-                participant = resolved
-                break
+    participant = _canonical_whatsapp_identity(*candidates)
     return f"{chat_id}:{participant}" if participant else chat_id
 
 
@@ -108,16 +112,16 @@ class InboundMessage:
 
 
 Handler = Callable[[InboundMessage], Awaitable[None]]
-# Called with the delivery chat, isolated session, and requesting message id
-# when a conversation should start over.
-Reset = Callable[[str, str, str], Awaitable[None]]
+# Called with the delivery chat, isolated session, requesting message id, and
+# the registry-resolved management command.
+CommandHandler = Callable[[str, str, str, CommandInvocation], Awaitable[None]]
 
 
 class WhatsAppChannel:
-    def __init__(self, config: Config, handler: Handler, on_reset: Reset):
+    def __init__(self, config: Config, handler: Handler, on_command: CommandHandler):
         self._config = config
         self._handler = handler
-        self._on_reset = on_reset
+        self._on_command = on_command
         self._process: Optional[subprocess.Popen] = None
         self._http: Optional[httpx.AsyncClient] = None
         self._poll_task: Optional[asyncio.Task] = None
@@ -128,9 +132,15 @@ class WhatsAppChannel:
         # The bridge replays its queue on reconnect, and a restart can overlap
         # with messages already answered.
         self._seen = MessageDeduplicator()
+        self._pending_started: Dict[str, float] = {}
+        # One active model turn and at most one merged follow-up per isolated
+        # session. This bounds work even when messages arrive faster than replies.
+        self._queued: Dict[str, InboundMessage] = {}
+        self._turn_tasks: Dict[str, asyncio.Task] = {}
         # Read receipts run detached; hold a reference so they are not
         # garbage-collected mid-flight.
         self._pending_tasks_background: set[asyncio.Task] = set()
+        self._bridge_token = secrets.token_urlsafe(32)
         self._base_url = f"http://127.0.0.1:{config.bridge_port}"
         # Set when the channel has given up. Whoever owns the process waits on
         # this, so a dead bridge stops the agent instead of leaving it idle.
@@ -141,10 +151,17 @@ class WhatsAppChannel:
 
     async def start(self) -> None:
         self._preflight()
-        self._kill_stale_bridge()
-        self._http = httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS)
-        self._spawn_bridge()
-        await self._wait_until_connected()
+        await self._stop_stale_bridge()
+        self._http = httpx.AsyncClient(
+            timeout=HTTP_TIMEOUT_SECONDS,
+            headers={BRIDGE_TOKEN_HEADER: self._bridge_token},
+        )
+        try:
+            self._spawn_bridge()
+            await self._wait_until_connected()
+        except BaseException:
+            await asyncio.shield(self.stop())
+            raise
         self._running = True
         self._poll_task = asyncio.create_task(self._poll_loop())
         if not self._config.allowed_senders:
@@ -157,22 +174,33 @@ class WhatsAppChannel:
     async def stop(self) -> None:
         self._running = False
         self.stopped.set()
-        for task in list(self._pending_tasks.values()):
-            task.cancel()
-        self._pending_tasks.clear()
-        self._pending.clear()
-        for task in list(self._pending_tasks_background):
-            task.cancel()
-        self._pending_tasks_background.clear()
         if self._poll_task is not None:
             self._poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._poll_task
             self._poll_task = None
-        if self._http is not None:
-            await self._http.aclose()
-            self._http = None
-        self._terminate_bridge()
+
+        owned = set(self._pending_tasks.values())
+        owned.update(self._pending_tasks_background)
+        owned.update(self._turn_tasks.values())
+        owned.discard(asyncio.current_task())
+        for task in owned:
+            task.cancel()
+        if owned:
+            await asyncio.gather(*owned, return_exceptions=True)
+
+        self._pending_tasks.clear()
+        self._pending_tasks_background.clear()
+        self._turn_tasks.clear()
+        self._pending.clear()
+        self._pending_started.clear()
+        self._queued.clear()
+        try:
+            if self._http is not None:
+                await self._http.aclose()
+                self._http = None
+        finally:
+            self._terminate_bridge()
 
     def _preflight(self) -> None:
         if shutil.which("node") is None:
@@ -192,18 +220,46 @@ class WhatsAppChannel:
     def _pidfile(self) -> Path:
         return self._config.state_dir / "bridge.pid"
 
-    def _kill_stale_bridge(self) -> None:
-        """Kill a bridge we started before and never cleaned up.
-
-        Only pids we wrote ourselves are touched.
-        """
+    async def _stop_stale_bridge(self) -> None:
+        """Ask a bridge we own to stop without trusting a reusable OS pid."""
         try:
             record = json.loads(self._pidfile.read_text(encoding="utf-8"))
             pid = int(record["pid"])
+            port = int(record["port"])
+            token = str(record["token"])
+            if pid <= 0 or not 1 <= port <= 65535 or not token:
+                raise ValueError("invalid bridge ownership record")
         except (OSError, ValueError, KeyError, TypeError):
             return
-        logger.info("Stopping a bridge left over from an earlier run (pid %s)", pid)
-        _kill_pid(pid)
+
+        base_url = f"http://127.0.0.1:{port}"
+        try:
+            async with httpx.AsyncClient(
+                timeout=2.0,
+                headers={BRIDGE_TOKEN_HEADER: token},
+            ) as client:
+                response = await client.get(f"{base_url}/health")
+                response.raise_for_status()
+                if int(response.json().get("pid", 0)) != pid:
+                    raise ValueError("bridge pid does not match its ownership record")
+                logger.info("Stopping a bridge left over from an earlier run (pid %s)", pid)
+                response = await client.post(f"{base_url}/shutdown")
+                response.raise_for_status()
+                for _ in range(30):
+                    await asyncio.sleep(0.1)
+                    try:
+                        await client.get(f"{base_url}/health")
+                    except httpx.TransportError:
+                        break
+                else:
+                    raise ChannelError(
+                        f"Owned stale bridge on port {port} did not stop."
+                    )
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            logger.warning(
+                "Could not verify the stale bridge; leaving its process untouched: %s",
+                exc,
+            )
         with contextlib.suppress(OSError):
             self._pidfile.unlink()
 
@@ -219,22 +275,50 @@ class WhatsAppChannel:
             str(self._config.media_dir),
             "--read-receipts",
             "1" if self._config.send_read_receipts else "0",
+            "--answer-groups",
+            "1" if self._config.answer_groups else "0",
         ]
         # stdout is inherited on purpose: the pairing QR code is printed there.
-        self._process = subprocess.Popen(command, cwd=str(self._config.bridge_dir))
+        child_env = {
+            **os.environ,
+            "PILOTAGE_BRIDGE_TOKEN": self._bridge_token,
+            "PILOTAGE_ALLOWED_SENDERS": ",".join(sorted(self._config.allowed_senders)),
+        }
+        self._process = subprocess.Popen(
+            command,
+            cwd=str(self._config.bridge_dir),
+            env=child_env,
+        )
         self._config.state_dir.mkdir(parents=True, exist_ok=True)
-        self._pidfile.write_text(
-            json.dumps({"pid": self._process.pid, "port": self._config.bridge_port}),
+        temp = self._pidfile.with_suffix(".tmp")
+        temp.write_text(
+            json.dumps(
+                {
+                    "pid": self._process.pid,
+                    "port": self._config.bridge_port,
+                    "token": self._bridge_token,
+                }
+            ),
             encoding="utf-8",
         )
+        try:
+            os.chmod(temp, 0o600)
+        except OSError:
+            pass
+        os.replace(temp, self._pidfile)
 
     def _terminate_bridge(self) -> None:
         process = self._process
         self._process = None
         if process is None:
             return
-        with contextlib.suppress(OSError):
-            self._pidfile.unlink()
+        try:
+            record = json.loads(self._pidfile.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            record = {}
+        if record.get("token") == self._bridge_token:
+            with contextlib.suppress(OSError):
+                self._pidfile.unlink()
         if process.poll() is not None:
             return
         process.terminate()
@@ -335,7 +419,11 @@ class WhatsAppChannel:
         sender_id = str(event.get("senderId") or "")
         sender_number = str(event.get("senderNumber") or "")
         raw_identities = event.get("identities")
-        identities = [str(value) for value in raw_identities] if isinstance(raw_identities, list) else []
+        identities = (
+            [str(value) for value in raw_identities]
+            if isinstance(raw_identities, list)
+            else []
+        )
         if not self._is_allowed(sender_id, sender_number, identities):
             self._report_blocked(sender_id, sender_number)
             return
@@ -352,17 +440,23 @@ class WhatsAppChannel:
             asyncio.create_task(self._mark_read(event.get("readReceiptKey")))
         )
 
-        if text.strip().lower() == RESET_COMMAND:
-            # Drop the batch on the spot rather than inside the task below.
-            # Someone who types this mid-thought has changed their mind about
-            # the thought, and sending it afterwards would answer the
-            # conversation they just ended.
-            waiting = self._pending_tasks.pop(session_id, None)
-            if waiting is not None:
-                waiting.cancel()
-            self._pending.pop(session_id, None)
+        invocation = parse_command(text)
+        if invocation is not None:
+            if invocation.command.name == "new":
+                # Drop a half-written batch on the spot. Sending it after /new
+                # would answer the conversation the person just ended.
+                waiting = self._pending_tasks.pop(session_id, None)
+                if waiting is not None:
+                    waiting.cancel()
+                self._pending.pop(session_id, None)
+                self._pending_started.pop(session_id, None)
+                self._queued.pop(session_id, None)
             self._pending_tasks_background.add(
-                asyncio.create_task(self._reset(chat_id, session_id, message_id))
+                asyncio.create_task(
+                    self._run_command(
+                        chat_id, session_id, message_id, invocation
+                    )
+                )
             )
             return
 
@@ -434,18 +528,25 @@ class WhatsAppChannel:
         finally:
             self._pending_tasks_background.discard(asyncio.current_task())
 
-    def _is_allowed(self, sender_id: str, sender_number: str, identities: List[str]) -> bool:
-        allowed = self._config.allowed_senders
-        if not allowed:
+    def _is_allowed(
+        self, sender_id: str, sender_number: str, identities: List[str]
+    ) -> bool:
+        allowed = {
+            normalized
+            for value in self._config.allowed_senders
+            if (normalized := _bare_whatsapp_id(value))
+        }
+        if not allowed or "*" in allowed:
             # An empty allowlist means nobody, never everybody.
             return False
-        # WhatsApp addresses the same person by phone number or by @lid alias,
-        # and which one arrives is not ours to choose. The bridge resolves both
-        # forms from the session's mapping files and sends them as `identities`,
-        # so an operator can write either one in the allowlist.
-        if any(identity in allowed for identity in identities):
-            return True
-        return sender_number in allowed or sender_id in allowed
+        candidates = {
+            normalized
+            for value in [sender_id, sender_number, *identities]
+            if (normalized := _bare_whatsapp_id(value))
+        }
+        # The bridge already made the same decision before media extraction.
+        # Keep this independent check at the Python trust boundary.
+        return bool(allowed.intersection(candidates))
 
     def _report_blocked(self, sender_id: str, sender_number: str) -> None:
         """Note once, per sender, that a message was ignored.
@@ -461,58 +562,131 @@ class WhatsAppChannel:
         self._reported_blocked.add(identity)
         logger.warning("Ignored a message from %s.", identity)
 
-    async def _reset(self, chat_id: str, session_id: str, message_id: str) -> None:
-        """Start the conversation over, once whatever is running has finished."""
+    async def _run_command(
+        self,
+        chat_id: str,
+        session_id: str,
+        message_id: str,
+        invocation: CommandInvocation,
+    ) -> None:
+        """Dispatch one recognized command without involving the model."""
         try:
-            await self._on_reset(chat_id, session_id, message_id)
+            await self._on_command(chat_id, session_id, message_id, invocation)
         except Exception:  # noqa: BLE001 - one bad command must not stop the channel
-            logger.exception("Resetting %s failed", chat_id)
+            logger.exception("Command /%s failed for %s", invocation.command.name, chat_id)
         finally:
             self._pending_tasks_background.discard(asyncio.current_task())
 
+    @staticmethod
+    def _merge_message(pending: InboundMessage, message: InboundMessage) -> None:
+        if message.text:
+            pending.text = (
+                f"{pending.text}\n{message.text}" if pending.text else message.text
+            )
+        pending.message_ids.extend(message.message_ids)
+        # A picture and the question about it can arrive separately. (Hermes)
+        pending.attachments.extend(message.attachments)
+        # Replies and quotes belong to the newest delivery address and sender
+        # representation, even when LID/phone aliases share one session.
+        pending.chat_id = message.chat_id
+        pending.sender_id = message.sender_id
+        pending.sender_number = message.sender_number
+        pending.push_name = message.push_name
+        pending.is_group = message.is_group
+
     def _enqueue(self, message: InboundMessage) -> None:
-        """Merge a message into the pending batch for its chat and restart the timer.
+        """Merge into a quiet-period batch bounded by a hard deadline.
 
         People send three messages in a row and mean one question. Answering the
-        first one before the other two land wastes a turn and reads as rude.
+        first before the other two land wastes a turn; waiting forever under a
+        steady stream would starve the conversation.
         """
         key = message.session_id
+        loop = asyncio.get_running_loop()
+        now = loop.time()
         pending = self._pending.get(key)
+        started = self._pending_started.get(key)
+        if (
+            pending is not None
+            and started is not None
+            and now >= started + self._config.text_batch_hard_cap_seconds
+        ):
+            self._flush_pending_now(key)
+            pending = None
+
         if pending is None:
             self._pending[key] = message
+            self._pending_started[key] = now
         else:
-            if message.text:
-                pending.text = (
-                    f"{pending.text}\n{message.text}" if pending.text else message.text
-                )
-            pending.message_ids.extend(message.message_ids)
-            # A picture and the question about it arrive as two messages.
-            # Losing the picture here loses the point of the turn. (Hermes)
-            pending.attachments.extend(message.attachments)
+            self._merge_message(pending, message)
 
-        task = self._pending_tasks.pop(key, None)
-        if task is not None:
-            task.cancel()
+        self._cancel_pending_timer(key)
         self._pending_tasks[key] = asyncio.create_task(self._flush_after_quiet(key, message.text))
 
+    def _cancel_pending_timer(self, key: str) -> None:
+        task = self._pending_tasks.pop(key, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    def _flush_pending_now(self, key: str) -> None:
+        self._cancel_pending_timer(key)
+        self._pending_started.pop(key, None)
+        message = self._pending.pop(key, None)
+        if message is not None:
+            self._queue_turn(message)
+
     async def _flush_after_quiet(self, key: str, last_text: str) -> None:
-        delay = (
+        quiet_delay = (
             self._config.text_batch_split_delay_seconds
             if len(last_text) >= SPLIT_THRESHOLD
             else self._config.text_batch_delay_seconds
         )
+        loop = asyncio.get_running_loop()
+        started = self._pending_started.get(key, loop.time())
+        hard_remaining = max(
+            0.0,
+            started + self._config.text_batch_hard_cap_seconds - loop.time(),
+        )
         try:
-            await asyncio.sleep(delay)
+            await asyncio.sleep(min(quiet_delay, hard_remaining))
         except asyncio.CancelledError:
             return
-        self._pending_tasks.pop(key, None)
-        message = self._pending.pop(key, None)
-        if message is None:
+
+        if self._pending_tasks.get(key) is not asyncio.current_task():
             return
+        self._flush_pending_now(key)
+
+    def _queue_turn(self, message: InboundMessage) -> None:
+        key = message.session_id
+        active = self._turn_tasks.get(key)
+        if active is not None and not active.done():
+            queued = self._queued.get(key)
+            if queued is None:
+                self._queued[key] = message
+            else:
+                self._merge_message(queued, message)
+            return
+
+        task = asyncio.create_task(self._run_turn_queue(key, message))
+        self._turn_tasks[key] = task
+
+    async def _run_turn_queue(self, key: str, message: InboundMessage) -> None:
+        current = asyncio.current_task()
         try:
-            await self._handler(message)
-        except Exception:  # noqa: BLE001 - one bad turn must not stop the channel
-            logger.exception("Handling a message from %s failed", message.chat_id)
+            while message is not None:
+                try:
+                    await self._handler(message)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - one turn must not stop the channel
+                    logger.exception("Handling a message from %s failed", message.chat_id)
+                if self.stopped.is_set():
+                    self._queued.pop(key, None)
+                    break
+                message = self._queued.pop(key, None)
+        finally:
+            if self._turn_tasks.get(key) is current:
+                self._turn_tasks.pop(key, None)
 
     # -- outbound -----------------------------------------------------------
 
@@ -570,19 +744,3 @@ class WhatsAppChannel:
             logger.error("Sending to %s failed: %s", chat_id, exc)
             return False
         return True
-
-
-def _kill_pid(pid: int) -> None:
-    if pid <= 0:
-        return
-    try:
-        if sys.platform == "win32":
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/F"],
-                check=False,
-                capture_output=True,
-            )
-        else:
-            os.kill(pid, signal.SIGTERM)
-    except OSError:
-        pass  # Already gone.

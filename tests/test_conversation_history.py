@@ -76,6 +76,56 @@ class StoreTests(unittest.TestCase):
             self.store.new_session("chat")
         self.store.append("chat", [("user", "latest")])
         self.assertEqual(self.store.load("chat", 10), [("user", "latest")])
+    def test_only_opaque_compaction_checkpoints_are_replayable(self):
+        self.store.append_with_replay(
+            "chat",
+            [
+                (
+                    "assistant",
+                    "answer",
+                    [
+                        {"type": "reasoning", "encrypted_content": "thought"},
+                        {"type": "compaction", "encrypted_content": "checkpoint"},
+                        {"type": "compaction", "encrypted_content": ""},
+                    ],
+                )
+            ],
+        )
+        self.assertEqual(
+            self.store.load_with_replay("chat"),
+            [
+                (
+                    "assistant",
+                    "answer",
+                    [{"type": "compaction", "encrypted_content": "checkpoint"}],
+                )
+            ],
+        )
+
+    def test_an_existing_database_is_migrated_without_losing_turns(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.execute(
+                "CREATE TABLE turns ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, "
+                "session INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, "
+                "written_at REAL NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO turns (chat_id, session, role, content, written_at)"
+                " VALUES ('chat', 1, 'user', 'before migration', 1.0)"
+            )
+            connection.commit()
+
+        self.store.append_with_replay(
+            "chat",
+            [("assistant", "after migration", [{"type": "compaction", "encrypted_content": "cp"}])],
+        )
+        self.assertEqual(
+            self.store.load("chat", 10),
+            [("user", "before migration"), ("assistant", "after migration")],
+        )
+
 
     def test_a_broken_file_costs_a_log_line_not_the_turn(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +182,31 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
         await second.respond("chat", "again")
         self.assertFalse(any(item.get("type") == "reasoning" for item in self.sent["input"]))
 
+    async def test_a_compaction_checkpoint_survives_the_process(self):
+        first = self._agent()
+
+        async def _with_checkpoint(request, *, force_refresh, ttfb_timeout, idle_timeout):
+            return codex_stream.StreamResult(
+                text="Checkpointed.",
+                reasoning_items=[
+                    {"type": "compaction", "encrypted_content": "opaque-checkpoint"}
+                ],
+            )
+
+        first._stream_once = _with_checkpoint
+        await first.respond("chat", "keep this goal")
+
+        second = self._agent()
+        await second.respond("chat", "continue")
+
+        self.assertEqual(
+            self.sent["input"][0],
+            {"type": "compaction", "encrypted_content": "opaque-checkpoint"},
+        )
+        said = [item.get("content") for item in self.sent["input"]]
+        self.assertIn("keep this goal", said)
+
+
     async def test_a_restart_after_new_does_not_hand_the_conversation_back(self):
         first = self._agent()
         await first.respond("chat", "the old business")
@@ -147,23 +222,25 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
 
         second = self._agent()
         reads = []
-        real_load = second._store.load
+        real_load = second._store.load_with_replay
 
-        def _counted(chat_id, limit):
+        def _counted(chat_id, limit=None):
             reads.append(chat_id)
             return real_load(chat_id, limit)
 
-        second._store.load = _counted
+        second._store.load_with_replay = _counted
         await second.respond("chat", "one")
         await second.respond("chat", "two")
         self.assertEqual(reads, ["chat"])
 
-    async def test_only_the_configured_window_comes_back(self):
+    async def test_configured_window_remains_the_non_native_fallback(self):
         first = self._agent()
+        object.__setattr__(first._config, "codex_native_compaction", False)
         for n in range(first._config.history_turns + 5):
             await first.respond("chat", f"question {n}")
 
         second = self._agent()
+        object.__setattr__(second._config, "codex_native_compaction", False)
         self.assertEqual(len(second._history.get("chat", [])), 0)
         await second.respond("chat", "and now?")
         self.assertEqual(len(second._history["chat"]), first._history_limit())

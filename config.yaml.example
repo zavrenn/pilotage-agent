@@ -10,10 +10,15 @@ agent:
   first_event_timeout: 120
   quiet_stream_timeout: 12
 
+compression:
+  codex_responses_native: true
+  codex_responses_compact_threshold: 200000
+
 whatsapp:
   answer_groups: false
   batch_delay: 5
   batch_split_delay: 10
+  batch_hard_cap: 20
   bridge_port: 8765
   read_receipts: false
 
@@ -23,15 +28,35 @@ tools:
     - terminal
     - file
     - skills
+    - memory
+    - cron
   max_iterations: 90
   max_result_chars: 100000
   max_step_chars: 200000
 
+memory:
+  memory_char_limit: 2200
+  user_char_limit: 1375
+
+cron:
+  enabled: true
+  # Blank uses the machine's local timezone. Example: Africa/Casablanca
+  timezone: ""
+  tick_seconds: 1
+  claim_ttl_seconds: 1800
+  max_concurrent: 2
+  output_retention: 50
+
 terminal:
-  # Relative file-tool paths follow this terminal session's current directory.
+  # Defaults to this profile's isolated workspace directory.
+  # Relative file-tool paths follow the terminal session's current directory.
   # cwd: /srv/agents/my-agent
   timeout: 120
 
 skills:
   # Skills are installed per profile under ~/.pilotage-agent/skills.
+  template_vars: true
+  # Trusted skills may opt into Hermes' inline !`command` expansion.
+  inline_shell: false
+  inline_shell_timeout: 10
   # disabled: [skill-name]

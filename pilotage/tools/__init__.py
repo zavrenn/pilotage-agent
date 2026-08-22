@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import Any, List, Sequence
 
+from ..settings import ConfigError
+
 from .registry import (
     Registry,
     Tool,
@@ -30,7 +32,9 @@ from .registry import (
     tool_error,
     tool_result,
 )
+from .cron import CRONJOB_TOOL
 from .files import FILE_TOOLS
+from .memory import MEMORY_TOOL
 from .skills import SKILLS_TOOLS, build_skills_prompt
 from .terminal import TERMINAL_TOOL
 from .todo import TODO_TOOL
@@ -49,7 +53,14 @@ __all__ = [
 ]
 
 # Every tool the runtime has. Slices add to this list; nothing else changes.
-ALL_TOOLS: Sequence[Tool] = (*FILE_TOOLS, *SKILLS_TOOLS, TERMINAL_TOOL, TODO_TOOL)
+ALL_TOOLS: Sequence[Tool] = (
+    CRONJOB_TOOL,
+    *FILE_TOOLS,
+    *SKILLS_TOOLS,
+    MEMORY_TOOL,
+    TERMINAL_TOOL,
+    TODO_TOOL,
+)
 
 
 def build_registry() -> Registry:
@@ -62,6 +73,17 @@ def build_registry() -> Registry:
 def enabled_groups(settings: Any, registry: Registry) -> List[str]:
     """Which tool groups this agent may use, after the file has had its say."""
     known = registry.groups()
+    known_set = set(known)
     enabled = settings.names("tools.enabled", known)
-    disabled = set(settings.names("tools.disabled"))
-    return [group for group in known if group in set(enabled) and group not in disabled]
+    disabled = settings.names("tools.disabled")
+    for setting_name, written in (
+        ("tools.enabled", enabled),
+        ("tools.disabled", disabled),
+    ):
+        unknown = sorted(set(written) - known_set)
+        if unknown:
+            raise ConfigError(
+                f"{setting_name} contains unknown tool groups: {', '.join(unknown)}"
+            )
+    disabled_set = set(disabled)
+    return [group for group in known if group in set(enabled) and group not in disabled_set]

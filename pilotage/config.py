@@ -18,6 +18,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .codex.compaction import DEFAULT_COMPACT_THRESHOLD
+from .profiles import default_state_root
 from .settings import ConfigError, Settings, config_path
 
 DEFAULT_MODEL = "gpt-5.6-sol"
@@ -52,6 +54,20 @@ DEFAULT_MAX_TOOL_ITERATIONS = 90
 # these are the difference between an expensive turn and an expensive chat.
 DEFAULT_MAX_RESULT_CHARS = 100_000
 DEFAULT_MAX_STEP_CHARS = 200_000
+
+# Hermes' bounded curated-memory defaults.
+DEFAULT_MEMORY_CHAR_LIMIT = 2200
+DEFAULT_USER_CHAR_LIMIT = 1375
+
+# Hermes-derived scheduler guardrails. The tick is only a wake-up latency;
+# durable claims, not timing luck, prevent duplicate execution.
+DEFAULT_CRON_TICK_SECONDS = 1.0
+DEFAULT_CRON_CLAIM_TTL_SECONDS = 1800.0
+DEFAULT_CRON_MAX_CONCURRENT = 2
+DEFAULT_CRON_OUTPUT_RETENTION = 50
+
+# Production's maximum total quiet-window batch age.
+DEFAULT_BATCH_HARD_CAP_SECONDS = 20.0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -108,8 +124,23 @@ class Config:
     # Quiet period before a burst of inbound messages is treated as one turn.
     text_batch_delay_seconds: float
     text_batch_split_delay_seconds: float
+    # Maximum total age of a pending inbound batch.
+    text_batch_hard_cap_seconds: float
     # Turns of history kept per chat, in memory and on disk.
     history_turns: int
+    # Hermes-native server compaction on the fixed ChatGPT Codex route.
+    codex_native_compaction: bool
+    codex_compact_threshold: int
+    # Profile-wide curated notes injected as a frozen per-session snapshot.
+    memory_char_limit: int
+    user_memory_char_limit: int
+    # Profile-local durable scheduled work.
+    cron_enabled: bool
+    cron_timezone: str
+    cron_tick_seconds: float
+    cron_claim_ttl_seconds: float
+    cron_max_concurrent: int
+    cron_output_retention: int
     request_timeout_seconds: float
     # How long a model connection may stay silent before we drop it and
     # reconnect: the first wait is for the very first sign of life, the second
@@ -151,8 +182,22 @@ class Config:
         return self.state_dir / "conversations.db"
 
     @property
+    def memory_dir(self) -> Path:
+        return self.state_dir / "memories"
+
+    @property
+    def workspace_dir(self) -> Path:
+        """The profile-local default root for terminal and file tools."""
+        return self.state_dir / "workspace"
+
+    @property
     def credentials_path(self) -> Path:
         return self.state_dir / "codex-auth.json"
+
+    @property
+    def main_credentials_path(self) -> Path:
+        """The only state a named profile may borrow from the main agent."""
+        return default_state_root() / "codex-auth.json"
 
     @property
     def bridge_script(self) -> Path:
@@ -187,14 +232,48 @@ class Config:
             for part in env_senders.replace(";", ",").split(",")
             if part.strip()
         ]
+        if "*" in senders:
+            raise ConfigError(
+                "PILOTAGE_ALLOWED_SENDERS must name explicit senders; '*' is not allowed"
+            )
 
         # Validate tool-owned settings at startup as well. Waiting until a
         # model first calls the tool would turn an operator typo into a partial
         # production failure rather than a clear startup error.
         settings.names("tools.enabled")
         settings.names("tools.disabled")
+        from .tools import build_registry, enabled_groups
+
+        enabled_groups(settings, build_registry())
+
         settings.names("skills.disabled")
-        settings.text("terminal.cwd", "")
+        settings.flag("skills.template_vars", True)
+        settings.flag("skills.inline_shell", False)
+        _count_in_range(
+            "skills.inline_shell_timeout",
+            settings.count("skills.inline_shell_timeout", 10),
+            minimum=1,
+        )
+        terminal_cwd = settings.text("terminal.cwd", "")
+        if terminal_cwd:
+            expanded_cwd = Path(terminal_cwd).expanduser()
+            if not expanded_cwd.is_dir() or not os.access(expanded_cwd, os.X_OK):
+                raise ConfigError(
+                    "terminal.cwd must be an existing accessible directory, "
+                    f"not {terminal_cwd!r}"
+                )
+        answer_groups = settings.flag("whatsapp.answer_groups", False)
+        if answer_groups:
+            raise ConfigError(
+                "whatsapp.answer_groups is unavailable until group mention policy exists"
+            )
+        cron_timezone = settings.text("cron.timezone", "")
+        try:
+            from .cron.jobs import timezone_for_name
+
+            timezone_for_name(cron_timezone)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
         _count_in_range(
             "terminal.timeout",
             settings.count("terminal.timeout", 120),
@@ -206,7 +285,7 @@ class Config:
             reasoning_effort=settings.text("agent.reasoning_effort", DEFAULT_REASONING_EFFORT),
             instructions=_instructions(settings),
             allowed_senders=frozenset(senders),
-            answer_groups=settings.flag("whatsapp.answer_groups", False),
+            answer_groups=answer_groups,
             bridge_port=_count_in_range(
                 "whatsapp.bridge_port",
                 settings.count("whatsapp.bridge_port", 8765),
@@ -223,16 +302,70 @@ class Config:
             ),
             text_batch_split_delay_seconds=_number_in_range(
                 "whatsapp.batch_split_delay",
-                settings.number(
-                    "whatsapp.batch_split_delay",
-                    10.0,
-                ),
+                settings.number("whatsapp.batch_split_delay", 10.0),
                 minimum=0,
                 inclusive=True,
+            ),
+            text_batch_hard_cap_seconds=_number_in_range(
+                "whatsapp.batch_hard_cap",
+                settings.number(
+                    "whatsapp.batch_hard_cap", DEFAULT_BATCH_HARD_CAP_SECONDS
+                ),
+                minimum=0,
+                inclusive=False,
             ),
             history_turns=_count_in_range(
                 "agent.history_turns",
                 settings.count("agent.history_turns", 20),
+                minimum=1,
+            ),
+            codex_native_compaction=settings.flag(
+                "compression.codex_responses_native", True
+            ),
+            codex_compact_threshold=_count_in_range(
+                "compression.codex_responses_compact_threshold",
+                settings.count(
+                    "compression.codex_responses_compact_threshold",
+                    DEFAULT_COMPACT_THRESHOLD,
+                ),
+                minimum=1024,
+            ),
+            memory_char_limit=_count_in_range(
+                "memory.memory_char_limit",
+                settings.count("memory.memory_char_limit", DEFAULT_MEMORY_CHAR_LIMIT),
+                minimum=1,
+            ),
+            user_memory_char_limit=_count_in_range(
+                "memory.user_char_limit",
+                settings.count("memory.user_char_limit", DEFAULT_USER_CHAR_LIMIT),
+                minimum=1,
+            ),
+            cron_enabled=settings.flag("cron.enabled", True),
+            cron_timezone=cron_timezone,
+            cron_tick_seconds=_number_in_range(
+                "cron.tick_seconds",
+                settings.number("cron.tick_seconds", DEFAULT_CRON_TICK_SECONDS),
+                minimum=0,
+                inclusive=False,
+            ),
+            cron_claim_ttl_seconds=_number_in_range(
+                "cron.claim_ttl_seconds",
+                settings.number(
+                    "cron.claim_ttl_seconds", DEFAULT_CRON_CLAIM_TTL_SECONDS
+                ),
+                minimum=1,
+                inclusive=True,
+            ),
+            cron_max_concurrent=_count_in_range(
+                "cron.max_concurrent",
+                settings.count("cron.max_concurrent", DEFAULT_CRON_MAX_CONCURRENT),
+                minimum=1,
+            ),
+            cron_output_retention=_count_in_range(
+                "cron.output_retention",
+                settings.count(
+                    "cron.output_retention", DEFAULT_CRON_OUTPUT_RETENTION
+                ),
                 minimum=1,
             ),
             request_timeout_seconds=_number_in_range(

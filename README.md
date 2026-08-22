@@ -15,8 +15,8 @@ for every model, channel, environment, and use case.
 ## Focus
 
 The project is intended for personal and organizational agents that maintain
-context, retain useful knowledge, use tools, and communicate through familiar
-messaging channels. Its planned initial scope is ChatGPT, WhatsApp, and Telegram.
+context, retain useful knowledge, use tools and skills, run scheduled work, and
+communicate through familiar messaging channels.
 
 New capabilities will be added from concrete use cases, not to pursue framework
 completeness.
@@ -31,15 +31,51 @@ completeness.
 
 ## Status
 
-Pilotage Agent is in early development. A runtime core is now in place, but there
-is no stable public API yet and interfaces change without notice.
+The Genesis core currently provides ChatGPT subscription authentication,
+allowlisted WhatsApp messaging, persistent conversations with native context
+compaction, curated memory, profile-local tools and skills, isolated profiles,
+management commands, and durable cron jobs. WhatsApp group mode remains closed
+until its mention policy is implemented. This Genesis slice is not
+production-complete: Telegram, voice transcription, outbound file delivery, and
+the approval workflow are not implemented yet. There is no stable public API.
+
+## Install on Ubuntu
+
+```bash
+scripts/install.sh
+# Edit ~/.pilotage-agent/.env and ~/.pilotage-agent/config.yaml
+./.venv/bin/pilotage login
+./.venv/bin/pilotage run
+```
+
+The first run prints the WhatsApp pairing QR. After pairing and testing, install
+the resident user service:
+
+```bash
+bash scripts/install-service.sh
+```
+
+Useful operator commands:
+
+```bash
+./.venv/bin/pilotage status
+./.venv/bin/pilotage profile create work
+# Edit ~/.pilotage-agent/profiles/work/.env and config.yaml
+./.venv/bin/pilotage --profile work run
+bash scripts/install-service.sh --profile work
+./.venv/bin/pilotage cron list --all
+```
+
+Each named profile owns its configuration, WhatsApp session, conversations,
+memory, skills, workspace, cron jobs, and an automatically assigned bridge
+port. Only one live runtime may own a profile. A named profile may fall back
+only to the default profile's ChatGPT authentication.
 
 ## Origin
 
 Pilotage Agent builds on [Hermes Agent](https://hermes-agent.nousresearch.com) by
-Nous Research, used under the MIT License. Upstream supplies the gateway, session
-handling, messaging adapters, and agent loop. Pilotage removes what it does not
-need and reshapes the rest around the principles above.
+Nous Research, used under the MIT License. It selectively reuses proven Hermes
+mechanisms and code while keeping a smaller Pilotage-owned runtime shape.
 
 The original copyright notice is retained in [LICENSE](LICENSE), as the MIT
 License requires.

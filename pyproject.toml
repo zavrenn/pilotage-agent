@@ -11,6 +11,8 @@ dependencies = [
     "openai==2.24.0",
     "httpx[socks]==0.28.1",
     "pyyaml==6.0.3",
+    "croniter==6.0.0",
+    "tzdata==2025.3; sys_platform == 'win32'",
     "tomli==2.2.1; python_version < '3.11'",
 ]
 
@@ -19,3 +21,6 @@ pilotage = "pilotage.main:main"
 
 [tool.setuptools.packages.find]
 include = ["pilotage*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

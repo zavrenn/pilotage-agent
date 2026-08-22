@@ -29,7 +29,7 @@ from .file_safety import get_read_block_error, get_write_denied_error
 from .patch_parser import OperationType, apply_v4a_operations, parse_v4a_patch
 from .registry import Tool, ToolContext, tool_error
 from .shell import DEFAULT_TIMEOUT_SECONDS, Shell
-from .terminal import TerminalSession, get_terminal_session
+from .terminal import TerminalSession, get_terminal_session, shell_cwd, shell_env
 
 STATE_KEY = "file"
 MAX_JSON_CHARS = 95_000
@@ -127,7 +127,7 @@ def _new_shell(context: ToolContext) -> Shell:
     timeout = int(_setting(context, "terminal.timeout", DEFAULT_TIMEOUT_SECONDS))
     if timeout <= 0:
         raise ValueError("terminal.timeout must be greater than zero")
-    return Shell(cwd=str(_setting(context, "terminal.cwd", "")), timeout=timeout)
+    return Shell(cwd=shell_cwd(context), timeout=timeout, env=shell_env(context))
 
 
 def _resolve(path: Any, shell: Shell) -> Path:

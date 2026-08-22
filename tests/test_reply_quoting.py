@@ -38,15 +38,15 @@ def _channel() -> WhatsAppChannel:
     async def handler(message: InboundMessage) -> None:  # pragma: no cover
         raise AssertionError("no turn should run here")
 
-    async def on_reset(
-        chat_id: str, session_id: str, message_id: str
+    async def on_command(
+        chat_id: str, session_id: str, message_id: str, _invocation
     ) -> None:  # pragma: no cover
-        raise AssertionError("nothing should reset here")
+        raise AssertionError("no command should run here")
 
     config = Config.load()
     object.__setattr__(config, "allowed_senders", frozenset({"212600000000"}))
     object.__setattr__(config, "text_batch_delay_seconds", 30.0)
-    return WhatsAppChannel(config, handler, on_reset)
+    return WhatsAppChannel(config, handler, on_command)
 
 
 class SendTests(unittest.IsolatedAsyncioTestCase):
@@ -97,6 +97,65 @@ class BatchTests(unittest.IsolatedAsyncioTestCase):
         for task in list(self.channel._pending_tasks.values()):
             task.cancel()
 
+
+
+class DirectMessageIdentityTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.channel = _channel()
+
+    def _event(
+        self,
+        chat_id: str,
+        message_id: str,
+        *,
+        sender_number: str,
+        identities: List[str],
+    ) -> Dict[str, Any]:
+        return {
+            "chatId": chat_id,
+            "messageId": message_id,
+            "senderId": chat_id,
+            "senderNumber": sender_number,
+            "identities": identities,
+            "body": "question",
+        }
+
+    async def test_phone_and_lid_dm_aliases_share_one_session(self):
+        self.channel._accept(
+            self._event(
+                "999999999999999@lid",
+                "m1",
+                sender_number="999999999999999",
+                identities=["999999999999999", "212600000000"],
+            )
+        )
+        self.channel._accept(
+            self._event(
+                "212600000000@s.whatsapp.net",
+                "m2",
+                sender_number="212600000000",
+                identities=["212600000000"],
+            )
+        )
+
+        self.assertEqual(list(self.channel._pending), ["212600000000"])
+        pending = self.channel._pending["212600000000"]
+        self.assertEqual(pending.message_ids, ["m1", "m2"])
+        self.assertEqual(pending.chat_id, "212600000000@s.whatsapp.net")
+
+    def test_plus_prefixed_full_jid_allowlist_entry_matches(self):
+        object.__setattr__(
+            self.channel._config,
+            "allowed_senders",
+            frozenset({"+212600000000@s.whatsapp.net"}),
+        )
+        self.assertTrue(
+            self.channel._is_allowed("212600000000@s.whatsapp.net", "", [])
+        )
+
+    def tearDown(self):
+        for task in list(self.channel._pending_tasks.values()):
+            task.cancel()
 
 class GroupIsolationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

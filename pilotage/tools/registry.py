@@ -73,6 +73,15 @@ class ToolContext:
     chat_id: str
     config: Any
     state: Dict[str, Any] = field(default_factory=dict)
+    # Profile-wide curated memory. Explicit because it is shared by chats;
+    # putting it in per-chat state would create divergent stores.
+    memory_store: Any = None
+    # Profile-wide durable scheduling state. It is explicit for the same
+    # isolation reason as memory; no tool discovers another profile's root.
+    cron_store: Any = None
+    # The delivery location that created a job, never a model-selected target.
+    origin: Optional[Dict[str, str]] = None
+    cron_wake: Optional[Callable[[], None]] = None
 
 
 Handler = Callable[..., Any]

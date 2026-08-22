@@ -61,6 +61,91 @@ class SchemaTests(unittest.TestCase):
                 error = file_safety.get_read_block_error(str(credential))
         self.assertIn("authentication state", error)
 
+    def test_named_profile_cannot_use_file_tools_on_default_or_sibling_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            selected = root / "profiles" / "selected"
+            sibling = root / "profiles" / "sibling"
+            workspace = selected / "workspace"
+            for path in (workspace, sibling):
+                path.mkdir(parents=True)
+
+            with (
+                mock.patch.object(file_safety, "state_dir", return_value=selected),
+                mock.patch.object(
+                    file_safety,
+                    "default_state_root",
+                    return_value=root,
+                ),
+            ):
+                self.assertIn(
+                    "another agent profile",
+                    file_safety.get_read_block_error(
+                        str(root / "codex-auth.json")
+                    ),
+                )
+                self.assertIn(
+                    "another agent profile",
+                    file_safety.get_read_block_error(
+                        str(sibling / "memories" / "MEMORY.md")
+                    ),
+                )
+                self.assertIn(
+                    "another agent profile",
+                    file_safety.get_write_denied_error(
+                        str(root / "workspace" / "file.txt")
+                    ),
+                )
+                self.assertIsNone(
+                    file_safety.get_read_block_error(str(workspace / "own.txt"))
+                )
+                self.assertIsNone(
+                    file_safety.get_write_denied_error(str(workspace / "own.txt"))
+                )
+
+    def test_default_profile_cannot_use_file_tools_on_named_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            named = root / "profiles" / "named" / "workspace" / "file.txt"
+            with (
+                mock.patch.object(file_safety, "state_dir", return_value=root),
+                mock.patch.object(
+                    file_safety,
+                    "default_state_root",
+                    return_value=root,
+                ),
+            ):
+                self.assertIn(
+                    "another agent profile",
+                    file_safety.get_read_block_error(str(named)),
+                )
+                self.assertIn(
+                    "another agent profile",
+                    file_safety.get_write_denied_error(str(named)),
+                )
+
+    def test_own_control_plane_requires_its_dedicated_tools(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory).resolve()
+            with mock.patch.object(file_safety, "state_dir", return_value=state):
+                for relative in (
+                    ".runtime.lock",
+                    "active_profile",
+                    "bridge.pid",
+                    "codex-auth.json.lock",
+                    "conversations.db-wal",
+                    "cron/.jobs.lock",
+                    "cron/jobs.json",
+                ):
+                    path = state / relative
+                    self.assertIsNotNone(file_safety.get_read_block_error(str(path)))
+                    self.assertIsNotNone(file_safety.get_write_denied_error(str(path)))
+
+                for relative in ("cron/output/result.md", "memories/MEMORY.md"):
+                    self.assertIsNotNone(
+                        file_safety.get_write_denied_error(str(state / relative))
+                    )
+
 
 class OutputBoundTests(unittest.TestCase):
     def test_large_search_pages_keep_valid_json_and_advance(self):

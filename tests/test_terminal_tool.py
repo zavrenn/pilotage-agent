@@ -19,15 +19,16 @@ from pilotage.tools.terminal import TERMINAL_SCHEMA, TerminalSession, handle
 
 
 class _Config:
-    def __init__(self, data=None, result_limit=321):
+    def __init__(self, data=None, result_limit=321, state_dir=None):
         self.settings = Settings(data or {})
         self.max_tool_result_chars = result_limit
+        self.state_dir = state_dir
 
 
-def _context(chat_id="chat", data=None, result_limit=321):
+def _context(chat_id="chat", data=None, result_limit=321, state_dir=None):
     return ToolContext(
         chat_id=chat_id,
-        config=_Config(data, result_limit),
+        config=_Config(data, result_limit, state_dir),
     )
 
 
@@ -37,9 +38,10 @@ class _FakeShell:
     max_active = 0
     active_lock = threading.Lock()
 
-    def __init__(self, cwd="", timeout=0):
+    def __init__(self, cwd="", timeout=0, env=None):
         self.cwd = cwd or "/default"
         self.timeout = timeout
+        self.env = dict(env or {})
         self.calls = []
         type(self).instances.append(self)
 
@@ -97,6 +99,26 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         shell = _FakeShell.instances[0]
         self.assertEqual((shell.cwd, shell.timeout), ("/workspace", 45))
         self.assertEqual(shell.calls[0][2]["capture_limit"], 700)
+
+    async def test_default_workspace_and_hermes_runtime_env_are_profile_scoped(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_dir = Path(temporary.name)
+        context = _context(chat_id="wa-session", state_dir=state_dir)
+
+        await self._run({"command": "pwd"}, context)
+
+        shell = _FakeShell.instances[0]
+        self.assertEqual(Path(shell.cwd), state_dir / "workspace")
+        self.assertTrue((state_dir / "workspace").is_dir())
+        self.assertEqual(
+            shell.env,
+            {
+                "HERMES_SESSION_ID": "wa-session",
+                "PILOTAGE_HOME": str(state_dir),
+                "HERMES_HOME": str(state_dir),
+            },
+        )
 
     async def test_the_shell_persists_for_the_chat(self):
         context = _context()

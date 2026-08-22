@@ -36,7 +36,12 @@ import {
   fetchLatestBaileysVersion,
 } from '@whiskeysockets/baileys';
 
-import { expandWhatsAppIdentifiers, normalizeWhatsAppIdentifier } from './allowlist.js';
+import {
+  expandWhatsAppIdentifiers,
+  matchesAllowedUser,
+  normalizeWhatsAppIdentifier,
+  parseAllowedUsers,
+} from './allowlist.js';
 import {
   buildTextSendPayload,
   createBoundedMessageStore,
@@ -66,6 +71,7 @@ function readFlag(name, envName, fallback = false) {
 }
 
 const PORT = Number.parseInt(readArg('port', '8765'), 10);
+const INSTANCE_TOKEN = readArg('instance-token', process.env.PILOTAGE_BRIDGE_TOKEN || '');
 const SESSION_DIR = readArg('session', './session');
 // Inbound media is written here, outside the session directory: re-pairing
 // deletes the session, and a cached voice note should not depend on that.
@@ -73,6 +79,13 @@ const MEDIA_DIR = readArg('media', './media');
 // Read receipts (the blue ticks) are off unless the operator asks for them, so
 // an agent watching a chat does not silently mark everything as read. (Hermes)
 const SEND_READ_RECEIPTS = readFlag('read-receipts', 'PILOTAGE_SEND_READ_RECEIPTS', false);
+const ANSWER_GROUPS = readFlag('answer-groups', 'PILOTAGE_ANSWER_GROUPS', false);
+const ALLOWED_USERS = parseAllowedUsers(process.env.PILOTAGE_ALLOWED_SENDERS || '');
+
+if (!INSTANCE_TOKEN) {
+  console.error('[bridge] --instance-token is required');
+  process.exit(2);
+}
 
 const CACHE_DIRS = {
   image: path.join(MEDIA_DIR, 'images'),
@@ -316,12 +329,26 @@ async function startSocket() {
     for (const msg of messages || []) {
       try {
         if (!msg.message) continue;
-        messageStore.remember(msg);
         // The agent runs on its own number. Anything this account sent is
         // either our own reply echoing back or a message the operator typed on
         // the linked device — never something to answer.
         if (msg.key?.fromMe) continue;
 
+        // Reject before extractBridgeEvent can download or cache media. Python
+        // repeats this gate before dispatch, but unauthorized content should
+        // never cross the bridge boundary in the first place.
+        const chatId = msg.key?.remoteJid;
+        if (!chatId || chatId === 'status@broadcast') continue;
+        const isGroup = chatId.endsWith('@g.us');
+        if (isGroup && !ANSWER_GROUPS) continue;
+        const senderId = (isGroup ? msg.key?.participant : chatId) || chatId;
+        const senderPn = msg.key?.senderPn || msg.key?.participantPn || null;
+        if (
+          !matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)
+          && !matchesAllowedUser(senderPn, ALLOWED_USERS, SESSION_DIR)
+        ) continue;
+
+        messageStore.remember(msg);
         // eslint-disable-next-line no-await-in-loop
         const event = await buildEvent(msg);
         if (!event) continue;
@@ -358,6 +385,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// Every request proves which Python runtime owns this bridge. Besides keeping
+// the loopback API private, this prevents a duplicate port from ever crossing
+// profile identities.
+app.use((req, res, next) => {
+  if (req.get('x-pilotage-bridge-token') !== INSTANCE_TOKEN) {
+    res.status(403).json({ error: 'forbidden bridge instance' });
+    return;
+  }
+  next();
+});
+
 app.get('/health', (_req, res) => {
   res.json({
     status: connected ? 'connected' : 'connecting',
@@ -371,6 +409,11 @@ app.get('/health', (_req, res) => {
 
 app.get('/messages', (_req, res) => {
   res.json(messageQueue.splice(0, messageQueue.length));
+});
+
+app.post('/shutdown', (_req, res) => {
+  res.json({ success: true });
+  setImmediate(shutdown);
 });
 
 // Presence, not a message: deliberately outside the send queue, so a slow
