@@ -47,6 +47,8 @@ class InstallScriptTests(unittest.TestCase):
                 self.assertIn(expected, source)
 
         self.assertNotIn("\nsudo loginctl enable-linger", source)
+        self.assertIn("WorkingDirectory=$escaped_repo", source)
+        self.assertNotIn('WorkingDirectory="$escaped_repo"', source)
 
     @unittest.skipIf(os.name == "nt", "Windows bash does not consume Windows paths")
     def test_shell_scripts_parse(self):

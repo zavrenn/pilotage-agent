@@ -74,7 +74,9 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 ExecStart="$escaped_bin" --profile %i run
-WorkingDirectory="$escaped_repo"
+# WorkingDirectory= consumes the path directly; unlike ExecStart=, wrapping it
+# in quotes makes the quote part of the path and systemd rejects it as relative.
+WorkingDirectory=$escaped_repo
 Environment="HOME=$escaped_home"
 Environment="PILOTAGE_HOME=$escaped_state"
 Environment="PYTHONUNBUFFERED=1"
