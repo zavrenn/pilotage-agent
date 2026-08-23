@@ -165,7 +165,10 @@ class Config:
     # number must never answer whoever finds it. Entries are phone numbers in
     # digits, or full jids.
     allowed_senders: frozenset[str]
-    answer_groups: bool
+    # Hermes' group gate, reduced to the production-used allowlist mode.
+    group_policy: str
+    group_allow_from: frozenset[str]
+    require_mention: bool
     bridge_port: int
     bridge_dir: Path
     state_dir: Path
@@ -223,6 +226,11 @@ class Config:
     def media_roots(self) -> tuple[Path, ...]:
         """The only directories a bridge-reported file path may live under."""
         return (self.media_dir,)
+
+    @property
+    def answer_groups(self) -> bool:
+        """Whether the bridge should surface any group traffic."""
+        return self.group_policy != "disabled"
 
     @property
     def conversations_path(self) -> Path:
@@ -313,11 +321,26 @@ class Config:
                     "terminal.cwd must be an existing accessible directory, "
                     f"not {terminal_cwd!r}"
                 )
-        answer_groups = settings.flag("whatsapp.answer_groups", False)
-        if answer_groups:
+        legacy_answer_groups = settings.get("whatsapp.answer_groups")
+        if legacy_answer_groups is not None and settings.flag(
+            "whatsapp.answer_groups", False
+        ):
             raise ConfigError(
-                "whatsapp.answer_groups is unavailable until group mention policy exists"
+                "whatsapp.answer_groups has been replaced by "
+                "whatsapp.group_policy and whatsapp.group_allow_from"
             )
+        group_policy = settings.text(
+            "whatsapp.group_policy", "disabled"
+        ).lower()
+        if group_policy not in {"disabled", "allowlist"}:
+            raise ConfigError(
+                "whatsapp.group_policy must be 'disabled' or 'allowlist', "
+                f"not {group_policy!r}"
+            )
+        group_allow_from = frozenset(
+            settings.names("whatsapp.group_allow_from")
+        )
+        require_mention = settings.flag("whatsapp.require_mention", False)
         cron_timezone = settings.text("cron.timezone", "")
         try:
             from .cron.jobs import timezone_for_name
@@ -336,7 +359,9 @@ class Config:
             reasoning_effort=settings.text("agent.reasoning_effort", DEFAULT_REASONING_EFFORT),
             instructions=_instructions(settings, home, channel),
             allowed_senders=frozenset(senders),
-            answer_groups=answer_groups,
+            group_policy=group_policy,
+            group_allow_from=group_allow_from,
+            require_mention=require_mention,
             bridge_port=_count_in_range(
                 "whatsapp.bridge_port",
                 settings.count("whatsapp.bridge_port", 8765),

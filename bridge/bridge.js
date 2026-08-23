@@ -51,6 +51,7 @@ import {
   extractBridgeEvent,
   inboundReadReceiptKeys,
   mediaPayloadForFile,
+  normalizeWhatsAppId,
 } from './bridge_helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -83,6 +84,7 @@ const MEDIA_DIR = readArg('media', './media');
 const SEND_READ_RECEIPTS = readFlag('read-receipts', 'PILOTAGE_SEND_READ_RECEIPTS', false);
 const ANSWER_GROUPS = readFlag('answer-groups', 'PILOTAGE_ANSWER_GROUPS', false);
 const ALLOWED_USERS = parseAllowedUsers(process.env.PILOTAGE_ALLOWED_SENDERS || '');
+const ALLOWED_GROUPS = parseAllowedUsers(process.env.PILOTAGE_ALLOWED_GROUPS || '');
 
 if (!INSTANCE_TOKEN) {
   console.error('[bridge] --instance-token is required');
@@ -251,7 +253,12 @@ async function buildEvent(msg) {
     chatId,
     senderId,
     senderNumber,
-    botIds: meId ? [meId] : [],
+    // Hermes carries both forms because WhatsApp may mention or quote either
+    // the phone JID or the linked-identity JID.
+    botIds: Array.from(new Set([
+      normalizeWhatsAppId(sock.user?.id),
+      normalizeWhatsAppId(sock.user?.lid),
+    ].filter(Boolean))),
     isGroup,
     downloadMedia: async (mediaMsg) => downloadMediaMessage(
       mediaMsg,
@@ -342,13 +349,21 @@ async function startSocket() {
         const chatId = msg.key?.remoteJid;
         if (!chatId || chatId === 'status@broadcast') continue;
         const isGroup = chatId.endsWith('@g.us');
-        if (isGroup && !ANSWER_GROUPS) continue;
         const senderId = (isGroup ? msg.key?.participant : chatId) || chatId;
         const senderPn = msg.key?.senderPn || msg.key?.participantPn || null;
-        if (
+        if (isGroup) {
+          // Group access is keyed by the chat, independently from the DM
+          // sender allowlist. Python repeats this gate and applies mentions.
+          if (
+            !ANSWER_GROUPS
+            || !matchesAllowedUser(chatId, ALLOWED_GROUPS, SESSION_DIR)
+          ) continue;
+        } else if (
           !matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)
           && !matchesAllowedUser(senderPn, ALLOWED_USERS, SESSION_DIR)
-        ) continue;
+        ) {
+          continue;
+        }
 
         messageStore.remember(msg);
         // eslint-disable-next-line no-await-in-loop

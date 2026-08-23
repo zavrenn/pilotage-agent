@@ -248,6 +248,9 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(config.codex_compact_threshold, 200_000)
         self.assertEqual(config.text_batch_hard_cap_seconds, 20.0)
         self.assertFalse(config.answer_groups)
+        self.assertEqual(config.group_policy, "disabled")
+        self.assertEqual(config.group_allow_from, frozenset())
+        self.assertTrue(config.require_mention)
 
     def test_the_operators_instructions_keep_the_formatting_note(self):
         self._write("agent:\n  instructions: Answer in French.\n")
@@ -433,9 +436,27 @@ class ConfigFileTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "terminal.cwd"):
             Config.load()
 
-    def test_group_mode_stays_closed_at_this_stage(self):
+    def test_production_group_policy_is_loaded(self):
+        self._write(
+            "whatsapp:\n"
+            "  group_policy: allowlist\n"
+            "  group_allow_from: ['*']\n"
+            "  require_mention: true\n"
+        )
+        config = Config.load()
+        self.assertTrue(config.answer_groups)
+        self.assertEqual(config.group_policy, "allowlist")
+        self.assertEqual(config.group_allow_from, frozenset({"*"}))
+        self.assertTrue(config.require_mention)
+
+    def test_unsupported_group_policy_stops_startup(self):
+        self._write("whatsapp:\n  group_policy: open\n")
+        with self.assertRaisesRegex(ConfigError, "group_policy"):
+            Config.load()
+
+    def test_old_group_switch_cannot_bypass_the_new_policy(self):
         self._write("whatsapp:\n  answer_groups: true\n")
-        with self.assertRaisesRegex(ConfigError, "answer_groups"):
+        with self.assertRaisesRegex(ConfigError, "group_policy"):
             Config.load()
 
     def test_non_positive_batch_hard_cap_is_refused(self):

@@ -58,6 +58,32 @@ test('matchesAllowedUser treats * as allow-all wildcard', () => {
   }
 });
 
+test('the same proven matcher accepts an allowlisted group jid', () => {
+  const sessionDir = mkdtempSync(path.join(os.tmpdir(), 'hermes-wa-allowlist-'));
+
+  try {
+    const allowedGroups = parseAllowedUsers('120363001234567890@g.us');
+    assert.equal(
+      matchesAllowedUser(
+        '120363001234567890@g.us',
+        allowedGroups,
+        sessionDir,
+      ),
+      true,
+    );
+    assert.equal(
+      matchesAllowedUser(
+        '120363999999999999@g.us',
+        allowedGroups,
+        sessionDir,
+      ),
+      false,
+    );
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+});
+
 test('matchesAllowedUser rejects everyone when allowlist is empty (#8389)', () => {
   // Regression guard: empty allowlist used to return true (allow-everyone),
   // which let any stranger DM the bridge and trigger a Python-side

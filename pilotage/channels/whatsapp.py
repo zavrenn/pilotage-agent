@@ -12,6 +12,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -91,6 +92,63 @@ def _session_id(
     return f"{chat_id}:{participant}" if participant else chat_id
 
 
+def _bot_ids_from_message(data: Dict[str, Any]) -> set[str]:
+    raw = data.get("botIds")
+    if not isinstance(raw, list):
+        return set()
+    return {
+        normalized
+        for value in raw
+        if (normalized := _bare_whatsapp_id(str(value)))
+    }
+
+
+def _message_is_reply_to_bot(data: Dict[str, Any]) -> bool:
+    quoted = _bare_whatsapp_id(str(data.get("quotedParticipant") or ""))
+    return bool(quoted and quoted in _bot_ids_from_message(data))
+
+
+def _message_mentions_bot(data: Dict[str, Any]) -> bool:
+    bot_ids = _bot_ids_from_message(data)
+    if not bot_ids:
+        return False
+    mentioned = data.get("mentionedIds")
+    mentioned_ids = (
+        {
+            normalized
+            for value in mentioned
+            if (normalized := _bare_whatsapp_id(str(value)))
+        }
+        if isinstance(mentioned, list)
+        else set()
+    )
+    if mentioned_ids.intersection(bot_ids):
+        return True
+
+    # Hermes keeps this fallback because some WhatsApp message forms lose the
+    # structured mention list while retaining the visible @number.
+    body = str(data.get("body") or "").lower()
+    return any(
+        f"@{bot_id.lower()}" in body or bot_id.lower() in body
+        for bot_id in bot_ids
+    )
+
+
+def _clean_bot_mention_text(text: str, data: Dict[str, Any]) -> str:
+    """Remove the bot's routing mention from accepted group text. (Hermes)"""
+    if not text:
+        return text
+    cleaned = text
+    for bot_id in _bot_ids_from_message(data):
+        cleaned = re.sub(
+            rf"@{re.escape(bot_id)}\b[,:\-]*\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+    return cleaned.strip() or text
+
+
 class ChannelError(RuntimeError):
     """The channel cannot start, or cannot keep running."""
 
@@ -165,10 +223,19 @@ class WhatsAppChannel:
             raise
         self._running = True
         self._poll_task = asyncio.create_task(self._poll_loop())
-        if not self._config.allowed_senders:
+        if not self._config.allowed_senders and not self._config.answer_groups:
             logger.warning(
                 "No allowed senders configured — every message will be ignored. "
                 "Message the agent once, then add the number it logs to PILOTAGE_ALLOWED_SENDERS."
+            )
+        elif not self._config.allowed_senders:
+            logger.warning(
+                "No allowed senders configured — direct messages will be ignored."
+            )
+        if self._config.answer_groups and not self._config.group_allow_from:
+            logger.warning(
+                "WhatsApp group policy is allowlist but group_allow_from is empty — "
+                "every group message will be ignored."
             )
         logger.info("WhatsApp channel ready")
 
@@ -284,6 +351,9 @@ class WhatsAppChannel:
             **os.environ,
             "PILOTAGE_BRIDGE_TOKEN": self._bridge_token,
             "PILOTAGE_ALLOWED_SENDERS": ",".join(sorted(self._config.allowed_senders)),
+            "PILOTAGE_ALLOWED_GROUPS": ",".join(
+                sorted(self._config.group_allow_from)
+            ),
         }
         self._process = subprocess.Popen(
             command,
@@ -410,7 +480,10 @@ class WhatsAppChannel:
         if not chat_id:
             return
         is_group = bool(event.get("isGroup"))
-        if is_group and not self._config.answer_groups:
+        if is_group and (
+            not self._is_group_allowed(chat_id)
+            or not self._group_message_is_triggered(event)
+        ):
             return
 
         message_id = str(event.get("messageId") or "")
@@ -425,7 +498,10 @@ class WhatsAppChannel:
             if isinstance(raw_identities, list)
             else []
         )
-        if not self._is_allowed(sender_id, sender_number, identities):
+        if (
+            not is_group
+            and not self._is_allowed(sender_id, sender_number, identities)
+        ):
             self._report_blocked(sender_id, sender_number)
             return
 
@@ -479,6 +555,8 @@ class WhatsAppChannel:
     ) -> str:
         """Turn a bridge event into the text the model actually sees."""
         body = str(event.get("body") or "").strip()
+        if event.get("isGroup"):
+            body = _clean_bot_mention_text(body, event)
         media_type = str(event.get("mediaType") or "")
 
         # The bridge writes "[image received]" when media arrives with no
@@ -498,8 +576,7 @@ class WhatsAppChannel:
         quoted = str(event.get("quotedText") or "").strip()
         if quoted and event.get("quotedMessageId"):
             snippet = quoted[:QUOTE_SNIPPET_LIMIT]
-            bot_ids = event.get("botIds")
-            own = isinstance(bot_ids, list) and event.get("quotedParticipant") in bot_ids
+            own = _message_is_reply_to_bot(event)
             prefix = (
                 f'[Replying to your previous message: "{snippet}"]'
                 if own
@@ -548,6 +625,28 @@ class WhatsAppChannel:
         # The bridge already made the same decision before media extraction.
         # Keep this independent check at the Python trust boundary.
         return bool(allowed.intersection(candidates))
+
+    def _is_group_allowed(self, chat_id: str) -> bool:
+        """Apply Hermes' group-chat policy independently from the DM allowlist."""
+        if self._config.group_policy != "allowlist":
+            return False
+        allowed = {
+            normalized
+            for value in self._config.group_allow_from
+            if (normalized := _bare_whatsapp_id(value))
+        }
+        candidate = _bare_whatsapp_id(chat_id)
+        return bool(candidate and ("*" in allowed or candidate in allowed))
+
+    def _group_message_is_triggered(self, event: Dict[str, Any]) -> bool:
+        """Require a direct trigger when configured, matching Hermes."""
+        if not self._config.require_mention:
+            return True
+        if str(event.get("body") or "").strip().startswith("/"):
+            return True
+        if _message_is_reply_to_bot(event):
+            return True
+        return _message_mentions_bot(event)
 
     def _report_blocked(self, sender_id: str, sender_number: str) -> None:
         """Note once, per sender, that a message was ignored.

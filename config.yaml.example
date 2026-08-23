@@ -16,7 +16,9 @@ compression:
   codex_responses_compact_threshold: 200000
 
 whatsapp:
-  answer_groups: false
+  group_policy: disabled
+  group_allow_from: []
+  require_mention: true
   batch_delay: 5
   batch_split_delay: 10
   batch_hard_cap: 20

@@ -53,6 +53,10 @@ class BridgeOwnershipTests(unittest.IsolatedAsyncioTestCase):
             popen.call_args.kwargs["env"]["PILOTAGE_ALLOWED_SENDERS"],
             "212600000000",
         )
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["PILOTAGE_ALLOWED_GROUPS"],
+            "",
+        )
         self.assertNotIn("212600000000", command)
         group_flag = command.index("--answer-groups")
         self.assertEqual(command[group_flag + 1], "0")
@@ -64,6 +68,31 @@ class BridgeOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 "port": self.channel._config.bridge_port,
                 "token": self.channel._bridge_token,
             },
+        )
+
+    def test_spawn_passes_the_group_allowlist_separately_from_dm_senders(self):
+        object.__setattr__(self.channel._config, "group_policy", "allowlist")
+        object.__setattr__(
+            self.channel._config,
+            "group_allow_from",
+            frozenset({"120363001234567890@g.us"}),
+        )
+        process = mock.Mock(pid=4322)
+        with mock.patch.object(
+            whatsapp.subprocess, "Popen", return_value=process
+        ) as popen:
+            self.channel._spawn_bridge()
+
+        command = popen.call_args.args[0]
+        group_flag = command.index("--answer-groups")
+        self.assertEqual(command[group_flag + 1], "1")
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["PILOTAGE_ALLOWED_GROUPS"],
+            "120363001234567890@g.us",
+        )
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["PILOTAGE_ALLOWED_SENDERS"],
+            "212600000000",
         )
 
     async def test_wrong_bridge_instance_is_never_accepted_as_ready(self):

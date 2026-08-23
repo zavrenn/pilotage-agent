@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { inferMediaType, mediaPayloadForFile } from './bridge_helpers.js';
+import {
+  extractBridgeEvent,
+  inferMediaType,
+  mediaPayloadForFile,
+} from './bridge_helpers.js';
 
 
 test('Hermes media type mapping keeps skill outputs native', () => {
@@ -40,5 +44,47 @@ test('Excel output becomes a named WhatsApp document payload', () => {
   assert.equal(
     payload.mimetype,
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+});
+
+
+test('group event carries Hermes mention, quote, and bot identity metadata', async () => {
+  const event = await extractBridgeEvent({
+    msg: {
+      key: {
+        id: 'm1',
+        remoteJid: '120363001234567890@g.us',
+        participant: '212600000000@s.whatsapp.net',
+      },
+      pushName: 'User',
+      messageTimestamp: 1,
+      message: {
+        extendedTextMessage: {
+          text: '@15551230000 hello',
+          contextInfo: {
+            mentionedJid: ['15551230000@s.whatsapp.net'],
+            stanzaId: 'quoted-1',
+            participant: '67427329167522@lid',
+            quotedMessage: { conversation: 'earlier answer' },
+          },
+        },
+      },
+    },
+    chatId: '120363001234567890@g.us',
+    senderId: '212600000000@s.whatsapp.net',
+    senderNumber: '212600000000',
+    botIds: [
+      '15551230000@10@s.whatsapp.net',
+      '67427329167522@lid',
+    ],
+    isGroup: true,
+  });
+
+  assert.deepEqual(event.mentionedIds, ['15551230000@s.whatsapp.net']);
+  assert.equal(event.quotedParticipant, '67427329167522@lid');
+  assert.equal(event.quotedText, 'earlier answer');
+  assert.deepEqual(
+    event.botIds,
+    ['15551230000@10@s.whatsapp.net', '67427329167522@lid'],
   );
 });

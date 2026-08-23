@@ -160,12 +160,13 @@ class DirectMessageIdentityTests(unittest.IsolatedAsyncioTestCase):
 class GroupIsolationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.channel = _channel()
-        object.__setattr__(self.channel._config, "answer_groups", True)
         object.__setattr__(
             self.channel._config,
-            "allowed_senders",
-            frozenset({"212600000000", "212611111111"}),
+            "group_policy",
+            "allowlist",
         )
+        object.__setattr__(self.channel._config, "group_allow_from", frozenset({"*"}))
+        object.__setattr__(self.channel._config, "require_mention", False)
 
     def _event(
         self,
