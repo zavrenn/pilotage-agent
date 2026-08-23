@@ -50,6 +50,15 @@ image_gen:
   provider: openai-codex
   model: gpt-image-2-high
 
+stt:
+  enabled: true
+  provider: openai
+  echo_transcripts: true
+  openai:
+    model: whisper-1
+  # language: fr
+  # prompt: Optional names or vocabulary that improve recognition.
+
 cron:
   enabled: true
   # Blank uses the machine's local timezone. Example: Africa/Casablanca

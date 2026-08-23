@@ -304,6 +304,9 @@ class Config:
         from .tools.image import validate_image_settings
 
         validate_image_settings(settings)
+        from .transcription import validate_settings as validate_stt_settings
+
+        validate_stt_settings(settings)
 
         settings.names("skills.disabled")
         settings.flag("skills.template_vars", True)

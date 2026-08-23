@@ -35,9 +35,9 @@ The Genesis core currently provides ChatGPT subscription authentication,
 allowlisted WhatsApp messaging, persistent conversations with native context
 compaction, full-text conversation recall, curated memory, profile-local tools
 and skills, isolated profiles, management commands, DDGS web search, native
-image analysis, Codex-backed image generation and editing, Hermes-style
-allowlisted WhatsApp groups, and durable cron jobs. This Genesis
-slice is not production-complete: Telegram, voice transcription, and the
+image analysis, OpenAI voice-message transcription, Codex-backed image
+generation and editing, Hermes-style allowlisted WhatsApp groups, and durable
+cron jobs. This Genesis slice is not production-complete: Telegram and the
 approval workflow are not implemented yet. There is no stable public API.
 
 ## Install on Ubuntu
@@ -48,6 +48,9 @@ scripts/install.sh
 ./.venv/bin/pilotage login
 ./.venv/bin/pilotage run
 ```
+
+Voice-message transcription requires VOICE_TOOLS_OPENAI_KEY in the profile
+.env; ChatGPT login does not authorize the OpenAI audio API.
 
 The first run prints the WhatsApp pairing QR. After pairing and testing, install
 the resident user service:

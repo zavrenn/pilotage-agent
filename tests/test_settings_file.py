@@ -244,6 +244,11 @@ class ConfigFileTests(unittest.TestCase):
         )
         self.assertEqual(config.settings.text("image_gen.provider"), "openai-codex")
         self.assertEqual(config.settings.text("image_gen.model"), "gpt-image-2-high")
+        self.assertTrue(config.settings.flag("stt.enabled"))
+        self.assertEqual(config.settings.text("stt.provider"), "openai")
+        self.assertEqual(
+            config.settings.text("stt.openai.model"), "whisper-1"
+        )
         self.assertTrue(config.cron_enabled)
         self.assertEqual(config.cron_output_retention, 50)
         self.assertTrue(config.codex_native_compaction)

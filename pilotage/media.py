@@ -11,9 +11,9 @@ What the model can actually take differs by kind:
 * **Images** go into the request as a base64 data URL.
 * **Text-readable documents** are inlined into the message, capped, as Hermes
   does for every one of its channels.
-* **Voice notes, audio and video** cannot be read at all. ChatGPT's OAuth
-  session does not carry the transcription API, so they are announced to the
-  model rather than silently dropped.
+* **Voice notes** are handed to the separate OpenAI transcription path before
+  the turn. Uploaded audio and video are announced rather than silently
+  dropped.
 
 Outbound files take the reverse path. The model names a generated file with
 Hermes' ``MEDIA:/absolute/path`` directive; the directive is removed from the
@@ -101,6 +101,11 @@ class Attachment:
     @property
     def is_text_document(self) -> bool:
         return self.media_type == "document" and self.path.suffix.lower() in TEXT_DOCUMENT_SUFFIXES
+
+    @property
+    def is_voice_message(self) -> bool:
+        """Native WhatsApp push-to-talk notes enter automatic STT. (Hermes)"""
+        return self.media_type == "ptt"
 
     def display_name(self) -> str:
         """The name the sender knows, not the cache file name.
@@ -329,10 +334,13 @@ def describe_unreadable(attachments: Sequence[Attachment]) -> str:
     for attachment in attachments:
         if attachment.is_image or attachment.is_text_document:
             continue
-        if attachment.media_type in {"ptt", "audio"}:
+        if attachment.is_voice_message:
+            # The asynchronous channel handler replaces this with either a
+            # transcript or Hermes' neutral transcription-failure marker.
+            continue
+        if attachment.media_type == "audio":
             notes.append(
-                "[The sender left a voice message. This agent cannot listen to it yet — "
-                "say so, and ask them to write it out.]"
+                "[The sender sent an audio file. This agent cannot listen to it automatically.]"
             )
         elif attachment.media_type in {"video", "gif"}:
             notes.append("[The sender sent a video. This agent cannot watch it.]")

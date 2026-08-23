@@ -821,17 +821,26 @@ class WhatsAppChannel:
         except httpx.HTTPError:
             pass  # Cosmetic — never worth interrupting a turn.
 
-    async def send(self, chat_id: str, text: str, reply_to: str = "") -> bool:
+    async def send(
+        self,
+        chat_id: str,
+        text: str,
+        reply_to: str = "",
+        *,
+        deliver_media: bool = True,
+    ) -> bool:
         if self._http is None:
             return False
 
-        attachments, cleaned = media.extract_outbound(
-            text or "", (self._config.workspace_dir,)
-        )
-        # Everything leaves through here, so this is the one place the model's
-        # markdown has to become WhatsApp's. MEDIA directives are removed first
-        # and become native bridge uploads below. This is Hermes' send order:
-        # visible text first, then each attachment through the serialized queue.
+        if deliver_media:
+            attachments, cleaned = media.extract_outbound(
+                text or "", (self._config.workspace_dir,)
+            )
+        else:
+            attachments, cleaned = [], text or ""
+        # Model replies take Hermes' send order: visible text first, then each
+        # extracted attachment. System echoes opt out because user-derived text
+        # must never turn a spoken MEDIA phrase into a file delivery.
         body = to_whatsapp(cleaned).strip()
         if not body and not attachments:
             return False

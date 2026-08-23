@@ -13,7 +13,7 @@ import logging
 import signal
 import sys
 
-from . import profiles
+from . import profiles, transcription
 from .agent import Agent
 from .commands import CommandInvocation, execute_command, status_text
 from .channels.whatsapp import ChannelError, InboundMessage, WhatsAppChannel
@@ -138,7 +138,6 @@ async def _command_run_locked(config: Config, profile_name: str = "default") -> 
     )
 
     async def handle(message: InboundMessage) -> None:
-        logger.info("%s: %s", message.sender_number or message.chat_id, message.text[:120])
         # A batch of messages is one question; quote the last of them, the
         # one the answer arrives under.
         quoted = message.message_ids[-1] if message.message_ids else ""
@@ -148,9 +147,29 @@ async def _command_run_locked(config: Config, profile_name: str = "default") -> 
 
         try:
             async with channel.typing(message.chat_id):
+                enriched_text, transcripts = await transcription.enrich_message(
+                    message.text,
+                    message.attachments,
+                    config.settings,
+                )
+                logger.info(
+                    "%s: %s",
+                    message.sender_number or message.chat_id,
+                    enriched_text[:120],
+                )
+                if transcripts and transcription.transcript_echo_enabled(
+                    config.settings
+                ):
+                    for transcript in transcripts:
+                        await channel.send(
+                            message.chat_id,
+                            f'🎙️ "{transcript}"',
+                            quoted,
+                            deliver_media=False,
+                        )
                 answer = await agent.respond(
                     message.session_id,
-                    message.text,
+                    enriched_text,
                     message.attachments,
                     on_notice=notice,
                     origin={"channel": "whatsapp", "chat_id": message.chat_id},

@@ -184,6 +184,20 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_plain_text_echo_cannot_turn_media_text_into_an_attachment(self):
+        report = self.config.workspace_dir / "report.xlsx"
+        report.write_bytes(b"xlsx")
+
+        self.assertTrue(
+            await self.channel.send(
+                "chat",
+                f"MEDIA:{report}",
+                deliver_media=False,
+            )
+        )
+
+        self.assertEqual(len(self.http.posts), 1)
+        self.assertTrue(self.http.posts[0]["url"].endswith("/send"))
 
 if __name__ == "__main__":
     unittest.main()
