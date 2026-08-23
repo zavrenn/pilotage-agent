@@ -64,6 +64,14 @@ MAX_ITERATIONS_SUMMARY_REQUEST = (
     "without calling any more tools."
 )
 
+# Codex can finish a response after emitting only a commentary/analysis message.
+# Hermes proved that this is a paused turn, not an empty answer: replay its exact
+# message item and let it continue, but stop a response loop after three tries.
+MAX_CODEX_INCOMPLETE_RESPONSES = 3
+CODEX_INCOMPLETE_RESPONSE = (
+    "Codex response remained incomplete after 3 continuation attempts"
+)
+
 # Called with a line to show the person waiting, mid-turn.
 Notice = Callable[[str], Awaitable[None]]
 
@@ -437,9 +445,36 @@ class Agent:
         items: List[Dict[str, Any]] = []
         limit = max(1, self._config.max_tool_iterations)
 
+        async def _next_action_or_answer(
+            offered_tools: Optional[List[Dict[str, Any]]],
+        ) -> Optional[codex_stream.StreamResult]:
+            for attempt in range(1, MAX_CODEX_INCOMPLETE_RESPONSES + 1):
+                result = await self._call_model(
+                    chat_id, history + items, offered_tools, on_notice
+                )
+                items.extend(_assistant_items(result))
+                # Tool calls take precedence: commentary commonly introduces a
+                # tool and must be replayed, but it must not delay execution.
+                if result.tool_calls or not result.needs_continuation:
+                    return result
+                if attempt < MAX_CODEX_INCOMPLETE_RESPONSES:
+                    logger.info(
+                        "Codex response for %s paused after commentary; continuing (%d/%d)",
+                        chat_id,
+                        attempt,
+                        MAX_CODEX_INCOMPLETE_RESPONSES,
+                    )
+            return None
+
         for step in range(limit):
-            result = await self._call_model(chat_id, history + items, self._tools, on_notice)
-            items.extend(_assistant_items(result))
+            result = await _next_action_or_answer(self._tools)
+            if result is None:
+                logger.warning(
+                    "Codex response for %s remained incomplete after %d attempts",
+                    chat_id,
+                    MAX_CODEX_INCOMPLETE_RESPONSES,
+                )
+                return TurnResult(text=CODEX_INCOMPLETE_RESPONSE, items=items)
             if not result.tool_calls:
                 return TurnResult(text=result.text, items=items)
 
@@ -466,8 +501,9 @@ class Agent:
         # work is already done and paid for, and the person is still waiting.
         logger.warning("Chat %s used all %d tool steps; asking for a summary", chat_id, limit)
         items.append({"role": "user", "content": MAX_ITERATIONS_SUMMARY_REQUEST})
-        result = await self._call_model(chat_id, history + items, None, on_notice)
-        items.extend(_assistant_items(result))
+        result = await _next_action_or_answer(None)
+        if result is None:
+            return TurnResult(text=CODEX_INCOMPLETE_RESPONSE, items=items)
         return TurnResult(text=result.text, items=items)
 
     async def _call_model(
@@ -570,10 +606,13 @@ def _assistant_items(result: codex_stream.StreamResult) -> List[Dict[str, Any]]:
         # `store: False` means the server cannot resolve item ids, so a
         # replayed id is a 404. `_issuer_kind` is not part of the API.
         items.append({k: v for k, v in item.items() if k not in ("id", "_issuer_kind")})
+    message_items = codex_stream.message_items_for_replay(result.message_items)
+    if message_items:
+        items.extend(message_items)
     # A reasoning item must be followed by a message, even an empty one, or the
-    # API rejects the input with `missing_following_item`. A call with neither
-    # reasoning nor words leaves nothing to say.
-    if items or result.text:
+    # API rejects the input with `missing_following_item`. Older/unphased
+    # responses still use the plain assistant-message fallback.
+    elif items or result.text:
         items.append({"role": "assistant", "content": result.text})
     for call in result.tool_calls:
         items.append(

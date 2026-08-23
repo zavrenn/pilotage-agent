@@ -24,12 +24,16 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .call_ids import clamp_call_id, deterministic_call_id
+from .call_ids import MAX_ITEM_ID_LENGTH, clamp_call_id, deterministic_call_id
 from . import compaction
 
 _TERMINAL_EVENT_TYPES = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
 )
+
+_RESPONSE_MESSAGE_STATUSES = frozenset({"completed", "incomplete", "in_progress"})
+_INTERMEDIATE_MESSAGE_PHASES = frozenset({"commentary", "analysis"})
+_FINAL_MESSAGE_PHASES = frozenset({"final_answer", "final"})
 
 # Waiting for the first event. Long on purpose: a subscription-backed request
 # can spend a minute in backend admission and prompt prefill before it says
@@ -232,6 +236,10 @@ def stream_timeouts(
 class StreamResult:
     text: str = ""
     reasoning_items: List[Dict[str, Any]] = field(default_factory=list)
+    # Exact Responses message items, including their phase. Codex asks callers
+    # to preserve these on replay; flattening them loses both cache continuity
+    # and the distinction between mid-turn commentary and the final answer.
+    message_items: List[Dict[str, Any]] = field(default_factory=list)
     # What the model asked to run, in the order it asked. Each is
     # ``{"call_id", "name", "arguments"}`` — arguments as the JSON text the
     # model wrote, passed through untouched so the request we replay next turn
@@ -240,6 +248,9 @@ class StreamResult:
     status: str = ""
     usage: Any = None
     response_id: str = ""
+    # A commentary/analysis-only response is the model pausing mid-turn, not an
+    # empty final answer. The agent replays it and asks the model to continue.
+    needs_continuation: bool = False
 
 
 def _field(obj: Any, name: str, default: Any = None) -> Any:
@@ -291,6 +302,9 @@ async def consume_stream(
     result = StreamResult()
     terminal_seen = False
     first_event_seen = False
+    active_message_phase: Optional[str] = None
+    saw_intermediate_message = False
+    saw_final_message = False
 
     events = stream.__aiter__()
     while True:
@@ -311,9 +325,24 @@ async def consume_stream(
         if event_type == "error":
             _raise_stream_error(event)
 
+        if event_type == "response.output_item.added":
+            item = _field(event, "item")
+            if _field(item, "type", "") == "message":
+                active_message_phase = _message_phase(_field(item, "phase")) or None
+                saw_intermediate_message = (
+                    saw_intermediate_message
+                    or active_message_phase in _INTERMEDIATE_MESSAGE_PHASES
+                )
+                saw_final_message = (
+                    saw_final_message or active_message_phase in _FINAL_MESSAGE_PHASES
+                )
+            else:
+                active_message_phase = None
+            continue
+
         if event_type.endswith("output_text.delta"):
             delta = _field(event, "delta", "") or ""
-            if delta:
+            if delta and active_message_phase not in _INTERMEDIATE_MESSAGE_PHASES:
                 text_deltas.append(str(delta))
                 if on_text_delta is not None:
                     on_text_delta(str(delta))
@@ -322,7 +351,14 @@ async def consume_stream(
         if event_type == "response.output_item.done":
             item = _field(event, "item")
             if item is not None:
-                output_items.append(_as_dict(item))
+                item_dict = _as_dict(item)
+                output_items.append(item_dict)
+                if item_dict.get("type") == "message":
+                    phase = _message_phase(item_dict.get("phase"))
+                    saw_intermediate_message = (
+                        saw_intermediate_message or phase in _INTERMEDIATE_MESSAGE_PHASES
+                    )
+                    saw_final_message = saw_final_message or phase in _FINAL_MESSAGE_PHASES
             continue
 
         if event_type in _TERMINAL_EVENT_TYPES:
@@ -337,9 +373,12 @@ async def consume_stream(
             terminal_seen = True
             break
 
-    result.text = "".join(text_deltas).strip()
-    if not result.text:
-        result.text = _text_from_items(output_items)
+    result.message_items = _message_items_from_items(output_items)
+    message_text = _final_text_from_message_items(result.message_items)
+    if message_text:
+        result.text = message_text
+    elif not (saw_intermediate_message and not saw_final_message):
+        result.text = "".join(text_deltas).strip()
     result.reasoning_items = []
     for item in output_items:
         item_type = item.get("type")
@@ -351,6 +390,9 @@ async def consume_stream(
                 {"type": "compaction", "encrypted_content": encrypted}
             )
     result.tool_calls = _tool_calls_from_items(output_items)
+    result.needs_continuation = bool(
+        not result.tool_calls and saw_intermediate_message and not saw_final_message
+    )
 
     if not terminal_seen and not result.text and not output_items:
         raise CodexStreamError("The Codex stream ended without a response.")
@@ -401,12 +443,105 @@ def _tool_calls_from_items(items: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     return calls
 
 
-def _text_from_items(items: List[Dict[str, Any]]) -> str:
+def _message_phase(value: Any) -> str:
+    return value.strip().lower() if isinstance(value, str) else ""
+
+
+def _normalize_message_status(value: Any) -> str:
+    if isinstance(value, str):
+        status = value.strip().lower().replace("-", "_").replace(" ", "_")
+        if status in _RESPONSE_MESSAGE_STATUSES:
+            return status
+    return "completed"
+
+
+def _message_text(item: Dict[str, Any]) -> str:
     parts: List[str] = []
+    for block in item.get("content") or []:
+        if not isinstance(block, dict) or block.get("type") not in {"output_text", "text"}:
+            continue
+        text = block.get("text")
+        if isinstance(text, str) and text:
+            parts.append(text)
+    return "".join(parts).strip()
+
+
+def _message_items_from_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
     for item in items:
         if item.get("type") != "message":
             continue
-        for block in item.get("content") or []:
-            if isinstance(block, dict) and isinstance(block.get("text"), str):
-                parts.append(block["text"])
-    return "".join(parts).strip()
+        text = _message_text(item)
+        if not text:
+            continue
+        message: Dict[str, Any] = {
+            "type": "message",
+            "role": "assistant",
+            "status": _normalize_message_status(item.get("status")),
+            "content": [{"type": "output_text", "text": text}],
+        }
+        item_id = item.get("id")
+        if isinstance(item_id, str) and item_id:
+            message["id"] = item_id
+        phase = _message_phase(item.get("phase"))
+        if phase:
+            message["phase"] = phase
+        messages.append(message)
+    return messages
+
+
+def _final_text_from_message_items(items: List[Dict[str, Any]]) -> str:
+    return "\n".join(
+        text
+        for item in items
+        if _message_phase(item.get("phase")) not in _INTERMEDIATE_MESSAGE_PHASES
+        if (text := _message_text(item))
+    ).strip()
+
+
+def message_items_for_replay(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Validate Codex assistant messages and retain its replay metadata.
+
+    This is Hermes' Responses replay rule reduced to Genesis' one backend.
+    Oversized server ids are omitted because the API rejects ids over 64
+    characters; phase and status remain exactly where Codex put them.
+    """
+    replay: List[Dict[str, Any]] = []
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            continue
+        if raw_item.get("type") != "message" or raw_item.get("role") != "assistant":
+            continue
+        raw_content = raw_item.get("content")
+        if not isinstance(raw_content, list):
+            continue
+
+        content: List[Dict[str, str]] = []
+        for part in raw_content:
+            if not isinstance(part, dict) or part.get("type") not in {"output_text", "text"}:
+                continue
+            text = part.get("text", "")
+            if text is None:
+                text = ""
+            if not isinstance(text, str):
+                text = str(text)
+            content.append({"type": "output_text", "text": text})
+        if not content:
+            continue
+
+        message: Dict[str, Any] = {
+            "type": "message",
+            "role": "assistant",
+            "status": _normalize_message_status(raw_item.get("status")),
+            "content": content,
+        }
+        item_id = raw_item.get("id")
+        if isinstance(item_id, str) and item_id.strip():
+            item_id = item_id.strip()
+            if len(item_id) <= MAX_ITEM_ID_LENGTH:
+                message["id"] = item_id
+        phase = raw_item.get("phase")
+        if isinstance(phase, str) and phase.strip():
+            message["phase"] = phase.strip()
+        replay.append(message)
+    return replay

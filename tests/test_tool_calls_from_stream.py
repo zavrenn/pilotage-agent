@@ -22,6 +22,37 @@ def _item(**fields) -> SimpleNamespace:
     )
 
 
+def _message_added(phase: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="response.output_item.added",
+        item={"type": "message", "phase": phase},
+    )
+
+
+def _message_done(
+    text: str,
+    *,
+    phase: str,
+    item_id: str,
+    status: str = "completed",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="response.output_item.done",
+        item={
+            "type": "message",
+            "role": "assistant",
+            "status": status,
+            "id": item_id,
+            "phase": phase,
+            "content": [{"type": "output_text", "text": text}],
+        },
+    )
+
+
+def _delta(text: str) -> SimpleNamespace:
+    return SimpleNamespace(type="response.output_text.delta", delta=text)
+
+
 def _completed() -> SimpleNamespace:
     return SimpleNamespace(
         type="response.completed",
@@ -41,8 +72,13 @@ class Stream:
             yield event
 
 
-async def _consume(events) -> codex_stream.StreamResult:
-    return await codex_stream.consume_stream(Stream(events), ttfb_timeout=1.0, idle_timeout=1.0)
+async def _consume(events, *, on_text_delta=None) -> codex_stream.StreamResult:
+    return await codex_stream.consume_stream(
+        Stream(events),
+        on_text_delta=on_text_delta,
+        ttfb_timeout=1.0,
+        idle_timeout=1.0,
+    )
 
 
 class CallIdTests(unittest.TestCase):
@@ -117,6 +153,113 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
             [SimpleNamespace(type="response.output_text.delta", delta="Hello."), _completed()]
         )
         self.assertEqual(result.tool_calls, [])
+
+    async def test_commentary_and_final_answer_are_kept_separate(self):
+        visible = []
+        result = await _consume(
+            [
+                _message_added("commentary"),
+                _delta("I will inspect the repository."),
+                _message_done(
+                    "I will inspect the repository.",
+                    phase="commentary",
+                    item_id="msg_commentary",
+                ),
+                _message_added("final_answer"),
+                _delta("Everything is ready."),
+                _message_done(
+                    "Everything is ready.",
+                    phase="final_answer",
+                    item_id="msg_final",
+                ),
+                _completed(),
+            ],
+            on_text_delta=visible.append,
+        )
+
+        self.assertEqual(result.text, "Everything is ready.")
+        self.assertEqual(visible, ["Everything is ready."])
+        self.assertFalse(result.needs_continuation)
+        self.assertEqual(
+            result.message_items,
+            [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "id": "msg_commentary",
+                    "phase": "commentary",
+                    "content": [
+                        {"type": "output_text", "text": "I will inspect the repository."}
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "id": "msg_final",
+                    "phase": "final_answer",
+                    "content": [{"type": "output_text", "text": "Everything is ready."}],
+                },
+            ],
+        )
+
+    async def test_commentary_only_is_an_incomplete_turn_not_an_answer(self):
+        result = await _consume(
+            [
+                _message_added("commentary"),
+                _delta("I will call the tool now."),
+                _message_done(
+                    "I will call the tool now.",
+                    phase="commentary",
+                    item_id="msg_commentary",
+                ),
+                _completed(),
+            ]
+        )
+
+        self.assertEqual(result.text, "")
+        self.assertTrue(result.needs_continuation)
+        self.assertEqual(result.message_items[0]["phase"], "commentary")
+
+    async def test_commentary_before_a_tool_is_replayed_but_does_not_delay_the_tool(self):
+        result = await _consume(
+            [
+                _message_added("commentary"),
+                _delta("I will inspect it."),
+                _message_done(
+                    "I will inspect it.",
+                    phase="commentary",
+                    item_id="msg_commentary",
+                ),
+                _item(name="todo", arguments="{}", call_id="call_1"),
+                _completed(),
+            ]
+        )
+
+        self.assertEqual(result.text, "")
+        self.assertFalse(result.needs_continuation)
+        self.assertEqual(result.message_items[0]["phase"], "commentary")
+        self.assertEqual(result.tool_calls[0]["call_id"], "call_1")
+
+    async def test_analysis_phase_is_also_hidden_from_the_answer(self):
+        result = await _consume(
+            [
+                _message_added("analysis"),
+                _delta("Private analysis."),
+                _message_done(
+                    "Private analysis.",
+                    phase="analysis",
+                    item_id="msg_analysis",
+                    status="in-progress",
+                ),
+                _completed(),
+            ]
+        )
+
+        self.assertEqual(result.text, "")
+        self.assertTrue(result.needs_continuation)
+        self.assertEqual(result.message_items[0]["status"], "in_progress")
 
 
 class CacheKeyTests(unittest.TestCase):

@@ -15,7 +15,11 @@ import unittest
 from pathlib import Path
 from typing import Any, Dict, List
 
-from pilotage.agent import MAX_ITERATIONS_SUMMARY_REQUEST, Agent
+from pilotage.agent import (
+    CODEX_INCOMPLETE_RESPONSE,
+    MAX_ITERATIONS_SUMMARY_REQUEST,
+    Agent,
+)
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
 from pilotage.history import ConversationStore
@@ -23,6 +27,23 @@ from pilotage.history import ConversationStore
 
 def _call(call_id: str, name: str = "todo", **arguments) -> Dict[str, str]:
     return {"call_id": call_id, "name": name, "arguments": json.dumps(arguments)}
+
+
+def _message(
+    text: str,
+    *,
+    phase: str,
+    item_id: str = "msg_1",
+    status: str = "completed",
+) -> Dict[str, Any]:
+    return {
+        "type": "message",
+        "role": "assistant",
+        "status": status,
+        "id": item_id,
+        "phase": phase,
+        "content": [{"type": "output_text", "text": text}],
+    }
 
 
 class LoopTests(unittest.IsolatedAsyncioTestCase):
@@ -108,6 +129,98 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         reasoning = [item for item in self._sent() if item.get("type") == "reasoning"]
         self.assertNotIn("id", reasoning[0])
         self.assertNotIn("_issuer_kind", reasoning[0])
+
+    async def test_exact_codex_message_is_replayed_before_its_tool_call(self):
+        commentary = _message(
+            "I will inspect it.",
+            phase="commentary",
+            item_id="msg_commentary",
+        )
+        self.replies = [
+            codex_stream.StreamResult(
+                message_items=[commentary],
+                tool_calls=[_call("call_abc")],
+            ),
+            codex_stream.StreamResult(text="Read it."),
+        ]
+
+        await self.agent.respond("chat", "inspect it")
+
+        messages = [item for item in self._sent() if item.get("type") == "message"]
+        self.assertEqual(messages[-1], commentary)
+        types = [item.get("type") or item.get("role") for item in self._sent()]
+        self.assertEqual(
+            types[-3:],
+            ["message", "function_call", "function_call_output"],
+        )
+
+    async def test_oversized_codex_message_id_is_dropped_on_replay(self):
+        self.replies = [
+            codex_stream.StreamResult(
+                message_items=[
+                    _message(
+                        "I will inspect it.",
+                        phase="commentary",
+                        item_id="m" * 65,
+                    )
+                ],
+                tool_calls=[_call("call_abc")],
+            ),
+            codex_stream.StreamResult(text="Read it."),
+        ]
+
+        await self.agent.respond("chat", "inspect it")
+
+        message = [item for item in self._sent() if item.get("type") == "message"][-1]
+        self.assertNotIn("id", message)
+        self.assertEqual(message["phase"], "commentary")
+
+    async def test_commentary_only_response_is_replayed_until_the_final_answer(self):
+        commentary = _message("I will inspect it.", phase="commentary")
+        self.replies = [
+            codex_stream.StreamResult(
+                message_items=[commentary],
+                needs_continuation=True,
+            ),
+            codex_stream.StreamResult(text="Inspection complete."),
+        ]
+
+        answer = await self.agent.respond("chat", "inspect it")
+
+        self.assertEqual(answer, "Inspection complete.")
+        self.assertEqual(len(self.requests), 2)
+        self.assertIn(commentary, self._sent())
+
+    async def test_commentary_continuation_stops_after_three_incomplete_responses(self):
+        self.replies = [
+            codex_stream.StreamResult(
+                message_items=[
+                    _message(
+                        "Still working.",
+                        phase="commentary",
+                        item_id=f"msg_{index}",
+                    )
+                ],
+                needs_continuation=True,
+            )
+            for index in range(3)
+        ]
+
+        answer = await self.agent.respond("chat", "inspect it")
+
+        self.assertEqual(answer, CODEX_INCOMPLETE_RESPONSE)
+        self.assertEqual(len(self.requests), 3)
+
+    async def test_exact_codex_message_survives_to_the_next_user_turn(self):
+        final = _message("Done.", phase="final_answer", item_id="msg_final")
+        self.replies = [
+            codex_stream.StreamResult(text="Done.", message_items=[final]),
+        ]
+        await self.agent.respond("chat", "first")
+
+        await self.agent.respond("chat", "follow up")
+
+        self.assertIn(final, self._sent())
 
     async def test_several_calls_in_one_step_all_come_back(self):
         self.replies = [
