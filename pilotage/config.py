@@ -18,6 +18,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .approvals import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from .codex.compaction import DEFAULT_COMPACT_THRESHOLD
 from .profiles import default_state_root
 from .settings import ConfigError, Settings, config_path
@@ -209,6 +210,12 @@ class Config:
     # Profile-wide curated notes injected as a frozen per-session snapshot.
     memory_char_limit: int
     user_memory_char_limit: int
+    # Hermes-shaped human gates, reduced to the persistent writes production
+    # needs. Each switch is per profile (and may be overridden per channel).
+    approval_memory: bool
+    approval_skills: bool
+    approval_cron: bool
+    approval_timeout_seconds: float
     # Profile-local durable scheduled work.
     cron_enabled: bool
     cron_timezone: str
@@ -445,6 +452,17 @@ class Config:
                 "memory.user_char_limit",
                 settings.count("memory.user_char_limit", DEFAULT_USER_CHAR_LIMIT),
                 minimum=1,
+            ),
+            approval_memory=settings.flag("approvals.memory", True),
+            approval_skills=settings.flag("approvals.skills", True),
+            approval_cron=settings.flag("approvals.cron", True),
+            approval_timeout_seconds=_number_in_range(
+                "approvals.timeout",
+                settings.number(
+                    "approvals.timeout", DEFAULT_APPROVAL_TIMEOUT_SECONDS
+                ),
+                minimum=0,
+                inclusive=False,
             ),
             cron_enabled=settings.flag("cron.enabled", True),
             cron_timezone=cron_timezone,

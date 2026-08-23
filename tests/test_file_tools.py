@@ -12,9 +12,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from pilotage import media
+from pilotage.approvals import ApprovalOutcome
 from pilotage.settings import Settings
 from pilotage.tools import ToolContext, build_registry
 from pilotage.tools.file_operations import (
+    PatchResult,
     SearchMatch,
     SearchResult,
     ShellFileOperations,
@@ -22,25 +25,40 @@ from pilotage.tools.file_operations import (
 )
 from pilotage.tools import file_safety
 from pilotage.tools.files import (
+    FileSession,
     PATCH_SCHEMA,
     READ_FILE_SCHEMA,
     SEARCH_FILES_SCHEMA,
     WRITE_FILE_SCHEMA,
     _bounded_search_dict,
     _patch,
+    _ApprovalRequired,
+    _run,
     _write,
     handle_patch,
     handle_read_file,
     handle_search_files,
     handle_write_file,
 )
-from pilotage.tools.terminal import handle as handle_terminal
+from pilotage.tools.terminal import TerminalSession, handle as handle_terminal
+
+
+VALID_SKILL = (
+    "---\n"
+    "name: demo\n"
+    "description: Demo workflow.\n"
+    "version: 1.0.0\n"
+    "---\n\n"
+    "# Demo\n\nFollow this workflow.\n"
+)
 
 
 class _Config:
     def __init__(self, workspace: Path):
         self.settings = Settings({"terminal": {"cwd": str(workspace)}})
         self.max_tool_result_chars = 100_000
+        self.state_dir = workspace
+        self.workspace_dir = workspace
 
 
 class SchemaTests(unittest.TestCase):
@@ -160,6 +178,156 @@ class SchemaTests(unittest.TestCase):
                 file_safety.get_write_denied_error(str(root / "notes.md"))
             )
 
+    def test_skill_write_requires_an_explicit_category_grant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            target = home / "skills" / "demo" / "SKILL.md"
+            context = ToolContext("chat", _Config(home))
+            shell = SimpleNamespace(cwd=str(home))
+            operations = mock.Mock()
+
+            def write(path, content):
+                written = Path(path)
+                written.parent.mkdir(parents=True, exist_ok=True)
+                written.write_text(content, encoding="utf-8")
+                return WriteResult(bytes_written=len(content), verified=True)
+
+            operations.write_file.side_effect = write
+            with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
+                with self.assertRaisesRegex(
+                    RuntimeError, "Write skill file"
+                ) as approval:
+                    _write(
+                        {"path": str(target), "content": VALID_SKILL},
+                        context,
+                        shell,
+                        operations,
+                    )
+                self.assertNotIn("Follow this workflow", approval.exception.summary)
+                self.assertIn(VALID_SKILL, approval.exception.review_content)
+                result = json.loads(
+                    _write(
+                        {"path": str(target), "content": VALID_SKILL},
+                        context,
+                        shell,
+                        operations,
+                        approved_categories=frozenset({"skills"}),
+                    )
+                )
+
+            self.assertTrue(result["verified"])
+            self.assertEqual(target.read_text(encoding="utf-8"), VALID_SKILL)
+
+    def test_invalid_skill_write_is_rejected_before_approval_or_disk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            target = home / "skills" / "demo" / "SKILL.md"
+            context = ToolContext("chat", _Config(home))
+            shell = SimpleNamespace(cwd=str(home))
+            operations = mock.Mock()
+            invalid = VALID_SKILL.replace("version: 1.0.0\n", "")
+
+            with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
+                result = json.loads(
+                    _write(
+                        {"path": str(target), "content": invalid},
+                        context,
+                        shell,
+                        operations,
+                    )
+                )
+
+            self.assertIn("version", result["error"])
+            self.assertFalse(target.exists())
+            operations.write_file.assert_not_called()
+
+    def test_invalid_skill_patch_is_rolled_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            target = home / "skills" / "demo" / "SKILL.md"
+            target.parent.mkdir(parents=True)
+            target.write_text(VALID_SKILL, encoding="utf-8")
+            context = ToolContext("chat", _Config(home))
+            shell = SimpleNamespace(cwd=str(home))
+            operations = mock.Mock()
+
+            def patch(path, old, new, _replace_all):
+                destination = Path(path)
+                replacement = destination.with_name("replacement.tmp")
+                replacement.write_text(
+                    destination.read_text(encoding="utf-8").replace(old, new),
+                    encoding="utf-8",
+                )
+                os.replace(replacement, destination)
+                return PatchResult(success=True, files_modified=[str(destination)])
+
+            operations.patch_replace.side_effect = patch
+            with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
+                result = json.loads(
+                    _patch(
+                        {
+                            "mode": "replace",
+                            "path": str(target),
+                            "old_string": "version: 1.0.0\n",
+                            "new_string": "",
+                        },
+                        context,
+                        shell,
+                        operations,
+                        approved_categories=frozenset({"skills"}),
+                    )
+                )
+
+            self.assertFalse(result["success"])
+            self.assertTrue(result["restored"])
+            self.assertIn("version", result["error"])
+            self.assertEqual(target.read_text(encoding="utf-8"), VALID_SKILL)
+
+    def test_invalid_v4a_skill_patch_is_rolled_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            target = home / "skills" / "demo" / "SKILL.md"
+            target.parent.mkdir(parents=True)
+            target.write_text(VALID_SKILL, encoding="utf-8")
+            context = ToolContext("chat", _Config(home))
+            shell = SimpleNamespace(cwd=str(home))
+
+            def apply(_parsed, _operations):
+                replacement = target.with_name("replacement.tmp")
+                replacement.write_text(
+                    VALID_SKILL.replace("version: 1.0.0\n", ""),
+                    encoding="utf-8",
+                )
+                os.replace(replacement, target)
+                return PatchResult(success=True, files_modified=[str(target)])
+
+            patch = """*** Begin Patch
+*** Update File: skills/demo/SKILL.md
+@@
+-version: 1.0.0
+*** End Patch"""
+            with (
+                mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}),
+                mock.patch(
+                    "pilotage.tools.files.apply_v4a_operations",
+                    side_effect=apply,
+                ),
+            ):
+                result = json.loads(
+                    _patch(
+                        {"mode": "patch", "patch": patch},
+                        context,
+                        shell,
+                        mock.Mock(),
+                        approved_categories=frozenset({"skills"}),
+                    )
+                )
+
+            self.assertFalse(result["success"])
+            self.assertTrue(result["restored"])
+            self.assertIn("version", result["error"])
+            self.assertEqual(target.read_text(encoding="utf-8"), VALID_SKILL)
+
     def test_agents_symlink_name_is_checked_before_resolution(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -226,6 +394,41 @@ class OutputBoundTests(unittest.TestCase):
         data = _bounded_search_dict(result, 0)
         self.assertEqual(data["next_offset"], 1)
 
+
+class ApprovalReviewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_full_skill_proposal_is_attached_then_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            context = ToolContext("chat", _Config(workspace))
+            shell = SimpleNamespace(cwd=str(workspace))
+            context.state["terminal"] = TerminalSession(shell=shell)
+            context.state["file"] = FileSession(shell=shell, operations=object())
+            proposal = "complete proposal\n" + "x" * 2_000 + "\nTAIL-MARKER"
+            review_paths = []
+
+            async def approve(category, summary):
+                self.assertEqual(category, "skills")
+                self.assertIn("Full proposal attached", summary)
+                review = Path(summary.rsplit("MEDIA:", 1)[1].strip())
+                review_paths.append(review)
+                self.assertTrue(review.is_file())
+                self.assertEqual(review.read_text(encoding="utf-8"), proposal)
+                attachments, cleaned = media.extract_outbound(summary, (workspace,))
+                self.assertEqual([item.path for item in attachments], [review])
+                self.assertNotIn("MEDIA:", cleaned)
+                return ApprovalOutcome(True, "approved")
+
+            def handler(_args, _context, _shell, _operations, *, approved_categories):
+                if "skills" not in approved_categories:
+                    raise _ApprovalRequired("skills", "Short summary", proposal)
+                return json.dumps({"success": True})
+
+            context.approval_request = approve
+            result = json.loads(await _run(handler, {}, context))
+
+            self.assertTrue(result["success"])
+            self.assertEqual(len(review_paths), 1)
+            self.assertFalse(review_paths[0].exists())
 
 @unittest.skipIf(os.name == "nt", "The production file stack requires Linux/bash")
 class FileToolCase(unittest.IsolatedAsyncioTestCase):
@@ -299,6 +502,42 @@ class SessionAndGuardTests(FileToolCase):
         )
         self.assertIn("requires approval", patched["error"])
         self.assertEqual(path.read_text(encoding="utf-8"), "Operator authority.")
+
+    async def test_skill_write_uses_live_approval_and_denial_writes_nothing(self):
+        requests = []
+
+        async def deny(category, summary):
+            requests.append((category, summary))
+            return ApprovalOutcome(False, "denied", "Keep the old skill")
+
+        self.context.approval_request = deny
+        target = self.workspace / "skills" / "demo" / "SKILL.md"
+        with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.workspace)}):
+            result = await self.call(
+                handle_write_file,
+                {"path": str(target), "content": VALID_SKILL},
+            )
+
+        self.assertEqual(result["approval"], "denied")
+        self.assertFalse(target.exists())
+        self.assertEqual(requests[0][0], "skills")
+        self.assertIn(str(target), requests[0][1])
+
+    async def test_approved_skill_write_runs_once(self):
+        async def approve(_category, _summary):
+            return ApprovalOutcome(True, "approved")
+
+        self.context.approval_request = approve
+        target = self.workspace / "skills" / "demo" / "SKILL.md"
+        with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.workspace)}):
+            result = await self.call(
+                handle_write_file,
+                {"path": str(target), "content": VALID_SKILL},
+            )
+
+        self.assertNotIn("error", result)
+        self.assertTrue(result["verified"])
+        self.assertTrue(target.is_file())
 
     async def test_agents_symlink_cannot_redirect_a_write_to_an_unprotected_name(self):
         target = self.workspace / "rules.md"
@@ -528,6 +767,27 @@ class ReplacePatchTests(FileToolCase):
 
 
 class V4APatchTests(FileToolCase):
+    async def test_skill_patch_that_breaks_metadata_is_rolled_back(self):
+        async def approve(_category, _summary):
+            return ApprovalOutcome(True, "approved")
+
+        self.context.approval_request = approve
+        target = self.workspace / "skills" / "demo" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        target.write_text(VALID_SKILL, encoding="utf-8")
+        patch = """*** Begin Patch
+*** Update File: skills/demo/SKILL.md
+@@
+-version: 1.0.0
+*** End Patch"""
+        with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.workspace)}):
+            result = await self.call(handle_patch, {"mode": "patch", "patch": patch})
+
+        self.assertFalse(result["success"])
+        self.assertTrue(result["restored"])
+        self.assertIn("version", result["error"])
+        self.assertEqual(target.read_text(encoding="utf-8"), VALID_SKILL)
+
     async def test_one_patch_can_add_update_move_and_delete(self):
         (self.workspace / "update.txt").write_text("before\n")
         moved = self.workspace / "move.txt"

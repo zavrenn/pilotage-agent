@@ -56,6 +56,14 @@ tools:
   max_result_chars: 100000
   max_step_chars: 200000
 
+# Persistent changes pause the active conversation until the user replies
+# /approve or /deny. Trusted profiles may disable categories independently.
+approvals:
+  memory: true
+  skills: true
+  cron: true
+  timeout: 300
+
 memory:
   memory_char_limit: 2200
   user_char_limit: 1375

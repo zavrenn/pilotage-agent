@@ -23,6 +23,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 from openai import APIStatusError, AsyncOpenAI
 
 from . import media
+from .approvals import ApprovalManager
 from .codex import (
     auth,
     client as codex_client,
@@ -149,6 +150,9 @@ class Agent:
         self._credentials: Optional[auth.Credentials] = None
         self._client: Optional[AsyncOpenAI] = None
         self._auth_lock = asyncio.Lock()
+        self._approvals = ApprovalManager(
+            getattr(config, "approval_timeout_seconds", 300.0)
+        )
         # One turn at a time per chat, so two fast messages cannot interleave
         # their history writes.
         self._chat_locks: Dict[str, asyncio.Lock] = {}
@@ -398,19 +402,35 @@ class Agent:
         clearing underneath it would hand back the conversation the person
         just asked to end.
         """
+        # /new is allowed to arrive while the active turn is waiting here.
+        # Release that waiter before taking the chat lock or reset would wait
+        # behind a turn that can only be resumed by another approval command.
+        self._approvals.block(chat_id)
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
-        async with lock:
-            # Record the boundary before changing live state. If this fails,
-            # /new reports failure and the old conversation remains intact.
-            await asyncio.to_thread(self._store.new_session, chat_id)
-            self._history.pop(chat_id, None)
-            # The task list belonged to work that has just been abandoned.
-            self._tool_state.pop(chat_id, None)
-            # Memory written during the old session becomes visible in the
-            # frozen prompt of the next one.
-            self._session_instructions.pop(chat_id, None)
-            # Do not reload the conversation that the durable boundary ended.
-            self._restored.add(chat_id)
+        try:
+            async with lock:
+                # Record the boundary before changing live state. If this fails,
+                # /new reports failure and the old conversation remains intact.
+                await asyncio.to_thread(self._store.new_session, chat_id)
+                self._history.pop(chat_id, None)
+                # The task list belonged to work that has just been abandoned.
+                self._tool_state.pop(chat_id, None)
+                # Memory written during the old session becomes visible in the
+                # frozen prompt of the next one.
+                self._session_instructions.pop(chat_id, None)
+                # Do not reload the conversation that the durable boundary ended.
+                self._restored.add(chat_id)
+        finally:
+            self._approvals.unblock(chat_id)
+
+    def resolve_approval(
+        self, chat_id: str, *, approved: bool, reason: str = ""
+    ) -> bool:
+        """Resolve this conversation's oldest live approval request."""
+
+        return self._approvals.resolve(
+            chat_id, approved=approved, reason=reason
+        )
 
     # -- the turn -----------------------------------------------------------
 
@@ -422,6 +442,7 @@ class Agent:
         on_notice: Optional[Notice] = None,
         *,
         origin: Optional[Dict[str, str]] = None,
+        approval_notify: Optional[Notice] = None,
     ) -> str:
         # Reading the files is blocking I/O and base64 of a few megabytes is not
         # free, so it happens off the event loop.
@@ -445,7 +466,12 @@ class Agent:
             if self._memory_store is not None:
                 self._memory_store.reset_consolidation_failures()
             result = await self._run_turn(
-                chat_id, user_text, image_parts, on_notice, origin=origin
+                chat_id,
+                user_text,
+                image_parts,
+                on_notice,
+                origin=origin,
+                approval_notify=approval_notify,
             )
             self._remember(chat_id, user_text, image_parts, result)
             checkpoints = (
@@ -471,10 +497,17 @@ class Agent:
         on_notice: Optional[Notice] = None,
         *,
         origin: Optional[Dict[str, str]] = None,
+        approval_notify: Optional[Notice] = None,
     ) -> TurnResult:
         """Call the model, run what it asks for, call it again — until it answers."""
         self._instructions_for_session(chat_id)
         history = self._build_input(chat_id, user_text, image_parts)
+
+        async def request_approval(category: str, summary: str):
+            return await self._approvals.request(
+                chat_id, category, summary, approval_notify
+            )
+
         context = ToolContext(
             chat_id=chat_id,
             config=self._config,
@@ -484,6 +517,7 @@ class Agent:
             cron_store=self._cron_store,
             origin=origin,
             cron_wake=self._cron_wake,
+            approval_request=request_approval,
         )
         # Everything the assistant does this turn, in order, ready to be sent
         # back on the next call and kept as history afterwards.

@@ -258,6 +258,29 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(config.group_policy, "disabled")
         self.assertEqual(config.group_allow_from, frozenset())
         self.assertTrue(config.require_mention)
+        self.assertTrue(config.approval_memory)
+        self.assertTrue(config.approval_skills)
+        self.assertTrue(config.approval_cron)
+        self.assertEqual(config.approval_timeout_seconds, 300)
+
+    def test_persistent_write_approvals_are_safe_by_default_and_independent(self):
+        defaults = Config.load()
+        self.assertTrue(defaults.approval_memory)
+        self.assertTrue(defaults.approval_skills)
+        self.assertTrue(defaults.approval_cron)
+
+        self._write(
+            "approvals:\n"
+            "  memory: false\n"
+            "  skills: true\n"
+            "  cron: false\n"
+            "  timeout: 45\n"
+        )
+        configured = Config.load()
+        self.assertFalse(configured.approval_memory)
+        self.assertTrue(configured.approval_skills)
+        self.assertFalse(configured.approval_cron)
+        self.assertEqual(configured.approval_timeout_seconds, 45)
 
     def test_the_operators_instructions_keep_the_formatting_note(self):
         self._write("agent:\n  instructions: Answer in French.\n")
@@ -458,6 +481,11 @@ class ConfigFileTests(unittest.TestCase):
                 with self.assertRaises(ConfigError):
                     Config.load()
 
+    def test_non_positive_approval_timeout_stops_startup(self):
+        self._write("approvals:\n  timeout: 0\n")
+        with self.assertRaisesRegex(ConfigError, "approvals.timeout"):
+            Config.load()
+
     def test_unknown_tool_groups_stop_startup(self):
         for key in ("enabled", "disabled"):
             with self.subTest(key=key):
@@ -542,6 +570,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         channel_config = Config.load(channel="whatsapp")
         object.__setattr__(channel_config, "cron_enabled", False)
         seen = {}
+        delivery = {"accepted": True}
 
         class FakeAgent:
             def __init__(self, _config, **_runtime_dependencies):
@@ -555,8 +584,10 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 *,
                 on_notice,
                 origin,
+                approval_notify,
             ):
                 seen["origin"] = origin
+                seen["approval_notify"] = approval_notify
                 return "answer"
 
         class FakeChannel:
@@ -570,7 +601,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 yield
 
             async def send(self, *_args):
-                return True
+                return delivery["accepted"]
 
             async def start(self):
                 await self.handler(
@@ -601,6 +632,10 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             seen["origin"],
             {"channel": "whatsapp", "chat_id": "123@c.us"},
         )
+        self.assertIsNotNone(seen["approval_notify"])
+        delivery["accepted"] = False
+        with self.assertRaisesRegex(main.ChannelError, "approval request"):
+            await seen["approval_notify"]("Approve this change")
 
     async def test_whatsapp_runs_with_its_channel_configuration(self):
         from pilotage import main

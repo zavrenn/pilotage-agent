@@ -17,9 +17,9 @@ commands. Treat it as "usually helps", never as "cannot be bypassed".
 Dropped from the Hermes version: sandbox and container path classification, and
 the approval gate on `~/.ssh/config`. Pilotage adds a small profile-routing
 guard so ordinary file calls cannot enter default or sibling profile state.
-Hermes also approval-gates auto-loaded instruction files; until Pilotage's
-approval slice lands, its file tools fail closed on ``AGENTS.md``. This is still
-good-faith enforcement; the terminal remains able to bypass it.
+Skill paths are classified separately for the live approval gate. Auto-loaded
+``AGENTS.md`` files remain denied: they are not one of the three approved write
+classes in the current production contract.
 """
 
 from __future__ import annotations
@@ -137,9 +137,6 @@ def build_write_denied_prefixes(home: str) -> list[str]:
             # writes would bypass their threat scans, ownership, and locking.
             str(state_dir() / "cron"),
             str(state_dir() / "memories"),
-            # Skill mutation always requires approval. Until that approval
-            # workflow exists, the ordinary file tools must fail closed.
-            str(state_dir() / "skills"),
         ]
     ] + list(_state_prefixes())
 
@@ -191,6 +188,25 @@ def is_write_denied(path: str, safe_roots: Sequence[str] = ()) -> bool:
     return _classify_write_denial(path, safe_roots) is not None
 
 
+def get_write_approval_category(path: str) -> Optional[str]:
+    """Return the persistent-write category for a path, if it has one.
+
+    Check both the lexical path and its real target. This prevents a symlink
+    either into or out of the profile skill tree from losing the approval.
+    The ordinary denial guard still runs first and rejects sibling profiles.
+    """
+
+    written = Path(os.path.abspath(os.path.expanduser(str(path))))
+    resolved = Path(_real(path))
+    skill_written = Path(
+        os.path.abspath(os.path.expanduser(str(state_dir() / "skills")))
+    )
+    skill_resolved = Path(_real(str(state_dir() / "skills")))
+    if _within(written, skill_written) or _within(resolved, skill_resolved):
+        return "skills"
+    return None
+
+
 def get_write_denied_error(
     path: str, *, verb: str = "Write", safe_roots: Sequence[str] = ()
 ) -> Optional[str]:
@@ -209,7 +225,7 @@ def get_write_denied_error(
     if denial == "instruction":
         return (
             f"{verb} denied: '{path}' is an agent instruction file. "
-            "Changing it requires approval, which is not available yet."
+            "Changing it requires approval outside this tool and is therefore denied."
         )
     return f"{verb} denied: '{path}' is a protected system or credential file."
 
@@ -287,6 +303,7 @@ __all__ = [
     "build_write_denied_paths",
     "build_write_denied_prefixes",
     "get_read_block_error",
+    "get_write_approval_category",
     "get_write_denied_error",
     "is_write_denied",
     "raise_if_read_blocked",

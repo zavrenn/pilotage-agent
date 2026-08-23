@@ -272,7 +272,7 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
             "@pilotage_bot",
         )
 
-    def test_session_boundaries_match_hermes_defaults(self):
+    def test_session_boundaries_separate_group_participants(self):
         self.assertEqual(
             telegram._session_id("42", "42", False, ""),
             "telegram:dm:42",
@@ -281,9 +281,13 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
             telegram._session_id("-100", "42", True, ""),
             telegram._session_id("-100", "43", True, ""),
         )
-        self.assertEqual(
+        self.assertNotEqual(
             telegram._session_id("-100", "42", True, "9"),
             telegram._session_id("-100", "43", True, "9"),
+        )
+        self.assertEqual(
+            telegram._session_id("-100", "42", True, "9"),
+            "telegram:group:-100:9:42",
         )
         forum = _message(
             chat_id=-100,
@@ -443,6 +447,34 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         command_handler.assert_awaited_once()
         invocation = command_handler.await_args.args[-1]
         self.assertEqual(invocation.command.name, "new")
+        await channel.stop()
+
+    async def test_approval_command_bypasses_an_active_turn(self):
+        channel, _, _ = self._channel(
+            "telegram:\n  batch_delay: 0\n  batch_hard_cap: 1\n"
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+        command_seen = asyncio.Event()
+
+        async def handler(_message):
+            started.set()
+            await release.wait()
+
+        async def command(_chat, _session, _message, _thread, invocation):
+            self.assertEqual(invocation.command.name, "approve")
+            command_seen.set()
+
+        channel._handler = handler
+        channel._on_command = command
+        await channel._accept_message(_message(text="working", message_id=1), [])
+        await asyncio.wait_for(started.wait(), timeout=0.5)
+
+        await channel._accept_message(_message(text="/approve", message_id=2), [])
+        await asyncio.wait_for(command_seen.wait(), timeout=0.5)
+
+        self.assertTrue(any(not task.done() for task in channel._turn_tasks.values()))
+        release.set()
         await channel.stop()
 
     async def test_markdown_reply_and_topic_are_sent_natively(self):

@@ -163,7 +163,9 @@ TERMINAL_SCHEMA = {
         "working directory, exported variables, functions and aliases persist "
         "between calls in this chat. Commands run in the foreground and return "
         "as soon as they finish. Use workdir for one command without moving the "
-        "session; when a command itself changes directory, the result reports cwd."
+        "session; when a command itself changes directory, the result reports cwd. "
+        "Use write_file/patch for file edits and the memory/cronjob tools for their "
+        "stores; those paths carry the profile's required approval workflow."
     ),
     "parameters": {
         "type": "object",

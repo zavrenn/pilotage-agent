@@ -275,6 +275,42 @@ class BatchLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delivered, ["one", "two\nthree"])
         self.assertEqual(channel._turn_tasks, {})
 
+    async def test_approval_command_bypasses_an_active_turn(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        command_seen = asyncio.Event()
+
+        async def handler(_message: InboundMessage) -> None:
+            started.set()
+            await release.wait()
+
+        async def command(_chat_id, session_id, _message_id, invocation) -> None:
+            self.assertEqual(session_id, "212600000000")
+            self.assertEqual(invocation.command.name, "approve")
+            command_seen.set()
+
+        config = Config.load()
+        object.__setattr__(config, "allowed_senders", frozenset({"212600000000"}))
+        channel = WhatsAppChannel(config, handler, command)
+        self.addAsyncCleanup(channel.stop)
+        channel._queue_turn(self._message("working", "m1"))
+        await asyncio.wait_for(started.wait(), timeout=0.5)
+
+        channel._accept(
+            {
+                "chatId": "212600000000@s.whatsapp.net",
+                "senderId": "212600000000@s.whatsapp.net",
+                "senderNumber": "212600000000",
+                "messageId": "m2",
+                "body": "/approve",
+                "isGroup": False,
+            }
+        )
+        await asyncio.wait_for(command_seen.wait(), timeout=0.5)
+
+        self.assertFalse(channel._turn_tasks["212600000000"].done())
+        release.set()
+
     async def test_stop_cancels_and_awaits_the_active_handler(self):
         started = asyncio.Event()
         cancelled = asyncio.Event()

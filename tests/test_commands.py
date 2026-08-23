@@ -130,9 +130,17 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
     class FakeAgent:
         def __init__(self):
             self.forgotten = []
+            self.approval_waiting = False
+            self.approval_resolutions = []
 
         async def forget(self, session_id):
             self.forgotten.append(session_id)
+
+        def resolve_approval(self, session_id, *, approved, reason=""):
+            self.approval_resolutions.append((session_id, approved, reason))
+            was_waiting = self.approval_waiting
+            self.approval_waiting = False
+            return was_waiting
 
     def setUp(self):
         self.agent = self.FakeAgent()
@@ -168,7 +176,21 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Pilotage", await self.execute("/status"))
         self.assertEqual(self.agent.forgotten, [])
 
+    async def test_approve_and_deny_resolve_only_this_session(self):
+        self.assertEqual(await self.execute("/approve"), "No approval is waiting.")
+        self.agent.approval_waiting = True
+        self.assertIn("Approved", await self.execute("/approve"))
+        self.agent.approval_waiting = True
+        self.assertIn("Denied", await self.execute("/deny not this change"))
+        self.assertEqual(
+            self.agent.approval_resolutions,
+            [
+                ("wa-chat", True, ""),
+                ("wa-chat", True, ""),
+                ("wa-chat", False, "not this change"),
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
-

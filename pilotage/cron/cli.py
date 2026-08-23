@@ -8,7 +8,7 @@ import sys
 from typing import Any
 
 from pilotage.config import Config
-from pilotage.tools.cron import handle_cronjob
+from pilotage.tools.cron import execute_cronjob
 from pilotage.tools.registry import ToolContext
 
 from .jobs import AmbiguousJobReference, CronError, CronStore
@@ -117,7 +117,7 @@ def run_cron_command(args: argparse.Namespace, config: Config) -> int:
         return 0
 
     context = ToolContext(chat_id="cli", config=config, cron_store=store)
-    raw = handle_cronjob(_payload(args), context)
+    raw = execute_cronjob(_payload(args), context)
     try:
         result = json.loads(raw)
     except (TypeError, json.JSONDecodeError):

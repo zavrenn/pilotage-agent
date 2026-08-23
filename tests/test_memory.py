@@ -9,8 +9,10 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
+from pilotage.approvals import ApprovalOutcome
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config, ConfigError
 from pilotage.history import ConversationStore
@@ -344,7 +346,11 @@ class MemoryRegistryTests(unittest.IsolatedAsyncioTestCase):
         store = MemoryStore(Path(temporary.name))
         store.load_from_disk()
         registry = build_registry()
-        context = ToolContext("chat", config=None, memory_store=store)
+        context = ToolContext(
+            "chat",
+            config=SimpleNamespace(approval_memory=False),
+            memory_store=store,
+        )
 
         raw = await registry.dispatch(
             "memory",
@@ -355,6 +361,37 @@ class MemoryRegistryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(json.loads(raw)["success"])
         self.assertEqual(store.memory_entries, ["durable fact"])
+
+    async def test_memory_write_waits_for_approval_and_denial_changes_nothing(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        store = MemoryStore(Path(temporary.name))
+        store.load_from_disk()
+        decisions = [ApprovalOutcome(False, "denied", "Not this fact")]
+
+        async def request(category, summary):
+            self.assertEqual(category, "memory")
+            self.assertIn("durable fact", summary)
+            return decisions.pop(0)
+
+        context = ToolContext(
+            "chat",
+            config=SimpleNamespace(approval_memory=True),
+            memory_store=store,
+            approval_request=request,
+        )
+        raw = await build_registry().dispatch(
+            "memory",
+            json.dumps(
+                {"action": "add", "target": "memory", "content": "durable fact"}
+            ),
+            context,
+            allowed_groups=["memory"],
+        )
+
+        result = json.loads(raw)
+        self.assertEqual(result["approval"], "denied")
+        self.assertEqual(store.memory_entries, [])
 
 
 class AgentMemoryTests(unittest.IsolatedAsyncioTestCase):

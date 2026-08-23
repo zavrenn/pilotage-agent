@@ -8,11 +8,13 @@ from typing import Any, Dict, Iterable, List
 
 from pilotage.cron.jobs import AmbiguousJobReference, CronError, CronStore
 
+from ..approvals import approval_error
 from .registry import Tool, ToolContext, tool_error
 
 logger = logging.getLogger(__name__)
 
 _ACTIONS = {"create", "list", "update", "pause", "resume", "remove", "run"}
+_MUTATING_ACTIONS = _ACTIONS - {"list"}
 _ACTION_ARGUMENTS = {
     "create": {"action", "prompt", "schedule", "name", "repeat", "skills"},
     "list": {"action", "include_disabled"},
@@ -96,8 +98,13 @@ def _missing(reference: str) -> str:
     )
 
 
-def handle_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
-    """Compressed Hermes management surface over this profile's store."""
+def execute_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
+    """Execute a validated cron operation without a messaging approval round-trip.
+
+    The model-facing handler below gates mutations first. The local operator CLI
+    calls this directly because invoking that command is already the operator's
+    explicit authorization.
+    """
     try:
         store = _store(context)
         action = str(args.get("action") or "").strip().lower()
@@ -222,6 +229,84 @@ def handle_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
         return tool_error(str(exc), success=False)
 
 
+def _cron_approval_request(
+    args: Dict[str, Any], context: ToolContext
+) -> tuple[Dict[str, Any], str] | None:
+    """Validate and canonicalize enough to approve the exact durable target."""
+
+    action = str(args.get("action") or "").strip().lower()
+    if action not in _MUTATING_ACTIONS:
+        return None
+    if set(args) - _ACTION_ARGUMENTS[action]:
+        return None
+    if action in {"create", "resume", "run"} and not getattr(
+        context.config, "cron_enabled", True
+    ):
+        return None
+
+    canonical = dict(args)
+    canonical["action"] = action
+    if action == "create":
+        if not str(args.get("schedule") or "").strip():
+            return None
+        detail = {
+            key: args.get(key)
+            for key in ("name", "schedule", "repeat", "skills", "prompt")
+            if key in args
+        }
+        rendered = json.dumps(detail, ensure_ascii=False)
+        summary = "Create cron job:\n" + rendered
+    else:
+        reference = str(args.get("job_id") or "").strip()
+        if not reference:
+            return None
+        try:
+            job = _store(context).resolve_job(reference)
+        except (AmbiguousJobReference, CronError, OSError):
+            return None
+        if job is None:
+            return None
+        canonical["job_id"] = str(job["id"])
+        if action == "update":
+            changes = {
+                key: args.get(key)
+                for key in ("name", "prompt", "schedule", "repeat", "skills")
+                if key in args
+            }
+            if not changes:
+                return None
+            detail = json.dumps(changes, ensure_ascii=False)
+            summary = (
+                f"Update cron job {job.get('name')!r} ({job['id']}):\n{detail}"
+            )
+        elif action == "pause":
+            reason = str(args.get("reason") or "").strip()
+            summary = f"Pause cron job {job.get('name')!r} ({job['id']})"
+            if reason:
+                summary += f": {reason}"
+        else:
+            summary = f"{action.title()} cron job {job.get('name')!r} ({job['id']})"
+
+    if len(summary) > 1800:
+        summary = summary[:1800] + "…"
+    return canonical, summary
+
+
+async def handle_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
+    prepared = _cron_approval_request(args, context)
+    if prepared is None:
+        return execute_cronjob(args, context)
+    canonical, summary = prepared
+    outcome = await context.authorize("cron", summary)
+    if not outcome.approved:
+        return tool_error(
+            approval_error(outcome),
+            success=False,
+            approval=outcome.status,
+        )
+    return execute_cronjob(canonical, context)
+
+
 CRONJOB_SCHEMA = {
     "name": "cronjob",
     "description": (
@@ -281,4 +366,9 @@ CRONJOB_SCHEMA = {
 CRONJOB_TOOL = Tool("cronjob", "cron", CRONJOB_SCHEMA, handle_cronjob, emoji="⏰")
 
 
-__all__ = ["CRONJOB_SCHEMA", "CRONJOB_TOOL", "handle_cronjob"]
+__all__ = [
+    "CRONJOB_SCHEMA",
+    "CRONJOB_TOOL",
+    "execute_cronjob",
+    "handle_cronjob",
+]

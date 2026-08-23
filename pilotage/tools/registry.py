@@ -25,6 +25,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
+from ..approvals import ApprovalOutcome, approval_required
+
 logger = logging.getLogger(__name__)
 
 # A tool error body, capped. Only runaway interpolated exceptions get near it.
@@ -39,6 +41,7 @@ DEFAULT_STEP_BUDGET_CHARS = 200_000
 
 MultimodalToolResult = Dict[str, Any]
 ToolOutput = Union[str, MultimodalToolResult]
+ApprovalRequest = Callable[[str, str], Awaitable[ApprovalOutcome]]
 
 
 def is_multimodal_tool_result(value: Any) -> bool:
@@ -150,6 +153,22 @@ class ToolContext:
     # The delivery location that created a job, never a model-selected target.
     origin: Optional[Dict[str, str]] = None
     cron_wake: Optional[Callable[[], None]] = None
+    # Bound by Agent to this exact conversation and its live messaging reply
+    # surface. A missing callback fails a required write closed.
+    approval_request: Optional[ApprovalRequest] = None
+
+    async def authorize(self, category: str, summary: str) -> ApprovalOutcome:
+        """Apply one category switch, then request live consent when enabled."""
+
+        if not approval_required(self.config, category):
+            return ApprovalOutcome(True, "not required")
+        if self.approval_request is None:
+            return ApprovalOutcome(
+                False,
+                "unavailable",
+                "This turn has no interactive messaging channel for approval.",
+            )
+        return await self.approval_request(category, summary)
 
 
 Handler = Callable[..., Any]

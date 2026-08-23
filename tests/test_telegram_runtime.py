@@ -48,6 +48,7 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
         config = Config.load(channel="whatsapp")
         seen = {}
         sent = []
+        delivery = {"accepted": True}
 
         class FakeAgent:
             def __init__(self, channel_config, **_runtime_dependencies):
@@ -61,11 +62,13 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 *,
                 on_notice,
                 origin,
+                approval_notify,
             ):
                 seen["session_id"] = session_id
                 seen["text"] = text
                 seen["attachments"] = attachments
                 seen["origin"] = origin
+                seen["approval_notify"] = approval_notify
                 return "answer"
 
         class FakeTelegramChannel:
@@ -83,7 +86,7 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             async def send(self, *args, **kwargs):
                 sent.append((args, kwargs))
-                return True
+                return delivery["accepted"]
 
             async def start(self):
                 await self.handler(
@@ -152,6 +155,9 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 {"thread_id": "9"},
             ),
         )
+        delivery["accepted"] = False
+        with self.assertRaisesRegex(main.TelegramChannelError, "approval request"):
+            await seen["approval_notify"]("Approve this change")
 
     async def test_dual_channel_cron_receives_both_channel_configs(self):
         (self.root / "config.yaml").write_text(

@@ -223,7 +223,7 @@ def _session_id(chat_id: str, user_id: str, is_group: bool, thread_id: str) -> s
         suffix = f":{thread_id}" if thread_id else ""
         return f"telegram:dm:{chat_id}{suffix}"
     if thread_id:
-        return f"telegram:group:{chat_id}:{thread_id}"
+        return f"telegram:group:{chat_id}:{thread_id}:{user_id}"
     return f"telegram:group:{chat_id}:{user_id}"
 
 

@@ -2,8 +2,10 @@
 
 The store and tool behavior are extracted from Hermes' production memory
 implementation. Pilotage keeps only the built-in file store: no external
-providers or approval subsystem. Each Agent supplies the selected profile's
-memory directory explicitly.
+providers. The small approval queue lives outside the store so direct storage
+integrity tests remain deterministic; the model-facing handler applies the
+per-profile gate. Each Agent supplies the selected profile's memory directory
+explicitly.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..approvals import approval_error
 from .registry import Tool, ToolContext, tool_error
 from .threat_patterns import first_threat_message as _first_threat_message
 
@@ -1087,7 +1090,58 @@ MEMORY_SCHEMA = {
 }
 
 
-def handle_memory(args: Dict[str, Any], context: ToolContext) -> str:
+def _memory_approval_summary(args: Dict[str, Any]) -> Optional[str]:
+    """Describe one valid-shaped memory mutation without changing the store."""
+
+    target = args.get("target", "memory")
+    if target is None:
+        target = "memory"
+    if target not in {"memory", "user"}:
+        return None
+    label = "user profile" if target == "user" else "memory"
+    operations = args.get("operations")
+    if operations:
+        if not isinstance(operations, list):
+            return None
+        detail = json.dumps(operations, ensure_ascii=False)
+        return (
+            f"Apply {len(operations)} change(s) to {label}:\n"
+            f"{detail[:1600]}{'…' if len(detail) > 1600 else ''}"
+        )
+
+    action = args.get("action")
+    if action not in {"add", "replace", "remove"}:
+        return None
+    content = args.get("content")
+    if content is None:
+        content = args.get("new_text")
+    old_text = args.get("old_text")
+    if action == "add" and not content:
+        return None
+    if action == "replace" and (not old_text or not content):
+        return None
+    if action == "remove" and not old_text:
+        return None
+    if action == "add":
+        detail = str(content)
+    elif action == "replace":
+        detail = f"Old: {old_text}\nNew: {content}"
+    else:
+        detail = str(old_text)
+    detail = detail[:1600] + ("…" if len(detail) > 1600 else "")
+    return f"{action.title()} in {label}:\n{detail}"
+
+
+async def handle_memory(args: Dict[str, Any], context: ToolContext) -> str:
+    summary = _memory_approval_summary(args)
+    if summary is not None:
+        outcome = await context.authorize("memory", summary)
+        if not outcome.approved:
+            return tool_error(
+                approval_error(outcome),
+                success=False,
+                approval=outcome.status,
+            )
     return memory_tool(
         action=args.get("action"),
         target=args.get("target", "memory"),

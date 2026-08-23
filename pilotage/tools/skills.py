@@ -23,6 +23,8 @@ from .path_security import has_traversal_component, validate_within_dir
 from .registry import Tool, ToolContext, tool_error
 from .skill_preprocessing import preprocess_skill_content
 from .skill_utils import (
+    MAX_SKILL_DESCRIPTION_LENGTH as MAX_DESCRIPTION_LENGTH,
+    MAX_SKILL_NAME_LENGTH as MAX_NAME_LENGTH,
     extract_skill_description,
     iter_skill_index_files,
     parse_frontmatter,
@@ -32,8 +34,6 @@ from .skill_utils import (
 
 logger = logging.getLogger(__name__)
 
-MAX_NAME_LENGTH = 64
-MAX_DESCRIPTION_LENGTH = 1024
 _LINKED_DIRS = ("references", "templates", "assets", "scripts")
 _DEDUP_LOCK = threading.Lock()
 _SKILL_VIEW_DEDUP_CAP = 200
@@ -257,7 +257,12 @@ def skills_list(config: Any, category: Optional[str] = None) -> str:
             "skills": public,
             "categories": categories,
             "count": len(public),
-            "hint": "Use skill_view(name) to load full content and linked files",
+            "skills_directory": str(root),
+            "hint": (
+                "Use skill_view(name) to load full content and linked files. "
+                "Creating or editing files under skills_directory uses the "
+                "profile's skills approval setting."
+            ),
         }
     )
 

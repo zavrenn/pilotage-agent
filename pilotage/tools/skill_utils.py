@@ -42,6 +42,12 @@ EXCLUDED_SKILL_DIRS = frozenset(
 
 SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 
+MAX_SKILL_NAME_LENGTH = 64
+MAX_SKILL_DESCRIPTION_LENGTH = 1024
+MAX_SKILL_CONTENT_CHARS = 100_000
+MAX_SKILL_FILE_BYTES = 1_048_576
+VALID_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
 
 def is_skill_support_path(path, *, root: Optional[Path] = None) -> bool:
     """True if *path* is under a support dir of an actual skill root."""
@@ -102,6 +108,70 @@ def parse_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:
             key, value = line.split(":", 1)
             frontmatter[key.strip()] = value.strip()
     return frontmatter, body
+
+
+def validate_skill_file_content(path: Path, content: str) -> Optional[str]:
+    """Port Hermes' hard write checks, plus Genesis' required version."""
+
+    label = path.name or "skill file"
+    encoded_size = len(content.encode("utf-8"))
+    if encoded_size > MAX_SKILL_FILE_BYTES:
+        return (
+            f"{label} content is {encoded_size:,} bytes "
+            f"(limit: {MAX_SKILL_FILE_BYTES:,} bytes)."
+        )
+    if len(content) > MAX_SKILL_CONTENT_CHARS:
+        return (
+            f"{label} content is {len(content):,} characters "
+            f"(limit: {MAX_SKILL_CONTENT_CHARS:,})."
+        )
+    if path.name.casefold() != "skill.md":
+        return None
+
+    document = content[1:] if content.startswith("\ufeff") else content
+    if not document.strip():
+        return "SKILL.md content cannot be empty."
+    if not document.startswith("---"):
+        return "SKILL.md must start with YAML frontmatter (---)."
+
+    end_match = re.search(r"\n---\s*\n", document[3:])
+    if not end_match:
+        return "SKILL.md frontmatter is not closed with a '---' line."
+    yaml_content = document[3 : end_match.start() + 3]
+    try:
+        frontmatter = yaml_load(yaml_content)
+    except Exception as exc:
+        return f"SKILL.md YAML frontmatter could not be parsed: {exc}"
+    if not isinstance(frontmatter, dict):
+        return "SKILL.md frontmatter must be a YAML mapping."
+
+    name = str(frontmatter.get("name") or "").strip()
+    if not name:
+        return "SKILL.md frontmatter must include a non-empty 'name'."
+    if len(name) > MAX_SKILL_NAME_LENGTH:
+        return f"Skill name exceeds {MAX_SKILL_NAME_LENGTH} characters."
+    if not VALID_SKILL_NAME_RE.fullmatch(name):
+        return (
+            "Skill name must use lowercase letters, numbers, hyphens, dots, "
+            "or underscores, and start with a letter or digit."
+        )
+
+    description = str(frontmatter.get("description") or "").strip()
+    if not description:
+        return "SKILL.md frontmatter must include a non-empty 'description'."
+    if len(description) > MAX_SKILL_DESCRIPTION_LENGTH:
+        return (
+            f"Skill description exceeds {MAX_SKILL_DESCRIPTION_LENGTH} characters."
+        )
+
+    version = str(frontmatter.get("version") or "").strip()
+    if not version:
+        return "SKILL.md frontmatter must include a non-empty 'version'."
+
+    body = document[end_match.end() + 3 :].strip()
+    if not body:
+        return "SKILL.md must have instructions after its frontmatter."
+    return None
 
 
 def skill_matches_platform_list(platforms: Any) -> bool:
@@ -173,7 +243,12 @@ def iter_skill_index_files(skills_dir: Path, filename: str = "SKILL.md"):
 
 __all__ = [
     "EXCLUDED_SKILL_DIRS",
+    "MAX_SKILL_CONTENT_CHARS",
+    "MAX_SKILL_DESCRIPTION_LENGTH",
+    "MAX_SKILL_FILE_BYTES",
+    "MAX_SKILL_NAME_LENGTH",
     "SKILL_SUPPORT_DIRS",
+    "VALID_SKILL_NAME_RE",
     "extract_skill_description",
     "is_skill_support_path",
     "iter_skill_index_files",
@@ -181,4 +256,5 @@ __all__ = [
     "skill_matches_channel",
     "skill_matches_platform",
     "skill_matches_platform_list",
+    "validate_skill_file_content",
 ]

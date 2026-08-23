@@ -12,7 +12,10 @@ from unittest import mock
 
 from pilotage.settings import Settings
 from pilotage.tools import ToolContext
-from pilotage.tools.file_safety import get_write_denied_error
+from pilotage.tools.file_safety import (
+    get_write_approval_category,
+    get_write_denied_error,
+)
 from pilotage.tools.skill_utils import parse_frontmatter
 from pilotage.tools.skills import (
     build_skills_prompt,
@@ -306,13 +309,15 @@ class ViewTests(SkillCase):
 
 
 class WriteSafetyTests(unittest.TestCase):
-    def test_file_tools_cannot_mutate_skills_before_approval_exists(self):
+    def test_skill_writes_are_classified_for_approval_not_hard_denied(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
-                error = get_write_denied_error(str(home / "skills" / "demo" / "SKILL.md"))
-        self.assertIsNotNone(error)
-        self.assertIn("denied", error.lower())
+                path = str(home / "skills" / "demo" / "SKILL.md")
+                error = get_write_denied_error(path)
+                category = get_write_approval_category(path)
+        self.assertIsNone(error)
+        self.assertEqual(category, "skills")
 
 
 if __name__ == "__main__":  # pragma: no cover

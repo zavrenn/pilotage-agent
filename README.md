@@ -37,8 +37,9 @@ native context compaction, full-text conversation recall, curated memory,
 profile-local tools and skills, isolated profiles, management commands, DDGS
 web search, native image analysis, OpenAI voice-message transcription,
 Codex-backed image generation and editing, allowlisted messaging groups, and
-durable cron jobs. This Genesis slice is not production-complete: the approval
-workflow is not implemented yet. There is no stable public API.
+durable cron jobs. Memory, skill, and cron changes use configurable per-profile
+approval gates over both messaging channels. This Genesis slice is not
+production-complete, and there is no stable public API.
 
 ## Install on Ubuntu
 

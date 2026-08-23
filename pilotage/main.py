@@ -198,6 +198,15 @@ async def _run_enabled_channels(
             async def notice(text: str) -> None:
                 await whatsapp_channel.send(message.chat_id, text, quoted)
 
+            async def approval_notice(text: str) -> None:
+                delivered = await whatsapp_channel.send(
+                    message.chat_id, text, quoted
+                )
+                if not delivered:
+                    raise ChannelError(
+                        "WhatsApp rejected the approval request delivery."
+                    )
+
             try:
                 async with whatsapp_channel.typing(message.chat_id):
                     enriched_text, transcripts = await transcription.enrich_message(
@@ -229,6 +238,7 @@ async def _run_enabled_channels(
                             "channel": "whatsapp",
                             "chat_id": message.chat_id,
                         },
+                        approval_notify=approval_notice,
                     )
             except Exception:
                 logger.exception("The WhatsApp model call failed")
@@ -284,6 +294,18 @@ async def _run_enabled_channels(
                     thread_id=message.thread_id,
                 )
 
+            async def approval_notice(text: str) -> None:
+                delivered = await telegram_channel.send(
+                    message.chat_id,
+                    text,
+                    quoted,
+                    thread_id=message.thread_id,
+                )
+                if not delivered:
+                    raise TelegramChannelError(
+                        "Telegram rejected the approval request delivery."
+                    )
+
             try:
                 async with telegram_channel.typing(
                     message.chat_id, message.thread_id
@@ -321,6 +343,7 @@ async def _run_enabled_channels(
                         message.attachments,
                         on_notice=notice,
                         origin=origin,
+                        approval_notify=approval_notice,
                     )
             except Exception:
                 logger.exception("The Telegram model call failed")

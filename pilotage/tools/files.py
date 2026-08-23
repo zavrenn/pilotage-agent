@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -18,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
+from ..approvals import approval_error, approval_required
 from . import file_state
 from .binary_extensions import BINARY_EXTENSIONS, OPAQUE_DOCUMENT_EXTENSIONS
 from .file_operations import (
@@ -25,15 +27,22 @@ from .file_operations import (
     normalize_read_pagination,
     normalize_search_pagination,
 )
-from .file_safety import get_read_block_error, get_write_denied_error
+from .file_safety import (
+    get_read_block_error,
+    get_write_approval_category,
+    get_write_denied_error,
+)
 from .patch_parser import OperationType, apply_v4a_operations, parse_v4a_patch
 from .registry import Tool, ToolContext, tool_error
 from .shell import DEFAULT_TIMEOUT_SECONDS, Shell
+from .skill_utils import validate_skill_file_content
 from .terminal import TerminalSession, get_terminal_session, shell_cwd, shell_env
 
 STATE_KEY = "file"
 MAX_JSON_CHARS = 95_000
 MAX_READ_CHARS = 85_000
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -47,6 +56,111 @@ class _PathBackup:
     path: Path
     existed: bool
     backup: Optional[Path] = None
+
+
+class _ApprovalRequired(RuntimeError):
+    def __init__(
+        self,
+        category: str,
+        summary: str,
+        review_content: str = "",
+    ):
+        super().__init__(summary)
+        self.category = category
+        self.summary = summary
+        self.review_content = review_content
+
+
+def _write_approval_review(context: ToolContext, content: str) -> Path:
+    root = getattr(context.config, "workspace_dir", None) or shell_cwd(context)
+    if not root:
+        raise ValueError("The approval review has no profile workspace.")
+    workspace = Path(root).expanduser().resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=".pilotage-approval-",
+        suffix=".txt",
+        dir=str(workspace),
+        text=True,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            stream.write(content)
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        Path(raw_path).unlink(missing_ok=True)
+        raise
+    return Path(raw_path)
+
+
+def _discard_approval_review(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Could not remove approval review %s: %s", path, exc)
+
+
+def _persisted_skill_error(
+    path: Path,
+    *,
+    classified_as_skill: bool = False,
+    skill_index_path: bool = False,
+) -> Optional[str]:
+    if (
+        not classified_as_skill
+        and get_write_approval_category(str(path)) != "skills"
+    ) or not path.exists():
+        return None
+    if not path.is_file():
+        return f"{path} is not a regular skill file."
+    try:
+        content = path.read_bytes().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return f"{path} is not valid UTF-8 text."
+    except OSError as exc:
+        return f"{path} could not be verified after writing: {exc}"
+    validation_path = path.with_name("SKILL.md") if skill_index_path else path
+    error = validate_skill_file_content(validation_path, content)
+    return f"{path}: {error}" if error else None
+
+
+def _mutated_skill_error(
+    paths: Iterable[Path],
+    *,
+    classified_paths: Iterable[Path] = (),
+    skill_index_paths: Iterable[Path] = (),
+) -> Optional[str]:
+    classified = set(classified_paths)
+    indexes = set(skill_index_paths)
+    for path in dict.fromkeys(paths):
+        error = _persisted_skill_error(
+            path,
+            classified_as_skill=path in classified,
+            skill_index_path=path in indexes,
+        )
+        if error:
+            return error
+    return None
+
+
+def _rollback_invalid_skill(
+    data: Dict[str, Any],
+    snapshots: Iterable[_PathBackup],
+    validation_error: str,
+) -> None:
+    rollback_error = _restore_backups(snapshots)
+    data.clear()
+    data.update(
+        success=False,
+        error=f"Skill validation failed: {validation_error}",
+    )
+    if rollback_error:
+        data["error"] += f" Rollback also failed: {rollback_error}"
+    else:
+        data["restored"] = True
 
 
 def _backup_paths(paths: Iterable[Path]) -> list[_PathBackup]:
@@ -258,7 +372,8 @@ def _fit_read_json(data: Dict[str, Any], offset: int) -> Dict[str, Any]:
 
 
 def _read(args: Dict[str, Any], context: ToolContext, shell: Shell,
-          operations: ShellFileOperations) -> str:
+          operations: ShellFileOperations, *,
+          approved_categories: frozenset[str] = frozenset()) -> str:
     path = _resolve(args.get("path"), shell)
     blocked = _read_guard(path)
     if blocked:
@@ -296,7 +411,8 @@ def _read(args: Dict[str, Any], context: ToolContext, shell: Shell,
 
 
 def _write(args: Dict[str, Any], context: ToolContext, shell: Shell,
-           operations: ShellFileOperations) -> str:
+           operations: ShellFileOperations, *,
+           approved_categories: frozenset[str] = frozenset()) -> str:
     if "content" not in args:
         return tool_error("write_file: missing required field 'content'")
     content = args.get("content")
@@ -316,6 +432,28 @@ def _write(args: Dict[str, Any], context: ToolContext, shell: Shell,
     )
     if denied:
         return tool_error(denied)
+    category = get_write_approval_category(str(requested_path))
+    if category == "skills":
+        validation_path = (
+            requested_path
+            if requested_path.name.casefold() == "skill.md"
+            else path
+        )
+        validation_error = validate_skill_file_content(validation_path, content)
+        if validation_error:
+            return tool_error(f"Skill validation failed: {validation_error}")
+    if category and category not in approved_categories:
+        target_label = json.dumps(str(path), ensure_ascii=True)
+        raise _ApprovalRequired(
+            category,
+            "Write skill file.\n"
+            f"Target: {target_label}\n"
+            f"Size: {len(content)} characters.",
+            "Write skill file\n"
+            f"Target: {path}\n\n"
+            "--- Full proposed content ---\n"
+            f"{content}",
+        )
     with file_state.lock_path(path):
         warning = file_state.check_stale(context.chat_id, path)
         snapshots = _backup_paths([path])
@@ -371,7 +509,8 @@ def _rewrite_v4a_paths(operations: Iterable[Any], shell: Shell) -> None:
 
 
 def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
-           operations: ShellFileOperations) -> str:
+           operations: ShellFileOperations, *,
+           approved_categories: frozenset[str] = frozenset()) -> str:
     mode = args.get("mode", "replace")
     if mode == "replace":
         if args.get("old_string") is None or args.get("new_string") is None:
@@ -385,6 +524,24 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
         )
         if denied:
             return tool_error(denied)
+        category = get_write_approval_category(str(requested_path))
+        if category and category not in approved_categories:
+            target_label = json.dumps(str(path), ensure_ascii=True)
+            raise _ApprovalRequired(
+                category,
+                "Patch skill file.\n"
+                f"Target: {target_label}\n"
+                f"Replace {len(args['old_string'])} characters with "
+                f"{len(args['new_string'])} characters.\n"
+                f"Replace all: {bool(args.get('replace_all', False))}.",
+                "Patch skill file\n"
+                f"Target: {path}\n"
+                f"Replace all: {bool(args.get('replace_all', False))}\n\n"
+                "--- Full text to replace ---\n"
+                f"{args['old_string']}\n\n"
+                "--- Full replacement text ---\n"
+                f"{args['new_string']}",
+            )
         with file_state.lock_path(path):
             warning = file_state.check_stale(context.chat_id, path)
             snapshots = _backup_paths([path])
@@ -410,6 +567,16 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
                         data["error"] += f" Rollback also failed: {rollback_error}"
                     else:
                         data["restored"] = True
+                elif not data.get("no_change"):
+                    validation_error = _persisted_skill_error(
+                        path,
+                        classified_as_skill=category == "skills",
+                        skill_index_path=(
+                            requested_path.name.casefold() == "skill.md"
+                        ),
+                    )
+                    if validation_error:
+                        _rollback_invalid_skill(data, snapshots, validation_error)
             finally:
                 _discard_backups(snapshots)
             data["resolved_path"] = str(path)
@@ -428,6 +595,9 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
     if error:
         return tool_error(f"Failed to parse patch: {error}")
     paths = _v4a_paths(parsed, shell)
+    approval_paths: list[Path] = []
+    skill_index_paths: list[Path] = []
+    validation_paths: list[Path] = []
     for operation in parsed:
         targets = [operation.file_path]
         if operation.operation == OperationType.MOVE and operation.new_path:
@@ -440,6 +610,19 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
             )
             if denied:
                 return tool_error(denied)
+            if get_write_approval_category(str(requested_target)):
+                approval_paths.append(resolved_target)
+            if requested_target.name.casefold() == "skill.md":
+                skill_index_paths.append(resolved_target)
+        if operation.operation in {OperationType.ADD, OperationType.UPDATE}:
+            validation_paths.append(_resolve(operation.file_path, shell))
+        elif operation.operation == OperationType.MOVE and operation.new_path:
+            destination = _resolve(operation.new_path, shell)
+            if (
+                Path(operation.new_path).name.casefold() == "skill.md"
+                or destination.name.casefold() == "skill.md"
+            ):
+                validation_paths.append(destination)
         if operation.operation in {OperationType.ADD, OperationType.UPDATE}:
             denied = _binary_document_write_error(_resolve(operation.file_path, shell))
             if denied:
@@ -451,6 +634,21 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
                     f"Patch validation failed (no files were modified): "
                     f"{destination} already exists"
                 )
+
+    if approval_paths and "skills" not in approved_categories:
+        unique = ", ".join(
+            json.dumps(str(path), ensure_ascii=True)
+            for path in dict.fromkeys(approval_paths)
+        )
+        raise _ApprovalRequired(
+            "skills",
+            f"Apply a skill patch to: {unique}.\n"
+            f"Size: {len(patch_content)} characters.",
+            "Apply skill patch\n"
+            f"Targets: {unique}\n\n"
+            "--- Full V4A patch ---\n"
+            f"{patch_content}",
+        )
 
     _rewrite_v4a_paths(parsed, shell)
     with ExitStack() as locks:
@@ -479,6 +677,14 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
                     data["error"] += f" Rollback also failed: {rollback_error}"
                 else:
                     data["restored"] = True
+            elif not data.get("no_change"):
+                validation_error = _mutated_skill_error(
+                    validation_paths,
+                    classified_paths=approval_paths,
+                    skill_index_paths=skill_index_paths,
+                )
+                if validation_error:
+                    _rollback_invalid_skill(data, snapshots, validation_error)
         finally:
             _discard_backups(snapshots)
         if warnings:
@@ -555,7 +761,8 @@ def _bounded_search_dict(result: Any, offset: int) -> Dict[str, Any]:
 
 
 def _search(args: Dict[str, Any], context: ToolContext, shell: Shell,
-            operations: ShellFileOperations) -> str:
+            operations: ShellFileOperations, *,
+            approved_categories: frozenset[str] = frozenset()) -> str:
     pattern = args.get("pattern")
     if not isinstance(pattern, str) or not pattern:
         return tool_error("pattern must be a non-empty string")
@@ -605,15 +812,53 @@ def _search(args: Dict[str, Any], context: ToolContext, shell: Shell,
 async def _run(handler: Any, args: Dict[str, Any], context: ToolContext) -> str:
     terminal = get_terminal_session(context)
     async with terminal.lock:
+        approved_categories: set[str] = set()
         try:
             if terminal.shell is None:
                 terminal.shell = await asyncio.to_thread(_new_shell, context)
             session = _file_session(context, terminal)
             if session.operations is None:
                 raise RuntimeError("file operations could not initialize")
-            return await asyncio.to_thread(
-                handler, args, context, terminal.shell, session.operations
-            )
+            while True:
+                try:
+                    return await asyncio.to_thread(
+                        handler,
+                        args,
+                        context,
+                        terminal.shell,
+                        session.operations,
+                        approved_categories=frozenset(approved_categories),
+                    )
+                except _ApprovalRequired as request:
+                    review_path: Optional[Path] = None
+                    summary = request.summary
+                    try:
+                        if request.review_content and approval_required(
+                            context.config, request.category
+                        ):
+                            review_path = await asyncio.to_thread(
+                                _write_approval_review,
+                                context,
+                                request.review_content,
+                            )
+                            summary += (
+                                "\n\nFull proposal attached as a text file.\n"
+                                f"MEDIA:{review_path}"
+                            )
+                        outcome = await context.authorize(
+                            request.category, summary
+                        )
+                    finally:
+                        if review_path is not None:
+                            await asyncio.to_thread(
+                                _discard_approval_review, review_path
+                            )
+                    if not outcome.approved:
+                        return tool_error(
+                            approval_error(outcome),
+                            approval=outcome.status,
+                        )
+                    approved_categories.add(request.category)
         except Exception as exc:
             return tool_error(f"{type(exc).__name__}: {exc}")
 

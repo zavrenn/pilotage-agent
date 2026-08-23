@@ -462,6 +462,7 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
                     *,
                     on_notice,
                     origin,
+                    approval_notify,
                 ):
                     seen["text"] = text
                     return "answer"

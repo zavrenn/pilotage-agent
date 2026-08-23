@@ -7,7 +7,9 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
+from pilotage.approvals import ApprovalOutcome
 from pilotage.cron.jobs import CronStore
 from pilotage.tools import ToolContext, build_registry
 
@@ -24,7 +26,7 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
         self.wakes = 0
         self.context = ToolContext(
             chat_id="session-1",
-            config=None,
+            config=SimpleNamespace(cron_enabled=True, approval_cron=False),
             cron_store=self.store,
             origin={"channel": "whatsapp", "chat_id": "123@c.us"},
             cron_wake=self._wake,
@@ -59,6 +61,20 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
             allowed_groups=["memory"],
         ))
         self.assertIn("disabled", blocked["error"])
+
+    async def test_create_denial_does_not_write_or_wake(self):
+        async def deny(category, summary):
+            self.assertEqual(category, "cron")
+            self.assertIn('"schedule": "1h"', summary)
+            return ApprovalOutcome(False, "denied", "Not now")
+
+        self.context.config.approval_cron = True
+        self.context.approval_request = deny
+        result = await self.create()
+
+        self.assertEqual(result["approval"], "denied")
+        self.assertEqual(self.store.list_jobs(include_disabled=True), [])
+        self.assertEqual(self.wakes, 0)
 
     async def test_create_captures_origin_and_list_is_bounded(self):
         created = await self.create(name="Morning", skills=["report"])

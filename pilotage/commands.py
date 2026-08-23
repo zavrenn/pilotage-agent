@@ -28,6 +28,8 @@ class CommandDef:
 COMMAND_REGISTRY: tuple[CommandDef, ...] = (
     CommandDef("help", "Show the available management commands", "Info", aliases=("commands",)),
     CommandDef("new", "Start a fresh conversation", "Session", aliases=("reset",)),
+    CommandDef("approve", "Allow the oldest pending change once", "Approval"),
+    CommandDef("deny", "Refuse the oldest pending change", "Approval"),
     CommandDef("status", "Show the running agent's essential status", "Info"),
     CommandDef("profile", "Show the active profile and state directory", "Info"),
 )
@@ -139,6 +141,26 @@ async def execute_command(
     """Execute one recognized command and return its channel-neutral text."""
 
     name = invocation.command.name
+    if name == "approve":
+        if invocation.arguments:
+            return "Usage: /approve"
+        resolved = agent.resolve_approval(session_id, approved=True)
+        return (
+            "Approved. I’ll continue."
+            if resolved
+            else "No approval is waiting."
+        )
+    if name == "deny":
+        resolved = agent.resolve_approval(
+            session_id,
+            approved=False,
+            reason=invocation.arguments,
+        )
+        return (
+            "Denied. Nothing will be changed."
+            if resolved
+            else "No approval is waiting."
+        )
     if invocation.arguments:
         return f"Usage: /{name}"
     if name == "help":
