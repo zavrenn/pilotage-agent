@@ -229,7 +229,7 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(config.model, "gpt-5.6-sol")
         self.assertEqual(
             config.settings.names("tools.enabled"),
-            ["todo", "terminal", "file", "skills", "memory", "cron"],
+            ["todo", "terminal", "web", "file", "skills", "memory", "cron"],
         )
         self.assertTrue(config.cron_enabled)
         self.assertEqual(config.cron_output_retention, 50)

@@ -27,6 +27,7 @@ tools:
   enabled:
     - todo
     - terminal
+    - web
     - file
     - skills
     - memory

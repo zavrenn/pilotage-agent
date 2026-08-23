@@ -293,6 +293,7 @@ class BuiltRegistryTests(unittest.TestCase):
         self.assertIn("memory", registry.groups())
         self.assertIn("todo", registry.groups())
         self.assertIn("terminal", registry.groups())
+        self.assertIn("web", registry.groups())
         self.assertEqual(
             {"patch", "read_file", "search_files", "write_file"},
             set(registry.names(["file"])),
@@ -300,6 +301,7 @@ class BuiltRegistryTests(unittest.TestCase):
         self.assertIsNotNone(registry.get("todo"))
         self.assertIsNotNone(registry.get("memory"))
         self.assertIsNotNone(registry.get("terminal"))
+        self.assertIsNotNone(registry.get("web_search"))
         self.assertEqual(
             {"skill_view", "skills_list"},
             set(registry.names(["skills"])),

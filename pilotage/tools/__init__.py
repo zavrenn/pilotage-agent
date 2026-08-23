@@ -38,6 +38,7 @@ from .memory import MEMORY_TOOL
 from .skills import SKILLS_TOOLS, build_skills_prompt
 from .terminal import TERMINAL_TOOL
 from .todo import TODO_TOOL
+from .web import WEB_SEARCH_TOOL
 
 __all__ = [
     "Registry",
@@ -60,6 +61,7 @@ ALL_TOOLS: Sequence[Tool] = (
     MEMORY_TOOL,
     TERMINAL_TOOL,
     TODO_TOOL,
+    WEB_SEARCH_TOOL,
 )
 
 
