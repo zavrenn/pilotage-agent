@@ -35,7 +35,8 @@ The Genesis core currently provides ChatGPT subscription authentication,
 allowlisted WhatsApp and Telegram messaging, persistent conversations with
 native context compaction, full-text conversation recall, curated memory,
 profile-local tools and skills, isolated profiles, management commands, DDGS
-web search, native image analysis, OpenAI voice-message transcription,
+web search, Firecrawl page extraction, native image analysis, OpenAI
+voice-message transcription,
 Codex-backed image generation and editing, allowlisted messaging groups, and
 durable cron jobs. Memory, skill, and cron changes use configurable per-profile
 approval gates over both messaging channels. This Genesis slice is not
@@ -52,6 +53,9 @@ scripts/install.sh
 
 Voice-message transcription requires VOICE_TOOLS_OPENAI_KEY in the profile
 .env; ChatGPT login does not authorize the OpenAI audio API.
+
+Full-page web extraction requires FIRECRAWL_API_KEY in the profile .env, or
+FIRECRAWL_API_URL for a self-hosted Firecrawl instance. DDGS search needs no key.
 
 An enabled WhatsApp channel prints its pairing QR on the first run. Telegram
 uses TELEGRAM_BOT_TOKEN and numeric IDs in TELEGRAM_ALLOWED_USERS from the

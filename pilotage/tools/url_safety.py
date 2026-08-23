@@ -1,4 +1,4 @@
-"""SSRF-safe HTTP connections for model-supplied image URLs.
+"""SSRF-safe HTTP connections for model-supplied URLs.
 
 Ported from Hermes tools/url_safety.py and narrowed to Genesis' current
 contract. Pilotage has no private-URL override or browser policy layer, so
@@ -12,9 +12,18 @@ import asyncio
 import ipaddress
 import logging
 import os
+import re
 import socket
 from typing import Any, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import (
+    parse_qsl,
+    quote,
+    unquote,
+    urljoin,
+    urlparse,
+    urlsplit,
+    urlunsplit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +61,166 @@ _ALWAYS_BLOCKED_NETWORKS = (
 _CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 _MAX_SSRF_CONNECT_IPS = 8
 
+# Hermes' known API-token prefixes. Web extraction hands its URL to a
+# third-party reader, so a recognizable secret in any URL component fails
+# closed before that handoff.
+_TOKEN_PREFIX_PATTERNS = (
+    r"sk-[A-Za-z0-9_-]{10,}",
+    r"ghp_[A-Za-z0-9]{10,}",
+    r"github_pat_[A-Za-z0-9_]{10,}",
+    r"gho_[A-Za-z0-9]{10,}",
+    r"ghu_[A-Za-z0-9]{10,}",
+    r"ghs_[A-Za-z0-9]{10,}",
+    r"ghr_[A-Za-z0-9]{10,}",
+    r"xapp-\d+-[A-Za-z0-9-]{10,}",
+    r"xox[baprs]-[A-Za-z0-9-]{10,}",
+    r"AIza[A-Za-z0-9_-]{30,}",
+    r"pplx-[A-Za-z0-9]{10,}",
+    r"fal_[A-Za-z0-9_-]{10,}",
+    r"fc-[A-Za-z0-9]{10,}",
+    r"bb_live_[A-Za-z0-9_-]{10,}",
+    r"gAAAA[A-Za-z0-9_=-]{20,}",
+    r"AKIA[A-Z0-9]{16}",
+    r"sk_live_[A-Za-z0-9]{10,}",
+    r"sk_test_[A-Za-z0-9]{10,}",
+    r"rk_live_[A-Za-z0-9]{10,}",
+    r"SG\.[A-Za-z0-9_-]{10,}",
+    r"hf_[A-Za-z0-9]{10,}",
+    r"r8_[A-Za-z0-9]{10,}",
+    r"npm_[A-Za-z0-9]{10,}",
+    r"pypi-[A-Za-z0-9_-]{10,}",
+    r"dop_v1_[A-Za-z0-9]{10,}",
+    r"doo_v1_[A-Za-z0-9]{10,}",
+    r"am_[A-Za-z0-9_-]{10,}",
+    r"sk_[A-Za-z0-9_]{10,}",
+    r"tvly-[A-Za-z0-9]{10,}",
+    r"exa_[A-Za-z0-9]{10,}",
+    r"gsk_[A-Za-z0-9]{10,}",
+    r"syt_[A-Za-z0-9]{10,}",
+    r"retaindb_[A-Za-z0-9]{10,}",
+    r"hsk-[A-Za-z0-9]{10,}",
+    r"mem0_[A-Za-z0-9]{10,}",
+    r"brv_[A-Za-z0-9]{10,}",
+    r"xai-[A-Za-z0-9]{30,}",
+    r"ntn_[A-Za-z0-9]{10,}",
+    r"fw-[A-Za-z0-9]{30,}",
+    r"fw_[A-Za-z0-9]{30,}",
+    r"fpk_[A-Za-z0-9]{30,}",
+    r"glpat-[A-Za-z0-9_\-]{10,}",
+    r"gloas-[A-Za-z0-9_\-]{10,}",
+    r"gldt-[A-Za-z0-9_\-]{10,}",
+    r"glrt-[A-Za-z0-9_.\-]{10,}",
+    r"glrtr-[A-Za-z0-9_.\-]{10,}",
+    r"glcbt-[A-Za-z0-9_\-]{10,}",
+    r"glptt-[A-Za-z0-9_\-]{10,}",
+    r"glft-[A-Za-z0-9_\-]{10,}",
+    r"glimt-[A-Za-z0-9_\-]{10,}",
+    r"glagent-[A-Za-z0-9_\-]{10,}",
+    r"glsoat-[A-Za-z0-9_\-]{10,}",
+    r"glffct-[A-Za-z0-9_\-]{10,}",
+    r"glwt-[A-Za-z0-9_\-]{10,}",
+    r"GR1348941[A-Za-z0-9_\-]{10,}",
+    r"pk-lf-[A-Za-z0-9\-]{8,}",
+)
+_TOKEN_PREFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(" + "|".join(_TOKEN_PREFIX_PATTERNS) + r")(?![A-Za-z0-9_-])"
+)
+
+_SENSITIVE_QUERY_PARAM_NAMES = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "auth_token",
+        "authorization",
+        "awsaccesskeyid",
+        "client_secret",
+        "credential",
+        "credentials",
+        "jwt",
+        "password",
+        "passwd",
+        "secret",
+        "session_id",
+        "signature",
+        "token",
+        "x_amz_security_token",
+        "x_amz_signature",
+        "x-amz-security-token",
+        "x-amz-signature",
+    }
+)
+
 
 def _proxy_is_configured() -> bool:
     return any(os.environ.get(name) for name in _PROXY_ENV_VARS)
+
+
+def normalize_url_for_request(url: str) -> str:
+    """Return an ASCII-safe HTTP URL for model-supplied URL tools."""
+    if not isinstance(url, str):
+        return url
+    raw = url.strip()
+    if not raw:
+        return raw
+    raw = re.sub(r"^([A-Za-z][A-Za-z0-9+.-]*://)\s+", r"\1", raw)
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return raw
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return raw
+
+    netloc = parsed.netloc
+    hostname = parsed.hostname
+    if hostname:
+        try:
+            ascii_host = hostname.encode("idna").decode("ascii")
+        except UnicodeError:
+            ascii_host = hostname
+        if ascii_host != hostname:
+            netloc = netloc.replace(hostname, ascii_host, 1)
+
+    path = quote(parsed.path, safe="/%:@!$&'()*+,;=")
+    query = quote(parsed.query, safe="/%:@!$&'()*+,;=?")
+    fragment = quote(parsed.fragment, safe="/%:@!$&'()*+,;=?")
+    return urlunsplit((parsed.scheme, netloc, path, query, fragment))
+
+
+def has_url_credentials(url: str) -> bool:
+    """Return whether an HTTP URL embeds credentials in its authority."""
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed = urlsplit(url.strip())
+        return parsed.scheme.lower() in {"http", "https"} and (
+            parsed.username is not None or parsed.password is not None
+        )
+    except ValueError:
+        return False
+
+
+def sensitive_query_param_name(url: str) -> Optional[str]:
+    """Return the first credential-bearing query parameter in a URL."""
+    if not isinstance(url, str) or "?" not in url:
+        return None
+    try:
+        parsed = urlsplit(url.strip())
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.query:
+        return None
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        if value and unquote(key).lower() in _SENSITIVE_QUERY_PARAM_NAMES:
+            return key
+    return None
+
+
+def contains_known_secret(url: str) -> bool:
+    """Return whether a raw or percent-decoded URL contains a known token."""
+    if not isinstance(url, str):
+        return False
+    return bool(_TOKEN_PREFIX_RE.search(url) or _TOKEN_PREFIX_RE.search(unquote(url)))
 
 
 def _is_blocked_ip(

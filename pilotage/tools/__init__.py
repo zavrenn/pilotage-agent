@@ -43,7 +43,7 @@ from .session_search import SESSION_SEARCH_TOOL
 from .skills import SKILLS_TOOLS, build_skills_prompt
 from .terminal import TERMINAL_TOOL
 from .todo import TODO_TOOL
-from .web import WEB_SEARCH_TOOL
+from .web import WEB_EXTRACT_TOOL, WEB_SEARCH_TOOL
 from .vision import VISION_ANALYZE_TOOL
 
 __all__ = [
@@ -72,6 +72,7 @@ ALL_TOOLS: Sequence[Tool] = (
     SESSION_SEARCH_TOOL,
     TERMINAL_TOOL,
     TODO_TOOL,
+    WEB_EXTRACT_TOOL,
     WEB_SEARCH_TOOL,
     VISION_ANALYZE_TOOL,
 )

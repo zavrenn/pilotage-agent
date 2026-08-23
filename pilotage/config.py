@@ -335,6 +335,9 @@ class Config:
         from .tools.image import validate_image_settings
 
         validate_image_settings(settings)
+        from .tools.web import validate_web_settings
+
+        validate_web_settings(settings)
         from .transcription import validate_settings as validate_stt_settings
 
         validate_stt_settings(settings)

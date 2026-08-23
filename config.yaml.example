@@ -72,6 +72,13 @@ image_gen:
   provider: openai-codex
   model: gpt-image-2-high
 
+web:
+  # Full-page extraction uses Firecrawl. Set FIRECRAWL_API_KEY in the profile
+  # .env, or FIRECRAWL_API_URL for a self-hosted Firecrawl instance.
+  # This is a per-page target; returned previews shrink when the combined
+  # result must fit tools.max_result_chars. Full text remains cached.
+  extract_char_limit: 15000
+
 stt:
   enabled: true
   provider: openai

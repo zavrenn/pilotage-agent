@@ -15,6 +15,7 @@ dependencies = [
     "pyyaml==6.0.3",
     "croniter==6.0.0",
     "ddgs==9.15.0",
+    "firecrawl-py==4.17.0",
     "tzdata==2025.3; sys_platform == 'win32'",
     "tomli==2.2.1; python_version < '3.11'",
 ]
