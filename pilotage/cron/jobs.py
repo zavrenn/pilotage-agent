@@ -234,6 +234,12 @@ def _normalize_origin(origin: Optional[Dict[str, Any]]) -> Optional[Dict[str, st
         return None
     channel = str(origin.get("channel") or "").strip().lower()
     chat_id = str(origin.get("chat_id") or "").strip()
+    if channel == "telegram" and chat_id:
+        normalized = {"channel": channel, "chat_id": chat_id}
+        thread_id = str(origin.get("thread_id") or "").strip()
+        if thread_id:
+            normalized["thread_id"] = thread_id
+        return normalized
     return {"channel": channel, "chat_id": chat_id} if channel and chat_id else None
 
 

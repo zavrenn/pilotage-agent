@@ -32,13 +32,13 @@ completeness.
 ## Status
 
 The Genesis core currently provides ChatGPT subscription authentication,
-allowlisted WhatsApp messaging, persistent conversations with native context
-compaction, full-text conversation recall, curated memory, profile-local tools
-and skills, isolated profiles, management commands, DDGS web search, native
-image analysis, OpenAI voice-message transcription, Codex-backed image
-generation and editing, Hermes-style allowlisted WhatsApp groups, and durable
-cron jobs. This Genesis slice is not production-complete: Telegram and the
-approval workflow are not implemented yet. There is no stable public API.
+allowlisted WhatsApp and Telegram messaging, persistent conversations with
+native context compaction, full-text conversation recall, curated memory,
+profile-local tools and skills, isolated profiles, management commands, DDGS
+web search, native image analysis, OpenAI voice-message transcription,
+Codex-backed image generation and editing, allowlisted messaging groups, and
+durable cron jobs. This Genesis slice is not production-complete: the approval
+workflow is not implemented yet. There is no stable public API.
 
 ## Install on Ubuntu
 
@@ -52,8 +52,12 @@ scripts/install.sh
 Voice-message transcription requires VOICE_TOOLS_OPENAI_KEY in the profile
 .env; ChatGPT login does not authorize the OpenAI audio API.
 
-The first run prints the WhatsApp pairing QR. After pairing and testing, install
-the resident user service:
+An enabled WhatsApp channel prints its pairing QR on the first run. Telegram
+uses TELEGRAM_BOT_TOKEN and numeric IDs in TELEGRAM_ALLOWED_USERS from the
+profile .env.
+Webhook delivery also requires TELEGRAM_WEBHOOK_URL and a long random
+TELEGRAM_WEBHOOK_SECRET; leaving the URL blank uses long polling.
+After testing the enabled channels, install the resident user service:
 
 ```bash
 bash scripts/install-service.sh
@@ -71,9 +75,10 @@ bash scripts/install-service.sh --profile work
 ```
 
 Each named profile owns its `SOUL.md` identity, configuration, WhatsApp session,
-conversations, memory, skills, workspace, cron jobs, and an automatically assigned
-bridge port. Only one live runtime may own a profile. A named profile may fall back
-only to the default profile's ChatGPT authentication. An optional `AGENTS.md` in
+Telegram credentials, conversations, memory, skills, workspace, cron jobs, and
+an automatically assigned bridge port. Only one live runtime may own a profile.
+A named profile may fall back only to the default profile's ChatGPT
+authentication. An optional `AGENTS.md` in
 the working directory supplies workspace instructions to each new conversation.
 
 ## Origin

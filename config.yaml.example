@@ -16,6 +16,7 @@ compression:
   codex_responses_compact_threshold: 200000
 
 whatsapp:
+  enabled: true
   group_policy: disabled
   group_allow_from: []
   require_mention: true
@@ -24,6 +25,19 @@ whatsapp:
   batch_hard_cap: 20
   bridge_port: 8765
   read_receipts: false
+
+telegram:
+  enabled: false
+  group_policy: disabled
+  # Quoted numeric group/supergroup IDs, or ["*"] for every group.
+  group_allow_from: []
+  require_mention: true
+  reply_to_mode: first
+  batch_delay: 0.3
+  batch_split_delay: 1
+  media_batch_delay: 0.8
+  batch_hard_cap: 20
+  disable_link_previews: false
 
 tools:
   enabled:

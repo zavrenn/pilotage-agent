@@ -1,8 +1,8 @@
 """Command line entry point.
 
     pilotage login          authenticate against ChatGPT (device code)
-    pilotage ask "..."      one question straight to the model, no WhatsApp
-    pilotage run            answer WhatsApp messages until stopped
+    pilotage ask "..."      one question straight to the model, no messaging
+    pilotage run            answer enabled messaging channels until stopped
 """
 
 from __future__ import annotations
@@ -17,6 +17,11 @@ from . import profiles, transcription
 from .agent import Agent
 from .commands import CommandInvocation, execute_command, status_text
 from .channels.whatsapp import ChannelError, InboundMessage, WhatsAppChannel
+from .channels.telegram import (
+    ChannelError as TelegramChannelError,
+    InboundMessage as TelegramInboundMessage,
+    TelegramChannel,
+)
 from .codex import auth
 from .config import Config, ConfigError
 from .cron.cli import add_cron_parser, run_cron_command
@@ -115,107 +120,273 @@ async def command_run(config: Config, profile_name: str = "default") -> int:
 
 
 async def _command_run_locked(config: Config, profile_name: str = "default") -> int:
-    channel: WhatsAppChannel
-    cron_store = CronStore(
-        config.state_dir,
-        timezone_name=config.cron_timezone,
-        claim_ttl_seconds=config.cron_claim_ttl_seconds,
-        output_retention=config.cron_output_retention,
-    )
+    return await _run_enabled_channels(config, profile_name)
 
-    async def scheduled_delivery(origin: dict[str, str], text: str) -> None:
-        await _deliver_scheduled(channel, origin, text)
+
+async def _run_enabled_channels(
+    config: Config, profile_name: str
+) -> int:
+    """Run the enabled first-class messaging channels for one profile."""
+    whatsapp_enabled = config.settings.flag("whatsapp.enabled", True)
+    telegram_config = config.for_channel("telegram")
+    telegram_enabled = telegram_config.settings.flag("telegram.enabled", False)
+    if not whatsapp_enabled and not telegram_enabled:
+        print("No messaging channel is enabled.", file=sys.stderr)
+        return 1
+
+    cron_config = config if whatsapp_enabled else telegram_config
+    cron_channel_configs = {}
+    if whatsapp_enabled:
+        cron_channel_configs["whatsapp"] = config
+    if telegram_enabled:
+        cron_channel_configs["telegram"] = telegram_config
+    cron_store = CronStore(
+        cron_config.state_dir,
+        timezone_name=cron_config.cron_timezone,
+        claim_ttl_seconds=cron_config.cron_claim_ttl_seconds,
+        output_retention=cron_config.cron_output_retention,
+    )
+    channels = {}
+
+    async def scheduled_delivery(
+        origin: dict[str, str], text: str
+    ) -> None:
+        channel_name = str(origin.get("channel") or "").lower()
+        delivery_channel = channels.get(channel_name)
+        chat_id = str(origin.get("chat_id") or "")
+        if delivery_channel is None:
+            raise ChannelError(
+                f"{channel_name or 'Unknown'} delivery adapter is unavailable."
+            )
+        if not chat_id:
+            raise ChannelError("Cron delivery origin has no chat ID.")
+        if channel_name == "telegram":
+            delivered = await delivery_channel.send(
+                chat_id,
+                text,
+                thread_id=str(origin.get("thread_id") or ""),
+            )
+        else:
+            delivered = await delivery_channel.send(chat_id, text)
+        if not delivered:
+            raise ChannelError(
+                f"{channel_name.title()} rejected the scheduled delivery."
+            )
 
     scheduler = (
-        CronScheduler(config, cron_store, deliver=scheduled_delivery)
-        if config.cron_enabled
+        CronScheduler(
+            cron_config,
+            cron_store,
+            deliver=scheduled_delivery,
+            channel_configs=cron_channel_configs,
+        )
+        if cron_config.cron_enabled
         else None
     )
-    agent = Agent(
-        config,
-        cron_store=cron_store,
-        cron_wake=scheduler.wake if scheduler is not None else None,
-    )
+    cron_wake = scheduler.wake if scheduler is not None else None
 
-    async def handle(message: InboundMessage) -> None:
-        # A batch of messages is one question; quote the last of them, the
-        # one the answer arrives under.
-        quoted = message.message_ids[-1] if message.message_ids else ""
+    if whatsapp_enabled:
+        whatsapp_agent = Agent(
+            config,
+            cron_store=cron_store,
+            cron_wake=cron_wake,
+        )
 
-        async def notice(text: str) -> None:
-            await channel.send(message.chat_id, text, quoted)
+        async def handle_whatsapp(message: InboundMessage) -> None:
+            quoted = message.message_ids[-1] if message.message_ids else ""
 
-        try:
-            async with channel.typing(message.chat_id):
-                enriched_text, transcripts = await transcription.enrich_message(
-                    message.text,
-                    message.attachments,
-                    config.settings,
-                )
-                logger.info(
-                    "%s: %s",
-                    message.sender_number or message.chat_id,
-                    enriched_text[:120],
-                )
-                if transcripts and transcription.transcript_echo_enabled(
-                    config.settings
-                ):
-                    for transcript in transcripts:
-                        await channel.send(
-                            message.chat_id,
-                            f'🎙️ "{transcript}"',
-                            quoted,
-                            deliver_media=False,
-                        )
-                answer = await agent.respond(
-                    message.session_id,
-                    enriched_text,
-                    message.attachments,
-                    on_notice=notice,
-                    origin={"channel": "whatsapp", "chat_id": message.chat_id},
-                )
-        except Exception:  # noqa: BLE001 - the user gets an answer either way
-            logger.exception("The model call failed")
-            answer = REPLY_ON_FAILURE
-        if not answer:
-            answer = REPLY_ON_FAILURE
-        await channel.send(message.chat_id, answer, quoted)
+            async def notice(text: str) -> None:
+                await whatsapp_channel.send(message.chat_id, text, quoted)
 
-    async def manage(
-        chat_id: str,
-        session_id: str,
-        message_id: str,
-        invocation: CommandInvocation,
-    ) -> None:
-        try:
-            answer = await execute_command(
-                invocation,
-                agent=agent,
-                config=config,
-                profile_name=profile_name,
-                session_id=session_id,
-                reset_reply=REPLY_ON_RESET,
+            try:
+                async with whatsapp_channel.typing(message.chat_id):
+                    enriched_text, transcripts = await transcription.enrich_message(
+                        message.text,
+                        message.attachments,
+                        config.settings,
+                    )
+                    logger.info(
+                        "%s: %s",
+                        message.sender_number or message.chat_id,
+                        enriched_text[:120],
+                    )
+                    if transcripts and transcription.transcript_echo_enabled(
+                        config.settings
+                    ):
+                        for transcript in transcripts:
+                            await whatsapp_channel.send(
+                                message.chat_id,
+                                f'\U0001f399\ufe0f "{transcript}"',
+                                quoted,
+                                deliver_media=False,
+                            )
+                    answer = await whatsapp_agent.respond(
+                        message.session_id,
+                        enriched_text,
+                        message.attachments,
+                        on_notice=notice,
+                        origin={
+                            "channel": "whatsapp",
+                            "chat_id": message.chat_id,
+                        },
+                    )
+            except Exception:
+                logger.exception("The WhatsApp model call failed")
+                answer = REPLY_ON_FAILURE
+            await whatsapp_channel.send(
+                message.chat_id,
+                answer or REPLY_ON_FAILURE,
+                quoted,
             )
-        except Exception:  # noqa: BLE001 - commands must always answer
-            logger.exception("Management command failed")
-            answer = REPLY_ON_FAILURE
-        await channel.send(chat_id, answer, message_id)
 
-    channel = WhatsAppChannel(config, handle, manage)
+        async def manage_whatsapp(
+            chat_id: str,
+            session_id: str,
+            message_id: str,
+            invocation: CommandInvocation,
+        ) -> None:
+            try:
+                answer = await execute_command(
+                    invocation,
+                    agent=whatsapp_agent,
+                    config=config,
+                    profile_name=profile_name,
+                    session_id=session_id,
+                    reset_reply=REPLY_ON_RESET,
+                )
+            except Exception:
+                logger.exception("WhatsApp management command failed")
+                answer = REPLY_ON_FAILURE
+            await whatsapp_channel.send(chat_id, answer, message_id)
 
-    # Fail before starting the bridge if we are not signed in.
+        whatsapp_channel = WhatsAppChannel(
+            config,
+            handle_whatsapp,
+            manage_whatsapp,
+        )
+        channels["whatsapp"] = whatsapp_channel
+
+    if telegram_enabled:
+        telegram_agent = Agent(
+            telegram_config,
+            cron_store=cron_store,
+            cron_wake=cron_wake,
+        )
+
+        async def handle_telegram(message: TelegramInboundMessage) -> None:
+            quoted = message.message_ids[-1] if message.message_ids else ""
+
+            async def notice(text: str) -> None:
+                await telegram_channel.send(
+                    message.chat_id,
+                    text,
+                    quoted,
+                    thread_id=message.thread_id,
+                )
+
+            try:
+                async with telegram_channel.typing(
+                    message.chat_id, message.thread_id
+                ):
+                    enriched_text, transcripts = await transcription.enrich_message(
+                        message.text,
+                        message.attachments,
+                        telegram_config.settings,
+                    )
+                    logger.info(
+                        "Telegram %s: %s",
+                        message.user_id or message.chat_id,
+                        enriched_text[:120],
+                    )
+                    if transcripts and transcription.transcript_echo_enabled(
+                        telegram_config.settings
+                    ):
+                        for transcript in transcripts:
+                            await telegram_channel.send(
+                                message.chat_id,
+                                f'\U0001f399\ufe0f "{transcript}"',
+                                quoted,
+                                thread_id=message.thread_id,
+                                deliver_media=False,
+                            )
+                    origin = {
+                        "channel": "telegram",
+                        "chat_id": message.chat_id,
+                    }
+                    if message.thread_id:
+                        origin["thread_id"] = message.thread_id
+                    answer = await telegram_agent.respond(
+                        message.session_id,
+                        enriched_text,
+                        message.attachments,
+                        on_notice=notice,
+                        origin=origin,
+                    )
+            except Exception:
+                logger.exception("The Telegram model call failed")
+                answer = REPLY_ON_FAILURE
+            await telegram_channel.send(
+                message.chat_id,
+                answer or REPLY_ON_FAILURE,
+                quoted,
+                thread_id=message.thread_id,
+            )
+
+        async def manage_telegram(
+            chat_id: str,
+            session_id: str,
+            message_id: str,
+            thread_id: str,
+            invocation: CommandInvocation,
+        ) -> None:
+            try:
+                answer = await execute_command(
+                    invocation,
+                    agent=telegram_agent,
+                    config=telegram_config,
+                    profile_name=profile_name,
+                    session_id=session_id,
+                    reset_reply=REPLY_ON_RESET,
+                )
+            except Exception:
+                logger.exception("Telegram management command failed")
+                answer = REPLY_ON_FAILURE
+            await telegram_channel.send(
+                chat_id,
+                answer,
+                message_id,
+                thread_id=thread_id,
+            )
+
+        telegram_channel = TelegramChannel(
+            telegram_config,
+            handle_telegram,
+            manage_telegram,
+        )
+        channels["telegram"] = telegram_channel
+
     try:
         auth.read_credentials(
-            config.credentials_path,
-            fallback_path=config.main_credentials_path,
+            cron_config.credentials_path,
+            fallback_path=cron_config.main_credentials_path,
         )
     except auth.AuthError as exc:
         print(f"{exc}", file=sys.stderr)
         return 1
 
+    start_order = [
+        channel
+        for name in ("telegram", "whatsapp")
+        if (channel := channels.get(name)) is not None
+    ]
+    started = []
     try:
-        await channel.start()
-    except ChannelError as exc:
+        for running_channel in start_order:
+            await running_channel.start()
+            started.append(running_channel)
+    except (ChannelError, TelegramChannelError) as exc:
+        for running_channel in reversed(started):
+            await running_channel.stop()
         print(f"{exc}", file=sys.stderr)
         return 1
 
@@ -223,7 +394,8 @@ async def _command_run_locked(config: Config, profile_name: str = "default") -> 
         try:
             await scheduler.start()
         except (CronError, OSError) as exc:
-            await channel.stop()
+            for running_channel in reversed(started):
+                await running_channel.stop()
             print(f"Cron scheduler could not start: {exc}", file=sys.stderr)
             return 1
 
@@ -233,11 +405,18 @@ async def _command_run_locked(config: Config, profile_name: str = "default") -> 
         try:
             loop.add_signal_handler(sig, stop.set)
         except NotImplementedError:
-            # Windows: fall back to KeyboardInterrupt below.
             signal.signal(sig, lambda *_: stop.set())
 
-    logger.info("Listening. Ctrl+C to stop.")
-    waiters = [asyncio.create_task(stop.wait()), asyncio.create_task(channel.stopped.wait())]
+    channel_labels = {"whatsapp": "WhatsApp", "telegram": "Telegram"}
+    logger.info(
+        "Listening on %s. Ctrl+C to stop.",
+        " and ".join(channel_labels[name] for name in channels),
+    )
+    waiters = [asyncio.create_task(stop.wait())]
+    waiters.extend(
+        asyncio.create_task(running_channel.stopped.wait())
+        for running_channel in start_order
+    )
     if scheduler is not None:
         waiters.append(asyncio.create_task(scheduler.stopped.wait()))
     try:
@@ -250,16 +429,17 @@ async def _command_run_locked(config: Config, profile_name: str = "default") -> 
         await asyncio.gather(*waiters, return_exceptions=True)
         if scheduler is not None:
             await scheduler.stop()
-        await channel.stop()
+        for running_channel in reversed(started):
+            await running_channel.stop()
 
     if scheduler is not None and scheduler.failure:
         print(scheduler.failure, file=sys.stderr)
         return 1
-    if channel.failure:
-        print(channel.failure, file=sys.stderr)
-        return 1
+    for running_channel in start_order:
+        if running_channel.failure:
+            print(running_channel.failure, file=sys.stderr)
+            return 1
     return 0
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pilotage", description="Pilotage Agent")
@@ -270,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("login", help="authenticate against ChatGPT")
     ask = subparsers.add_parser("ask", help="ask one question, print the answer")
     ask.add_argument("question", nargs="+")
-    subparsers.add_parser("run", help="answer WhatsApp messages until stopped")
+    subparsers.add_parser("run", help="answer enabled messaging channels until stopped")
     subparsers.add_parser("status", help="show the selected agent's essential status")
     add_cron_parser(subparsers)
 
@@ -306,6 +486,13 @@ def main(argv: list[str] | None = None) -> int:
         # startup error, not a traceback after the common config passed.
         channel = "whatsapp" if args.command in {"run", "status"} else ""
         config = Config.load(channel=channel)
+        if args.command == "status":
+            telegram_config = config.for_channel("telegram")
+            if (
+                not config.settings.flag("whatsapp.enabled", True)
+                and telegram_config.settings.flag("telegram.enabled", False)
+            ):
+                config = telegram_config
     except ConfigError as exc:
         # A broken configuration file stops the agent rather than starting it
         # with defaults: a default can silently re-enable what was switched off.

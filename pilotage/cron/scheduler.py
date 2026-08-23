@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import unicodedata
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
 from pilotage.agent import Agent
 from pilotage.config import Config
@@ -37,7 +37,7 @@ _EMOJI_RANGES = (
 )
 
 Delivery = Callable[[Dict[str, str], str], Awaitable[None]]
-AgentFactory = Callable[[], Agent]
+AgentFactory = Callable[[Config], Agent]
 
 
 class CronExecutionError(RuntimeError):
@@ -157,11 +157,16 @@ class CronScheduler:
         *,
         deliver: Optional[Delivery] = None,
         agent_factory: Optional[AgentFactory] = None,
+        channel_configs: Optional[Mapping[str, Config]] = None,
     ):
         self.config = config
         self.store = store
         self._deliver = deliver
         self._agent_factory = agent_factory or self._fresh_agent
+        self._channel_configs = {
+            str(channel).lower(): channel_config
+            for channel, channel_config in (channel_configs or {}).items()
+        }
         self._wake = asyncio.Event()
         self._loop_task: Optional[asyncio.Task] = None
         self._active: set[asyncio.Task] = set()
@@ -169,12 +174,20 @@ class CronScheduler:
         self.stopped = asyncio.Event()
         self.failure: Optional[str] = None
 
-    def _fresh_agent(self) -> Agent:
+    def _fresh_agent(self, config: Config) -> Agent:
         return Agent(
-            self.config,
+            config,
             ConversationStore(path=None),
             disabled_tool_groups=("cron",),
         )
+
+    def _config_for_job(self, job: Dict[str, Any]) -> Config:
+        origin = job.get("origin")
+        if isinstance(origin, dict):
+            channel = str(origin.get("channel") or "").lower()
+            if channel in self._channel_configs:
+                return self._channel_configs[channel]
+        return self.config
 
     def wake(self) -> None:
         self._wake.set()
@@ -276,10 +289,11 @@ class CronScheduler:
         origin = job.get("origin")
         if not isinstance(origin, dict):
             return "Cron job has no valid delivery origin."
-        if str(origin.get("channel") or "").lower() != "whatsapp":
+        channel = str(origin.get("channel") or "").lower()
+        if channel not in {"whatsapp", "telegram"}:
             return "Cron delivery channel is unsupported by this runtime."
         if self._deliver is None:
-            return "WhatsApp delivery adapter is unavailable."
+            return "Messaging delivery adapter is unavailable."
         try:
             await self._deliver(origin, text)
         except Exception as exc:
@@ -344,10 +358,13 @@ class CronScheduler:
         delivery_error = ""
         try:
             session_id = f"cron:{job_id}:{owner.rsplit(':', 1)[-1]}"
+            job_config = self._config_for_job(job)
             prompt = await asyncio.to_thread(
-                build_job_prompt, self.config, job, session_id
+                build_job_prompt, job_config, job, session_id
             )
-            answer = await self._agent_factory().respond(session_id, prompt)
+            answer = await self._agent_factory(job_config).respond(
+                session_id, prompt
+            )
             if not str(answer or "").strip():
                 raise CronExecutionError("The scheduled agent returned an empty response.")
             if not await retain_claim():

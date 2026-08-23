@@ -10,7 +10,8 @@ What the model can actually take differs by kind:
 
 * **Images** go into the request as a base64 data URL.
 * **Text-readable documents** are inlined into the message, capped, as Hermes
-  does for every one of its channels.
+  does for every one of its channels. Binary documents keep an agent-visible
+  local path so terminal and document-reading skills can inspect them.
 * **Voice notes** are handed to the separate OpenAI transcription path before
   the turn. Uploaded audio and video are announced rather than silently
   dropped.
@@ -18,8 +19,8 @@ What the model can actually take differs by kind:
 Outbound files take the reverse path. The model names a generated file with
 Hermes' ``MEDIA:/absolute/path`` directive; the directive is removed from the
 visible answer and the resolved file is accepted only when it is a regular
-file inside this profile's workspace. The WhatsApp channel then hands that
-validated path to the private bridge as a native attachment.
+file inside this profile's workspace. The selected channel then hands that
+validated path to its transport as a native attachment.
 """
 
 from __future__ import annotations
@@ -104,7 +105,7 @@ class Attachment:
 
     @property
     def is_voice_message(self) -> bool:
-        """Native WhatsApp push-to-talk notes enter automatic STT. (Hermes)"""
+        """Native messaging voice notes enter automatic STT. (Hermes)"""
         return self.media_type == "ptt"
 
     def display_name(self) -> str:
@@ -121,7 +122,7 @@ class Attachment:
 
 @dataclass(frozen=True)
 class OutboundAttachment:
-    """One validated workspace file to deliver through WhatsApp."""
+    """One validated workspace file to deliver through a messaging channel."""
 
     path: Path
     media_type: str
@@ -329,7 +330,7 @@ def image_parts(attachments: Sequence[Attachment]) -> List[Dict[str, Any]]:
 
 
 def describe_unreadable(attachments: Sequence[Attachment]) -> str:
-    """Name what arrived but cannot be read, so the model does not answer blind."""
+    """Describe non-native media and expose binary documents as Hermes does."""
     notes: List[str] = []
     for attachment in attachments:
         if attachment.is_image or attachment.is_text_document:
@@ -338,7 +339,16 @@ def describe_unreadable(attachments: Sequence[Attachment]) -> str:
             # The asynchronous channel handler replaces this with either a
             # transcript or Hermes' neutral transcription-failure marker.
             continue
-        if attachment.media_type == "audio":
+        if attachment.media_type == "document":
+            name = attachment.display_name()
+            path = attachment.path.resolve()
+            notes.append(
+                f"[The sender sent a document: '{name}'. It is saved at: {path}. "
+                "Its text is not inlined here because it is a binary document. "
+                "Use the terminal or an appropriate document-reading skill to "
+                "inspect it before answering.]"
+            )
+        elif attachment.media_type == "audio":
             notes.append(
                 "[The sender sent an audio file. This agent cannot listen to it automatically.]"
             )

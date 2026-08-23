@@ -23,9 +23,11 @@ class Factory:
     def __init__(self, responder):
         self.responder = responder
         self.instances = []
+        self.configs = []
 
-    def __call__(self):
+    def __call__(self, config):
         factory = self
+        factory.configs.append(config)
 
         class FakeAgent:
             async def respond(self, session_id, prompt):
@@ -73,23 +75,26 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             "name": "status",
         }
         values.update(kwargs)
-        if origin:
+        if origin is True:
             values["origin"] = {
                 "channel": "whatsapp",
                 "chat_id": "123@c.us",
             }
+        elif origin:
+            values["origin"] = origin
         return self.store.create_job(**values)
 
     async def deliver(self, origin, text):
         self.deliveries.append((origin, text))
 
-    async def scheduler(self, responder, deliver=None):
+    async def scheduler(self, responder, deliver=None, channel_configs=None):
         factory = Factory(responder)
         scheduler = CronScheduler(
             self.config,
             self.store,
             deliver=self.deliver if deliver is None else deliver,
             agent_factory=factory,
+            channel_configs=channel_configs,
         )
         await scheduler.start()
         self.addAsyncCleanup(scheduler.stop)
@@ -116,6 +121,33 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.deliveries[0][1], "All good")
         self.assertEqual(len(factory.instances), 1)
         self.assertTrue(factory.instances[0][0].startswith(f"cron:{job['id']}:"))
+
+    async def test_origin_channel_selects_the_matching_agent_config(self):
+        telegram_config = SimpleNamespace(
+            state_dir=self.root,
+            settings=Settings({}),
+            cron_max_concurrent=2,
+            cron_tick_seconds=0.02,
+        )
+        job = self.create(
+            origin={"channel": "telegram", "chat_id": "42"},
+        )
+
+        async def answer(_session, _prompt):
+            return "Telegram result"
+
+        _, factory = await self.scheduler(
+            answer,
+            channel_configs={
+                "whatsapp": self.config,
+                "telegram": telegram_config,
+            },
+        )
+        await wait_until(
+            lambda: self.store.resolve_job(job["id"])["state"] == "completed"
+        )
+
+        self.assertEqual(factory.configs, [telegram_config])
 
     async def test_local_and_silent_jobs_do_not_deliver(self):
         local = self.create(origin=False, name="local")

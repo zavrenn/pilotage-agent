@@ -36,6 +36,12 @@ DEFAULT_INSTRUCTIONS = (
     "know, say plainly when you do not know, and never invent facts."
 )
 
+TELEGRAM_DEFAULT_INSTRUCTIONS = (
+    "You are a Pilotage agent. You answer over Telegram, so keep replies short "
+    "and readable on a phone: a few sentences, not a document. Say what you "
+    "know, say plainly when you do not know, and never invent facts."
+)
+
 # Added to whatever instructions the operator writes, always. The model emits
 # markdown on its own and we translate it on the way out, so it has to know
 # which marks survive the trip — including when the operator replaces the
@@ -55,6 +61,18 @@ WHATSAPP_MEDIA_NOTE = (
     "and other files arrive as downloadable documents. The file must be inside "
     "this profile's workspace. Use MEDIA: for local files, never a markdown "
     "link or sandbox: URL."
+)
+
+TELEGRAM_FORMATTING_NOTE = (
+    "Write in ordinary markdown. It is converted to Telegram MarkdownV2 before "
+    "delivery, including headings, emphasis, links, code, block quotes and "
+    "lists. Tables are converted into readable row groups for mobile."
+)
+
+TELEGRAM_MEDIA_NOTE = (
+    "You can send generated files natively on Telegram. To deliver a local "
+    "file, include MEDIA:/absolute/path/to/file on its own line in your "
+    "response. The file must be inside this profile's workspace."
 )
 
 # How many times the model may call tools and look at the results before it has
@@ -130,6 +148,12 @@ def _instructions(settings: Settings, home: Path, channel: str = "") -> str:
     """Assemble profile identity, optional operator overlay, and channel rules."""
     written = settings.text("agent.instructions", "")
     soul = _load_soul(home)
+    if channel == "telegram":
+        parts = [soul or written or TELEGRAM_DEFAULT_INSTRUCTIONS]
+        if soul and written:
+            parts.append(written)
+        parts.extend((TELEGRAM_FORMATTING_NOTE, TELEGRAM_MEDIA_NOTE))
+        return "\n\n".join(parts)
     parts = [soul or written or DEFAULT_INSTRUCTIONS]
     if soul and written:
         parts.append(written)
@@ -307,6 +331,9 @@ class Config:
         from .transcription import validate_settings as validate_stt_settings
 
         validate_stt_settings(settings)
+        from .channels.telegram import validate_settings as validate_telegram_settings
+
+        validate_telegram_settings(settings)
 
         settings.names("skills.disabled")
         settings.flag("skills.template_vars", True)

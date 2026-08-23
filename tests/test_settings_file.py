@@ -379,6 +379,44 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(seen["config"].model, "whatsapp-model")
         self.assertEqual(seen["profile"], "default")
 
+    def test_status_uses_telegram_view_when_it_is_only_enabled(self):
+        from pilotage import main
+
+        self._write(
+            "whatsapp:\n"
+            "  enabled: false\n"
+            "telegram:\n"
+            "  enabled: true\n"
+            "channels:\n"
+            "  telegram:\n"
+            "    agent:\n"
+            "      model: telegram-model\n"
+        )
+        seen = {}
+
+        def status(config, profile_name):
+            seen["config"] = config
+            seen["profile"] = profile_name
+            return 0
+
+        environment = {
+            "TELEGRAM_BOT_TOKEN": "123456:test-token",
+            "TELEGRAM_ALLOWED_USERS": "42",
+            "TELEGRAM_WEBHOOK_URL": "",
+            "TELEGRAM_WEBHOOK_SECRET": "",
+        }
+        with (
+            mock.patch.dict(os.environ, environment),
+            mock.patch.object(main, "command_status", status),
+        ):
+            self.assertEqual(main.main(["status"]), 0)
+
+        self.assertEqual(
+            seen["config"].settings.channel, "telegram"
+        )
+        self.assertEqual(seen["config"].model, "telegram-model")
+        self.assertEqual(seen["profile"], "default")
+
     def test_a_broken_file_exits_instead_of_starting(self):
         from pilotage import main
 
