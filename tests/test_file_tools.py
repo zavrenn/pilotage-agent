@@ -9,6 +9,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from pilotage.settings import Settings
@@ -26,6 +27,8 @@ from pilotage.tools.files import (
     SEARCH_FILES_SCHEMA,
     WRITE_FILE_SCHEMA,
     _bounded_search_dict,
+    _patch,
+    _write,
     handle_patch,
     handle_read_file,
     handle_search_files,
@@ -147,6 +150,59 @@ class SchemaTests(unittest.TestCase):
                         file_safety.get_write_denied_error(str(state / relative))
                     )
 
+    def test_auto_loaded_agents_files_fail_closed_until_approvals_exist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for name in ("AGENTS.md", "agents.md", "AgEnTs.Md"):
+                error = file_safety.get_write_denied_error(str(root / name))
+                self.assertIn("requires approval", error)
+            self.assertIsNone(
+                file_safety.get_write_denied_error(str(root / "notes.md"))
+            )
+
+    def test_agents_symlink_name_is_checked_before_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "rules.md"
+            target.write_text("Operator authority.", encoding="utf-8")
+            try:
+                (root / "AGENTS.md").symlink_to(target)
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+            context = ToolContext("chat", _Config(root))
+            shell = SimpleNamespace(cwd=str(root))
+            operations = mock.Mock()
+
+            written = json.loads(
+                _write(
+                    {"path": "AGENTS.md", "content": "Agent authority."},
+                    context,
+                    shell,
+                    operations,
+                )
+            )
+            patched = json.loads(
+                _patch(
+                    {
+                        "mode": "replace",
+                        "path": "AGENTS.md",
+                        "old_string": "Operator",
+                        "new_string": "Agent",
+                    },
+                    context,
+                    shell,
+                    operations,
+                )
+            )
+
+            self.assertIn("requires approval", written["error"])
+            self.assertIn("requires approval", patched["error"])
+            self.assertEqual(
+                target.read_text(encoding="utf-8"), "Operator authority."
+            )
+            operations.write_file.assert_not_called()
+            operations.patch_replace.assert_not_called()
+
 
 class OutputBoundTests(unittest.TestCase):
     def test_large_search_pages_keep_valid_json_and_advance(self):
@@ -221,6 +277,56 @@ class SessionAndGuardTests(FileToolCase):
         self.assertIn("secrets", read["error"])
         self.assertIn("secrets", write["error"])
         self.assertEqual(secret.read_text(), "TOKEN=secret")
+
+    async def test_auto_loaded_agents_file_cannot_be_written_or_patched(self):
+        created = await self.call(
+            handle_write_file,
+            {"path": "AGENTS.md", "content": "New authority."},
+        )
+        self.assertIn("requires approval", created["error"])
+        self.assertFalse((self.workspace / "AGENTS.md").exists())
+
+        path = self.workspace / "AGENTS.md"
+        path.write_text("Operator authority.", encoding="utf-8")
+        patched = await self.call(
+            handle_patch,
+            {
+                "mode": "replace",
+                "path": "AGENTS.md",
+                "old_string": "Operator",
+                "new_string": "Agent",
+            },
+        )
+        self.assertIn("requires approval", patched["error"])
+        self.assertEqual(path.read_text(encoding="utf-8"), "Operator authority.")
+
+    async def test_agents_symlink_cannot_redirect_a_write_to_an_unprotected_name(self):
+        target = self.workspace / "rules.md"
+        target.write_text("Operator authority.", encoding="utf-8")
+        try:
+            (self.workspace / "AGENTS.md").symlink_to(target)
+        except OSError as exc:
+            self.skipTest(f"symlinks unavailable: {exc}")
+
+        written = await self.call(
+            handle_write_file,
+            {"path": "AGENTS.md", "content": "Agent authority."},
+        )
+        patched = await self.call(
+            handle_patch,
+            {
+                "mode": "replace",
+                "path": "AGENTS.md",
+                "old_string": "Operator",
+                "new_string": "Agent",
+            },
+        )
+
+        self.assertIn("requires approval", written["error"])
+        self.assertIn("requires approval", patched["error"])
+        self.assertEqual(
+            target.read_text(encoding="utf-8"), "Operator authority."
+        )
 
 
 class ReadTests(FileToolCase):

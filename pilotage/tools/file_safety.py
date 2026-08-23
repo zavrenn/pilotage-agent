@@ -17,7 +17,9 @@ commands. Treat it as "usually helps", never as "cannot be bypassed".
 Dropped from the Hermes version: sandbox and container path classification, and
 the approval gate on `~/.ssh/config`. Pilotage adds a small profile-routing
 guard so ordinary file calls cannot enter default or sibling profile state.
-This is still good-faith enforcement; the terminal remains able to bypass it.
+Hermes also approval-gates auto-loaded instruction files; until Pilotage's
+approval slice lands, its file tools fail closed on ``AGENTS.md``. This is still
+good-faith enforcement; the terminal remains able to bypass it.
 """
 
 from __future__ import annotations
@@ -28,6 +30,9 @@ from typing import Iterable, Optional, Sequence
 
 from ..config import state_dir
 from ..profiles import default_state_root
+
+
+_PROTECTED_INSTRUCTION_BASENAMES = frozenset({"agents.md"})
 
 
 def _real(path: str) -> str:
@@ -50,6 +55,17 @@ def _is_other_profile_state(path: str) -> bool:
     if selected == main:
         return _within(resolved, main / "profiles")
     return _within(resolved, main) and not _within(resolved, selected)
+
+
+def _is_protected_instruction_file(path: str) -> bool:
+    """Match Hermes's case-insensitive normalized-path and realpath guard."""
+    normalized = os.path.normpath(os.path.expanduser(str(path)))
+    resolved = _real(path)
+    return any(
+        os.path.basename(candidate).casefold()
+        in _PROTECTED_INSTRUCTION_BASENAMES
+        for candidate in (normalized, resolved)
+    )
 
 
 def _state_files() -> tuple[str, ...]:
@@ -148,7 +164,7 @@ def resolve_safe_roots(roots: Iterable[str]) -> tuple[str, ...]:
 
 
 def _classify_write_denial(path: str, safe_roots: Sequence[str] = ()) -> Optional[str]:
-    """Return 'credential', 'safe_root', or None when the write is allowed."""
+    """Classify a refused write, or return ``None`` when it is allowed."""
     home = _real("~")
     resolved = _real(path)
 
@@ -159,6 +175,8 @@ def _classify_write_denial(path: str, safe_roots: Sequence[str] = ()) -> Optiona
     for prefix in build_write_denied_prefixes(home):
         if resolved.startswith(prefix):
             return "credential"
+    if _is_protected_instruction_file(path):
+        return "instruction"
 
     if safe_roots:
         for root in safe_roots:
@@ -188,6 +206,11 @@ def get_write_denied_error(
         )
     if denial == "profile":
         return f"{verb} denied: '{path}' belongs to another agent profile."
+    if denial == "instruction":
+        return (
+            f"{verb} denied: '{path}' is an agent instruction file. "
+            "Changing it requires approval, which is not available yet."
+        )
     return f"{verb} denied: '{path}' is a protected system or credential file."
 
 

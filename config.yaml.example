@@ -50,6 +50,7 @@ cron:
 
 terminal:
   # Defaults to this profile's isolated workspace directory.
+  # Its AGENTS.md instructions are loaded when each conversation starts.
   # Relative file-tool paths follow the terminal session's current directory.
   # cwd: /srv/agents/my-agent
   timeout: 120

@@ -130,13 +130,18 @@ def _new_shell(context: ToolContext) -> Shell:
     return Shell(cwd=shell_cwd(context), timeout=timeout, env=shell_env(context))
 
 
-def _resolve(path: Any, shell: Shell) -> Path:
+def _requested_path(path: Any, shell: Shell) -> Path:
+    """Return the absolute path as requested, without following symlinks."""
     if not isinstance(path, str) or not path.strip():
         raise ValueError("path must be a non-empty string")
     candidate = Path(os.path.expanduser(path))
     if not candidate.is_absolute():
         candidate = Path(shell.cwd) / candidate
-    return candidate.resolve(strict=False)
+    return candidate
+
+
+def _resolve(path: Any, shell: Shell) -> Path:
+    return _requested_path(path, shell).resolve(strict=False)
 
 
 def _read_guard(path: Path) -> Optional[str]:
@@ -302,8 +307,13 @@ def _write(args: Dict[str, Any], context: ToolContext, shell: Shell,
             "Refusing to write read_file's line-numbered display text. "
             "Remove the '<line>|' prefixes first."
         )
-    path = _resolve(args.get("path"), shell)
-    denied = _read_guard(path) or _write_guard(path) or _binary_document_write_error(path)
+    requested_path = _requested_path(args.get("path"), shell)
+    path = requested_path.resolve(strict=False)
+    denied = (
+        _read_guard(path)
+        or _write_guard(requested_path)
+        or _binary_document_write_error(path)
+    )
     if denied:
         return tool_error(denied)
     with file_state.lock_path(path):
@@ -366,8 +376,13 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
     if mode == "replace":
         if args.get("old_string") is None or args.get("new_string") is None:
             return tool_error("patch replace mode requires old_string and new_string")
-        path = _resolve(args.get("path"), shell)
-        denied = _read_guard(path) or _write_guard(path) or _binary_document_write_error(path)
+        requested_path = _requested_path(args.get("path"), shell)
+        path = requested_path.resolve(strict=False)
+        denied = (
+            _read_guard(path)
+            or _write_guard(requested_path)
+            or _binary_document_write_error(path)
+        )
         if denied:
             return tool_error(denied)
         with file_state.lock_path(path):
@@ -418,8 +433,11 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
         if operation.operation == OperationType.MOVE and operation.new_path:
             targets.append(operation.new_path)
         for target in targets:
-            resolved_target = _resolve(target, shell)
-            denied = _read_guard(resolved_target) or _write_guard(resolved_target, "Patch")
+            requested_target = _requested_path(target, shell)
+            resolved_target = requested_target.resolve(strict=False)
+            denied = _read_guard(resolved_target) or _write_guard(
+                requested_target, "Patch"
+            )
             if denied:
                 return tool_error(denied)
         if operation.operation in {OperationType.ADD, OperationType.UPDATE}:

@@ -69,7 +69,8 @@ bash scripts/install-service.sh --profile work
 Each named profile owns its `SOUL.md` identity, configuration, WhatsApp session,
 conversations, memory, skills, workspace, cron jobs, and an automatically assigned
 bridge port. Only one live runtime may own a profile. A named profile may fall back
-only to the default profile's ChatGPT authentication.
+only to the default profile's ChatGPT authentication. An optional `AGENTS.md` in
+the working directory supplies workspace instructions to each new conversation.
 
 ## Origin
 

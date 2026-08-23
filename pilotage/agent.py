@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 from openai import APIStatusError, AsyncOpenAI
@@ -28,6 +29,7 @@ from .codex import (
     stream as codex_stream,
 )
 from .config import Config
+from .context_files import build_context_files_prompt
 from .cron.jobs import CronStore
 from .history import ConversationStore
 from .tools.memory import MemoryStore
@@ -122,11 +124,25 @@ class Agent:
             if group not in disabled
         ]
         self._tools = self._registry.definitions(self._tool_groups)
-        self._instructions = config.instructions
+        self._base_instructions = config.instructions
+        self._skills_prompt = ""
+        self._instructions = self._base_instructions
         if "skills" in self._tool_groups:
-            skills_prompt = build_skills_prompt(config)
-            if skills_prompt:
-                self._instructions = f"{self._instructions}\n\n{skills_prompt}"
+            self._skills_prompt = build_skills_prompt(config)
+            if self._skills_prompt:
+                self._instructions = (
+                    f"{self._instructions}\n\n{self._skills_prompt}"
+                )
+
+        configured_cwd = config.settings.text("terminal.cwd", "")
+        default_workspace = getattr(
+            config, "workspace_dir", Path(config.state_dir) / "workspace"
+        )
+        self._context_cwd = (
+            Path(configured_cwd).expanduser()
+            if configured_cwd
+            else default_workspace
+        )
 
         self._memory_store: Optional[MemoryStore] = None
         if "memory" in self._tool_groups:
@@ -136,9 +152,10 @@ class Agent:
                 user_char_limit=config.user_memory_char_limit,
             )
             self._memory_store.load_from_disk()
-        # One frozen memory snapshot per chat session. Pilotage serves several
-        # chats with one Agent instance; a single process-wide snapshot would
-        # keep new memory invisible until restart.
+        # One frozen instruction snapshot per chat session. Pilotage serves
+        # several chats with one Agent instance; workspace instructions and
+        # memory written mid-conversation become visible after /new, not in the
+        # middle of an established prompt-cache prefix.
         self._session_instructions: Dict[str, str] = {}
 
         self._cron_store: Optional[CronStore] = None
@@ -160,22 +177,28 @@ class Agent:
         cached = self._session_instructions.get(chat_id)
         if cached is not None:
             return cached
-        if self._memory_store is None:
-            self._session_instructions[chat_id] = self._instructions
-            return self._instructions
 
-        snapshot = MemoryStore(
-            self._config.memory_dir,
-            memory_char_limit=self._config.memory_char_limit,
-            user_char_limit=self._config.user_memory_char_limit,
-        )
-        snapshot.load_from_disk()
-        blocks = [
-            block
-            for target in ("memory", "user")
-            if (block := snapshot.format_for_system_prompt(target))
-        ]
-        instructions = "\n\n".join([self._instructions, *blocks])
+        blocks = [self._base_instructions]
+        workspace_context = build_context_files_prompt(self._context_cwd)
+        if workspace_context:
+            blocks.append(workspace_context)
+        if self._skills_prompt:
+            blocks.append(self._skills_prompt)
+
+        if self._memory_store is not None:
+            snapshot = MemoryStore(
+                self._config.memory_dir,
+                memory_char_limit=self._config.memory_char_limit,
+                user_char_limit=self._config.user_memory_char_limit,
+            )
+            snapshot.load_from_disk()
+            blocks.extend(
+                block
+                for target in ("memory", "user")
+                if (block := snapshot.format_for_system_prompt(target))
+            )
+
+        instructions = "\n\n".join(blocks)
         self._session_instructions[chat_id] = instructions
         return instructions
 
