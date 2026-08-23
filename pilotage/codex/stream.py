@@ -180,10 +180,17 @@ def estimate_context_tokens(request: Dict[str, Any]) -> int:
     images = 0
 
     for item in request.get("input") or []:
-        content = item.get("content") if isinstance(item, dict) else None
+        if isinstance(item, dict):
+            content = item.get("content")
+            if (
+                not isinstance(content, list)
+                and item.get("type") == "function_call_output"
+            ):
+                content = item.get("output")
+        else:
+            content = None
         if not isinstance(content, list):
-            # A plain text turn, or a reasoning item carrying its encrypted
-            # payload. Both are read as text, so their characters count.
+            # Plain text or encrypted reasoning is charged as text.
             chars += len(str(item))
             continue
         for part in content:

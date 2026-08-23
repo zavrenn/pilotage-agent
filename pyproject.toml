@@ -9,6 +9,7 @@ description = "A small runtime for focused, long-lived agents."
 requires-python = ">=3.10"
 dependencies = [
     "openai==2.24.0",
+    "Pillow==12.3.0",
     "httpx[socks]==0.28.1",
     "pyyaml==6.0.3",
     "croniter==6.0.0",

@@ -23,7 +23,7 @@ import inspect
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,71 @@ TRUNCATION_MARKER = "… [truncated]"
 # start of a command's output or a file is where the answer usually is.
 DEFAULT_MAX_RESULT_CHARS = 100_000
 DEFAULT_STEP_BUDGET_CHARS = 200_000
+
+MultimodalToolResult = Dict[str, Any]
+ToolOutput = Union[str, MultimodalToolResult]
+
+
+def is_multimodal_tool_result(value: Any) -> bool:
+    """Hermes' envelope for a tool result containing image content."""
+    return (
+        isinstance(value, dict)
+        and value.get("_multimodal") is True
+        and isinstance(value.get("content"), list)
+    )
+
+
+def multimodal_text_summary(value: Any) -> str:
+    """Return the small text view used for logs and output budgets."""
+    if is_multimodal_tool_result(value):
+        if value.get("text_summary"):
+            return str(value["text_summary"])
+        parts = [
+            str(part.get("text", ""))
+            for part in value.get("content") or []
+            if isinstance(part, dict) and part.get("type") == "text"
+        ]
+        return "\n".join(filter(None, parts)) or "[multimodal tool result]"
+    return value if isinstance(value, str) else str(value)
+
+
+def responses_tool_output(value: ToolOutput) -> Any:
+    """Convert Hermes chat-style image parts to Codex Responses parts."""
+    if not is_multimodal_tool_result(value):
+        return value
+
+    converted: List[Dict[str, Any]] = []
+    for part in value.get("content") or []:
+        if isinstance(part, str):
+            if part:
+                converted.append({"type": "input_text", "text": part})
+            continue
+        if not isinstance(part, dict):
+            continue
+        part_type = str(part.get("type") or "").strip().lower()
+        if part_type in {"text", "input_text", "output_text"}:
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                converted.append({"type": "input_text", "text": text})
+            continue
+        if part_type in {"image_url", "input_image"}:
+            image_ref = part.get("image_url")
+            detail = part.get("detail")
+            if isinstance(image_ref, dict):
+                image_url = image_ref.get("url")
+                detail = image_ref.get("detail", detail)
+            else:
+                image_url = image_ref
+            if not isinstance(image_url, str) or not image_url:
+                continue
+            image_part: Dict[str, Any] = {
+                "type": "input_image",
+                "image_url": image_url,
+            }
+            if isinstance(detail, str) and detail.strip():
+                image_part["detail"] = detail.strip()
+            converted.append(image_part)
+    return converted or multimodal_text_summary(value)
 
 
 def tool_error(message: Any, **extra: Any) -> str:
@@ -164,7 +229,7 @@ class Registry:
         *,
         allowed_groups: Optional[Sequence[str]] = None,
         max_result_chars: Optional[int] = None,
-    ) -> str:
+    ) -> ToolOutput:
         """Run one tool call and return what the model should read.
 
         Never raises. A bad name, unreadable arguments and a handler that
@@ -194,8 +259,12 @@ class Registry:
             logger.exception("The tool %s failed", name)
             return tool_error(f"Tool execution failed: {type(exc).__name__}: {exc}", tool=name)
 
+        if is_multimodal_tool_result(result):
+            return result
         if not isinstance(result, str):
-            logger.error("The tool %s returned %s, not text", name, type(result).__name__)
+            logger.error(
+                "The tool %s returned %s, not text", name, type(result).__name__
+            )
             return tool_error(
                 f"Tool handler returned unsupported result type: {type(result).__name__}",
                 tool=name,
@@ -251,7 +320,7 @@ async def run_calls(
     allowed_groups: Optional[Sequence[str]] = None,
     max_result_chars: Optional[int] = None,
     step_budget_chars: int = DEFAULT_STEP_BUDGET_CHARS,
-) -> List[str]:
+) -> List[ToolOutput]:
     """Run the calls the model asked for in one step, and return their results.
 
     They run at the same time — the model asks for several precisely when they
@@ -278,10 +347,20 @@ async def run_calls(
     if step_budget_chars <= 0:
         return list(results)
     remaining = step_budget_chars
-    bounded: List[str] = []
+    bounded: List[ToolOutput] = []
     for result in results:
         if remaining <= 0:
             bounded.append(tool_error("The result was dropped: this step's output budget is spent."))
+            continue
+        if is_multimodal_tool_result(result):
+            summary = multimodal_text_summary(result)
+            if len(summary) > remaining:
+                bounded.append(
+                    tool_error("The result was dropped: this step's output budget is spent.")
+                )
+                continue
+            bounded.append(result)
+            remaining -= len(summary)
             continue
         bounded.append(cap_result(result, remaining))
         remaining -= len(bounded[-1])

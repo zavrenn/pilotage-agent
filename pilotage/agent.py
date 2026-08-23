@@ -39,6 +39,7 @@ from .tools import (
     build_registry,
     build_skills_prompt,
     enabled_groups,
+    responses_tool_output,
     run_calls,
 )
 
@@ -98,6 +99,35 @@ class TurnResult:
 
     text: str = ""
     items: List[Dict[str, Any]] = field(default_factory=list)
+
+
+def _retire_tool_result_images(items: List[Dict[str, Any]]) -> None:
+    """Keep one follow-up turn, then replace old tool images with their text."""
+    for item in items:
+        if (
+            not isinstance(item, dict)
+            or item.get("type") != "function_call_output"
+        ):
+            continue
+        output = item.get("output")
+        if not isinstance(output, list) or not any(
+            isinstance(part, dict) and part.get("type") == "input_image"
+            for part in output
+        ):
+            continue
+        text_parts = [
+            str(part.get("text") or "")
+            for part in output
+            if (
+                isinstance(part, dict)
+                and part.get("type") == "input_text"
+                and isinstance(part.get("text"), str)
+            )
+        ]
+        item["output"] = (
+            "\n".join(filter(None, text_parts))
+            or "[vision image removed after the follow-up turn]"
+        )
 
 
 class Agent:
@@ -266,13 +296,15 @@ class Agent:
     ) -> None:
         history = self._history.setdefault(chat_id, [])
         # Images are heavy — a base64 photo is a third larger than the file —
-        # and replaying every one of them on every turn would grow the request
-        # and the process without bound. Only the newest user turn keeps its
-        # pictures, so a follow-up about the photo just sent still works and
-        # nothing older is held in memory. Hermes strips old image parts the
-        # same way, in its context compressor.
+        # and replaying every one on every turn would grow the request and the
+        # process without bound. Only the newest completed turn keeps pictures,
+        # whether they came from the user or vision_analyze, so one follow-up
+        # still sees them. Hermes retires old image parts in its context
+        # compressor for the same reason.
         for turn in history:
             turn.image_parts = []
+            if turn.items:
+                _retire_tool_result_images(turn.items)
         history.append(Turn(role="user", content=user_text, image_parts=image_parts))
         history.append(Turn(role="assistant", content=result.text, items=result.items))
         if self._native_compaction_active():
@@ -516,7 +548,7 @@ class Agent:
                     {
                         "type": "function_call_output",
                         "call_id": call["call_id"],
-                        "output": output,
+                        "output": responses_tool_output(output),
                     }
                 )
 

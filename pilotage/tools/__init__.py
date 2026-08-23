@@ -28,6 +28,9 @@ from .registry import (
     Tool,
     ToolContext,
     cap_result,
+    is_multimodal_tool_result,
+    multimodal_text_summary,
+    responses_tool_output,
     run_calls,
     tool_error,
     tool_result,
@@ -41,6 +44,7 @@ from .skills import SKILLS_TOOLS, build_skills_prompt
 from .terminal import TERMINAL_TOOL
 from .todo import TODO_TOOL
 from .web import WEB_SEARCH_TOOL
+from .vision import VISION_ANALYZE_TOOL
 
 __all__ = [
     "Registry",
@@ -50,6 +54,9 @@ __all__ = [
     "build_skills_prompt",
     "cap_result",
     "enabled_groups",
+    "is_multimodal_tool_result",
+    "multimodal_text_summary",
+    "responses_tool_output",
     "run_calls",
     "tool_error",
     "tool_result",
@@ -66,6 +73,7 @@ ALL_TOOLS: Sequence[Tool] = (
     TERMINAL_TOOL,
     TODO_TOOL,
     WEB_SEARCH_TOOL,
+    VISION_ANALYZE_TOOL,
 )
 
 

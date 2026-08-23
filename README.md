@@ -34,9 +34,9 @@ completeness.
 The Genesis core currently provides ChatGPT subscription authentication,
 allowlisted WhatsApp messaging, persistent conversations with native context
 compaction, full-text conversation recall, curated memory, profile-local tools
-and skills, isolated profiles,
-management commands, DDGS web search, Codex-backed image generation and editing,
-Hermes-style allowlisted WhatsApp groups, and durable cron jobs. This Genesis
+and skills, isolated profiles, management commands, DDGS web search, native
+image analysis, Codex-backed image generation and editing, Hermes-style
+allowlisted WhatsApp groups, and durable cron jobs. This Genesis
 slice is not production-complete: Telegram, voice transcription, and the
 approval workflow are not implemented yet. There is no stable public API.
 

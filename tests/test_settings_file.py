@@ -234,6 +234,7 @@ class ConfigFileTests(unittest.TestCase):
                 "terminal",
                 "web",
                 "image_gen",
+                "vision",
                 "file",
                 "skills",
                 "session_search",
