@@ -14,6 +14,7 @@ to disk so a restart does not silently end every conversation at once. See
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -392,9 +393,20 @@ class Agent:
     ) -> str:
         # Reading the files is blocking I/O and base64 of a few megabytes is not
         # free, so it happens off the event loop.
-        image_parts = (
-            await asyncio.to_thread(media.image_parts, attachments) if attachments else []
-        )
+        if attachments:
+            image_parts, attached_image_paths = await asyncio.to_thread(
+                media.image_parts_with_paths, attachments
+            )
+        else:
+            image_parts, attached_image_paths = [], []
+        if attached_image_paths:
+            # Hermes gives the model a string handle alongside the pixels so
+            # the same image can be passed to image_generate for editing.
+            base_text = user_text.strip() or "What do you see in this image?"
+            hints = "\n".join(
+                f"[Image attached at: {path}]" for path in attached_image_paths
+            )
+            user_text = f"{base_text}\n\n{hints}"
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
             await self._restore(chat_id)
@@ -445,6 +457,16 @@ class Agent:
         items: List[Dict[str, Any]] = []
         limit = max(1, self._config.max_tool_iterations)
 
+        def _finish(text: str) -> TurnResult:
+            return TurnResult(
+                text=_append_generated_media(
+                    text,
+                    items,
+                    self._config.workspace_dir,
+                ),
+                items=items,
+            )
+
         async def _next_action_or_answer(
             offered_tools: Optional[List[Dict[str, Any]]],
         ) -> Optional[codex_stream.StreamResult]:
@@ -474,9 +496,9 @@ class Agent:
                     chat_id,
                     MAX_CODEX_INCOMPLETE_RESPONSES,
                 )
-                return TurnResult(text=CODEX_INCOMPLETE_RESPONSE, items=items)
+                return _finish(CODEX_INCOMPLETE_RESPONSE)
             if not result.tool_calls:
-                return TurnResult(text=result.text, items=items)
+                return _finish(result.text)
 
             names = ", ".join(call["name"] for call in result.tool_calls)
             logger.info("Step %d for %s: %s", step + 1, chat_id, names)
@@ -503,8 +525,8 @@ class Agent:
         items.append({"role": "user", "content": MAX_ITERATIONS_SUMMARY_REQUEST})
         result = await _next_action_or_answer(None)
         if result is None:
-            return TurnResult(text=CODEX_INCOMPLETE_RESPONSE, items=items)
-        return TurnResult(text=result.text, items=items)
+            return _finish(CODEX_INCOMPLETE_RESPONSE)
+        return _finish(result.text)
 
     async def _call_model(
         self,
@@ -624,6 +646,56 @@ def _assistant_items(result: codex_stream.StreamResult) -> List[Dict[str, Any]]:
             }
         )
     return items
+
+
+def _append_generated_media(
+    text: str,
+    items: List[Dict[str, Any]],
+    workspace: Path,
+) -> str:
+    """Port Hermes' deterministic image delivery from current-turn outputs."""
+    image_call_ids = {
+        str(item.get("call_id") or "")
+        for item in items
+        if item.get("type") == "function_call"
+        and item.get("name") == "image_generate"
+    }
+    if not image_call_ids:
+        return text
+
+    existing, _ = media.extract_outbound(text or "", (workspace,))
+    seen = {attachment.path for attachment in existing}
+    tags: List[str] = []
+    for item in items:
+        if (
+            item.get("type") != "function_call_output"
+            or str(item.get("call_id") or "") not in image_call_ids
+        ):
+            continue
+        try:
+            payload = json.loads(str(item.get("output") or ""))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or not payload.get("success"):
+            continue
+        path = payload.get("image")
+        if not isinstance(path, str):
+            continue
+        attachments, _ = media.extract_outbound(
+            f"MEDIA:{path}",
+            (workspace,),
+        )
+        for attachment in attachments:
+            if attachment.path in seen:
+                continue
+            seen.add(attachment.path)
+            tags.append(f"MEDIA:{attachment.path}")
+
+    if not tags:
+        return text
+    visible = (text or "").strip()
+    suffix = "\n".join(tags)
+    return f"{visible}\n{suffix}" if visible else suffix
 
 
 def _user_item(text: str, image_parts: List[Dict[str, Any]]) -> Dict[str, Any]:

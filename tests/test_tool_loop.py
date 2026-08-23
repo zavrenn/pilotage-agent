@@ -10,11 +10,14 @@ that a runaway loop still ends with the person getting what was found.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Dict, List
+from unittest import mock
 
+from pilotage import media
 from pilotage.agent import (
     CODEX_INCOMPLETE_RESPONSE,
     MAX_ITERATIONS_SUMMARY_REQUEST,
@@ -23,6 +26,7 @@ from pilotage.agent import (
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
 from pilotage.history import ConversationStore
+from pilotage.tools import Tool
 
 
 def _call(call_id: str, name: str = "todo", **arguments) -> Dict[str, str]:
@@ -50,7 +54,8 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.agent = Agent(Config.load(), ConversationStore(Path(tmp.name) / "conversations.db"))
+        self.root = Path(tmp.name)
+        self.agent = Agent(Config.load(), ConversationStore(self.root / "conversations.db"))
         # Each element is what the model returns for the call at that position.
         self.replies: List[codex_stream.StreamResult] = []
         self.requests: List[Dict[str, Any]] = []
@@ -240,6 +245,123 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, "I will do it another way.")
         outputs = [item for item in self._sent() if item.get("type") == "function_call_output"]
         self.assertIn("error", json.loads(outputs[0]["output"]))
+
+    async def test_attached_image_has_a_path_handle_for_editing(self):
+        source = self.root / "attached.png"
+        source.write_bytes(bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+            "890000000d49444154789c6300010000000500010d0a2db40000000049454e44"
+            "ae426082"
+        ))
+        attachment = media.Attachment(
+            path=source,
+            mime="image/png",
+            media_type="image",
+        )
+        self.replies = [codex_stream.StreamResult(text="I see it.")]
+
+        await self.agent.respond("chat", "edit this", [attachment])
+
+        user = self._sent()[0]
+        text_part = next(
+            part for part in user["content"] if part.get("type") == "input_text"
+        )
+        self.assertIn(f"[Image attached at: {source.resolve()}]", text_part["text"])
+        self.assertTrue(
+            any(part.get("type") == "input_image" for part in user["content"])
+        )
+
+    async def test_generated_image_is_delivered_when_model_omits_media_tag(self):
+        home = self.root / "profile"
+        with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
+            config = Config.load()
+        config.workspace_dir.mkdir(parents=True)
+        generated = config.workspace_dir / "generated-images" / "result.png"
+        generated.parent.mkdir()
+        generated.write_bytes(b"png")
+        agent = Agent(
+            config,
+            ConversationStore(self.root / "image-conversations.db"),
+        )
+
+        def fake_image(_args, _context):
+            return json.dumps(
+                {"success": True, "image": str(generated.resolve())}
+            )
+
+        agent._registry._tools["image_generate"] = Tool(
+            name="image_generate",
+            group="image_gen",
+            schema={
+                "name": "image_generate",
+                "description": "test",
+                "parameters": {"type": "object"},
+            },
+            handler=fake_image,
+        )
+        replies = [
+            codex_stream.StreamResult(
+                tool_calls=[_call("image_1", name="image_generate", prompt="cat")]
+            ),
+            codex_stream.StreamResult(text="Here it is."),
+        ]
+
+        async def stream_once(
+            _request, *, force_refresh, ttfb_timeout, idle_timeout
+        ):
+            return replies.pop(0)
+
+        agent._stream_once = stream_once
+        answer = await agent.respond("chat", "make an image")
+
+        self.assertIn("Here it is.", answer)
+        self.assertEqual(answer.count(f"MEDIA:{generated.resolve()}"), 1)
+
+    async def test_model_supplied_media_tag_is_not_duplicated(self):
+        home = self.root / "profile-dedup"
+        with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
+            config = Config.load()
+        config.workspace_dir.mkdir(parents=True)
+        generated = config.workspace_dir / "result.png"
+        generated.write_bytes(b"png")
+        agent = Agent(
+            config,
+            ConversationStore(self.root / "dedup-conversations.db"),
+        )
+
+        def fake_image(_args, _context):
+            return json.dumps(
+                {"success": True, "image": str(generated.resolve())}
+            )
+
+        agent._registry._tools["image_generate"] = Tool(
+            name="image_generate",
+            group="image_gen",
+            schema={
+                "name": "image_generate",
+                "description": "test",
+                "parameters": {"type": "object"},
+            },
+            handler=fake_image,
+        )
+        replies = [
+            codex_stream.StreamResult(
+                tool_calls=[_call("image_1", name="image_generate", prompt="cat")]
+            ),
+            codex_stream.StreamResult(
+                text=f"Here it is.\nMEDIA:{generated.resolve()}"
+            ),
+        ]
+
+        async def stream_once(
+            _request, *, force_refresh, ttfb_timeout, idle_timeout
+        ):
+            return replies.pop(0)
+
+        agent._stream_once = stream_once
+        answer = await agent.respond("chat", "make an image")
+
+        self.assertEqual(answer.count(f"MEDIA:{generated.resolve()}"), 1)
 
     async def test_the_work_of_a_turn_is_remembered_for_the_next_one(self):
         self.replies = [

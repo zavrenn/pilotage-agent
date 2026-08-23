@@ -293,6 +293,9 @@ class Config:
         from .tools import build_registry, enabled_groups
 
         enabled_groups(settings, build_registry())
+        from .tools.image import validate_image_settings
+
+        validate_image_settings(settings)
 
         settings.names("skills.disabled")
         settings.flag("skills.template_vars", True)

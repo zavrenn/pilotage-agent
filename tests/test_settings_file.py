@@ -229,8 +229,19 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(config.model, "gpt-5.6-sol")
         self.assertEqual(
             config.settings.names("tools.enabled"),
-            ["todo", "terminal", "web", "file", "skills", "memory", "cron"],
+            [
+                "todo",
+                "terminal",
+                "web",
+                "image_gen",
+                "file",
+                "skills",
+                "memory",
+                "cron",
+            ],
         )
+        self.assertEqual(config.settings.text("image_gen.provider"), "openai-codex")
+        self.assertEqual(config.settings.text("image_gen.model"), "gpt-image-2-high")
         self.assertTrue(config.cron_enabled)
         self.assertEqual(config.cron_output_retention, 50)
         self.assertTrue(config.codex_native_compaction)
@@ -404,6 +415,16 @@ class ConfigFileTests(unittest.TestCase):
             with self.subTest(key=key):
                 self._write(f"tools:\n  {key}: [typo]\n")
                 with self.assertRaisesRegex(ConfigError, f"tools.{key}.*typo"):
+                    Config.load()
+
+    def test_invalid_image_generation_settings_stop_startup(self):
+        for body in (
+            "provider: fal",
+            "model: imaginary-image-model",
+        ):
+            with self.subTest(body=body):
+                self._write(f"image_gen:\n  {body}\n")
+                with self.assertRaisesRegex(ConfigError, "image_gen"):
                     Config.load()
 
     def test_an_invalid_terminal_working_directory_stops_startup(self):

@@ -34,6 +34,7 @@ from .registry import (
 )
 from .cron import CRONJOB_TOOL
 from .files import FILE_TOOLS
+from .image import IMAGE_GENERATE_TOOL
 from .memory import MEMORY_TOOL
 from .skills import SKILLS_TOOLS, build_skills_prompt
 from .terminal import TERMINAL_TOOL
@@ -57,6 +58,7 @@ __all__ = [
 ALL_TOOLS: Sequence[Tool] = (
     CRONJOB_TOOL,
     *FILE_TOOLS,
+    IMAGE_GENERATE_TOOL,
     *SKILLS_TOOLS,
     MEMORY_TOOL,
     TERMINAL_TOOL,

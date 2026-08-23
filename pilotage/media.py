@@ -292,9 +292,12 @@ def inline_documents(text: str, attachments: Sequence[Attachment]) -> str:
     return text
 
 
-def image_parts(attachments: Sequence[Attachment]) -> List[Dict[str, Any]]:
-    """Build the ``input_image`` parts for a Responses request."""
+def image_parts_with_paths(
+    attachments: Sequence[Attachment],
+) -> tuple[List[Dict[str, Any]], List[Path]]:
+    """Build image parts and Hermes' model-visible local path handles."""
     parts: List[Dict[str, Any]] = []
+    paths: List[Path] = []
     for attachment in attachments:
         if not attachment.is_image:
             continue
@@ -310,6 +313,13 @@ def image_parts(attachments: Sequence[Attachment]) -> List[Dict[str, Any]]:
         parts.append(
             {"type": "input_image", "image_url": f"data:{attachment.mime};base64,{encoded}"}
         )
+        paths.append(attachment.path.resolve())
+    return parts, paths
+
+
+def image_parts(attachments: Sequence[Attachment]) -> List[Dict[str, Any]]:
+    """Build the ``input_image`` parts for a Responses request."""
+    parts, _ = image_parts_with_paths(attachments)
     return parts
 
 

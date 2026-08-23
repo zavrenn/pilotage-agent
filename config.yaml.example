@@ -28,6 +28,7 @@ tools:
     - todo
     - terminal
     - web
+    - image_gen
     - file
     - skills
     - memory
@@ -39,6 +40,10 @@ tools:
 memory:
   memory_char_limit: 2200
   user_char_limit: 1375
+
+image_gen:
+  provider: openai-codex
+  model: gpt-image-2-high
 
 cron:
   enabled: true

@@ -34,8 +34,9 @@ completeness.
 The Genesis core currently provides ChatGPT subscription authentication,
 allowlisted WhatsApp messaging, persistent conversations with native context
 compaction, curated memory, profile-local tools and skills, isolated profiles,
-management commands, DDGS web search, and durable cron jobs. WhatsApp group mode
-remains closed until its mention policy is implemented. This Genesis slice is
+management commands, DDGS web search, Codex-backed image generation and editing,
+and durable cron jobs. WhatsApp group mode remains closed until its mention
+policy is implemented. This Genesis slice is
 not production-complete: Telegram, voice transcription, and the approval
 workflow are not implemented yet. There is no stable public API.
 
