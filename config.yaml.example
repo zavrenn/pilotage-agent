@@ -33,6 +33,8 @@ tools:
     - image_gen
     - file
     - skills
+    # Profile-wide; disable where unrelated users share one profile.
+    - session_search
     - memory
     - cron
   max_iterations: 90

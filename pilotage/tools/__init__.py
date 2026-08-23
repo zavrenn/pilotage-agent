@@ -36,6 +36,7 @@ from .cron import CRONJOB_TOOL
 from .files import FILE_TOOLS
 from .image import IMAGE_GENERATE_TOOL
 from .memory import MEMORY_TOOL
+from .session_search import SESSION_SEARCH_TOOL
 from .skills import SKILLS_TOOLS, build_skills_prompt
 from .terminal import TERMINAL_TOOL
 from .todo import TODO_TOOL
@@ -61,6 +62,7 @@ ALL_TOOLS: Sequence[Tool] = (
     IMAGE_GENERATE_TOOL,
     *SKILLS_TOOLS,
     MEMORY_TOOL,
+    SESSION_SEARCH_TOOL,
     TERMINAL_TOOL,
     TODO_TOOL,
     WEB_SEARCH_TOOL,

@@ -73,6 +73,9 @@ class ToolContext:
     chat_id: str
     config: Any
     state: Dict[str, Any] = field(default_factory=dict)
+    # Profile-wide durable conversation history. Explicit so session search
+    # cannot discover or cross into another profile's database.
+    conversation_store: Any = None
     # Profile-wide curated memory. Explicit because it is shared by chats;
     # putting it in per-chat state would create divergent stores.
     memory_store: Any = None

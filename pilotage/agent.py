@@ -447,6 +447,7 @@ class Agent:
             chat_id=chat_id,
             config=self._config,
             state=self._tool_state.setdefault(chat_id, {}),
+            conversation_store=self._store,
             memory_store=self._memory_store,
             cron_store=self._cron_store,
             origin=origin,

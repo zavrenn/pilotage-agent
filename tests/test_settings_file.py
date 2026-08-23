@@ -236,6 +236,7 @@ class ConfigFileTests(unittest.TestCase):
                 "image_gen",
                 "file",
                 "skills",
+                "session_search",
                 "memory",
                 "cron",
             ],
