@@ -18,10 +18,11 @@ but the newest turn while the process runs: they are enormous next to the text.
 conversation stays cheap and reversible. Optional retention later removes only
 ended sessions that have passed their configured age.
 
-A completed answer is still delivered if its history append fails. ``/new`` is
-the deliberate exception: its durable session boundary must succeed before the
-live conversation is cleared, or a restart could silently resurrect what the
-user ended.
+Tool work is checkpointed before execution and again after its result. A write
+failure therefore stops the turn instead of allowing side effects whose only
+record lived in one process. ``/new`` likewise succeeds on disk before the live
+conversation is cleared, or a restart could silently resurrect what the user
+ended.
 """
 
 from __future__ import annotations
@@ -70,6 +71,19 @@ CREATE TABLE IF NOT EXISTS history_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- One unfinished model turn per durable chat session. The exact Responses
+-- trajectory is temporary: it protects tool-call/result boundaries while a
+-- turn is running, then is deleted atomically with the completed text turns.
+CREATE TABLE IF NOT EXISTS active_turns (
+    chat_id      TEXT    NOT NULL,
+    session      INTEGER NOT NULL,
+    user_content TEXT    NOT NULL,
+    trajectory   TEXT    NOT NULL DEFAULT '[]',
+    phase        TEXT    NOT NULL DEFAULT 'started',
+    updated_at   REAL    NOT NULL,
+    PRIMARY KEY (chat_id, session)
+);
 """
 
 FTS_SCHEMA = """
@@ -104,7 +118,7 @@ StoredReplayTurn = Tuple[str, str, List[Dict[str, str]]]
 
 
 class ConversationError(RuntimeError):
-    """A durable conversation boundary could not be recorded."""
+    """Canonical conversation state could not be read or written."""
 
 
 class ConversationSearchError(RuntimeError):
@@ -345,6 +359,16 @@ class ConversationStore:
                             float(activity) if activity is not None else current_time
                         )
 
+                # An automatic clock boundary must not discard an ambiguous
+                # interrupted tool turn. Only the user's explicit /new can
+                # abandon that checkpoint.
+                if connection.execute(
+                    "SELECT 1 FROM active_turns"
+                    " WHERE chat_id = ? AND session = ?",
+                    (chat_id, session),
+                ).fetchone():
+                    return None
+
                 reason = _automatic_reset_reason(
                     last_active,
                     current_time,
@@ -472,8 +496,182 @@ class ConversationStore:
                         for role, content, replay in turns
                     ],
                 )
-        except (sqlite3.Error, OSError):
+        except (sqlite3.Error, OSError, TypeError) as exc:
             logger.warning("Could not write the history of %s", chat_id, exc_info=True)
+            raise ConversationError(
+                f"Could not write the history of {chat_id}"
+            ) from exc
+
+    def begin_turn(self, chat_id: str, user_content: str) -> None:
+        """Durably accept one user turn before the model can act on it."""
+
+        if self._path is None:
+            return
+        now = time.time()
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                session = self._session(connection, chat_id)
+                existing = connection.execute(
+                    "SELECT 1 FROM active_turns"
+                    " WHERE chat_id = ? AND session = ?",
+                    (chat_id, session),
+                ).fetchone()
+                if existing is not None:
+                    raise ConversationError(
+                        "The previous turn is incomplete; use /new after "
+                        "checking whether its tool work already happened."
+                    )
+                connection.execute(
+                    "INSERT INTO chats (chat_id, session, last_active)"
+                    " VALUES (?, ?, ?)"
+                    " ON CONFLICT (chat_id)"
+                    " DO UPDATE SET last_active = excluded.last_active",
+                    (chat_id, session, now),
+                )
+                connection.execute(
+                    "INSERT INTO active_turns"
+                    " (chat_id, session, user_content, trajectory, phase, updated_at)"
+                    " VALUES (?, ?, ?, '[]', 'started', ?)",
+                    (chat_id, session, user_content, now),
+                )
+        except ConversationError:
+            raise
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning("Could not begin the turn for %s", chat_id, exc_info=True)
+            raise ConversationError(
+                f"Could not begin the turn for {chat_id}"
+            ) from exc
+
+    def checkpoint_turn(
+        self,
+        chat_id: str,
+        user_content: str,
+        items: Sequence[Dict[str, Any]],
+        *,
+        phase: str,
+    ) -> None:
+        """Persist a tool boundary before execution or model continuation."""
+
+        if self._path is None:
+            return
+        if phase not in {"tool_requested", "tool_completed"}:
+            raise ValueError(f"Unsupported active-turn phase: {phase}")
+        try:
+            encoded = json.dumps(
+                list(items), ensure_ascii=False, separators=(",", ":")
+            )
+            with self._connect() as connection:
+                session = self._session(connection, chat_id)
+                cursor = connection.execute(
+                    "UPDATE active_turns"
+                    " SET trajectory = ?, phase = ?, updated_at = ?"
+                    " WHERE chat_id = ? AND session = ? AND user_content = ?",
+                    (encoded, phase, time.time(), chat_id, session, user_content),
+                )
+                if cursor.rowcount != 1:
+                    raise ConversationError(
+                        f"No active turn can be checkpointed for {chat_id}"
+                    )
+        except ConversationError:
+            raise
+        except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Could not checkpoint the %s turn for %s",
+                phase,
+                chat_id,
+                exc_info=True,
+            )
+            raise ConversationError(
+                f"Could not checkpoint the turn for {chat_id}"
+            ) from exc
+
+    def discard_unstarted_turn(self, chat_id: str) -> None:
+        """Forget a failed model attempt only when no tool call was persisted."""
+
+        if self._path is None:
+            return
+        try:
+            with self._connect() as connection:
+                session = self._session(connection, chat_id)
+                connection.execute(
+                    "DELETE FROM active_turns"
+                    " WHERE chat_id = ? AND session = ? AND phase = 'started'",
+                    (chat_id, session),
+                )
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning(
+                "Could not discard the unstarted turn for %s",
+                chat_id,
+                exc_info=True,
+            )
+            raise ConversationError(
+                f"Could not discard the unstarted turn for {chat_id}"
+            ) from exc
+
+    def complete_turn(
+        self,
+        chat_id: str,
+        user_content: str,
+        assistant_content: str,
+        replay: Sequence[Dict[str, Any]] = (),
+    ) -> None:
+        """Atomically replace the active checkpoint with completed text turns."""
+
+        if self._path is None:
+            return
+        now = time.time()
+        try:
+            encoded_replay = json.dumps(
+                _compaction_items(replay), separators=(",", ":")
+            )
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                session = self._session(connection, chat_id)
+                active = connection.execute(
+                    "SELECT 1 FROM active_turns"
+                    " WHERE chat_id = ? AND session = ? AND user_content = ?",
+                    (chat_id, session, user_content),
+                ).fetchone()
+                if active is None:
+                    raise ConversationError(
+                        f"No active turn can be completed for {chat_id}"
+                    )
+                connection.execute(
+                    "INSERT INTO chats (chat_id, session, last_active)"
+                    " VALUES (?, ?, ?)"
+                    " ON CONFLICT (chat_id)"
+                    " DO UPDATE SET last_active = excluded.last_active",
+                    (chat_id, session, now),
+                )
+                connection.executemany(
+                    "INSERT INTO turns"
+                    " (chat_id, session, role, content, replay, written_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        (chat_id, session, "user", user_content, "", now),
+                        (
+                            chat_id,
+                            session,
+                            "assistant",
+                            assistant_content,
+                            encoded_replay,
+                            now,
+                        ),
+                    ],
+                )
+                connection.execute(
+                    "DELETE FROM active_turns"
+                    " WHERE chat_id = ? AND session = ?",
+                    (chat_id, session),
+                )
+        except ConversationError:
+            raise
+        except (sqlite3.Error, OSError, TypeError) as exc:
+            logger.warning("Could not complete the turn for %s", chat_id, exc_info=True)
+            raise ConversationError(
+                f"Could not complete the turn for {chat_id}"
+            ) from exc
 
     def new_session(self, chat_id: str) -> None:
         """Leave the current conversation behind without deleting it.
@@ -485,12 +683,19 @@ class ConversationStore:
             return
         try:
             with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                previous_session = self._session(connection, chat_id)
                 connection.execute(
                     "INSERT INTO chats (chat_id, session, last_active)"
                     " VALUES (?, 2, ?)"
                     " ON CONFLICT (chat_id) DO UPDATE"
                     " SET session = session + 1, last_active = excluded.last_active",
                     (chat_id, time.time()),
+                )
+                connection.execute(
+                    "DELETE FROM active_turns"
+                    " WHERE chat_id = ? AND session = ?",
+                    (chat_id, previous_session),
                 )
         except (sqlite3.Error, OSError) as exc:
             logger.warning("Could not start a new session for %s", chat_id, exc_info=True)

@@ -25,6 +25,7 @@ import httpx
 from .. import media
 from ..commands import CommandInvocation, parse_command
 from ..config import Config
+from ..delivery import SendResult
 from .dedup import MessageDeduplicator
 from .formatting import to_whatsapp
 
@@ -258,6 +259,8 @@ class WhatsAppChannel:
         self._http: Optional[httpx.AsyncClient] = None
         self._poll_task: Optional[asyncio.Task] = None
         self._running = False
+        self._startup_hold_closed = False
+        self._startup_events: List[Dict[str, Any]] = []
         self._pending: Dict[str, InboundMessage] = {}
         self._pending_tasks: Dict[str, asyncio.Task] = {}
         self._reported_blocked: set[str] = set()
@@ -280,6 +283,18 @@ class WhatsAppChannel:
         self.failure: Optional[str] = None
 
     # -- lifetime -----------------------------------------------------------
+
+    def hold_inbound(self) -> None:
+        self._startup_hold_closed = True
+
+    def release_inbound(self) -> None:
+        if not self._startup_hold_closed and not self._startup_events:
+            return
+        held = list(self._startup_events)
+        self._startup_hold_closed = False
+        self._startup_events.clear()
+        for event in held:
+            self._accept(event)
 
     async def start(self) -> None:
         self._preflight()
@@ -322,6 +337,7 @@ class WhatsAppChannel:
                 await self._poll_task
             self._poll_task = None
 
+        self.release_inbound()
         timers = set(self._pending_tasks.values())
         for key in list(self._pending):
             self._flush_pending_now(key)
@@ -578,6 +594,9 @@ class WhatsAppChannel:
         self.stopped.set()
 
     def _accept(self, event: Dict[str, Any]) -> None:
+        if self._startup_hold_closed:
+            self._startup_events.append(dict(event))
+            return
         chat_id = str(event.get("chatId") or "")
         if not chat_id:
             return
@@ -930,9 +949,9 @@ class WhatsAppChannel:
         reply_to: str = "",
         *,
         deliver_media: bool = True,
-    ) -> bool:
+    ) -> SendResult:
         if self._http is None:
-            return False
+            return SendResult(False, "WhatsApp transport is not connected")
 
         if deliver_media:
             attachments, cleaned = media.extract_outbound(
@@ -945,8 +964,9 @@ class WhatsAppChannel:
         # must never turn a spoken MEDIA phrase into a file delivery.
         body = to_whatsapp(cleaned).strip()
         if not body and not attachments:
-            return False
+            return SendResult(False, "response had no deliverable content")
 
+        sent_any = False
         try:
             if body:
                 payload: Dict[str, Any] = {"chatId": chat_id, "message": body}
@@ -959,6 +979,7 @@ class WhatsAppChannel:
                     f"{self._base_url}/send", json=payload
                 )
                 response.raise_for_status()
+                sent_any = True
 
             for attachment in attachments:
                 payload = {
@@ -974,7 +995,38 @@ class WhatsAppChannel:
                     timeout=MEDIA_HTTP_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
+                sent_any = True
         except httpx.HTTPError as exc:
             logger.error("Sending to %s failed: %s", chat_id, exc)
-            return False
-        return True
+            retryable = False
+            retry_after = None
+            if isinstance(exc, httpx.HTTPStatusError):
+                status = exc.response.status_code
+                # The bridge can surface 500 after earlier internal chunks were
+                # already delivered, so only the explicit backpressure and
+                # pre-send not-connected guard are safe to retry.
+                retryable = status in {429, 503}
+                if status == 429:
+                    written = exc.response.headers.get("retry-after", "")
+                    try:
+                        retry_after = float(written)
+                    except (TypeError, ValueError):
+                        retry_after = None
+            elif isinstance(exc, httpx.ConnectTimeout):
+                retryable = True
+            elif isinstance(exc, httpx.TimeoutException):
+                # The bridge may have accepted a timed-out request.
+                retryable = False
+            elif isinstance(exc, httpx.TransportError):
+                retryable = True
+            if sent_any:
+                # Retrying the whole response would duplicate the already
+                # delivered text or an earlier attachment.
+                retryable = False
+            return SendResult(
+                False,
+                str(exc),
+                retryable=retryable,
+                retry_after=retry_after,
+            )
+        return SendResult(True)

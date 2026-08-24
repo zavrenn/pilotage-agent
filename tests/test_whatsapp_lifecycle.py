@@ -346,6 +346,38 @@ class BatchLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(channel._turn_tasks["212600000000"].done())
         release.set()
 
+    async def test_startup_gate_holds_a_recognized_command_until_release(self):
+        command_seen = asyncio.Event()
+
+        async def command(chat_id, session_id, message_id, invocation) -> None:
+            self.assertEqual(chat_id, "212600000000@s.whatsapp.net")
+            self.assertEqual(session_id, "212600000000")
+            self.assertEqual(message_id, "m2")
+            self.assertEqual(invocation.command.name, "approve")
+            command_seen.set()
+
+        config = Config.load()
+        object.__setattr__(config, "allowed_senders", frozenset({"212600000000"}))
+        channel = WhatsAppChannel(config, _handle, command)
+        self.addAsyncCleanup(channel.stop)
+
+        channel.hold_inbound()
+        channel._accept(
+            {
+                "chatId": "212600000000@s.whatsapp.net",
+                "senderId": "212600000000@s.whatsapp.net",
+                "senderNumber": "212600000000",
+                "messageId": "m2",
+                "body": "/approve",
+                "isGroup": False,
+            }
+        )
+        await asyncio.sleep(0)
+        self.assertFalse(command_seen.is_set())
+
+        channel.release_inbound()
+        await asyncio.wait_for(command_seen.wait(), timeout=0.5)
+
     async def test_stop_cancels_and_awaits_the_active_handler(self):
         started = asyncio.Event()
         cancelled = asyncio.Event()

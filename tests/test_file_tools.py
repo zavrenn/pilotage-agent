@@ -32,6 +32,7 @@ from pilotage.tools.files import (
     WRITE_FILE_SCHEMA,
     _bounded_search_dict,
     _patch,
+    _read_guard,
     _ApprovalRequired,
     _run,
     _write,
@@ -52,6 +53,18 @@ VALID_SKILL = (
     "---\n\n"
     "# Demo\n\nFollow this workflow.\n"
 )
+
+
+class ReadGuardFailureTests(unittest.TestCase):
+    def test_guard_failure_does_not_authorize_a_read(self):
+        with (
+            mock.patch(
+                "pilotage.tools.files.get_read_block_error",
+                side_effect=RuntimeError("guard unavailable"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "guard unavailable"),
+        ):
+            _read_guard(Path("secret.txt"))
 
 
 class _Config:
@@ -156,6 +169,8 @@ class SchemaTests(unittest.TestCase):
                     "bridge.pid",
                     "codex-auth.json.lock",
                     "conversations.db-wal",
+                    "delivery.db",
+                    "delivery.db-wal",
                     "SOUL.md",
                     "cron/.jobs.lock",
                     "cron/jobs.json",

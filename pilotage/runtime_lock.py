@@ -7,6 +7,7 @@ releases it without trusting a reusable PID or deleting a stale sentinel.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import threading
@@ -51,8 +52,14 @@ def _try_lock(handle: IO[str]) -> bool:
         else:  # pragma: no cover - supported Python platforms provide one
             return False
         return True
-    except (BlockingIOError, OSError):
+    except BlockingIOError:
         return False
+    except OSError as exc:
+        if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            return False
+        if getattr(exc, "winerror", None) in {32, 33}:
+            return False
+        raise RuntimeLockError(f"Cannot lock runtime lock {handle.name}: {exc}") from exc
 
 
 def _unlock(handle: IO[str]) -> None:
@@ -64,6 +71,32 @@ def _unlock(handle: IO[str]) -> None:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     except OSError:
         pass
+
+
+def runtime_lock_is_held(state_dir: Path) -> bool:
+    """Probe the operating-system lock without changing its owner record."""
+
+    resolved_state = Path(state_dir).expanduser().resolve(strict=False)
+    path = resolved_state / ".runtime.lock"
+    key = str(path)
+    if path.is_symlink():
+        raise RuntimeLockError(f"Runtime lock cannot be a symbolic link: {path}")
+    with _PROCESS_LOCKS_GUARD:
+        if key in _PROCESS_LOCKS:
+            return True
+    try:
+        handle = open(path, "r+", encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise RuntimeLockError(f"Cannot open runtime lock {path}: {exc}") from exc
+    try:
+        acquired = _try_lock(handle)
+        if acquired:
+            _unlock(handle)
+        return not acquired
+    finally:
+        handle.close()
 
 
 class ProfileRuntimeLock:
@@ -96,7 +129,15 @@ class ProfileRuntimeLock:
                 handle = open(self.path, "a+", encoding="utf-8")
             except OSError as exc:
                 raise RuntimeLockError(f"Cannot open runtime lock {self.path}: {exc}") from exc
-            if not _try_lock(handle):
+            try:
+                acquired = _try_lock(handle)
+            except BaseException:
+                try:
+                    handle.close()
+                except OSError:
+                    pass
+                raise
+            if not acquired:
                 handle.close()
                 raise RuntimeAlreadyRunning(
                     f"Another Pilotage runtime is already using {self.state_dir}."
@@ -138,4 +179,9 @@ class ProfileRuntimeLock:
             _PROCESS_LOCKS.discard(self._key)
 
 
-__all__ = ["ProfileRuntimeLock", "RuntimeAlreadyRunning", "RuntimeLockError"]
+__all__ = [
+    "ProfileRuntimeLock",
+    "RuntimeAlreadyRunning",
+    "RuntimeLockError",
+    "runtime_lock_is_held",
+]

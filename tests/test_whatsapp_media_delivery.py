@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+import httpx
+
 from pilotage import media
 from pilotage.channels.whatsapp import InboundMessage, WhatsAppChannel
 from pilotage.config import Config, WHATSAPP_MEDIA_NOTE
@@ -289,6 +291,42 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(self.http.posts), 1)
         self.assertTrue(self.http.posts[0]["url"].endswith("/send"))
+
+    async def test_bridge_500_status_error_is_not_retryable(self):
+        request = httpx.Request("POST", "http://127.0.0.1:8123/send")
+        response = httpx.Response(500, request=request)
+        self.channel._http = mock.Mock(
+            post=mock.AsyncMock(
+                side_effect=httpx.HTTPStatusError(
+                    "bridge 500",
+                    request=request,
+                    response=response,
+                )
+            )
+        )
+
+        sent = await self.channel.send("chat", "hello")
+
+        self.assertFalse(sent)
+        self.assertFalse(sent.retryable)
+
+    async def test_bridge_503_status_error_is_retryable(self):
+        request = httpx.Request("POST", "http://127.0.0.1:8123/send")
+        response = httpx.Response(503, request=request)
+        self.channel._http = mock.Mock(
+            post=mock.AsyncMock(
+                side_effect=httpx.HTTPStatusError(
+                    "bridge 503",
+                    request=request,
+                    response=response,
+                )
+            )
+        )
+
+        sent = await self.channel.send("chat", "hello")
+
+        self.assertFalse(sent)
+        self.assertTrue(sent.retryable)
 
 if __name__ == "__main__":
     unittest.main()

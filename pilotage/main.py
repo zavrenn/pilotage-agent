@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import logging
 import signal
 import shutil
@@ -35,8 +36,14 @@ from .config import Config, ConfigError
 from .cron.cli import add_cron_parser, run_cron_command
 from .cron.jobs import CronError, CronStore
 from .cron.scheduler import CronScheduler
+from .delivery import (
+    DeliveryStore,
+    claim_deliveries,
+    deliver_final,
+    redeliver_claimed_deliveries,
+)
 from .env import load_env_files
-from .history import ConversationStore
+from .history import ConversationError, ConversationStore
 from .i18n import t
 from .redact import RedactingFormatter
 from .runtime_lock import ProfileRuntimeLock, RuntimeLockError
@@ -45,9 +52,9 @@ from .service import run_service_command
 logger = logging.getLogger("pilotage")
 
 SESSION_MAINTENANCE_INTERVAL_SECONDS = 3600
-# Current Hermes gives in-flight cron work 30 seconds. Pilotage gives the same
-# bounded window to every already accepted task because it does not carry
-# Hermes' much larger interrupted-turn resume subsystem.
+# Hermes bounds both startup owed-delivery drain and shutdown in-flight drain
+# to 30 seconds.
+STARTUP_RECOVERY_DRAIN_SECONDS = 30.0
 SHUTDOWN_DRAIN_SECONDS = 30.0
 
 
@@ -226,6 +233,7 @@ async def _run_enabled_channels(
         output_retention=cron_config.cron_output_retention,
     )
     conversation_store = ConversationStore(cron_config.conversations_path)
+    delivery_store = DeliveryStore(cron_config.state_dir / "delivery.db")
     channels = {}
     agents: list[Agent] = []
 
@@ -325,14 +333,32 @@ async def _run_enabled_channels(
                         },
                         approval_notify=approval_notice,
                     )
+            except ConversationError:
+                logger.exception("WhatsApp conversation persistence failed")
+                answer = t("runtime.storage_failure", config.language)
             except Exception:
                 logger.exception("The WhatsApp model call failed")
                 answer = whatsapp_failure_reply
-            await whatsapp_channel.send(
-                message.chat_id,
-                answer or whatsapp_failure_reply,
-                quoted,
+            final_text = answer or whatsapp_failure_reply
+            delivered = await deliver_final(
+                delivery_store,
+                session_key=message.session_id,
+                message_ref=quoted,
+                platform="whatsapp",
+                chat_id=message.chat_id,
+                thread_id="",
+                content=final_text,
+                send=lambda: whatsapp_channel.send(
+                    message.chat_id,
+                    final_text,
+                    quoted,
+                ),
             )
+            if not delivered:
+                logger.error(
+                    "WhatsApp final response remains pending for %s",
+                    message.chat_id,
+                )
 
         async def manage_whatsapp(
             chat_id: str,
@@ -349,6 +375,9 @@ async def _run_enabled_channels(
                     session_id=session_id,
                     reset_reply=whatsapp_reset_reply,
                 )
+            except ConversationError:
+                logger.exception("WhatsApp conversation reset persistence failed")
+                answer = t("runtime.storage_failure", config.language)
             except Exception:
                 logger.exception("WhatsApp management command failed")
                 answer = whatsapp_failure_reply
@@ -436,15 +465,36 @@ async def _run_enabled_channels(
                         origin=origin,
                         approval_notify=approval_notice,
                     )
+            except ConversationError:
+                logger.exception("Telegram conversation persistence failed")
+                answer = t(
+                    "runtime.storage_failure",
+                    telegram_config.language,
+                )
             except Exception:
                 logger.exception("The Telegram model call failed")
                 answer = telegram_failure_reply
-            await telegram_channel.send(
-                message.chat_id,
-                answer or telegram_failure_reply,
-                quoted,
+            final_text = answer or telegram_failure_reply
+            delivered = await deliver_final(
+                delivery_store,
+                session_key=message.session_id,
+                message_ref=quoted,
+                platform="telegram",
+                chat_id=message.chat_id,
                 thread_id=message.thread_id,
+                content=final_text,
+                send=lambda: telegram_channel.send(
+                    message.chat_id,
+                    final_text,
+                    quoted,
+                    thread_id=message.thread_id,
+                ),
             )
+            if not delivered:
+                logger.error(
+                    "Telegram final response remains pending for %s",
+                    message.chat_id,
+                )
 
         async def manage_telegram(
             chat_id: str,
@@ -461,6 +511,12 @@ async def _run_enabled_channels(
                     profile_name=profile_name,
                     session_id=session_id,
                     reset_reply=telegram_reset_reply,
+                )
+            except ConversationError:
+                logger.exception("Telegram conversation reset persistence failed")
+                answer = t(
+                    "runtime.storage_failure",
+                    telegram_config.language,
                 )
             except Exception:
                 logger.exception("Telegram management command failed")
@@ -494,7 +550,12 @@ async def _run_enabled_channels(
         if (channel := channels.get(name)) is not None
     ]
     started = []
+    recovery_task: asyncio.Task[None] | None = None
     try:
+        for running_channel in start_order:
+            hold_inbound = getattr(running_channel, "hold_inbound", None)
+            if callable(hold_inbound):
+                hold_inbound()
         for running_channel in start_order:
             await running_channel.start()
             started.append(running_channel)
@@ -508,10 +569,54 @@ async def _run_enabled_channels(
         print(f"{exc}", file=sys.stderr)
         return 1
 
+    claimed_rows = await claim_deliveries(delivery_store, set(channels))
+    if claimed_rows:
+        async def recover_final_responses() -> None:
+            recovered = await redeliver_claimed_deliveries(
+                delivery_store,
+                channels,
+                claimed_rows,
+            )
+            if recovered:
+                logger.info(
+                    "Redelivered %d recovered final response(s)",
+                    recovered,
+                )
+
+        recovery_task = asyncio.create_task(
+            recover_final_responses(),
+            name="pilotage-delivery-recovery",
+        )
+        _, pending = await asyncio.wait(
+            {recovery_task},
+            timeout=STARTUP_RECOVERY_DRAIN_SECONDS,
+        )
+        if pending:
+            logger.info(
+                "Releasing inbound while startup delivery recovery continues"
+                " in background"
+            )
+        else:
+            await recovery_task
+
+    for running_channel in started:
+        release_inbound = getattr(running_channel, "release_inbound", None)
+        if callable(release_inbound):
+            released = release_inbound()
+            if inspect.isawaitable(released):
+                await released
+
     if scheduler is not None:
         try:
             await scheduler.start()
         except (CronError, OSError) as exc:
+            if recovery_task is not None and not recovery_task.done():
+                recovery_task.cancel()
+            if recovery_task is not None:
+                await asyncio.gather(
+                    recovery_task,
+                    return_exceptions=True,
+                )
             for running_channel in reversed(started):
                 await running_channel.stop()
             await asyncio.gather(
@@ -593,6 +698,9 @@ async def _run_enabled_channels(
         if maintenance_task is not None:
             maintenance_task.cancel()
             await asyncio.gather(maintenance_task, return_exceptions=True)
+        if recovery_task is not None:
+            recovery_task.cancel()
+            await asyncio.gather(recovery_task, return_exceptions=True)
 
         # Refuse new work first. Accepted batches are flushed now, so channel
         # turns can finish while an in-flight cron job uses the same transport.

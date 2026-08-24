@@ -732,7 +732,14 @@ class Agent:
             working_notice_task = asyncio.create_task(
                 self._working_notice_loop(chat_id, on_notice)
             )
+            turn_begun = False
             try:
+                await asyncio.to_thread(
+                    self._store.begin_turn,
+                    chat_id,
+                    user_text,
+                )
+                turn_begun = True
                 result = await self._run_turn(
                     chat_id,
                     user_text,
@@ -743,26 +750,39 @@ class Agent:
                     turn_note=reset_note,
                     working_directory=working_directory,
                 )
+            except BaseException:
+                if turn_begun:
+                    try:
+                        await asyncio.to_thread(
+                            self._store.discard_unstarted_turn,
+                            chat_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Could not clear the unstarted turn for %s",
+                            chat_id,
+                            exc_info=True,
+                        )
+                raise
             finally:
                 working_notice_task.cancel()
                 await asyncio.gather(
                     working_notice_task,
                     return_exceptions=True,
                 )
-            self._remember(chat_id, user_text, image_parts, result)
             checkpoints = (
                 compaction.persistent_compaction_items(result.items)
                 if self._native_compaction_active()
                 else []
             )
             await asyncio.to_thread(
-                self._store.append_with_replay,
+                self._store.complete_turn,
                 chat_id,
-                [
-                    ("user", user_text, []),
-                    ("assistant", result.text, checkpoints),
-                ],
+                user_text,
+                result.text,
+                checkpoints,
             )
+            self._remember(chat_id, user_text, image_parts, result)
             return result.text
 
     async def _run_turn(
@@ -880,6 +900,13 @@ class Agent:
 
             names = ", ".join(call["name"] for call in result.tool_calls)
             logger.info("Step %d for %s: %s", step + 1, chat_id, names)
+            await asyncio.to_thread(
+                self._store.checkpoint_turn,
+                chat_id,
+                user_text,
+                items,
+                phase="tool_requested",
+            )
             outputs = await run_calls(
                 self._registry,
                 result.tool_calls,
@@ -896,6 +923,13 @@ class Agent:
                         "output": responses_tool_output(output),
                     }
                 )
+            await asyncio.to_thread(
+                self._store.checkpoint_turn,
+                chat_id,
+                user_text,
+                items,
+                phase="tool_completed",
+            )
 
         # Out of steps. Ask for what it has rather than sending nothing: the
         # work is already done and paid for, and the person is still waiting.

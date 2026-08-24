@@ -449,6 +449,67 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(invocation.command.name, "new")
         await channel.stop()
 
+    async def test_startup_gate_holds_authorized_command_and_media_until_release(self):
+        command_started = asyncio.Event()
+        media_download_started = asyncio.Event()
+        release_media = asyncio.Event()
+        media_delivered = asyncio.Event()
+        channel, _, _ = self._channel(
+            "telegram:\n"
+            "  batch_delay: 0\n"
+            "  batch_hard_cap: 1\n"
+        )
+        self.addAsyncCleanup(channel.stop)
+
+        async def handler(message):
+            self.assertEqual(message.message_ids, ["12"])
+            media_delivered.set()
+
+        async def command(_chat, _session, _message, _thread, invocation):
+            self.assertEqual(invocation.command.name, "approve")
+            command_started.set()
+
+        async def download(message):
+            self.assertEqual(getattr(message, "message_id", None), 12)
+            media_download_started.set()
+            await release_media.wait()
+            return [], []
+
+        channel._handler = handler
+        channel._on_command = command
+        channel._download_attachments = download
+        channel.hold_inbound()
+
+        await channel._handle_media(
+            SimpleNamespace(
+                effective_message=_message(
+                    text="photo",
+                    message_id=12,
+                    voice=SimpleNamespace(),
+                )
+            ),
+            None,
+        )
+        await channel._handle_command(
+            SimpleNamespace(
+                effective_message=_message(text="/approve", message_id=11)
+            ),
+            None,
+        )
+        await asyncio.sleep(0)
+        self.assertFalse(command_started.is_set())
+        self.assertFalse(media_download_started.is_set())
+
+        releasing = asyncio.create_task(channel.release_inbound())
+        await asyncio.wait_for(media_download_started.wait(), timeout=0.5)
+        await asyncio.sleep(0)
+        self.assertFalse(command_started.is_set())
+        release_media.set()
+        await asyncio.wait_for(media_delivered.wait(), timeout=0.5)
+        await asyncio.wait_for(command_started.wait(), timeout=0.5)
+        await asyncio.wait_for(releasing, timeout=0.5)
+        await channel.stop()
+
     async def test_approval_command_bypasses_an_active_turn(self):
         channel, _, _ = self._channel(
             "telegram:\n  batch_delay: 0\n  batch_hard_cap: 1\n"

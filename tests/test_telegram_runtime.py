@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -164,6 +165,16 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 {"thread_id": "9"},
             ),
         )
+        with contextlib.closing(
+            sqlite3.connect(self.root / "delivery.db")
+        ) as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT platform, chat_id, thread_id, state"
+                    " FROM delivery_obligations"
+                ).fetchall(),
+                [("telegram", "42", "9", "delivered")],
+            )
         delivery["accepted"] = False
         with self.assertRaisesRegex(main.TelegramChannelError, "approval request"):
             await seen["approval_notify"]("Approve this change")

@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 from .. import media
 from ..commands import CommandInvocation, parse_command
+from ..delivery import SendResult, as_send_result
 from ..settings import ConfigError, Settings
 from .dedup import MessageDeduplicator
 from .telegram_formatting import (
@@ -35,7 +36,15 @@ logger = logging.getLogger(__name__)
 try:  # Optional until the Telegram channel is enabled.
     from telegram import LinkPreviewOptions, Update
     from telegram.constants import ChatAction, ParseMode
-    from telegram.error import BadRequest, Conflict, Forbidden, InvalidToken
+    from telegram.error import (
+        BadRequest,
+        Conflict,
+        Forbidden,
+        InvalidToken,
+        NetworkError,
+        RetryAfter,
+        TimedOut,
+    )
     from telegram.ext import Application, MessageHandler, filters
     from telegram.request import HTTPXRequest
 
@@ -43,6 +52,7 @@ try:  # Optional until the Telegram channel is enabled.
 except ImportError:  # pragma: no cover - exercised through preflight
     LinkPreviewOptions = Update = ChatAction = ParseMode = Any
     BadRequest = Conflict = Forbidden = InvalidToken = RuntimeError
+    NetworkError = RetryAfter = TimedOut = RuntimeError
     Application = MessageHandler = HTTPXRequest = Any
     filters = None
     TELEGRAM_AVAILABLE = False
@@ -251,6 +261,26 @@ def _redact_error(exc: BaseException, token: str) -> str:
     return re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot<redacted>", text)
 
 
+def _send_failure(exc: BaseException, token: str) -> SendResult:
+    written = _redact_error(exc, token)
+    if isinstance(exc, RetryAfter):
+        value = getattr(exc, "retry_after", None)
+        total_seconds = getattr(value, "total_seconds", None)
+        if callable(total_seconds):
+            value = total_seconds()
+        try:
+            delay = float(value)
+        except (TypeError, ValueError):
+            delay = None
+        return SendResult(False, written, retryable=True, retry_after=delay)
+    if isinstance(exc, TimedOut):
+        # Telegram may have accepted a request whose response timed out.
+        return SendResult(False, written)
+    if isinstance(exc, NetworkError):
+        return SendResult(False, written, retryable=True)
+    return SendResult(False, written)
+
+
 class TelegramChannel:
     """One Telegram bot connected through a webhook or long polling."""
 
@@ -305,6 +335,7 @@ class TelegramChannel:
         self._running = False
         self._intake_stopped = False
         self._drop_delayed_deliveries = False
+        self._startup_hold_closed = False
         self.stopped = asyncio.Event()
         self.failure: Optional[str] = None
 
@@ -317,9 +348,25 @@ class TelegramChannel:
         self._turn_tasks: Dict[str, asyncio.Task] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._intake_tasks: set[asyncio.Task] = set()
+        self._startup_updates: List[tuple[str, Any, Any]] = []
         self._held_inbound: Dict[str, InboundMessage] = {}
 
     # -- lifetime -------------------------------------------------------
+
+    def hold_inbound(self) -> None:
+        self._startup_hold_closed = True
+
+    async def release_inbound(self) -> None:
+        if not self._startup_hold_closed and not self._startup_updates:
+            return
+        try:
+            # Keep the gate closed while draining. Fresh callbacks append to
+            # the same FIFO, so they cannot overtake an older held update.
+            while self._startup_updates:
+                kind, update, context = self._startup_updates.pop(0)
+                await self._replay_startup_update(kind, update, context)
+        finally:
+            self._startup_hold_closed = False
 
     def _preflight(self) -> None:
         if not TELEGRAM_AVAILABLE:
@@ -472,6 +519,7 @@ class TelegramChannel:
         """Stop receiving updates and dispatch every batch already accepted."""
 
         if self._intake_stopped:
+            await self.release_inbound()
             self._release_held_inbound()
             return
         self._intake_stopped = True
@@ -485,6 +533,7 @@ class TelegramChannel:
         if updater is not None and getattr(updater, "running", False):
             await self._bounded_step(updater.stop(), "update receiver stop")
 
+        await self.release_inbound()
         timers = set(self._pending_tasks.values())
         for key in list(self._pending):
             self._flush_pending_now(key)
@@ -565,6 +614,8 @@ class TelegramChannel:
         self._turn_tasks.clear()
         self._background_tasks.clear()
         self._intake_tasks.clear()
+        self._startup_updates.clear()
+        self._startup_hold_closed = False
 
         app = self._app
         self._app = None
@@ -787,24 +838,54 @@ class TelegramChannel:
             update, "message", None
         )
 
-    async def _handle_text(self, update: Any, context: Any) -> None:
+    async def _handle_text(
+        self,
+        update: Any,
+        context: Any,
+        *,
+        _startup_replay: bool = False,
+    ) -> None:
         async with self._track_intake():
             message = self._message_from_update(update)
             if message is None or not self._authorized(message):
                 return
+            if not _startup_replay and self._hold_startup_update(
+                "text", update, context
+            ):
+                return
             await self._accept_message(message, [])
 
-    async def _handle_command(self, update: Any, context: Any) -> None:
+    async def _handle_command(
+        self,
+        update: Any,
+        context: Any,
+        *,
+        _startup_replay: bool = False,
+    ) -> None:
         async with self._track_intake():
             message = self._message_from_update(update)
             if message is None or not self._authorized(message):
                 return
+            if not _startup_replay and self._hold_startup_update(
+                "command", update, context
+            ):
+                return
             await self._accept_message(message, [])
 
-    async def _handle_location(self, update: Any, context: Any) -> None:
+    async def _handle_location(
+        self,
+        update: Any,
+        context: Any,
+        *,
+        _startup_replay: bool = False,
+    ) -> None:
         async with self._track_intake():
             message = self._message_from_update(update)
             if message is None or not self._authorized(message):
+                return
+            if not _startup_replay and self._hold_startup_update(
+                "location", update, context
+            ):
                 return
             venue = getattr(message, "venue", None)
             location = (
@@ -836,11 +917,21 @@ class TelegramChannel:
             )
             await self._accept_message(message, [], text_override="\n".join(parts))
 
-    async def _handle_media(self, update: Any, context: Any) -> None:
+    async def _handle_media(
+        self,
+        update: Any,
+        context: Any,
+        *,
+        _startup_replay: bool = False,
+    ) -> None:
         async with self._track_intake():
             message = self._message_from_update(update)
             # Authorization must precede get_file/download_as_bytearray.
             if message is None or not self._authorized(message):
+                return
+            if not _startup_replay and self._hold_startup_update(
+                "media", update, context
+            ):
                 return
             try:
                 attachments, notes = await self._download_attachments(message)
@@ -857,6 +948,31 @@ class TelegramChannel:
         chat_id = str(getattr(getattr(message, "chat", None), "id", "") or "")
         message_id = str(getattr(message, "message_id", "") or "")
         return f"{chat_id}:{message_id}" if message_id else ""
+
+    def _hold_startup_update(
+        self, kind: str, update: Any, context: Any
+    ) -> bool:
+        if not self._startup_hold_closed:
+            return False
+        self._startup_updates.append((kind, update, context))
+        return True
+
+    async def _replay_startup_update(
+        self, kind: str, update: Any, context: Any
+    ) -> None:
+        if kind == "text":
+            await self._handle_text(update, context, _startup_replay=True)
+            return
+        if kind == "command":
+            await self._handle_command(update, context, _startup_replay=True)
+            return
+        if kind == "location":
+            await self._handle_location(update, context, _startup_replay=True)
+            return
+        if kind == "media":
+            await self._handle_media(update, context, _startup_replay=True)
+            return
+        logger.warning("Telegram dropped an unknown held update kind: %s", kind)
 
     async def _accept_message(
         self,
@@ -1381,9 +1497,9 @@ class TelegramChannel:
         *,
         thread_id: str = "",
         deliver_media: bool = True,
-    ) -> bool:
+    ) -> SendResult:
         if self._bot is None:
-            return False
+            return SendResult(False, "Telegram transport is not connected")
 
         if deliver_media:
             attachments, cleaned = media.extract_outbound(
@@ -1405,7 +1521,7 @@ class TelegramChannel:
             else []
         )
         if not chunks and not attachments:
-            return False
+            return SendResult(False, "response had no deliverable content")
 
         delivery_index = 0
         for chunk in chunks:
@@ -1414,8 +1530,13 @@ class TelegramChannel:
                 **self._reply_kwargs(reply_to, delivery_index),
                 **self._preview_kwargs(),
             }
-            if not await self._send_text_chunk(chat_id, chunk, kwargs):
-                return False
+            result = as_send_result(
+                await self._send_text_chunk(chat_id, chunk, kwargs)
+            )
+            if not result:
+                if delivery_index:
+                    return SendResult(False, result.error)
+                return result
             delivery_index += 1
 
         for attachment in attachments:
@@ -1423,14 +1544,19 @@ class TelegramChannel:
                 **self._thread_kwargs(thread_id),
                 **self._reply_kwargs(reply_to, delivery_index),
             }
-            if not await self._send_attachment(chat_id, attachment.path, kwargs):
-                return False
+            result = as_send_result(
+                await self._send_attachment(chat_id, attachment.path, kwargs)
+            )
+            if not result:
+                if delivery_index:
+                    return SendResult(False, result.error)
+                return result
             delivery_index += 1
-        return True
+        return SendResult(True)
 
     async def _send_text_chunk(
         self, chat_id: str, chunk: str, kwargs: Dict[str, Any]
-    ) -> bool:
+    ) -> SendResult:
         target = normalize_telegram_chat_id(chat_id)
         try:
             await self._bot.send_message(
@@ -1439,7 +1565,7 @@ class TelegramChannel:
                 parse_mode=ParseMode.MARKDOWN_V2,
                 **kwargs,
             )
-            return True
+            return SendResult(True)
         except BadRequest as exc:
             written = str(exc).lower()
             retry_kwargs = dict(kwargs)
@@ -1476,14 +1602,14 @@ class TelegramChannel:
                 chat_id,
                 _redact_error(exc, self._token),
             )
-            return False
+            return SendResult(False, _redact_error(exc, self._token))
         except Exception as exc:
             logger.error(
                 "Sending to Telegram chat %s failed: %s",
                 chat_id,
                 _redact_error(exc, self._token),
             )
-            return False
+            return _send_failure(exc, self._token)
 
     async def _send_text_once(
         self,
@@ -1491,7 +1617,7 @@ class TelegramChannel:
         text: str,
         parse_mode: Any,
         kwargs: Dict[str, Any],
-    ) -> bool:
+    ) -> SendResult:
         try:
             await self._bot.send_message(
                 chat_id=chat_id,
@@ -1499,20 +1625,20 @@ class TelegramChannel:
                 parse_mode=parse_mode,
                 **kwargs,
             )
-            return True
+            return SendResult(True)
         except Exception as exc:
             logger.error(
                 "Telegram fallback delivery failed: %s",
                 _redact_error(exc, self._token),
             )
-            return False
+            return _send_failure(exc, self._token)
 
     async def _send_attachment(
         self,
         chat_id: str,
         path: Path,
         kwargs: Dict[str, Any],
-    ) -> bool:
+    ) -> SendResult:
         suffix = path.suffix.lower()
         target = normalize_telegram_chat_id(chat_id)
         try:
@@ -1542,7 +1668,7 @@ class TelegramChannel:
                         **{argument: stream},
                         **kwargs,
                     )
-                return True
+                return SendResult(True)
             except BadRequest:
                 if argument not in {"photo", "animation", "video"}:
                     raise
@@ -1554,14 +1680,14 @@ class TelegramChannel:
                         document=stream,
                         **kwargs,
                     )
-                return True
+                return SendResult(True)
         except Exception as exc:
             logger.error(
                 "Sending Telegram attachment %s failed: %s",
                 path.name,
                 _redact_error(exc, self._token),
             )
-            return False
+            return _send_failure(exc, self._token)
 
 
 __all__ = [

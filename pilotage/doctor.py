@@ -27,6 +27,7 @@ from .agent import Agent
 from .codex import auth
 from .history import ConversationStore
 from .redact import redact_sensitive_text
+from .runtime_lock import RuntimeLockError, runtime_lock_is_held
 from .tools import ToolContext, build_registry, enabled_groups
 from .tools.code_execution import _execute
 from .tools.subprocess_env import PROTECTED_ENV_VARS, build_subprocess_env
@@ -441,18 +442,6 @@ def _check_profile_state(config: Any) -> str:
     return "state and workspace accessible"
 
 
-def _pid_is_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
 def _check_runtime(config: Any) -> str:
     path = Path(config.state_dir) / ".runtime.lock"
     try:
@@ -463,8 +452,12 @@ def _check_runtime(config: Any) -> str:
         raise DoctorError("profile runtime is not running") from exc
     if recorded_state != Path(config.state_dir).resolve(strict=False):
         raise DoctorError("runtime lock belongs to a different profile path")
-    if not _pid_is_alive(pid):
-        raise DoctorError("profile runtime pid is not alive")
+    try:
+        held = runtime_lock_is_held(config.state_dir)
+    except RuntimeLockError as exc:
+        raise DoctorError(str(exc)) from exc
+    if not held:
+        raise DoctorError("profile runtime does not own its operating-system lock")
     return f"pid {pid}"
 
 
@@ -603,8 +596,6 @@ def _check_sql_connection() -> str:
         os.environ["MSSQL_HOST"],
         "-U",
         os.environ["MSSQL_USER"],
-        "-P",
-        os.environ["MSSQL_PASSWORD"],
         "-d",
         os.environ["MSSQL_DB"],
         "-l",
@@ -619,7 +610,10 @@ def _check_sql_connection() -> str:
         "-Q",
         "SET NOCOUNT ON; SELECT 1 AS pilotage_ready;",
     ]
-    result = _run(command, timeout=20)
+    child_env = build_subprocess_env()
+    password = child_env.pop("MSSQL_PASSWORD", "")
+    child_env["SQLCMDPASSWORD"] = password
+    result = _run(command, timeout=20, env=child_env)
     if result.returncode != 0:
         raise DoctorError(
             "sqlcmd connection failed: "

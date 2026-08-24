@@ -23,6 +23,11 @@ DEFAULT_PROFILE_LANGUAGE: Final = "fr"
 _CATALOGS: Final[dict[str, dict[str, str]]] = {
     "en": {
         "runtime.failure": "I couldn't answer just now. Please try again.",
+        "runtime.storage_failure": (
+            "I stopped because conversation state could not be saved safely. "
+            "Check storage first. If an earlier request may have acted, verify "
+            "it before using /new."
+        ),
         "runtime.reset": "Starting fresh. I forgot our conversation.",
         "runtime.reconnect": "Still nothing back from the model. Reconnecting…",
         "runtime.working": "Still working.",
@@ -55,6 +60,11 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
     },
     "fr": {
         "runtime.failure": "Je n'ai pas pu répondre pour le moment. Réessayez.",
+        "runtime.storage_failure": (
+            "Je me suis arrêté car l'état de la conversation n'a pas pu être "
+            "enregistré en toute sécurité. Vérifiez d'abord le stockage. Si une "
+            "demande précédente a pu agir, vérifiez-la avant d'utiliser /new."
+        ),
         "runtime.reset": "On repart de zéro. J'ai oublié notre conversation.",
         "runtime.reconnect": "Toujours aucune réponse du modèle. Je me reconnecte…",
         "runtime.working": "Je continue.",
@@ -87,6 +97,10 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
     },
     "ar": {
         "runtime.failure": "تعذّر عليّ الرد الآن. حاول مرة أخرى.",
+        "runtime.storage_failure": (
+            "توقفت لأن حالة المحادثة لم تُحفظ بأمان. تحقّق من التخزين أولاً. "
+            "إذا كان الطلب السابق ربما نفّذ إجراءً، فتحقّق منه قبل استخدام /new."
+        ),
         "runtime.reset": "سنبدأ من جديد. لقد نسيت محادثتنا السابقة.",
         "runtime.reconnect": "لم يصل رد من النموذج بعد. أعيد الاتصال…",
         "runtime.working": "ما زلت أعمل.",

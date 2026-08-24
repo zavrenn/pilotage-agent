@@ -89,6 +89,10 @@ def _state_files() -> tuple[str, ...]:
         _real(str(home / "conversations.db-journal")),
         _real(str(home / "conversations.db-shm")),
         _real(str(home / "conversations.db-wal")),
+        _real(str(home / "delivery.db")),
+        _real(str(home / "delivery.db-journal")),
+        _real(str(home / "delivery.db-shm")),
+        _real(str(home / "delivery.db-wal")),
         _real(str(home / "cron" / ".jobs.lock")),
         _real(str(home / "cron" / "jobs.json")),
     )

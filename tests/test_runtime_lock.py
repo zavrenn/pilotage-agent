@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import io
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from pilotage import main
+from pilotage import main, runtime_lock
 from pilotage.config import Config
-from pilotage.runtime_lock import ProfileRuntimeLock, RuntimeAlreadyRunning
+from pilotage.runtime_lock import (
+    ProfileRuntimeLock,
+    RuntimeAlreadyRunning,
+    runtime_lock_is_held,
+)
 
 
 class RuntimeLockTests(unittest.TestCase):
@@ -40,6 +46,32 @@ class RuntimeLockTests(unittest.TestCase):
         content = lock.path.read_text(encoding="utf-8")
         self.assertIn('"pid":', content)
         self.assertIn('"state_dir":', content)
+
+    def test_ownership_probe_checks_the_operating_system_lock(self):
+        path = self.root / ".runtime.lock"
+        path.write_text("{}", encoding="utf-8")
+        self.assertFalse(runtime_lock_is_held(self.root))
+
+        lock = ProfileRuntimeLock(self.root)
+        lock.acquire()
+        self.addCleanup(lock.release)
+        self.assertTrue(runtime_lock_is_held(self.root))
+
+    def test_unexpected_windows_lock_failure_is_not_classified_as_contention(self):
+        path = self.root / ".runtime.lock"
+        path.write_text("", encoding="utf-8")
+        backend = SimpleNamespace(
+            LK_NBLCK=1,
+            locking=mock.Mock(side_effect=OSError(errno.EIO, "lock failure")),
+        )
+
+        with (
+            path.open("a+", encoding="utf-8") as handle,
+            mock.patch.object(runtime_lock, "msvcrt", backend),
+            mock.patch.object(runtime_lock, "fcntl", None),
+            self.assertRaises(runtime_lock.RuntimeLockError),
+        ):
+            runtime_lock._try_lock(handle)
 
 
 class RuntimeEntryPointTests(unittest.IsolatedAsyncioTestCase):

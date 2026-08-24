@@ -9,6 +9,7 @@ where the first one left it.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import tempfile
 import time
@@ -24,7 +25,11 @@ from pilotage.agent import Agent
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
 from pilotage.cron.jobs import timezone_for_name
-from pilotage.history import ConversationStore, session_workspace_path
+from pilotage.history import (
+    ConversationError,
+    ConversationStore,
+    session_workspace_path,
+)
 
 
 class StoreTests(unittest.TestCase):
@@ -223,13 +228,87 @@ class StoreTests(unittest.TestCase):
         )
 
 
-    def test_a_broken_file_costs_a_log_line_not_the_turn(self):
+    def test_a_broken_file_fails_the_history_write(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_bytes(b"this is not a database")
-        with self.assertLogs("pilotage.history", level="WARNING"):
+        with (
+            self.assertLogs("pilotage.history", level="WARNING"),
+            self.assertRaises(ConversationError),
+        ):
             self.store.append("chat", [("user", "hello")])
         with self.assertLogs("pilotage.history", level="WARNING"):
             self.assertEqual(self.store.load("chat", 10), [])
+
+    def test_active_tool_trajectory_is_removed_with_the_completed_turn(self):
+        self.store.begin_turn("chat", "do it")
+        items = [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "todo",
+                "arguments": "{}",
+            }
+        ]
+        self.store.checkpoint_turn(
+            "chat", "do it", items, phase="tool_requested"
+        )
+        with closing(sqlite3.connect(self.path)) as connection:
+            phase, trajectory = connection.execute(
+                "SELECT phase, trajectory FROM active_turns"
+            ).fetchone()
+        self.assertEqual(phase, "tool_requested")
+        self.assertEqual(json.loads(trajectory), items)
+
+        self.store.complete_turn("chat", "do it", "Done.")
+
+        with closing(sqlite3.connect(self.path)) as connection:
+            active = connection.execute(
+                "SELECT COUNT(*) FROM active_turns"
+            ).fetchone()[0]
+        self.assertEqual(active, 0)
+        self.assertEqual(
+            self.store.load("chat", 10),
+            [("user", "do it"), ("assistant", "Done.")],
+        )
+
+    def test_new_session_explicitly_abandons_an_incomplete_turn(self):
+        self.store.begin_turn("chat", "possibly acted")
+        self.store.checkpoint_turn(
+            "chat",
+            "possibly acted",
+            [{"type": "function_call", "call_id": "call_1"}],
+            phase="tool_requested",
+        )
+
+        self.store.new_session("chat")
+        self.store.begin_turn("chat", "fresh")
+        self.store.complete_turn("chat", "fresh", "Ready.")
+
+        self.assertEqual(
+            self.store.load("chat", 10),
+            [("user", "fresh"), ("assistant", "Ready.")],
+        )
+
+    def test_automatic_reset_never_discards_an_incomplete_tool_turn(self):
+        self.store.begin_turn("chat", "possibly acted")
+        self.store.checkpoint_turn(
+            "chat",
+            "possibly acted",
+            [{"type": "function_call", "call_id": "call_1"}],
+            phase="tool_requested",
+        )
+
+        reset = self.store.prepare_session(
+            "chat",
+            mode="idle",
+            idle_minutes=1,
+            now=time.time() + 3600,
+        )
+
+        self.assertIsNone(reset)
+        self.assertEqual(self.store.current_session("chat"), 1)
+        with self.assertRaisesRegex(ConversationError, "previous turn"):
+            self.store.begin_turn("chat", "new request")
 
 
 class RestartTests(unittest.IsolatedAsyncioTestCase):
@@ -491,17 +570,23 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
         await second.respond("chat", "and now?")
         self.assertEqual(len(second._history["chat"]), first._history_limit())
 
-    async def test_a_store_that_cannot_be_written_still_answers(self):
+    async def test_a_store_that_cannot_be_written_stops_before_the_model(self):
         broken = Agent(Config.load(), ConversationStore(self.path))
         self.path.write_bytes(b"this is not a database")
+        called = False
 
         async def _stream_once(request, *, force_refresh, ttfb_timeout, idle_timeout):
-            return codex_stream.StreamResult(text="Answered anyway.")
+            nonlocal called
+            called = True
+            return codex_stream.StreamResult(text="must not be returned")
 
         broken._stream_once = _stream_once
-        with self.assertLogs("pilotage.history", level="WARNING"):
-            answer = await broken.respond("chat", "hello")
-        self.assertEqual(answer, "Answered anyway.")
+        with (
+            self.assertLogs("pilotage.history", level="WARNING"),
+            self.assertRaises(ConversationError),
+        ):
+            await broken.respond("chat", "hello")
+        self.assertFalse(called)
 
 
 class OneShotTests(unittest.IsolatedAsyncioTestCase):

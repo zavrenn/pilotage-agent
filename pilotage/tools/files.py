@@ -260,10 +260,7 @@ def _resolve(path: Any, shell: Shell) -> Path:
 
 
 def _read_guard(path: Path) -> Optional[str]:
-    try:
-        return get_read_block_error(str(path))
-    except Exception:  # defense in depth must not become an availability risk
-        return None
+    return get_read_block_error(str(path))
 
 
 def _write_guard(path: Path, verb: str = "Write") -> Optional[str]:

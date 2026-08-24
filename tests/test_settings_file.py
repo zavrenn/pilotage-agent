@@ -819,6 +819,164 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(seen["agent"], channel_config)
         self.assertIs(seen["channel"], channel_config)
 
+    async def test_startup_recovery_orders_hold_start_claim_redeliver_release(self):
+        from pilotage import main
+
+        channel_config = Config.load(channel="whatsapp")
+        object.__setattr__(channel_config, "cron_enabled", False)
+        events = []
+        claimed_rows = [{"obligation_id": "owed"}]
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+        class FakeChannel:
+            def __init__(self, _config, _handler, _manage):
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                events.append("hold")
+
+            async def start(self):
+                events.append("start")
+
+            def release_inbound(self):
+                events.append("release")
+                self.stopped.set()
+
+            async def stop_intake(self):
+                events.append("stop_intake")
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                events.append("stop")
+
+        async def fake_claim(_store, platforms):
+            events.append(("claim", set(platforms)))
+            return claimed_rows
+
+        async def fake_redeliver(_store, channels, rows):
+            events.append(("redeliver", set(channels), rows))
+            return 1
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(main, "claim_deliveries", fake_claim),
+            mock.patch.object(
+                main,
+                "redeliver_claimed_deliveries",
+                fake_redeliver,
+            ),
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            self.assertEqual(await main.command_run(channel_config), 0)
+
+        self.assertEqual(
+            events[:5],
+            [
+                "hold",
+                "start",
+                ("claim", {"whatsapp"}),
+                ("redeliver", {"whatsapp"}, claimed_rows),
+                "release",
+            ],
+        )
+
+    async def test_startup_timeout_releases_inbound_before_shutdown_cancels_recovery(self):
+        from pilotage import main
+
+        channel_config = Config.load(channel="whatsapp")
+        object.__setattr__(channel_config, "cron_enabled", False)
+        events = []
+        released = asyncio.Event()
+        redelivery_started = asyncio.Event()
+        redelivery_cancelled = asyncio.Event()
+        seen = {}
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+        class FakeChannel:
+            def __init__(self, _config, _handler, _manage):
+                self.stopped = asyncio.Event()
+                self.failure = None
+                seen["channel"] = self
+
+            def hold_inbound(self):
+                events.append("hold")
+
+            async def start(self):
+                events.append("start")
+
+            def release_inbound(self):
+                events.append("release")
+                released.set()
+
+            async def stop_intake(self):
+                events.append("stop_intake")
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                events.append("stop")
+
+        async def fake_claim(_store, platforms):
+            events.append(("claim", set(platforms)))
+            return [{"obligation_id": "owed"}]
+
+        async def fake_redeliver(_store, channels, rows):
+            events.append(("redeliver", set(channels), rows))
+            redelivery_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                events.append("cancelled")
+                redelivery_cancelled.set()
+                raise
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(main, "claim_deliveries", fake_claim),
+            mock.patch.object(
+                main,
+                "redeliver_claimed_deliveries",
+                fake_redeliver,
+            ),
+            mock.patch.object(
+                main,
+                "STARTUP_RECOVERY_DRAIN_SECONDS",
+                0.001,
+            ),
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            run_task = asyncio.create_task(main.command_run(channel_config))
+            await asyncio.wait_for(redelivery_started.wait(), 0.05)
+            await asyncio.wait_for(released.wait(), 0.05)
+            self.assertFalse(redelivery_cancelled.is_set())
+            self.assertEqual(
+                events[:5],
+                [
+                    "hold",
+                    "start",
+                    ("claim", {"whatsapp"}),
+                    ("redeliver", {"whatsapp"}, [{"obligation_id": "owed"}]),
+                    "release",
+                ],
+            )
+            seen["channel"].stopped.set()
+            self.assertEqual(await run_task, 0)
+
+        await asyncio.wait_for(redelivery_cancelled.wait(), 0.05)
+        self.assertLess(events.index("release"), events.index("cancelled"))
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

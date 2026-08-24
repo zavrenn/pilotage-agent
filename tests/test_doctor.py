@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from pilotage import doctor
+from pilotage.runtime_lock import ProfileRuntimeLock
 
 
 class ReportTests(unittest.IsolatedAsyncioTestCase):
@@ -130,11 +131,15 @@ class SqlReadinessTests(unittest.TestCase):
         self.assertEqual(command[0], "/opt/mssql-tools18/bin/sqlcmd")
         self.assertEqual(command[command.index("-S") + 1], "db.example,1433")
         self.assertEqual(command[command.index("-U") + 1], "reader")
-        self.assertEqual(command[command.index("-P") + 1], "top-secret")
+        self.assertNotIn("-P", command)
+        self.assertNotIn("top-secret", command)
         self.assertEqual(command[command.index("-d") + 1], "reports")
         self.assertIn("-N", command)
         self.assertIn("-C", command)
         self.assertLess(command.index("-N"), command.index("-Q"))
+        child_env = run.call_args.kwargs["env"]
+        self.assertEqual(child_env["SQLCMDPASSWORD"], "top-secret")
+        self.assertNotIn("MSSQL_PASSWORD", child_env)
 
     def test_sql_probe_names_missing_settings_without_values(self):
         with (
@@ -270,19 +275,28 @@ class RuntimeTests(unittest.TestCase):
     def test_runtime_lock_must_name_this_live_profile(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory).resolve()
+            lock = ProfileRuntimeLock(state)
+            lock.acquire()
+            try:
+                config = SimpleNamespace(state_dir=state)
+                detail = doctor._check_runtime(config)
+            finally:
+                lock.release()
+
+        self.assertEqual(detail, f"pid {os.getpid()}")
+
+    def test_stale_live_pid_record_is_not_runtime_ownership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory).resolve()
             (state / ".runtime.lock").write_text(
-                json.dumps({"pid": 123, "state_dir": str(state)}),
+                json.dumps({"pid": os.getpid(), "state_dir": str(state)}),
                 encoding="utf-8",
             )
-            config = SimpleNamespace(state_dir=state)
-            with mock.patch.object(
-                doctor,
-                "_pid_is_alive",
-                return_value=True,
+            with self.assertRaisesRegex(
+                doctor.DoctorError,
+                "does not own",
             ):
-                detail = doctor._check_runtime(config)
-
-        self.assertEqual(detail, "pid 123")
+                doctor._check_runtime(SimpleNamespace(state_dir=state))
 
 
 if __name__ == "__main__":

@@ -23,6 +23,11 @@ class I18nTests(unittest.TestCase):
         self.assertIn("try again", t("runtime.failure", "en"))
         self.assertIn("Réessayez", t("runtime.failure", "fr"))
         self.assertIn("حاول", t("runtime.failure", "ar"))
+        for language in SUPPORTED_LANGUAGES:
+            self.assertIn(
+                "/new",
+                t("runtime.storage_failure", language),
+            )
         self.assertIn(
             "memory",
             t("approval.required", "ar", category="memory"),

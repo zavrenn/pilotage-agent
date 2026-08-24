@@ -25,7 +25,7 @@ from pilotage.agent import (
 )
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
-from pilotage.history import ConversationStore
+from pilotage.history import ConversationError, ConversationStore
 from pilotage.tools import Tool
 
 
@@ -56,6 +56,9 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
         self.agent = Agent(Config.load(), ConversationStore(self.root / "conversations.db"))
+        # Keep staged attachment fixtures inside this test's temporary state;
+        # the operator's default profile workspace may contain real inputs.
+        self.agent._context_cwd = self.root / "workspace"
         # Each element is what the model returns for the call at that position.
         self.replies: List[codex_stream.StreamResult] = []
         self.requests: List[Dict[str, Any]] = []
@@ -100,6 +103,70 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(await self.agent.respond("chat", "make a plan"), "Planned.")
         self.assertEqual(len(self.requests), 2)
+
+    async def test_tool_work_does_not_run_if_its_call_cannot_be_persisted(self):
+        self.replies = [
+            codex_stream.StreamResult(
+                tool_calls=[
+                    _call(
+                        "call_1",
+                        todos=[
+                            {
+                                "id": "1",
+                                "content": "must not be saved",
+                                "status": "pending",
+                            }
+                        ],
+                    )
+                ]
+            )
+        ]
+
+        def fail_checkpoint(*_args, **_kwargs):
+            raise ConversationError("disk failed")
+
+        self.agent._store.checkpoint_turn = fail_checkpoint
+        with self.assertRaisesRegex(ConversationError, "disk failed"):
+            await self.agent.respond("chat", "make a plan")
+
+        self.assertNotIn("todos", self.agent._tool_state["chat"])
+        self.assertEqual(len(self.requests), 1)
+
+    async def test_tool_result_write_failure_stops_before_another_model_call(self):
+        self.replies = [
+            codex_stream.StreamResult(
+                tool_calls=[
+                    _call(
+                        "call_1",
+                        todos=[
+                            {
+                                "id": "1",
+                                "content": "already executed",
+                                "status": "pending",
+                            }
+                        ],
+                    )
+                ]
+            )
+        ]
+        real_checkpoint = self.agent._store.checkpoint_turn
+
+        def checkpoint(*args, **kwargs):
+            if kwargs.get("phase") == "tool_completed":
+                raise ConversationError("result write failed")
+            return real_checkpoint(*args, **kwargs)
+
+        self.agent._store.checkpoint_turn = checkpoint
+        with self.assertRaisesRegex(ConversationError, "result write failed"):
+            await self.agent.respond("chat", "make a plan")
+
+        self.assertEqual(
+            len(self.agent._tool_state["chat"]["todo"].read()),
+            1,
+        )
+        self.assertEqual(len(self.requests), 1)
+        with self.assertRaisesRegex(ConversationError, "previous turn"):
+            await self.agent.respond("chat", "continue")
 
     async def test_the_result_goes_back_matched_to_the_call_that_asked(self):
         self.replies = [
