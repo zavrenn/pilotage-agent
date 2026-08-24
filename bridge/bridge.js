@@ -356,18 +356,18 @@ async function startSocket() {
         const isGroup = chatId.endsWith('@g.us');
         const senderId = (isGroup ? msg.key?.participant : chatId) || chatId;
         const senderPn = msg.key?.senderPn || msg.key?.participantPn || null;
+        const senderAllowed = (
+          matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)
+          || matchesAllowedUser(senderPn, ALLOWED_USERS, SESSION_DIR)
+        );
+        if (!senderAllowed) continue;
         if (isGroup) {
-          // Group access is keyed by the chat, independently from the DM
-          // sender allowlist. Python repeats this gate and applies mentions.
+          // Every sender is explicitly allowed above. Group traffic additionally
+          // needs an allowed chat; Python repeats both gates and applies mentions.
           if (
             !ANSWER_GROUPS
             || !matchesAllowedUser(chatId, ALLOWED_GROUPS, SESSION_DIR)
           ) continue;
-        } else if (
-          !matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)
-          && !matchesAllowedUser(senderPn, ALLOWED_USERS, SESSION_DIR)
-        ) {
-          continue;
         }
 
         messageStore.remember(msg);

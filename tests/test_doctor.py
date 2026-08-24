@@ -189,6 +189,25 @@ class PreparedEnvironmentTests(unittest.TestCase):
 
 
 class WhatsAppReadinessTests(unittest.TestCase):
+    def test_group_access_never_replaces_the_sender_allowlist(self):
+        config = SimpleNamespace(
+            allowed_senders=frozenset(),
+            answer_groups=True,
+            group_allow_from=frozenset({"*"}),
+        )
+
+        with self.assertRaisesRegex(
+            doctor.DoctorError,
+            "no explicit allowed senders",
+        ):
+            doctor._check_whatsapp_policy(config)
+
+        config.allowed_senders = frozenset({"212600000000"})
+        self.assertEqual(
+            doctor._check_whatsapp_policy(config),
+            "explicit access policy",
+        )
+
     def test_linked_session_must_be_registered(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

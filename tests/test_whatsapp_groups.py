@@ -31,7 +31,7 @@ class GroupAdmissionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "PILOTAGE_HOME": str(root),
                 "PILOTAGE_CONFIG": "",
-                "PILOTAGE_ALLOWED_SENDERS": "",
+                "PILOTAGE_ALLOWED_SENDERS": "212600000000",
             },
         )
         environment.start()
@@ -69,7 +69,7 @@ class GroupAdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.channel._accept(self._event())
         self.assertEqual(self.channel._pending, {})
 
-    async def test_direct_mention_is_accepted_without_dm_allowlist(self):
+    async def test_direct_mention_from_allowed_group_member_is_accepted(self):
         self.channel._accept(
             self._event(
                 "@15551230000 what is the weather?",
@@ -89,6 +89,18 @@ class GroupAdmissionTests(unittest.IsolatedAsyncioTestCase):
             self._event(
                 "@15551230000 hello",
                 chatId="120363999999999999@g.us",
+                mentionedIds=["15551230000@s.whatsapp.net"],
+            )
+        )
+        self.assertEqual(self.channel._pending, {})
+
+    async def test_group_wildcard_never_bypasses_the_sender_allowlist(self):
+        object.__setattr__(self.channel._config, "group_allow_from", frozenset({"*"}))
+        self.channel._accept(
+            self._event(
+                "@15551230000 what is the weather?",
+                senderId="212611111111@s.whatsapp.net",
+                senderNumber="212611111111",
                 mentionedIds=["15551230000@s.whatsapp.net"],
             )
         )

@@ -48,6 +48,8 @@ gateway:
 
 whatsapp:
   enabled: true
+  # Group access is additional: the sender must still be in
+  # PILOTAGE_ALLOWED_SENDERS. ["*"] means any group, never any participant.
   group_policy: disabled
   group_allow_from: []
   require_mention: true
@@ -59,8 +61,10 @@ whatsapp:
 
 telegram:
   enabled: false
+  # Group access is additional: the sender must still be in
+  # TELEGRAM_ALLOWED_USERS. ["*"] means any group, never any participant.
   group_policy: disabled
-  # Quoted numeric group/supergroup IDs, or ["*"] for every group.
+  # Quoted numeric group/supergroup IDs.
   group_allow_from: []
   require_mention: true
   reply_to_mode: first

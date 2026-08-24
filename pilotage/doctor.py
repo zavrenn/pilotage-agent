@@ -462,10 +462,8 @@ def _check_runtime(config: Any) -> str:
 
 
 def _check_whatsapp_policy(config: Any) -> str:
-    if not config.allowed_senders and not config.answer_groups:
-        raise DoctorError(
-            "WhatsApp has no allowed direct senders or enabled groups"
-        )
+    if not config.allowed_senders:
+        raise DoctorError("WhatsApp has no explicit allowed senders")
     return "explicit access policy"
 
 

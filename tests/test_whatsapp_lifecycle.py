@@ -237,9 +237,13 @@ class BridgeOwnershipTests(unittest.IsolatedAsyncioTestCase):
             encoding="utf-8"
         )
         loop = source.index("sock.ev.on('messages.upsert'")
-        gate = source.index("!matchesAllowedUser", loop)
+        sender_gate = source.index("const senderAllowed", loop)
+        sender_rejection = source.index("if (!senderAllowed) continue", sender_gate)
+        group_gate = source.index("!ANSWER_GROUPS", sender_rejection)
         extraction = source.index("const event = await buildEvent", loop)
-        self.assertLess(gate, extraction)
+        self.assertLess(sender_gate, sender_rejection)
+        self.assertLess(sender_rejection, group_gate)
+        self.assertLess(group_gate, extraction)
 
 
 

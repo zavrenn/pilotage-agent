@@ -212,7 +212,7 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(channel._authorized(addressed))
-        self.assertTrue(channel._authorized(other_member))
+        self.assertFalse(channel._authorized(other_member))
         self.assertFalse(channel._authorized(unmentioned))
         self.assertFalse(channel._authorized(addressed_elsewhere))
         self.assertTrue(channel._authorized(replying))
@@ -227,7 +227,7 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    def test_group_wildcard_allows_any_group_but_not_an_unauthorized_dm(self):
+    def test_group_wildcard_allows_any_group_only_for_authorized_users(self):
         channel, _, _ = self._channel(
             "telegram:\n"
             "  group_policy: allowlist\n"
@@ -236,6 +236,15 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(
+            channel._authorized(
+                _message(
+                    user_id=42,
+                    chat_id=-200,
+                    chat_type="supergroup",
+                )
+            )
+        )
+        self.assertFalse(
             channel._authorized(
                 _message(
                     user_id=77,

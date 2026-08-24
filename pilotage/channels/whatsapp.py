@@ -311,14 +311,10 @@ class WhatsAppChannel:
             raise
         self._running = True
         self._poll_task = asyncio.create_task(self._poll_loop())
-        if not self._config.allowed_senders and not self._config.answer_groups:
+        if not self._config.allowed_senders:
             logger.warning(
                 "No allowed senders configured — every message will be ignored. "
                 "Message the agent once, then add the number it logs to PILOTAGE_ALLOWED_SENDERS."
-            )
-        elif not self._config.allowed_senders:
-            logger.warning(
-                "No allowed senders configured — direct messages will be ignored."
             )
         if self._config.answer_groups and not self._config.group_allow_from:
             logger.warning(
@@ -619,10 +615,7 @@ class WhatsAppChannel:
             if isinstance(raw_identities, list)
             else []
         )
-        if (
-            not is_group
-            and not self._is_allowed(sender_id, sender_number, identities)
-        ):
+        if not self._is_allowed(sender_id, sender_number, identities):
             self._report_blocked(sender_id, sender_number)
             return
 
@@ -748,7 +741,7 @@ class WhatsAppChannel:
         return bool(allowed.intersection(candidates))
 
     def _is_group_allowed(self, chat_id: str) -> bool:
-        """Apply Hermes' group-chat policy independently from the DM allowlist."""
+        """Apply the group-chat location gate after the global sender gate."""
         if self._config.group_policy != "allowlist":
             return False
         allowed = {

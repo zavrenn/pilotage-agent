@@ -793,15 +793,15 @@ class TelegramChannel:
         if user is None or not chat_id:
             self._report_blocked(message)
             return False
+        if not self._is_user_allowed(user):
+            self._report_blocked(message)
+            return False
         if _is_group(message):
             if not self._is_group_allowed(chat_id):
                 return False
             if not self._group_message_is_triggered(message):
                 return False
             return True
-        if not self._is_user_allowed(user):
-            self._report_blocked(message)
-            return False
         return True
 
     def _clean_routing_mention(self, text: str) -> str:

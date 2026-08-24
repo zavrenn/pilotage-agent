@@ -210,7 +210,8 @@ class Config:
     # number must never answer whoever finds it. Entries are phone numbers in
     # digits, or full jids.
     allowed_senders: frozenset[str]
-    # Hermes' group gate, reduced to the production-used allowlist mode.
+    # Additional location gate for allowed senders. "*" means any group,
+    # never any sender.
     group_policy: str
     group_allow_from: frozenset[str]
     require_mention: bool
