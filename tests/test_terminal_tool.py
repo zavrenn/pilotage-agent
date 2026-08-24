@@ -172,6 +172,18 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(args=args):
                 self.assertIn("error", await self._run(args))
 
+    async def test_catastrophic_and_self_lifecycle_commands_never_reach_the_shell(self):
+        for command in (
+            "rm -rf /",
+            "mkfs.ext4 /dev/sda1",
+            "pilotage service stop",
+            "systemctl --user restart pilotage-agent@default.service",
+        ):
+            with self.subTest(command=command):
+                result = await self._run({"command": command})
+                self.assertIn("Blocked", result["error"])
+        self.assertEqual(_FakeShell.instances, [])
+
     async def test_parallel_calls_are_ordered_on_the_same_shell(self):
         context = _context()
         await asyncio.gather(

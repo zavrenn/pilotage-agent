@@ -986,7 +986,8 @@ class Agent:
     ) -> codex_stream.StreamResult:
         client = await self._ensure_client(force_refresh=force_refresh)
         try:
-            create_stream = client.responses.create(**request, stream=True)
+            wire_request = codex_stream._bypass_sdk_request_transform(request)
+            create_stream = client.responses.create(**wire_request, stream=True)
             try:
                 if ttfb_timeout > 0:
                     stream = await asyncio.wait_for(create_stream, timeout=ttfb_timeout)

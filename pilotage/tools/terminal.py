@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..redact import redact_sensitive_text, redact_terminal_output
+from .command_guard import find_blocked_command, profile_name_for_state_dir
 from .registry import Tool, ToolContext, tool_error
 from .shell import DEFAULT_TIMEOUT_SECONDS, Shell
 
@@ -125,6 +126,27 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
 
     session = get_terminal_session(context)
     async with session.lock:
+        base_cwd = (
+            str(session.shell.cwd)
+            if session.shell is not None and getattr(session.shell, "cwd", None)
+            else shell_cwd(context)
+        )
+        guard_cwd = base_cwd
+        if workdir:
+            candidate = Path(workdir).expanduser()
+            if not candidate.is_absolute() and base_cwd:
+                candidate = Path(base_cwd) / candidate
+            guard_cwd = str(candidate)
+        finding = find_blocked_command(
+            command,
+            cwd=guard_cwd,
+            current_profile=profile_name_for_state_dir(
+                getattr(context.config, "state_dir", None)
+            ),
+        )
+        if finding:
+            return tool_error(finding.message)
+
         if session.shell is None:
             try:
                 default_timeout = int(

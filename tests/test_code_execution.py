@@ -202,6 +202,25 @@ class ExecutionTests(unittest.TestCase):
         self.assertIn("Prepared environment 'docs' is unavailable", result["error"])
         self.assertIn("pilotage doctor", result["error"])
 
+    def test_literal_catastrophic_and_self_lifecycle_subprocesses_are_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            for source in (
+                'import subprocess\nsubprocess.run(["reboot"])',
+                'import subprocess\nsubprocess.run(["pilotage", "service", "stop"])',
+            ):
+                with self.subTest(source=source):
+                    result = self._run(source, workspace)
+                    self.assertIn("Blocked", result["error"])
+                    self.assertNotIn("status", result)
+
+    def test_command_words_printed_as_data_are_not_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self._run('print("reboot")', Path(directory))
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["output"].strip(), "reboot")
+
 
 class HandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_shell_command_shape_and_unknown_environment(self):

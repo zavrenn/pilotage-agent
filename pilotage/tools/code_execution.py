@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional
 from ..redact import redact_sensitive_text
 from ..settings import ConfigError
 from .ansi_strip import strip_ansi
+from .command_guard import find_blocked_python_source, profile_name_for_state_dir
 from .registry import Tool, ToolContext, tool_error
 from .subprocess_env import build_subprocess_env
 from .terminal import get_terminal_session, shell_cwd
@@ -287,6 +288,17 @@ def _execute(
     *,
     workspace: Optional[Path] = None,
 ) -> str:
+    working_dir = workspace or _workspace(context)
+    finding = find_blocked_python_source(
+        code,
+        cwd=str(working_dir),
+        current_profile=profile_name_for_state_dir(
+            getattr(context.config, "state_dir", None)
+        ),
+    )
+    if finding:
+        return tool_error(finding.message)
+
     interpreter = interpreter_path(context, environment)
     if not interpreter.is_file():
         return tool_error(
@@ -299,7 +311,6 @@ def _execute(
             f"interpreter is not executable: {interpreter}. Run pilotage doctor."
         )
 
-    working_dir = workspace or _workspace(context)
     if not working_dir.is_dir():
         return tool_error(
             f"Session working directory does not exist: {working_dir}"

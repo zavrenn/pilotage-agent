@@ -261,6 +261,40 @@ class ClientLifecycleTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(caught.exception.code, "codex_stream_no_first_byte")
 
+    async def test_stream_call_routes_bulk_payload_around_the_sdk_transform(self):
+        class RecordingResponses:
+            def __init__(self):
+                self.kwargs = None
+
+            async def create(self, **kwargs):
+                self.kwargs = kwargs
+                return FakeStream([_completed()])
+
+        responses = RecordingResponses()
+
+        async def client(*, force_refresh=False):
+            return SimpleNamespace(responses=responses)
+
+        request = {
+            "model": "gpt-test",
+            "input": [{"role": "user", "content": "hello"}],
+            "tools": [{"type": "function", "name": "terminal", "parameters": {}}],
+        }
+        self.agent._ensure_client = client
+
+        await self.agent._stream_once(
+            request,
+            force_refresh=False,
+            ttfb_timeout=1.0,
+            idle_timeout=1.0,
+        )
+
+        self.assertNotIn("input", responses.kwargs)
+        self.assertNotIn("tools", responses.kwargs)
+        self.assertEqual(responses.kwargs["extra_body"]["input"], request["input"])
+        self.assertEqual(responses.kwargs["extra_body"]["tools"], request["tools"])
+        self.assertTrue(responses.kwargs["stream"])
+
     async def test_close_releases_current_and_retired_clients_once(self):
         class FakeClient:
             def __init__(self):

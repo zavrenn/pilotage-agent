@@ -189,6 +189,21 @@ class CrudTests(StoreCase):
         with self.assertRaises(CronError):
             self.store.load_jobs()
 
+    def test_self_lifecycle_prompt_is_rejected_on_create_and_update(self):
+        with self.assertRaisesRegex(ValueError, "self-lifecycle"):
+            self.create(prompt="At midnight, run pilotage service stop")
+
+        job = self.create(prompt="Send the status")
+        with self.assertRaisesRegex(ValueError, "self-lifecycle"):
+            self.store.update_job(
+                job["id"],
+                {"prompt": "systemctl --user restart pilotage-agent@default.service"},
+            )
+
+    def test_sibling_profile_lifecycle_prompt_is_not_self_targeting(self):
+        job = self.create(prompt="Run pilotage -p sibling service stop")
+        self.assertEqual(job["prompt"], "Run pilotage -p sibling service stop")
+
     def test_corrupt_delivery_data_is_read_safely_and_fails_local(self):
         job = self.create(origin={"channel": "telegram", "chat_id": "42"})
         payload = json.loads(self.store.jobs_path.read_text(encoding="utf-8"))

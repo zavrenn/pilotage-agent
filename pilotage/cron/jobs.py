@@ -199,9 +199,10 @@ def compute_next_run(
     return None
 
 
-def validate_prompt(prompt: str) -> str:
+def validate_prompt(prompt: str, *, current_profile: str = "default") -> str:
     """Hermes' strict persisted-cron-prompt boundary."""
     # Lazy to keep cron storage independent of the tool registry import graph.
+    from pilotage.tools.command_guard import find_embedded_self_lifecycle
     from pilotage.tools.threat_patterns import first_threat_message
 
     written = str(prompt or "").strip()
@@ -210,6 +211,11 @@ def validate_prompt(prompt: str) -> str:
     threat = first_threat_message(written, scope="strict")
     if threat:
         raise ValueError(f"Blocked unsafe cron prompt: {threat}")
+    lifecycle = find_embedded_self_lifecycle(
+        written, current_profile=current_profile
+    )
+    if lifecycle:
+        raise ValueError(f"Blocked unsafe cron prompt: {lifecycle.message}")
     for pattern, pattern_id in _CRON_THREATS:
         if pattern.search(written):
             raise ValueError(f"Blocked unsafe cron prompt: threat pattern {pattern_id!r}.")
@@ -554,7 +560,12 @@ class CronStore:
         origin: Optional[Dict[str, Any]] = None,
         deliver: Optional[str] = None,
     ) -> Dict[str, Any]:
-        prompt_text = validate_prompt(prompt)
+        from pilotage.tools.command_guard import profile_name_for_state_dir
+
+        prompt_text = validate_prompt(
+            prompt,
+            current_profile=profile_name_for_state_dir(self.state_dir),
+        )
         skill_names = _normalize_skills(skills)
         normalized_toolsets = _normalize_enabled_toolsets(enabled_toolsets)
         normalized_workdir = _normalize_workdir(workdir)
@@ -642,7 +653,12 @@ class CronStore:
                     raise ValueError("name cannot be empty")
                 job["name"] = name[:MAX_NAME_CHARS]
             if "prompt" in updates:
-                job["prompt"] = validate_prompt(updates["prompt"])
+                from pilotage.tools.command_guard import profile_name_for_state_dir
+
+                job["prompt"] = validate_prompt(
+                    updates["prompt"],
+                    current_profile=profile_name_for_state_dir(self.state_dir),
+                )
             if "skills" in updates:
                 job["skills"] = _normalize_skills(updates["skills"])
                 job["skill"] = job["skills"][0] if job["skills"] else None

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -61,6 +62,61 @@ class CodexStreamTimeout(CodexStreamError):
 # ---------------------------------------------------------------------------
 # Request
 # ---------------------------------------------------------------------------
+
+
+# Bulk request fields that carry the conversation payload. Everything else is
+# scalar configuration the SDK transform handles quickly.
+_SDK_TRANSFORM_BYPASS_FIELDS = ("input", "tools")
+
+
+def _is_plain_json_data(value: Any) -> bool:
+    """Return whether *value* is already composed only of JSON wire types."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _is_plain_json_data(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return all(_is_plain_json_data(item) for item in value)
+    return False
+
+
+def _bypass_sdk_request_transform(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Route bulk wire-format payloads around the SDK transform.
+
+    ``responses.create`` otherwise walks the full input and tool graph before
+    opening the connection while holding the GIL. ``extra_body`` is merged
+    after that transform and produces the same wire body. Non-JSON values keep
+    the typed SDK path. Set ``PILOTAGE_CODEX_SDK_TRANSFORM=1`` to restore the
+    SDK path for diagnosis.
+    """
+    if os.environ.get("PILOTAGE_CODEX_SDK_TRANSFORM", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return request
+
+    moved = {
+        field: request[field]
+        for field in _SDK_TRANSFORM_BYPASS_FIELDS
+        if isinstance(request.get(field), (dict, list))
+        and _is_plain_json_data(request[field])
+    }
+    if not moved:
+        return request
+
+    bypassed = {key: value for key, value in request.items() if key not in moved}
+    extra_body = bypassed.get("extra_body")
+    merged = dict(extra_body) if isinstance(extra_body, dict) else {}
+    for field, value in moved.items():
+        # Explicit caller entries retain the SDK merge precedence.
+        merged.setdefault(field, value)
+    bypassed["extra_body"] = merged
+    return bypassed
 
 
 def content_cache_key(instructions: str, tools: Optional[List[Dict[str, Any]]], scope_id: str = "") -> Optional[str]:
@@ -306,9 +362,15 @@ async def consume_stream(
     """
     text_deltas: List[str] = []
     output_items: List[Dict[str, Any]] = []
+    output_indexes: List[Any] = []
+    output_sequences: List[int] = []
+    pending_function_calls: Dict[str, Dict[str, Any]] = {}
+    announced_output_order: Dict[str, Tuple[int, Any]] = {}
     result = StreamResult()
     terminal_seen = False
+    saw_response_completed = False
     first_event_seen = False
+    next_output_sequence = 0
     active_message_phase: Optional[str] = None
     saw_intermediate_message = False
     saw_final_message = False
@@ -334,7 +396,23 @@ async def consume_stream(
 
         if event_type == "response.output_item.added":
             item = _field(event, "item")
-            if _field(item, "type", "") == "message":
+            item_type = str(_field(item, "type", "") or "")
+            item_id = str(_field(item, "id", "") or "")
+            if item_id and item_id not in announced_output_order:
+                announced_output_order[item_id] = (
+                    next_output_sequence,
+                    _field(event, "output_index"),
+                )
+                next_output_sequence += 1
+            if "function_call" in item_type and item_id:
+                sequence, output_index = announced_output_order[item_id]
+                pending_function_calls[item_id] = {
+                    "item": item,
+                    "arguments": str(_field(item, "arguments", "") or ""),
+                    "output_index": output_index,
+                    "sequence": sequence,
+                }
+            if item_type == "message":
                 active_message_phase = _message_phase(_field(item, "phase")) or None
                 saw_intermediate_message = (
                     saw_intermediate_message
@@ -346,6 +424,24 @@ async def consume_stream(
             else:
                 active_message_phase = None
             continue
+
+        if "function_call" in event_type:
+            if "delta" in event_type:
+                pending = pending_function_calls.get(
+                    str(_field(event, "item_id", "") or "")
+                )
+                delta = _field(event, "delta", "")
+                if pending is not None and delta:
+                    pending["arguments"] += str(delta)
+                continue
+            if event_type.endswith("function_call_arguments.done"):
+                pending = pending_function_calls.get(
+                    str(_field(event, "item_id", "") or "")
+                )
+                arguments = _field(event, "arguments", None)
+                if pending is not None and arguments is not None:
+                    pending["arguments"] = str(arguments)
+                continue
 
         if event_type.endswith("output_text.delta"):
             delta = _field(event, "delta", "") or ""
@@ -360,6 +456,19 @@ async def consume_stream(
             if item is not None:
                 item_dict = _as_dict(item)
                 output_items.append(item_dict)
+                item_id = str(item_dict.get("id") or "")
+                sequence, announced_index = announced_output_order.get(
+                    item_id, (None, None)
+                )
+                output_index = _field(event, "output_index")
+                if output_index is None:
+                    output_index = announced_index
+                if sequence is None:
+                    sequence = next_output_sequence
+                    next_output_sequence += 1
+                output_indexes.append(output_index)
+                output_sequences.append(sequence)
+                pending_function_calls.pop(item_id, None)
                 if item_dict.get("type") == "message":
                     phase = _message_phase(item_dict.get("phase"))
                     saw_intermediate_message = (
@@ -378,7 +487,47 @@ async def consume_stream(
                 if error is not None:
                     _raise_stream_error(error)
             terminal_seen = True
+            saw_response_completed = event_type == "response.completed"
             break
+
+    # Compatible Responses backends can omit output_item.done for calls they
+    # announced and then successfully complete. Settle only after an observed
+    # response.completed; done items remain authoritative.
+    if pending_function_calls and saw_response_completed:
+        indexed = [
+            (index, sequence, position, item)
+            for position, (index, sequence, item) in enumerate(
+                zip(output_indexes, output_sequences, output_items)
+            )
+        ]
+        for position, pending in enumerate(
+            pending_function_calls.values(), start=len(indexed)
+        ):
+            item = pending["item"]
+            arguments = str(pending["arguments"] or "").strip() or "{}"
+            indexed.append(
+                (
+                    pending.get("output_index"),
+                    pending["sequence"],
+                    position,
+                    {
+                        "type": "function_call",
+                        "id": _field(item, "id"),
+                        "call_id": _field(item, "call_id"),
+                        "name": _field(item, "name"),
+                        "arguments": arguments,
+                        "status": "completed",
+                    },
+                )
+            )
+        if all(entry[0] is not None for entry in indexed):
+            try:
+                indexed.sort(key=lambda entry: entry[0])
+            except TypeError:
+                pass
+        else:
+            indexed.sort(key=lambda entry: entry[1])
+        output_items = [entry[3] for entry in indexed]
 
     result.message_items = _message_items_from_items(output_items)
     message_text = _final_text_from_message_items(result.message_items)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 from pilotage.codex import stream as codex_stream
 from pilotage.codex.call_ids import MAX_ITEM_ID_LENGTH, clamp_call_id, deterministic_call_id
@@ -19,6 +20,43 @@ from pilotage.codex.call_ids import MAX_ITEM_ID_LENGTH, clamp_call_id, determini
 def _item(**fields) -> SimpleNamespace:
     return SimpleNamespace(
         type="response.output_item.done", item={"type": "function_call", **fields}
+    )
+
+
+def _function_added(
+    *,
+    item_id: str,
+    call_id: str,
+    name: str,
+    arguments: str = "",
+    output_index=None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="response.output_item.added",
+        output_index=output_index,
+        item={
+            "type": "function_call",
+            "id": item_id,
+            "call_id": call_id,
+            "name": name,
+            "arguments": arguments,
+        },
+    )
+
+
+def _arguments_delta(item_id: str, delta: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="response.function_call_arguments.delta",
+        item_id=item_id,
+        delta=delta,
+    )
+
+
+def _arguments_done(item_id: str, arguments: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="response.function_call_arguments.done",
+        item_id=item_id,
+        arguments=arguments,
     )
 
 
@@ -147,6 +185,119 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         self.assertEqual([call["call_id"] for call in result.tool_calls], ["c1", "c2"])
+
+    async def test_a_pending_call_settles_when_item_done_is_omitted(self):
+        result = await _consume(
+            [
+                _function_added(item_id="fc_1", call_id="c1", name="todo"),
+                _arguments_delta("fc_1", '{"merge":'),
+                _arguments_delta("fc_1", "true}"),
+                _completed(),
+            ]
+        )
+
+        self.assertEqual(
+            result.tool_calls,
+            [{"call_id": "c1", "name": "todo", "arguments": '{"merge":true}'}],
+        )
+
+    async def test_arguments_done_is_authoritative_for_a_pending_call(self):
+        result = await _consume(
+            [
+                _function_added(item_id="fc_1", call_id="c1", name="todo"),
+                _arguments_delta("fc_1", '{"partial":'),
+                _arguments_done("fc_1", '{"final": true}'),
+                _completed(),
+            ]
+        )
+
+        self.assertEqual(result.tool_calls[0]["arguments"], '{"final": true}')
+
+    async def test_zero_argument_pending_call_settles_with_an_empty_object(self):
+        result = await _consume(
+            [_function_added(item_id="fc_1", call_id="c1", name="todo"), _completed()]
+        )
+
+        self.assertEqual(result.tool_calls[0]["arguments"], "{}")
+
+    async def test_pending_call_is_not_settled_without_successful_completion(self):
+        incomplete = SimpleNamespace(
+            type="response.incomplete",
+            response=SimpleNamespace(
+                status="incomplete", usage=None, id="resp_1", error=None
+            ),
+        )
+        result = await _consume(
+            [_function_added(item_id="fc_1", call_id="c1", name="todo"), incomplete]
+        )
+
+        self.assertEqual(result.tool_calls, [])
+
+    async def test_item_done_remains_authoritative_and_is_not_duplicated(self):
+        result = await _consume(
+            [
+                _function_added(item_id="fc_1", call_id="c1", name="todo"),
+                _arguments_delta("fc_1", '{"partial":'),
+                _item(
+                    id="fc_1",
+                    name="todo",
+                    arguments='{"done": true}',
+                    call_id="c1",
+                ),
+                _completed(),
+            ]
+        )
+
+        self.assertEqual(
+            result.tool_calls,
+            [{"call_id": "c1", "name": "todo", "arguments": '{"done": true}'}],
+        )
+
+    async def test_pending_and_done_calls_keep_output_index_order(self):
+        done_second = SimpleNamespace(
+            type="response.output_item.done",
+            output_index=1,
+            item={
+                "type": "function_call",
+                "id": "fc_2",
+                "call_id": "c2",
+                "name": "second",
+                "arguments": '{"step": 2}',
+            },
+        )
+        result = await _consume(
+            [
+                _function_added(
+                    item_id="fc_1", call_id="c1", name="first", output_index=0
+                ),
+                _arguments_delta("fc_1", '{"step": 1}'),
+                _function_added(
+                    item_id="fc_2", call_id="c2", name="second", output_index=1
+                ),
+                done_second,
+                _completed(),
+            ]
+        )
+
+        self.assertEqual([call["call_id"] for call in result.tool_calls], ["c1", "c2"])
+
+    async def test_missing_indexes_use_first_observed_order(self):
+        result = await _consume(
+            [
+                _function_added(item_id="fc_1", call_id="c1", name="first"),
+                _function_added(item_id="fc_2", call_id="c2", name="second"),
+                _item(id="fc_1", name="first", arguments="{}", call_id="c1"),
+                _completed(),
+            ]
+        )
+
+        self.assertEqual([call["call_id"] for call in result.tool_calls], ["c1", "c2"])
+
+    async def test_eof_does_not_turn_a_pending_call_into_authority(self):
+        with self.assertRaises(codex_stream.CodexStreamError):
+            await _consume(
+                [_function_added(item_id="fc_1", call_id="c1", name="todo")]
+            )
 
     async def test_an_answer_with_no_calls_has_none(self):
         result = await _consume(
@@ -283,6 +434,61 @@ class CacheKeyTests(unittest.TestCase):
             codex_stream.content_cache_key("do things", None, "chat_a"),
             codex_stream.content_cache_key("do things", None, "chat_b"),
         )
+
+
+class SdkTransformBypassTests(unittest.TestCase):
+    def _request(self):
+        return {
+            "model": "gpt-test",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "Hi"}]}],
+            "tools": [{"type": "function", "name": "terminal", "parameters": {}}],
+            "store": False,
+        }
+
+    def test_plain_json_payloads_are_moved_without_mutating_the_request(self):
+        request = self._request()
+        original_input = request["input"]
+
+        bypassed = codex_stream._bypass_sdk_request_transform(request)
+
+        self.assertNotIn("input", bypassed)
+        self.assertNotIn("tools", bypassed)
+        self.assertIs(bypassed["extra_body"]["input"], original_input)
+        self.assertEqual(bypassed["extra_body"]["tools"], request["tools"])
+        self.assertIs(request["input"], original_input)
+        self.assertNotIn("extra_body", request)
+
+    def test_existing_extra_body_keeps_precedence(self):
+        request = self._request()
+        caller_extra = {"input": "explicit", "prompt_cache_retention": "24h"}
+        request["extra_body"] = caller_extra
+
+        bypassed = codex_stream._bypass_sdk_request_transform(request)
+
+        self.assertEqual(bypassed["extra_body"]["input"], "explicit")
+        self.assertEqual(bypassed["extra_body"]["tools"], request["tools"])
+        self.assertEqual(caller_extra, {"input": "explicit", "prompt_cache_retention": "24h"})
+
+    def test_non_json_bulk_field_stays_on_the_typed_path(self):
+        request = self._request()
+        request["input"] = [{"content": object()}]
+
+        bypassed = codex_stream._bypass_sdk_request_transform(request)
+
+        self.assertIs(bypassed["input"], request["input"])
+        self.assertEqual(bypassed["extra_body"], {"tools": request["tools"]})
+
+    def test_scalar_input_stays_on_the_typed_path(self):
+        request = {"model": "gpt-test", "input": "hello"}
+
+        self.assertIs(codex_stream._bypass_sdk_request_transform(request), request)
+
+    def test_escape_hatch_restores_the_sdk_transform(self):
+        request = self._request()
+        with mock.patch.dict(
+            "os.environ", {"PILOTAGE_CODEX_SDK_TRANSFORM": "1"}, clear=False
+        ):
+            self.assertIs(codex_stream._bypass_sdk_request_transform(request), request)
 
 
 if __name__ == "__main__":  # pragma: no cover
