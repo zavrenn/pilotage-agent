@@ -23,6 +23,7 @@ import inspect
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
 from ..approvals import ApprovalOutcome, approval_required
@@ -153,6 +154,12 @@ class ToolContext:
     # The delivery location that created a job, never a model-selected target.
     origin: Optional[Dict[str, str]] = None
     cron_wake: Optional[Callable[[], None]] = None
+    # Turn-scoped logical cwd. Cron jobs use this instead of mutating process
+    # environment, so concurrent jobs cannot leak directories into each other.
+    working_directory: Optional[Path] = None
+    # None means the profile's full skill set. Scheduled jobs pass an explicit
+    # allowlist, including an empty set.
+    allowed_skills: Optional[frozenset[str]] = None
     # Bound by Agent to this exact conversation and its live messaging reply
     # surface. A missing callback fails a required write closed.
     approval_request: Optional[ApprovalRequest] = None

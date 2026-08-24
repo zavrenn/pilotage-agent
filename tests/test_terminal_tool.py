@@ -56,6 +56,11 @@ class _FakeShell:
             if command.startswith("cd ") and not cwd:
                 self.cwd = command[3:]
                 return {"output": "", "returncode": 0, "cwd_observed": True}
+            if command == "printenv":
+                return {
+                    "output": "MY_SERVICE_TOKEN=opaque-value-1234567890\n",
+                    "returncode": 0,
+                }
             return {"output": f"ran {command}", "returncode": 0}
         finally:
             with type(self).active_lock:
@@ -150,6 +155,11 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         context = _context(data={"terminal": {"timeout": 45}})
         await self._run({"command": "build", "timeout": 300}, context)
         self.assertEqual(_FakeShell.instances[0].calls[0][2]["timeout"], 300)
+
+    async def test_terminal_output_is_redacted_before_the_model_receives_it(self):
+        result = await self._run({"command": "printenv"})
+        self.assertNotIn("opaque-value-1234567890", result["output"])
+        self.assertIn("MY_SERVICE_TOKEN=", result["output"])
 
     async def test_bad_arguments_are_errors_the_model_can_fix(self):
         for args in (

@@ -76,6 +76,7 @@ function readFlag(name, envName, fallback = false) {
 const PORT = Number.parseInt(readArg('port', '8765'), 10);
 const INSTANCE_TOKEN = readArg('instance-token', process.env.PILOTAGE_BRIDGE_TOKEN || '');
 const SESSION_DIR = readArg('session', './session');
+const PAIR_ONLY = process.argv.includes('--pair-only');
 // Inbound media is written here, outside the session directory: re-pairing
 // deletes the session, and a cached voice note should not depend on that.
 const MEDIA_DIR = readArg('media', './media');
@@ -86,7 +87,7 @@ const ANSWER_GROUPS = readFlag('answer-groups', 'PILOTAGE_ANSWER_GROUPS', false)
 const ALLOWED_USERS = parseAllowedUsers(process.env.PILOTAGE_ALLOWED_SENDERS || '');
 const ALLOWED_GROUPS = parseAllowedUsers(process.env.PILOTAGE_ALLOWED_GROUPS || '');
 
-if (!INSTANCE_TOKEN) {
+if (!PAIR_ONLY && !INSTANCE_TOKEN) {
   console.error('[bridge] --instance-token is required');
   process.exit(2);
 }
@@ -313,6 +314,10 @@ async function startSocket() {
       connected = true;
       meId = sock.user?.id || null;
       log(`connected as ${meId}`);
+      if (PAIR_ONLY) {
+        log('pairing complete; credentials saved');
+        setTimeout(() => process.exit(0), 2000);
+      }
       return;
     }
 
@@ -566,12 +571,17 @@ app.post('/send-media', async (req, res) => {
 // Boot
 // ---------------------------------------------------------------------------
 
-const server = app.listen(PORT, '127.0.0.1', () => {
-  log(`listening on http://127.0.0.1:${PORT} (session: ${SESSION_DIR}, media: ${MEDIA_DIR})`);
-});
+let server = null;
+if (PAIR_ONLY) {
+  log(`pairing mode (session: ${SESSION_DIR})`);
+} else {
+  server = app.listen(PORT, '127.0.0.1', () => {
+    log(`listening on http://127.0.0.1:${PORT} (session: ${SESSION_DIR}, media: ${MEDIA_DIR})`);
+  });
+}
 
 function shutdown() {
-  try { server.close(); } catch { /* already down */ }
+  try { server?.close(); } catch { /* already down */ }
   try { sock?.end?.(undefined); } catch { /* already down */ }
   process.exit(0);
 }

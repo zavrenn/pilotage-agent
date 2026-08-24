@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .approvals import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from .codex.compaction import DEFAULT_COMPACT_THRESHOLD
+from .i18n import DEFAULT_PROFILE_LANGUAGE, normalize_language, t
 from .profiles import default_state_root
 from .settings import ConfigError, Settings, config_path
 
@@ -60,7 +61,8 @@ WHATSAPP_MEDIA_NOTE = (
     "file, include MEDIA:/absolute/path/to/file on its own line in your "
     "response. Images (.jpg, .png, .webp) appear as photos; PDFs, spreadsheets "
     "and other files arrive as downloadable documents. The file must be inside "
-    "this profile's workspace. Use MEDIA: for local files, never a markdown "
+    "this profile's workspace or an operator-declared delivery directory. "
+    "Use MEDIA: for local files, never a markdown "
     "link or sandbox: URL."
 )
 
@@ -73,7 +75,8 @@ TELEGRAM_FORMATTING_NOTE = (
 TELEGRAM_MEDIA_NOTE = (
     "You can send generated files natively on Telegram. To deliver a local "
     "file, include MEDIA:/absolute/path/to/file on its own line in your "
-    "response. The file must be inside this profile's workspace."
+    "response. The file must be inside this profile's workspace or an "
+    "operator-declared delivery directory."
 )
 
 # How many times the model may call tools and look at the results before it has
@@ -101,6 +104,8 @@ DEFAULT_CRON_OUTPUT_RETENTION = 50
 
 # Production's maximum total quiet-window batch age.
 DEFAULT_BATCH_HARD_CAP_SECONDS = 20.0
+DEFAULT_SESSION_RETENTION_DAYS = 90
+DEFAULT_WORKING_NOTICE_INTERVAL_SECONDS = 180.0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -181,11 +186,26 @@ def _number_in_range(name: str, value: float, *, minimum: float, inclusive: bool
     return value
 
 
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Whether a resolved path is inside one resolved trusted root."""
+
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 @dataclass(frozen=True)
 class Config:
     model: str
     reasoning_effort: str
     instructions: str
+    # Runtime-owned static messages.  The model's language and register remain
+    # part of the profile's SOUL.md identity.
+    language: str
+    # One profile timezone, inherited by cron and automatic daily resets.
+    timezone: str
     # Who the agent answers. Empty means nobody: an agent wired to a real phone
     # number must never answer whoever finds it. Entries are phone numbers in
     # digits, or full jids.
@@ -204,6 +224,16 @@ class Config:
     text_batch_hard_cap_seconds: float
     # Turns of history kept per chat, in memory and on disk.
     history_turns: int
+    # Current Hermes' messaging reset policy, profile-wide.
+    session_reset_mode: str
+    session_reset_idle_minutes: int
+    session_reset_at_hour: int
+    session_reset_notify: bool
+    # Optional ended-session history cleanup. Active sessions are never pruned.
+    session_auto_prune: bool
+    session_retention_days: int
+    # Route each conversation generation into its own restricted workspace.
+    session_isolated_workspaces: bool
     # Hermes-native server compaction on the fixed ChatGPT Codex route.
     codex_native_compaction: bool
     codex_compact_threshold: int
@@ -229,6 +259,9 @@ class Config:
     # is for a stream that started and then stopped. Zero waits forever.
     codex_first_event_timeout_seconds: float
     codex_quiet_stream_timeout_seconds: float
+    # A bounded, non-technical heartbeat for long messaging turns. Zero disables.
+    working_notice_interval_seconds: float
+    working_notice_text: str
     # Blue ticks. Off unless the operator asks: an agent that watches a chat
     # should not silently mark everything as read.
     send_read_receipts: bool
@@ -239,6 +272,11 @@ class Config:
     # The file itself, so a tool added in a later slice can read its own
     # settings without this dataclass growing a field for every one of them.
     settings: Settings = field(default_factory=Settings, compare=False, repr=False)
+    # Current Hermes' home-channel contract, narrowed to Pilotage's two
+    # platforms. Channel identities stay in the profile .env, not YAML.
+    channel: str = "whatsapp"
+    home_chat_id: str = ""
+    home_thread_id: str = ""
 
     @property
     def session_dir(self) -> Path:
@@ -246,11 +284,7 @@ class Config:
 
     @property
     def media_dir(self) -> Path:
-        """Inbound media, kept outside the session directory.
-
-        Re-pairing deletes the session; a cached voice note should not depend
-        on that. Nothing prunes this directory yet — see docs/skeleton-drops.md.
-        """
+        """Short-lived channel cache; active files are copied into session inputs."""
         return self.state_dir / "media"
 
     @property
@@ -276,6 +310,28 @@ class Config:
     def workspace_dir(self) -> Path:
         """The profile-local default root for terminal and file tools."""
         return self.state_dir / "workspace"
+
+    @property
+    def outbound_media_roots(self) -> tuple[Path, ...]:
+        """Directories explicitly trusted for native outbound file delivery."""
+
+        roots = [self.workspace_dir.resolve(strict=False)]
+        for written in self.settings.names("gateway.media_delivery_allow_dirs"):
+            resolved = Path(written).expanduser().resolve(strict=False)
+            if resolved not in roots:
+                roots.append(resolved)
+        return tuple(roots)
+
+    @property
+    def home_origin(self) -> dict[str, str] | None:
+        """The declared destination for unattended output on this channel."""
+
+        if self.channel not in {"whatsapp", "telegram"} or not self.home_chat_id:
+            return None
+        origin = {"channel": self.channel, "chat_id": self.home_chat_id}
+        if self.channel == "telegram" and self.home_thread_id:
+            origin["thread_id"] = self.home_thread_id
+        return origin
 
     @property
     def credentials_path(self) -> Path:
@@ -307,6 +363,24 @@ class Config:
         settings = Settings.load(config_path(home))
         if channel:
             settings = settings.for_channel(channel)
+        active_channel = (channel or "whatsapp").strip().lower()
+        home_chat_id = ""
+        home_thread_id = ""
+        if active_channel == "whatsapp":
+            home_chat_id = _env_str("WHATSAPP_HOME_CHANNEL", "")
+        elif active_channel == "telegram":
+            home_chat_id = _env_str("TELEGRAM_HOME_CHANNEL", "")
+            home_thread_id = _env_str("TELEGRAM_HOME_CHANNEL_THREAD_ID", "")
+            if home_thread_id and not home_thread_id.isdigit():
+                raise ConfigError(
+                    "TELEGRAM_HOME_CHANNEL_THREAD_ID must be a positive numeric "
+                    "Telegram topic ID"
+                )
+            if home_thread_id and int(home_thread_id) <= 0:
+                raise ConfigError(
+                    "TELEGRAM_HOME_CHANNEL_THREAD_ID must be a positive numeric "
+                    "Telegram topic ID"
+                )
 
         if settings.get("whatsapp.allowed_senders") is not None:
             raise ConfigError(
@@ -338,6 +412,9 @@ class Config:
         from .tools.web import validate_web_settings
 
         validate_web_settings(settings)
+        from .tools.code_execution import validate_settings as validate_code_execution
+
+        validate_code_execution(settings)
         from .transcription import validate_settings as validate_stt_settings
 
         validate_stt_settings(settings)
@@ -348,6 +425,18 @@ class Config:
         settings.names("skills.disabled")
         settings.flag("skills.template_vars", True)
         settings.flag("skills.inline_shell", False)
+        for written in settings.names("gateway.media_delivery_allow_dirs"):
+            root = Path(written).expanduser()
+            if not root.is_absolute():
+                raise ConfigError(
+                    "gateway.media_delivery_allow_dirs must contain absolute "
+                    f"paths, not {written!r}"
+                )
+            if not root.is_dir():
+                raise ConfigError(
+                    "gateway.media_delivery_allow_dirs path is not an existing "
+                    f"directory: {root}"
+                )
         _count_in_range(
             "skills.inline_shell_timeout",
             settings.count("skills.inline_shell_timeout", 10),
@@ -360,6 +449,33 @@ class Config:
                 raise ConfigError(
                     "terminal.cwd must be an existing accessible directory, "
                     f"not {terminal_cwd!r}"
+                )
+        isolated_workspaces = settings.flag(
+            "sessions.isolated_workspaces", False
+        )
+        if isolated_workspaces and terminal_cwd:
+            if not expanded_cwd.is_absolute():
+                raise ConfigError(
+                    "terminal.cwd must be absolute when "
+                    "sessions.isolated_workspaces is enabled"
+                )
+            resolved_cwd = expanded_cwd.resolve(strict=False)
+            trusted_roots = [
+                (home / "workspace").resolve(strict=False),
+                *[
+                    Path(written).expanduser().resolve(strict=False)
+                    for written in settings.names(
+                        "gateway.media_delivery_allow_dirs"
+                    )
+                ],
+            ]
+            if not any(
+                _path_is_within(resolved_cwd, root) for root in trusted_roots
+            ):
+                raise ConfigError(
+                    "terminal.cwd must be inside the profile workspace or a "
+                    "gateway.media_delivery_allow_dirs path when "
+                    "sessions.isolated_workspaces is enabled"
                 )
         legacy_answer_groups = settings.get("whatsapp.answer_groups")
         if legacy_answer_groups is not None and settings.flag(
@@ -381,10 +497,35 @@ class Config:
             settings.names("whatsapp.group_allow_from")
         )
         require_mention = settings.flag("whatsapp.require_mention", False)
-        cron_timezone = settings.text("cron.timezone", "")
+        session_reset_mode = settings.text(
+            "session_reset.mode", "none"
+        ).strip().lower()
+        if session_reset_mode not in {"none", "idle", "daily", "both"}:
+            raise ConfigError(
+                "session_reset.mode must be 'none', 'idle', 'daily', or 'both', "
+                f"not {session_reset_mode!r}"
+            )
+        language_written = settings.text(
+            "display.language", DEFAULT_PROFILE_LANGUAGE
+        )
+        try:
+            language = normalize_language(language_written)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+        working_notice_text = settings.text(
+            "agent.working_notice_text",
+            t("runtime.working", language),
+        )
+        if len(working_notice_text) > 280:
+            raise ConfigError(
+                "agent.working_notice_text must be at most 280 characters"
+            )
+        timezone_name = settings.text("timezone", "")
+        cron_timezone = settings.text("cron.timezone", timezone_name)
         try:
             from .cron.jobs import timezone_for_name
 
+            timezone_for_name(timezone_name)
             timezone_for_name(cron_timezone)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
@@ -398,6 +539,8 @@ class Config:
             model=settings.text("agent.model", DEFAULT_MODEL),
             reasoning_effort=settings.text("agent.reasoning_effort", DEFAULT_REASONING_EFFORT),
             instructions=_instructions(settings, home, channel),
+            language=language,
+            timezone=timezone_name,
             allowed_senders=frozenset(senders),
             group_policy=group_policy,
             group_allow_from=group_allow_from,
@@ -435,6 +578,28 @@ class Config:
                 settings.count("agent.history_turns", 20),
                 minimum=1,
             ),
+            session_reset_mode=session_reset_mode,
+            session_reset_idle_minutes=_count_in_range(
+                "session_reset.idle_minutes",
+                settings.count("session_reset.idle_minutes", 1440),
+                minimum=1,
+            ),
+            session_reset_at_hour=_count_in_range(
+                "session_reset.at_hour",
+                settings.count("session_reset.at_hour", 4),
+                minimum=0,
+                maximum=23,
+            ),
+            session_reset_notify=settings.flag("session_reset.notify", True),
+            session_auto_prune=settings.flag("sessions.auto_prune", False),
+            session_retention_days=_count_in_range(
+                "sessions.retention_days",
+                settings.count(
+                    "sessions.retention_days", DEFAULT_SESSION_RETENTION_DAYS
+                ),
+                minimum=1,
+            ),
+            session_isolated_workspaces=isolated_workspaces,
             codex_native_compaction=settings.flag(
                 "compression.codex_responses_native", True
             ),
@@ -519,6 +684,16 @@ class Config:
                 minimum=0,
                 inclusive=True,
             ),
+            working_notice_interval_seconds=_number_in_range(
+                "agent.working_notice_interval",
+                settings.number(
+                    "agent.working_notice_interval",
+                    DEFAULT_WORKING_NOTICE_INTERVAL_SECONDS,
+                ),
+                minimum=0,
+                inclusive=True,
+            ),
+            working_notice_text=working_notice_text,
             send_read_receipts=settings.flag("whatsapp.read_receipts", False),
             max_tool_iterations=_count_in_range(
                 "tools.max_iterations",
@@ -536,6 +711,9 @@ class Config:
                 minimum=1,
             ),
             settings=settings,
+            channel=active_channel,
+            home_chat_id=home_chat_id,
+            home_thread_id=home_thread_id,
         )
 
 

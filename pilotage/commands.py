@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import __version__
+from .i18n import DEFAULT_LANGUAGE, t
 
 
 @dataclass(frozen=True)
@@ -73,10 +74,13 @@ def parse_command(text: str) -> Optional[CommandInvocation]:
     return CommandInvocation(command, arguments)
 
 
-def help_text() -> str:
-    lines = ["Management commands:"]
+def help_text(language: str = DEFAULT_LANGUAGE) -> str:
+    lines = [t("commands.header", language)]
     for command in COMMAND_REGISTRY:
-        aliases = "".join(f" (alias: /{alias})" for alias in command.aliases)
+        aliases = "".join(
+            f" ({t('commands.alias', language, alias=alias)})"
+            for alias in command.aliases
+        )
         lines.append(f"/{command.name} — {command.description}{aliases}")
     return "\n".join(lines)
 
@@ -95,37 +99,50 @@ def _auth_scope(config: Any) -> str:
     primary = Path(config.credentials_path)
     fallback = Path(config.main_credentials_path)
     if primary.exists():
-        return "this profile"
+        return "profile"
     try:
         distinct = primary.resolve(strict=False) != fallback.resolve(strict=False)
     except OSError:
         distinct = primary != fallback
     if distinct and fallback.exists():
-        return "shared from default profile"
-    return "not signed in"
+        return "shared"
+    return "missing"
 
 
 def profile_text(config: Any, profile_name: str) -> str:
+    language = str(getattr(config, "language", DEFAULT_LANGUAGE))
+    auth_scope = t(f"commands.auth_{_auth_scope(config)}", language)
     return (
-        f"Profile: {profile_name}\n"
-        f"State: {config.state_dir}\n"
-        f"ChatGPT auth: {_auth_scope(config)}"
+        f"{t('commands.profile', language, profile=profile_name)}\n"
+        f"{t('commands.state', language, state=config.state_dir)}\n"
+        f"{t('commands.auth', language, scope=auth_scope)}"
     )
 
 
 def status_text(config: Any, profile_name: str) -> str:
+    language = str(getattr(config, "language", DEFAULT_LANGUAGE))
     tools = configured_tool_names(config)
     channel = str(getattr(config.settings, "channel", "") or "local")
-    cron_state = "enabled" if getattr(config, "cron_enabled", True) else "disabled"
-    cron_timezone = str(getattr(config, "cron_timezone", "") or "system local")
+    cron_state = t(
+        "commands.enabled"
+        if getattr(config, "cron_enabled", True)
+        else "commands.disabled",
+        language,
+    )
+    cron_timezone = str(
+        getattr(config, "cron_timezone", "")
+        or t("commands.system_local", language)
+    )
+    tool_text = ", ".join(tools) if tools else t("commands.none", language)
+    auth_scope = t(f"commands.auth_{_auth_scope(config)}", language)
     return (
         f"Pilotage {__version__}\n"
-        f"Profile: {profile_name}\n"
-        f"Model: {config.model}\n"
-        f"Channel: {channel}\n"
-        f"Tools: {', '.join(tools) if tools else 'none'}\n"
-        f"Cron: {cron_state} ({cron_timezone})\n"
-        f"ChatGPT auth: {_auth_scope(config)}"
+        f"{t('commands.profile', language, profile=profile_name)}\n"
+        f"{t('commands.model', language, model=config.model)}\n"
+        f"{t('commands.channel', language, channel=channel)}\n"
+        f"{t('commands.tools', language, tools=tool_text)}\n"
+        f"{t('commands.cron', language, state=cron_state, timezone=cron_timezone)}\n"
+        f"{t('commands.auth', language, scope=auth_scope)}"
     )
 
 
@@ -141,14 +158,15 @@ async def execute_command(
     """Execute one recognized command and return its channel-neutral text."""
 
     name = invocation.command.name
+    language = str(getattr(config, "language", DEFAULT_LANGUAGE))
     if name == "approve":
         if invocation.arguments:
-            return "Usage: /approve"
+            return t("commands.usage", language, command="approve")
         resolved = agent.resolve_approval(session_id, approved=True)
         return (
-            "Approved. I’ll continue."
+            t("commands.approved", language)
             if resolved
-            else "No approval is waiting."
+            else t("commands.no_approval", language)
         )
     if name == "deny":
         resolved = agent.resolve_approval(
@@ -157,14 +175,14 @@ async def execute_command(
             reason=invocation.arguments,
         )
         return (
-            "Denied. Nothing will be changed."
+            t("commands.denied", language)
             if resolved
-            else "No approval is waiting."
+            else t("commands.no_approval", language)
         )
     if invocation.arguments:
-        return f"Usage: /{name}"
+        return t("commands.usage", language, command=name)
     if name == "help":
-        return help_text()
+        return help_text(language)
     if name == "new":
         await agent.forget(session_id)
         return reset_reply
@@ -172,5 +190,5 @@ async def execute_command(
         return status_text(config, profile_name)
     if name == "profile":
         return profile_text(config, profile_name)
-    return f"Unknown command: /{name}"
+    return t("commands.unknown", language, command=name)
 

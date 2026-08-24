@@ -13,15 +13,17 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, List
+from unittest import mock
 
 import httpx
 from openai import APIStatusError
 
-from pilotage import agent as agent_module
 from pilotage.agent import Agent
+from pilotage.codex import auth
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
 from pilotage.history import ConversationStore
+from pilotage.i18n import t
 
 # A step in a staged stream that never finishes.
 HANG = object()
@@ -198,7 +200,10 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         result = await self.agent._run_turn("chat", "hi", [], self._notice)
         self.assertEqual(result.text, "Answered.")
         self.assertEqual(len(self.attempts), 2)
-        self.assertEqual(self.notices, [agent_module.RECONNECT_NOTICE])
+        self.assertEqual(
+            self.notices,
+            [t("runtime.reconnect", self.agent._config.language)],
+        )
 
     async def test_a_second_quiet_connection_gives_up(self):
         quiet = [
@@ -227,6 +232,127 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         self.agent._stream_once = self._answer_after([quiet])
         result = await self.agent._run_turn("chat", "hi", [], explode)
         self.assertEqual(result.text, "Answered.")
+
+
+class ClientLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.agent = Agent(
+            Config.load(),
+            ConversationStore(Path(tmp.name) / "conversations.db"),
+        )
+
+    async def test_stream_creation_itself_is_bounded_by_ttfb(self):
+        class HangingResponses:
+            async def create(self, **_kwargs):
+                await asyncio.Event().wait()
+
+        async def client(*, force_refresh=False):
+            return SimpleNamespace(responses=HangingResponses())
+
+        self.agent._ensure_client = client
+        with self.assertRaises(codex_stream.CodexStreamTimeout) as caught:
+            await self.agent._stream_once(
+                {"model": "gpt-test", "input": []},
+                force_refresh=False,
+                ttfb_timeout=0.02,
+                idle_timeout=1.0,
+            )
+        self.assertEqual(caught.exception.code, "codex_stream_no_first_byte")
+
+    async def test_close_releases_current_and_retired_clients_once(self):
+        class FakeClient:
+            def __init__(self):
+                self.closed = 0
+
+            async def close(self):
+                self.closed += 1
+
+        retired = FakeClient()
+        current = FakeClient()
+        self.agent._retired_clients[id(retired)] = retired
+        self.agent._client = current
+
+        await self.agent.close()
+        await self.agent.close()
+
+        self.assertEqual((retired.closed, current.closed), (1, 1))
+
+    async def test_replaced_client_closes_when_its_last_stream_releases_it(self):
+        class FakeClient:
+            def __init__(self):
+                self.closed = 0
+
+            async def close(self):
+                self.closed += 1
+
+        old = FakeClient()
+        replacement = FakeClient()
+        old_credentials = auth.Credentials("old", "refresh", "https://codex", "")
+        new_credentials = auth.Credentials("new", "refresh", "https://codex", "")
+        self.agent._client = old
+        self.agent._credentials = old_credentials
+
+        with mock.patch.object(
+            auth, "access_token_is_expiring", return_value=False
+        ):
+            borrowed_old = await self.agent._ensure_client()
+        self.assertIs(borrowed_old, old)
+
+        with (
+            mock.patch.object(
+                auth, "resolve_credentials", return_value=new_credentials
+            ),
+            mock.patch(
+                "pilotage.agent.codex_client.build_client",
+                return_value=replacement,
+            ),
+        ):
+            borrowed = await self.agent._ensure_client(force_refresh=True)
+
+        self.assertIs(borrowed, replacement)
+        self.assertEqual(old.closed, 0)
+        self.assertEqual(list(self.agent._retired_clients.values()), [old])
+
+        await self.agent._release_client(old)
+        self.assertEqual(old.closed, 1)
+        self.assertEqual(self.agent._retired_clients, {})
+
+        await self.agent._release_client(replacement)
+        await self.agent.close()
+
+    async def test_idle_replaced_client_does_not_accumulate(self):
+        class FakeClient:
+            def __init__(self):
+                self.closed = 0
+
+            async def close(self):
+                self.closed += 1
+
+        old = FakeClient()
+        replacement = FakeClient()
+        self.agent._client = old
+        self.agent._credentials = auth.Credentials(
+            "old", "refresh", "https://codex", ""
+        )
+        refreshed = auth.Credentials("new", "refresh", "https://codex", "")
+
+        with (
+            mock.patch.object(auth, "resolve_credentials", return_value=refreshed),
+            mock.patch(
+                "pilotage.agent.codex_client.build_client",
+                return_value=replacement,
+            ),
+        ):
+            borrowed = await self.agent._ensure_client(force_refresh=True)
+
+        self.assertIs(borrowed, replacement)
+        self.assertEqual(old.closed, 1)
+        self.assertEqual(self.agent._retired_clients, {})
+
+        await self.agent._release_client(replacement)
+        await self.agent.close()
 
 
 if __name__ == "__main__":

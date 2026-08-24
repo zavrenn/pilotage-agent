@@ -76,6 +76,21 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.agent.respond("chat", "hello"), "No tools needed.")
         self.assertEqual(len(self.requests), 1)
 
+    async def test_native_compaction_clears_stale_skill_view_dedup(self):
+        self.agent._tool_state["chat"] = {
+            "skill_views": {("report", ""): (1, 1)}
+        }
+        self.replies = [
+            codex_stream.StreamResult(
+                text="Compacted.",
+                reasoning_items=[
+                    {"type": "compaction", "encrypted_content": "opaque"}
+                ],
+            )
+        ]
+        self.assertEqual(await self.agent.respond("chat", "continue"), "Compacted.")
+        self.assertNotIn("skill_views", self.agent._tool_state["chat"])
+
     async def test_a_tool_call_is_run_and_the_model_asked_again(self):
         self.replies = [
             codex_stream.StreamResult(
@@ -266,7 +281,13 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         text_part = next(
             part for part in user["content"] if part.get("type") == "input_text"
         )
-        self.assertIn(f"[Image attached at: {source.resolve()}]", text_part["text"])
+        staged = list((self.agent._context_cwd / "inputs").iterdir())
+        self.assertEqual(len(staged), 1)
+        self.assertIn(
+            f"[Image attached at: {staged[0].resolve()}]",
+            text_part["text"],
+        )
+        self.assertNotIn(str(source.resolve()), text_part["text"])
         self.assertTrue(
             any(part.get("type") == "input_image" for part in user["content"])
         )

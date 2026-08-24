@@ -32,9 +32,11 @@ from .codex import (
 )
 from .config import Config
 from .context_files import build_context_files_prompt
-from .cron.jobs import CronStore
-from .history import ConversationStore
+from .cron.jobs import CronStore, timezone_for_name
+from .history import ConversationStore, session_workspace_path
+from .i18n import DEFAULT_LANGUAGE, t
 from .tools.memory import MemoryStore
+from .tools.skills import reset_skill_view_dedup
 from .tools import (
     ToolContext,
     build_registry,
@@ -53,11 +55,6 @@ logger = logging.getLogger(__name__)
 # turn's patience.
 MAX_STREAM_RECONNECTS = 1
 
-# What the person waiting is told when we drop a quiet connection. They have
-# been watching the typing indicator for two minutes by then; silence would
-# read as the agent having given up.
-RECONNECT_NOTICE = "Still nothing back from the model. Reconnecting…"
-
 # What the model is told when it has used every step it is allowed. Hermes'
 # wording. It is asked to answer rather than cut off, so the person waiting
 # gets what was found instead of nothing.
@@ -73,6 +70,13 @@ MAX_ITERATIONS_SUMMARY_REQUEST = (
 MAX_CODEX_INCOMPLETE_RESPONSES = 3
 CODEX_INCOMPLETE_RESPONSE = (
     "Codex response remained incomplete after 3 continuation attempts"
+)
+
+ISOLATED_WORKSPACE_NOTE = (
+    "This conversation's restricted working directory is {root}. "
+    "Use inputs for inbound copies, tmp for temporary work, and exports for "
+    "files intended for the user. Only files inside {exports} can be delivered "
+    "with MEDIA. Put every deliverable there first."
 )
 
 # Called with a line to show the person waiting, mid-turn.
@@ -140,6 +144,9 @@ class Agent:
         cron_store: Optional[CronStore] = None,
         cron_wake: Optional[Callable[[], None]] = None,
         disabled_tool_groups: Sequence[str] = (),
+        enabled_tool_groups: Optional[Sequence[str]] = None,
+        enabled_skills: Optional[Sequence[str]] = None,
+        working_directory: Optional[Path] = None,
     ):
         self._config = config
         self._store = store or ConversationStore(config.conversations_path)
@@ -149,9 +156,15 @@ class Agent:
         self._restored: set[str] = set()
         self._credentials: Optional[auth.Credentials] = None
         self._client: Optional[AsyncOpenAI] = None
+        # Replaced pools live only while an in-flight stream still owns them.
+        # This is Pilotage's async ownership equivalent of Hermes deferring FD
+        # release until every borrower has unwound.
+        self._client_leases: Dict[int, int] = {}
+        self._retired_clients: Dict[int, AsyncOpenAI] = {}
         self._auth_lock = asyncio.Lock()
         self._approvals = ApprovalManager(
-            getattr(config, "approval_timeout_seconds", 300.0)
+            getattr(config, "approval_timeout_seconds", 300.0),
+            language=getattr(config, "language", DEFAULT_LANGUAGE),
         )
         # One turn at a time per chat, so two fast messages cannot interleave
         # their history writes.
@@ -162,16 +175,44 @@ class Agent:
         # about what it just used.
         self._registry = build_registry()
         disabled = set(disabled_tool_groups)
+        configured_groups = enabled_groups(config.settings, self._registry)
+        if enabled_tool_groups is not None:
+            requested = {
+                str(group).strip()
+                for group in enabled_tool_groups
+                if str(group).strip()
+            }
+            unavailable = sorted(requested - set(configured_groups))
+            if unavailable:
+                raise ValueError(
+                    "Requested tool groups are unavailable in this profile: "
+                    + ", ".join(unavailable)
+                )
+        else:
+            requested = set(configured_groups)
         self._tool_groups = [
-            group for group in enabled_groups(config.settings, self._registry)
-            if group not in disabled
+            group
+            for group in configured_groups
+            if group in requested and group not in disabled
         ]
         self._tools = self._registry.definitions(self._tool_groups)
         self._base_instructions = config.instructions
         self._skills_prompt = ""
         self._instructions = self._base_instructions
+        self._enabled_skills = (
+            None
+            if enabled_skills is None
+            else frozenset(
+                str(name).strip()
+                for name in enabled_skills
+                if str(name).strip()
+            )
+        )
         if "skills" in self._tool_groups:
-            self._skills_prompt = build_skills_prompt(config)
+            self._skills_prompt = build_skills_prompt(
+                config,
+                self._enabled_skills,
+            )
             if self._skills_prompt:
                 self._instructions = (
                     f"{self._instructions}\n\n{self._skills_prompt}"
@@ -182,10 +223,16 @@ class Agent:
             config, "workspace_dir", Path(config.state_dir) / "workspace"
         )
         self._context_cwd = (
-            Path(configured_cwd).expanduser()
-            if configured_cwd
-            else default_workspace
+            Path(working_directory).expanduser()
+            if working_directory is not None
+            else (
+                Path(configured_cwd).expanduser()
+                if configured_cwd
+                else default_workspace
+            )
         )
+        self._fixed_working_directory = working_directory is not None
+        self._session_workdirs: Dict[str, Path] = {}
 
         self._memory_store: Optional[MemoryStore] = None
         if "memory" in self._tool_groups:
@@ -216,7 +263,11 @@ class Agent:
         # Whatever the tools of one chat need to remember between calls.
         self._tool_state: Dict[str, Dict[str, Any]] = {}
 
-    def _instructions_for_session(self, chat_id: str) -> str:
+    def _instructions_for_session(
+        self,
+        chat_id: str,
+        working_directory: Optional[Path] = None,
+    ) -> str:
         cached = self._session_instructions.get(chat_id)
         if cached is not None:
             return cached
@@ -225,6 +276,16 @@ class Agent:
         workspace_context = build_context_files_prompt(self._context_cwd)
         if workspace_context:
             blocks.append(workspace_context)
+        if (
+            getattr(self._config, "session_isolated_workspaces", False)
+            and working_directory is not None
+        ):
+            blocks.append(
+                ISOLATED_WORKSPACE_NOTE.format(
+                    root=working_directory,
+                    exports=working_directory / "exports",
+                )
+            )
         if self._skills_prompt:
             blocks.append(self._skills_prompt)
 
@@ -245,7 +306,65 @@ class Agent:
         self._session_instructions[chat_id] = instructions
         return instructions
 
+    @property
+    def session_workspace_root(self) -> Optional[Path]:
+        """Root whose isolated session folders are owned by this Agent."""
+
+        if self._fixed_working_directory or not getattr(
+            self._config, "session_isolated_workspaces", False
+        ):
+            return None
+        return self._context_cwd.expanduser().resolve(strict=False)
+
+    def _session_working_directory(self, chat_id: str) -> Path:
+        """Route one durable conversation generation to a private workspace."""
+
+        if not getattr(
+            self._config, "session_isolated_workspaces", False
+        ):
+            return self._context_cwd
+        cached = self._session_workdirs.get(chat_id)
+        if cached is not None:
+            return cached
+
+        base = self._context_cwd.expanduser().resolve(strict=False)
+        if self._fixed_working_directory:
+            candidate = base
+        else:
+            generation = self._store.current_session(chat_id)
+            candidate = session_workspace_path(base, chat_id, generation)
+
+        resolved_candidate = candidate.resolve(strict=False)
+        try:
+            resolved_candidate.relative_to(base)
+        except ValueError as exc:
+            raise RuntimeError(
+                "Restricted session workspace escaped its configured root"
+            ) from exc
+
+        candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root = candidate.resolve(strict=True)
+        try:
+            root.relative_to(base)
+        except ValueError as exc:
+            raise RuntimeError(
+                "Restricted session workspace escaped its configured root"
+            ) from exc
+
+        root.chmod(0o700)
+        for name in ("inputs", "tmp", "exports"):
+            child = root / name
+            child.mkdir(mode=0o700, exist_ok=True)
+            child.chmod(0o700)
+        self._session_workdirs[chat_id] = root
+        return root
+
     # -- credentials --------------------------------------------------------
+
+    def _lease_client(self, client: AsyncOpenAI) -> AsyncOpenAI:
+        key = id(client)
+        self._client_leases[key] = self._client_leases.get(key, 0) + 1
+        return client
 
     async def _ensure_client(self, *, force_refresh: bool = False) -> AsyncOpenAI:
         async with self._auth_lock:
@@ -254,7 +373,7 @@ class Agent:
                 # rather than discovering the expiry as a 401 mid-answer.
                 assert self._credentials is not None
                 if not auth.access_token_is_expiring(self._credentials.access_token):
-                    return self._client
+                    return self._lease_client(self._client)
 
             credentials = await asyncio.to_thread(
                 auth.resolve_credentials,
@@ -265,11 +384,57 @@ class Agent:
             if self._client is None or credentials.access_token != (
                 self._credentials.access_token if self._credentials else None
             ):
-                self._credentials = credentials
-                self._client = codex_client.build_client(
+                replacement = codex_client.build_client(
                     credentials, timeout_seconds=self._config.request_timeout_seconds
                 )
-            return self._client
+                old_client = self._client
+                self._credentials = credentials
+                self._client = replacement
+                if old_client is not None:
+                    old_key = id(old_client)
+                    if self._client_leases.get(old_key, 0) > 0:
+                        self._retired_clients[old_key] = old_client
+                    else:
+                        await self._close_client(old_client)
+            return self._lease_client(self._client)
+
+    @staticmethod
+    async def _close_client(client: Any) -> None:
+        try:
+            await client.close()
+        except Exception:  # noqa: BLE001 - retirement must not fail a turn
+            logger.debug("Closing a Codex client failed", exc_info=True)
+
+    async def _release_client(self, client: Any) -> None:
+        key = id(client)
+        async with self._auth_lock:
+            count = self._client_leases.get(key, 0)
+            if count <= 0:
+                return
+            if count > 1:
+                self._client_leases[key] = count - 1
+                return
+            self._client_leases.pop(key, None)
+            retired = self._retired_clients.get(key)
+            if retired is not None:
+                await self._close_client(retired)
+                self._retired_clients.pop(key, None)
+
+    async def close(self) -> None:
+        """Close every resident Codex pool owned by this Agent."""
+
+        async with self._auth_lock:
+            clients = list(self._retired_clients.values())
+            if self._client is not None and all(
+                client is not self._client for client in clients
+            ):
+                clients.append(self._client)
+            self._retired_clients.clear()
+            self._client_leases.clear()
+            self._client = None
+            self._credentials = None
+        for client in clients:
+            await self._close_client(client)
 
     # -- history ------------------------------------------------------------
 
@@ -394,6 +559,16 @@ class Agent:
         """Turns kept per chat — a question and its answer count as two."""
         return max(2, self._config.history_turns * 2)
 
+    def _clear_live_session(self, chat_id: str) -> None:
+        """Clear every process-local value owned by one conversation."""
+
+        self._history.pop(chat_id, None)
+        self._tool_state.pop(chat_id, None)
+        self._session_instructions.pop(chat_id, None)
+        self._session_workdirs.pop(chat_id, None)
+        # The durable boundary already selected an empty current session.
+        self._restored.add(chat_id)
+
     async def forget(self, chat_id: str) -> None:
         """Drop a conversation's history.
 
@@ -412,14 +587,7 @@ class Agent:
                 # Record the boundary before changing live state. If this fails,
                 # /new reports failure and the old conversation remains intact.
                 await asyncio.to_thread(self._store.new_session, chat_id)
-                self._history.pop(chat_id, None)
-                # The task list belonged to work that has just been abandoned.
-                self._tool_state.pop(chat_id, None)
-                # Memory written during the old session becomes visible in the
-                # frozen prompt of the next one.
-                self._session_instructions.pop(chat_id, None)
-                # Do not reload the conversation that the durable boundary ended.
-                self._restored.add(chat_id)
+                self._clear_live_session(chat_id)
         finally:
             self._approvals.unblock(chat_id)
 
@@ -431,6 +599,38 @@ class Agent:
         return self._approvals.resolve(
             chat_id, approved=approved, reason=reason
         )
+
+    async def _working_notice_loop(
+        self,
+        chat_id: str,
+        on_notice: Optional[Notice],
+    ) -> None:
+        """Send the configured generic heartbeat while a long turn is active."""
+
+        interval = float(
+            getattr(
+                self._config,
+                "working_notice_interval_seconds",
+                180.0,
+            )
+        )
+        if on_notice is None or interval <= 0:
+            return
+        text = str(
+            getattr(
+                self._config,
+                "working_notice_text",
+                "Still working.",
+            )
+            or ""
+        ).strip()
+        if not text:
+            return
+        while True:
+            await asyncio.sleep(interval)
+            if self._approvals.has_pending(chat_id):
+                continue
+            await _notify(on_notice, text)
 
     # -- the turn -----------------------------------------------------------
 
@@ -444,35 +644,111 @@ class Agent:
         origin: Optional[Dict[str, str]] = None,
         approval_notify: Optional[Notice] = None,
     ) -> str:
-        # Reading the files is blocking I/O and base64 of a few megabytes is not
-        # free, so it happens off the event loop.
-        if attachments:
-            image_parts, attached_image_paths = await asyncio.to_thread(
-                media.image_parts_with_paths, attachments
-            )
-        else:
-            image_parts, attached_image_paths = [], []
-        if attached_image_paths:
-            # Hermes gives the model a string handle alongside the pixels so
-            # the same image can be passed to image_generate for editing.
-            base_text = user_text.strip() or "What do you see in this image?"
-            hints = "\n".join(
-                f"[Image attached at: {path}]" for path in attached_image_paths
-            )
-            user_text = f"{base_text}\n\n{hints}"
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
+            reset_mode = getattr(self._config, "session_reset_mode", "none")
+            reset = None
+            if reset_mode != "none":
+                reset = await asyncio.to_thread(
+                    self._store.prepare_session,
+                    chat_id,
+                    mode=reset_mode,
+                    idle_minutes=getattr(
+                        self._config, "session_reset_idle_minutes", 1440
+                    ),
+                    at_hour=getattr(self._config, "session_reset_at_hour", 4),
+                    tzinfo=timezone_for_name(
+                        getattr(self._config, "timezone", "")
+                    ),
+                )
+            reset_note = ""
+            if reset is not None:
+                self._clear_live_session(chat_id)
+                reason_text = (
+                    "the daily reset schedule"
+                    if reset.reason == "daily"
+                    else "inactivity"
+                )
+                reset_note = (
+                    "[System note: The user's previous session was automatically "
+                    f"reset because of {reason_text}. This is a fresh conversation "
+                    "with no prior context.]"
+                )
+                if (
+                    reset.had_activity
+                    and getattr(self._config, "session_reset_notify", True)
+                ):
+                    await _notify(
+                        on_notice,
+                        t(
+                            f"session.auto_reset_{reset.reason}",
+                            getattr(
+                                self._config,
+                                "language",
+                                DEFAULT_LANGUAGE,
+                            ),
+                        ),
+                    )
             await self._restore(chat_id)
+            working_directory = await asyncio.to_thread(
+                self._session_working_directory,
+                chat_id,
+            )
+            if attachments:
+                original_attachments = list(attachments)
+                staged_attachments = await asyncio.to_thread(
+                    media.stage_inbound,
+                    original_attachments,
+                    working_directory / "inputs",
+                )
+                for original, staged in zip(
+                    original_attachments,
+                    staged_attachments,
+                ):
+                    user_text = user_text.replace(
+                        str(original.path.resolve(strict=False)),
+                        str(staged.path),
+                    )
+                image_parts, attached_image_paths = await asyncio.to_thread(
+                    media.image_parts_with_paths,
+                    staged_attachments,
+                )
+            else:
+                image_parts, attached_image_paths = [], []
+            if attached_image_paths:
+                # Keep a local path handle alongside the pixels so the same
+                # session input can be used for a later image edit.
+                base_text = (
+                    user_text.strip()
+                    or "What do you see in this image?"
+                )
+                hints = "\n".join(
+                    f"[Image attached at: {path}]"
+                    for path in attached_image_paths
+                )
+                user_text = f"{base_text}\n\n{hints}"
             if self._memory_store is not None:
                 self._memory_store.reset_consolidation_failures()
-            result = await self._run_turn(
-                chat_id,
-                user_text,
-                image_parts,
-                on_notice,
-                origin=origin,
-                approval_notify=approval_notify,
+            working_notice_task = asyncio.create_task(
+                self._working_notice_loop(chat_id, on_notice)
             )
+            try:
+                result = await self._run_turn(
+                    chat_id,
+                    user_text,
+                    image_parts,
+                    on_notice,
+                    origin=origin,
+                    approval_notify=approval_notify,
+                    turn_note=reset_note,
+                    working_directory=working_directory,
+                )
+            finally:
+                working_notice_task.cancel()
+                await asyncio.gather(
+                    working_notice_task,
+                    return_exceptions=True,
+                )
             self._remember(chat_id, user_text, image_parts, result)
             checkpoints = (
                 compaction.persistent_compaction_items(result.items)
@@ -498,10 +774,16 @@ class Agent:
         *,
         origin: Optional[Dict[str, str]] = None,
         approval_notify: Optional[Notice] = None,
+        turn_note: str = "",
+        working_directory: Optional[Path] = None,
     ) -> TurnResult:
         """Call the model, run what it asks for, call it again — until it answers."""
-        self._instructions_for_session(chat_id)
-        history = self._build_input(chat_id, user_text, image_parts)
+        active_working_directory = working_directory or self._context_cwd
+        self._instructions_for_session(chat_id, active_working_directory)
+        model_user_text = (
+            f"{turn_note}\n\n{user_text}" if turn_note else user_text
+        )
+        history = self._build_input(chat_id, model_user_text, image_parts)
 
         async def request_approval(category: str, summary: str):
             return await self._approvals.request(
@@ -517,6 +799,8 @@ class Agent:
             cron_store=self._cron_store,
             origin=origin,
             cron_wake=self._cron_wake,
+            working_directory=active_working_directory,
+            allowed_skills=self._enabled_skills,
             approval_request=request_approval,
         )
         # Everything the assistant does this turn, in order, ready to be sent
@@ -525,12 +809,36 @@ class Agent:
         limit = max(1, self._config.max_tool_iterations)
 
         def _finish(text: str) -> TurnResult:
+            isolated = getattr(
+                self._config, "session_isolated_workspaces", False
+            )
+            if isolated:
+                outbound_roots = (
+                    active_working_directory / "exports",
+                )
+            else:
+                outbound_roots = getattr(
+                    self._config, "outbound_media_roots", None
+                )
+                if not outbound_roots:
+                    workspace = getattr(
+                        self._config,
+                        "workspace_dir",
+                        Path(self._config.state_dir) / "workspace",
+                    )
+                    outbound_roots = (workspace,)
+            finished_text = _append_generated_media(
+                text,
+                items,
+                outbound_roots,
+            )
+            if isolated:
+                finished_text = media.confine_outbound(
+                    finished_text,
+                    outbound_roots,
+                )
             return TurnResult(
-                text=_append_generated_media(
-                    text,
-                    items,
-                    self._config.workspace_dir,
-                ),
+                text=finished_text,
                 items=items,
             )
 
@@ -541,7 +849,10 @@ class Agent:
                 result = await self._call_model(
                     chat_id, history + items, offered_tools, on_notice
                 )
-                items.extend(_assistant_items(result))
+                assistant_items = _assistant_items(result)
+                items.extend(assistant_items)
+                if compaction.has_compaction_checkpoint(assistant_items):
+                    reset_skill_view_dedup(context)
                 # Tool calls take precedence: commentary commonly introduces a
                 # tool and must be replayed, but it must not delay execution.
                 if result.tool_calls or not result.needs_continuation:
@@ -653,7 +964,17 @@ class Agent:
                     reconnects,
                     MAX_STREAM_RECONNECTS,
                 )
-                await _notify(on_notice, RECONNECT_NOTICE)
+                await _notify(
+                    on_notice,
+                    t(
+                        "runtime.reconnect",
+                        getattr(
+                            self._config,
+                            "language",
+                            DEFAULT_LANGUAGE,
+                        ),
+                    ),
+                )
 
     async def _stream_once(
         self,
@@ -664,18 +985,31 @@ class Agent:
         idle_timeout: float,
     ) -> codex_stream.StreamResult:
         client = await self._ensure_client(force_refresh=force_refresh)
-        stream = await client.responses.create(**request, stream=True)
         try:
-            return await codex_stream.consume_stream(
-                stream, ttfb_timeout=ttfb_timeout, idle_timeout=idle_timeout
-            )
-        finally:
-            # Closing the response is what actually lets go of a wedged
-            # connection, and it must not replace the error that got us here.
+            create_stream = client.responses.create(**request, stream=True)
             try:
-                await stream.close()
-            except Exception:  # noqa: BLE001 - the turn already has its outcome
-                logger.debug("Closing the Codex stream failed", exc_info=True)
+                if ttfb_timeout > 0:
+                    stream = await asyncio.wait_for(create_stream, timeout=ttfb_timeout)
+                else:
+                    stream = await create_stream
+            except asyncio.TimeoutError:
+                raise codex_stream.CodexStreamTimeout(
+                    f"Codex stream produced no bytes within {ttfb_timeout:g}s.",
+                    code="codex_stream_no_first_byte",
+                ) from None
+            try:
+                return await codex_stream.consume_stream(
+                    stream, ttfb_timeout=ttfb_timeout, idle_timeout=idle_timeout
+                )
+            finally:
+                # Closing the response is what actually lets go of a wedged
+                # connection, and it must not replace the error that got us here.
+                try:
+                    await stream.close()
+                except Exception:  # noqa: BLE001 - the turn already has its outcome
+                    logger.debug("Closing the Codex stream failed", exc_info=True)
+        finally:
+            await self._release_client(client)
 
 
 async def _notify(on_notice: Optional[Notice], text: str) -> None:
@@ -718,7 +1052,7 @@ def _assistant_items(result: codex_stream.StreamResult) -> List[Dict[str, Any]]:
 def _append_generated_media(
     text: str,
     items: List[Dict[str, Any]],
-    workspace: Path,
+    roots: Sequence[Path],
 ) -> str:
     """Port Hermes' deterministic image delivery from current-turn outputs."""
     image_call_ids = {
@@ -730,7 +1064,7 @@ def _append_generated_media(
     if not image_call_ids:
         return text
 
-    existing, _ = media.extract_outbound(text or "", (workspace,))
+    existing, _ = media.extract_outbound(text or "", roots)
     seen = {attachment.path for attachment in existing}
     tags: List[str] = []
     for item in items:
@@ -750,7 +1084,7 @@ def _append_generated_media(
             continue
         attachments, _ = media.extract_outbound(
             f"MEDIA:{path}",
-            (workspace,),
+            roots,
         )
         for attachment in attachments:
             if attachment.path in seen:

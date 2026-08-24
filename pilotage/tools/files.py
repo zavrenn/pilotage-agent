@@ -33,6 +33,7 @@ from .file_safety import (
     get_write_denied_error,
 )
 from .patch_parser import OperationType, apply_v4a_operations, parse_v4a_patch
+from .read_extract import ExtractionError, extract_document_text, is_extractable_document
 from .registry import Tool, ToolContext, tool_error
 from .shell import DEFAULT_TIMEOUT_SECONDS, Shell
 from .skill_utils import validate_skill_file_content
@@ -378,12 +379,68 @@ def _read(args: Dict[str, Any], context: ToolContext, shell: Shell,
     blocked = _read_guard(path)
     if blocked:
         return tool_error(blocked)
+    offset, limit = normalize_read_pagination(args.get("offset", 1), args.get("limit", 2000))
+
+    if is_extractable_document(str(path)):
+        try:
+            extracted = extract_document_text(str(path))
+        except ExtractionError as exc:
+            if path.suffix.lower() != ".ipynb":
+                return tool_error(
+                    f"Cannot read '{path}' ({path.suffix.lower()}): document "
+                    f"extraction failed - {exc}."
+                )
+        else:
+            lines = extracted.splitlines()
+            total_lines = len(lines)
+            end_line = offset + limit - 1
+            page = "\n".join(lines[offset - 1:end_line])
+            content = (
+                operations._add_line_numbers(page, offset)
+                if page
+                else ""
+            )
+            data: Dict[str, Any] = {
+                "content": content,
+                "total_lines": total_lines,
+                "file_size": path.stat().st_size,
+                "truncated": total_lines > end_line,
+                "extracted_document": True,
+                "resolved_path": str(path),
+            }
+            if data["truncated"]:
+                data["hint"] = (
+                    f"Use offset={end_line + 1} to continue reading "
+                    f"(showing {offset}-{min(end_line, total_lines)} "
+                    f"of {total_lines} lines)"
+                )
+            trimmed, lines_kept, char_truncated = _truncate_read(
+                content, MAX_READ_CHARS
+            )
+            if char_truncated:
+                next_offset = offset + lines_kept
+                data.update(
+                    content=trimmed,
+                    truncated=True,
+                    truncated_by="characters",
+                    next_offset=next_offset,
+                    hint=(
+                        f"Output reached the {MAX_READ_CHARS:,}-character "
+                        f"budget. Use offset={next_offset} to continue."
+                    ),
+                )
+            file_state.record_read(
+                context.chat_id,
+                path,
+                partial=offset > 1 or bool(data.get("truncated")),
+            )
+            return _json(_fit_read_json(data, offset))
+
     if path.suffix.lower() in BINARY_EXTENSIONS | OPAQUE_DOCUMENT_EXTENSIONS:
         return tool_error(
             f"Cannot read '{path}': binary and opaque document formats are not "
             "part of this text-file tool group."
         )
-    offset, limit = normalize_read_pagination(args.get("offset", 1), args.get("limit", 2000))
     result = operations.read_file(str(path), offset, limit)
     data = result.to_dict()
     content = str(data.get("content") or "")
@@ -881,7 +938,7 @@ async def handle_search_files(args: Dict[str, Any], context: ToolContext) -> str
 
 READ_FILE_SCHEMA = {
     "name": "read_file",
-    "description": "Read a text file with compact line numbers and pagination. Use this instead of cat/head/tail. Output lines are '<line>|<content>'.",
+    "description": "Read text, notebooks, DOCX, XLSX, and PDFs with compact line numbers and pagination. Use this instead of cat/head/tail. Output lines are '<line>|<content>'.",
     "parameters": {
         "type": "object",
         "properties": {

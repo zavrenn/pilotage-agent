@@ -303,6 +303,8 @@ class TelegramChannel:
         self._bot: Any = None
         self._bot_username = ""
         self._running = False
+        self._intake_stopped = False
+        self._drop_delayed_deliveries = False
         self.stopped = asyncio.Event()
         self.failure: Optional[str] = None
 
@@ -314,6 +316,8 @@ class TelegramChannel:
         self._queued: Dict[str, InboundMessage] = {}
         self._turn_tasks: Dict[str, asyncio.Task] = {}
         self._background_tasks: set[asyncio.Task] = set()
+        self._intake_tasks: set[asyncio.Task] = set()
+        self._held_inbound: Dict[str, InboundMessage] = {}
 
     # -- lifetime -------------------------------------------------------
 
@@ -391,6 +395,8 @@ class TelegramChannel:
         )
         self.stopped.clear()
         self.failure = None
+        self._intake_stopped = False
+        self._drop_delayed_deliveries = False
         app = self._build_application()
         self._app = app
         try:
@@ -443,6 +449,7 @@ class TelegramChannel:
             ) from exc
 
         self._running = True
+        self._release_held_inbound()
         logger.info(
             "Telegram channel ready as @%s (%s)",
             self._bot_username or "unknown",
@@ -461,15 +468,92 @@ class TelegramChannel:
                 _redact_error(exc, self._token),
             )
 
-    async def stop(self) -> None:
+    async def stop_intake(self) -> None:
+        """Stop receiving updates and dispatch every batch already accepted."""
+
+        if self._intake_stopped:
+            self._release_held_inbound()
+            return
+        self._intake_stopped = True
+        # Hermes fences delayed delivery before the first teardown await. PTB
+        # may already have advanced the update offset, so a late handler must
+        # be held instead of scheduling work that teardown will never observe.
+        self._drop_delayed_deliveries = True
         self._running = False
-        self.stopped.set()
+        app = self._app
+        updater = getattr(app, "updater", None) if app is not None else None
+        if updater is not None and getattr(updater, "running", False):
+            await self._bounded_step(updater.stop(), "update receiver stop")
+
+        timers = set(self._pending_tasks.values())
+        for key in list(self._pending):
+            self._flush_pending_now(key)
+        self._release_held_inbound()
+        for task in timers:
+            task.cancel()
+        if timers:
+            await asyncio.gather(*timers, return_exceptions=True)
+        self._pending_tasks.clear()
+        if app is not None and getattr(app, "running", False):
+            # PTB owns the update callbacks. Stop it before taking our task
+            # snapshot so callbacks already accepted by PTB can reach the hold
+            # queue and then join Pilotage's bounded drain.
+            await self._bounded_step(app.stop(), "application stop")
+        self._release_held_inbound()
+
+    async def stop(self, *, drain_timeout_seconds: float = 0.0) -> None:
+        """Stop intake, then give already accepted work a bounded drain."""
+
+        await self.stop_intake()
+
+        loop = asyncio.get_running_loop()
+        timeout = (
+            0.0
+            if self.failure
+            else max(0.0, float(drain_timeout_seconds))
+        )
+        deadline = loop.time() + timeout
+        current = asyncio.current_task()
+
+        # A media callback can still be finishing a download when PTB teardown
+        # begins. Let it reach the fenced hold queue before draining turns.
+        intake = {
+            task
+            for task in self._intake_tasks
+            if task is not current and not task.done()
+        }
+        pending_intake = intake
+        if intake and timeout > 0:
+            _, pending_intake = await asyncio.wait(
+                intake, timeout=max(0.0, deadline - loop.time())
+            )
+        if pending_intake:
+            logger.warning(
+                "Telegram shutdown drain expired with %d in-progress update(s)",
+                len(pending_intake),
+            )
+        for task in pending_intake:
+            task.cancel()
+        if intake:
+            await asyncio.gather(*intake, return_exceptions=True)
+        self._release_held_inbound()
 
         owned = set(self._pending_tasks.values())
         owned.update(self._turn_tasks.values())
         owned.update(self._background_tasks)
-        owned.discard(asyncio.current_task())
-        for task in owned:
+        owned.discard(current)
+        live = {task for task in owned if not task.done()}
+        pending = live
+        if live and timeout > 0:
+            _, pending = await asyncio.wait(
+                live, timeout=max(0.0, deadline - loop.time())
+            )
+        if pending:
+            logger.warning(
+                "Telegram shutdown drain expired with %d accepted task(s)",
+                len(pending),
+            )
+        for task in pending:
             task.cancel()
         if owned:
             await asyncio.gather(*owned, return_exceptions=True)
@@ -480,18 +564,23 @@ class TelegramChannel:
         self._queued.clear()
         self._turn_tasks.clear()
         self._background_tasks.clear()
+        self._intake_tasks.clear()
 
         app = self._app
         self._app = None
         self._bot = None
         if app is None:
+            self.stopped.set()
             return
-        updater = getattr(app, "updater", None)
-        if updater is not None and getattr(updater, "running", False):
-            await self._bounded_step(updater.stop(), "update receiver stop")
-        if getattr(app, "running", False):
-            await self._bounded_step(app.stop(), "application stop")
-        await self._bounded_step(app.shutdown(), "application shutdown")
+        try:
+            await self._bounded_step(app.shutdown(), "application shutdown")
+        finally:
+            if self._held_inbound:
+                logger.warning(
+                    "Telegram retained %d late inbound message(s) for restart",
+                    len(self._held_inbound),
+                )
+            self.stopped.set()
 
     def _polling_error_callback(self, error: BaseException) -> None:
         written = _redact_error(error, self._token)
@@ -681,6 +770,17 @@ class TelegramChannel:
 
     # -- inbound --------------------------------------------------------
 
+    @asynccontextmanager
+    async def _track_intake(self):
+        task = asyncio.current_task()
+        if task is not None:
+            self._intake_tasks.add(task)
+        try:
+            yield
+        finally:
+            if task is not None:
+                self._intake_tasks.discard(task)
+
     @staticmethod
     def _message_from_update(update: Any) -> Any:
         return getattr(update, "effective_message", None) or getattr(
@@ -688,66 +788,70 @@ class TelegramChannel:
         )
 
     async def _handle_text(self, update: Any, context: Any) -> None:
-        message = self._message_from_update(update)
-        if message is None or not self._authorized(message):
-            return
-        await self._accept_message(message, [])
+        async with self._track_intake():
+            message = self._message_from_update(update)
+            if message is None or not self._authorized(message):
+                return
+            await self._accept_message(message, [])
 
     async def _handle_command(self, update: Any, context: Any) -> None:
-        message = self._message_from_update(update)
-        if message is None or not self._authorized(message):
-            return
-        await self._accept_message(message, [])
+        async with self._track_intake():
+            message = self._message_from_update(update)
+            if message is None or not self._authorized(message):
+                return
+            await self._accept_message(message, [])
 
     async def _handle_location(self, update: Any, context: Any) -> None:
-        message = self._message_from_update(update)
-        if message is None or not self._authorized(message):
-            return
-        venue = getattr(message, "venue", None)
-        location = (
-            getattr(venue, "location", None)
-            if venue is not None
-            else getattr(message, "location", None)
-        )
-        if location is None:
-            return
-        latitude = getattr(location, "latitude", None)
-        longitude = getattr(location, "longitude", None)
-        if latitude is None or longitude is None:
-            return
-        parts = ["[The sender shared a location pin.]"]
-        if venue is not None:
-            title = str(getattr(venue, "title", "") or "").strip()
-            address = str(getattr(venue, "address", "") or "").strip()
-            if title:
-                parts.append(f"Venue: {title}")
-            if address:
-                parts.append(f"Address: {address}")
-        parts.extend(
-            [
-                f"latitude: {latitude}",
-                f"longitude: {longitude}",
-                "Map: https://www.google.com/maps/search/?api=1&query="
-                f"{latitude},{longitude}",
-            ]
-        )
-        await self._accept_message(message, [], text_override="\n".join(parts))
+        async with self._track_intake():
+            message = self._message_from_update(update)
+            if message is None or not self._authorized(message):
+                return
+            venue = getattr(message, "venue", None)
+            location = (
+                getattr(venue, "location", None)
+                if venue is not None
+                else getattr(message, "location", None)
+            )
+            if location is None:
+                return
+            latitude = getattr(location, "latitude", None)
+            longitude = getattr(location, "longitude", None)
+            if latitude is None or longitude is None:
+                return
+            parts = ["[The sender shared a location pin.]"]
+            if venue is not None:
+                title = str(getattr(venue, "title", "") or "").strip()
+                address = str(getattr(venue, "address", "") or "").strip()
+                if title:
+                    parts.append(f"Venue: {title}")
+                if address:
+                    parts.append(f"Address: {address}")
+            parts.extend(
+                [
+                    f"latitude: {latitude}",
+                    f"longitude: {longitude}",
+                    "Map: https://www.google.com/maps/search/?api=1&query="
+                    f"{latitude},{longitude}",
+                ]
+            )
+            await self._accept_message(message, [], text_override="\n".join(parts))
 
     async def _handle_media(self, update: Any, context: Any) -> None:
-        message = self._message_from_update(update)
-        # Authorization must precede get_file/download_as_bytearray.
-        if message is None or not self._authorized(message):
-            return
-        try:
-            attachments, notes = await self._download_attachments(message)
-        except Exception as exc:
-            logger.warning(
-                "Telegram media download failed: %s",
-                _redact_error(exc, self._token),
-            )
-            attachments = []
-            notes = ["[A Telegram attachment could not be downloaded.]"]
-        await self._accept_message(message, attachments, notes=notes)
+        async with self._track_intake():
+            message = self._message_from_update(update)
+            # Authorization must precede get_file/download_as_bytearray.
+            if message is None or not self._authorized(message):
+                return
+            try:
+                attachments, notes = await self._download_attachments(message)
+            except Exception as exc:
+                logger.warning(
+                    "Telegram media download failed: %s",
+                    _redact_error(exc, self._token),
+                )
+                attachments = []
+                notes = ["[A Telegram attachment could not be downloaded.]"]
+            await self._accept_message(message, attachments, notes=notes)
 
     def _message_key(self, message: Any) -> str:
         chat_id = str(getattr(getattr(message, "chat", None), "id", "") or "")
@@ -1070,6 +1174,19 @@ class TelegramChannel:
 
     # -- batching -------------------------------------------------------
 
+    def _hold_inbound(self, message: InboundMessage) -> None:
+        existing = self._held_inbound.get(message.session_id)
+        if existing is None:
+            self._held_inbound[message.session_id] = message
+        else:
+            self._merge_message(existing, message)
+
+    def _release_held_inbound(self) -> None:
+        held = list(self._held_inbound.values())
+        self._held_inbound.clear()
+        for message in held:
+            self._queue_turn(message)
+
     @staticmethod
     def _merge_message(
         pending: InboundMessage, message: InboundMessage
@@ -1089,6 +1206,9 @@ class TelegramChannel:
         pending.thread_id = message.thread_id
 
     def _enqueue(self, message: InboundMessage) -> None:
+        if self._drop_delayed_deliveries:
+            self._hold_inbound(message)
+            return
         key = message.session_id
         loop = asyncio.get_running_loop()
         now = loop.time()
@@ -1127,7 +1247,10 @@ class TelegramChannel:
         self._pending_started.pop(key, None)
         message = self._pending.pop(key, None)
         if message is not None:
-            self._queue_turn(message)
+            if self._drop_delayed_deliveries:
+                self._hold_inbound(message)
+            else:
+                self._queue_turn(message)
 
     async def _flush_after_quiet(
         self, key: str, last_text_length: int, has_media: bool
@@ -1180,7 +1303,7 @@ class TelegramChannel:
                         "Handling a Telegram message from %s failed",
                         message.chat_id,
                     )
-                if self.stopped.is_set():
+                if self.failure:
                     self._queued.pop(key, None)
                     break
                 message = self._queued.pop(key, None)
@@ -1264,7 +1387,7 @@ class TelegramChannel:
 
         if deliver_media:
             attachments, cleaned = media.extract_outbound(
-                text or "", (self._config.workspace_dir,)
+                text or "", self._config.outbound_media_roots
             )
         else:
             attachments, cleaned = [], text or ""

@@ -119,6 +119,77 @@ class OutboundExtractionTests(unittest.TestCase):
         self.assertEqual(attachments[0].media_type, "document")
         self.assertEqual(cleaned, "")
 
+    def test_restricted_filter_keeps_current_exports_and_refuses_other_files(self):
+        exports = self.workspace / "session-2" / "exports"
+        exports.mkdir(parents=True)
+        current = exports / "current.pdf"
+        current.write_bytes(b"current")
+        outside = self.workspace / "old-session.pdf"
+        outside.write_bytes(b"old")
+
+        confined = media.confine_outbound(
+            f"Ready\nMEDIA:{current}\nMEDIA:{outside}",
+            (exports,),
+        )
+
+        self.assertIn(f"MEDIA:{current.resolve()}", confined)
+        self.assertNotIn(str(outside), confined)
+        self.assertIn("File delivery blocked", confined)
+        attachments, cleaned = media.extract_outbound(confined, (exports,))
+        self.assertEqual(
+            [attachment.path for attachment in attachments],
+            [current.resolve()],
+        )
+        self.assertIn("File delivery blocked", cleaned)
+
+
+class InboundLifecycleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def test_inbound_file_is_copied_into_session_inputs(self):
+        cached = self.root / "cache" / "report.pdf"
+        cached.parent.mkdir()
+        cached.write_bytes(b"report")
+        attachment = media.Attachment(
+            path=cached,
+            mime="application/pdf",
+            media_type="document",
+            file_name="Quarterly report.pdf",
+        )
+
+        staged = media.stage_inbound(
+            [attachment],
+            self.root / "session" / "inputs",
+        )
+
+        self.assertEqual(staged[0].path.read_bytes(), b"report")
+        self.assertEqual(staged[0].file_name, "Quarterly report.pdf")
+        self.assertNotEqual(staged[0].path, cached)
+        self.assertEqual(
+            staged[0].path.parent,
+            (self.root / "session" / "inputs").resolve(),
+        )
+
+    def test_cache_cleanup_removes_only_files_older_than_one_day(self):
+        cache = self.root / "media"
+        cache.mkdir()
+        old = cache / "old.bin"
+        fresh = cache / "fresh.bin"
+        old.write_bytes(b"old")
+        fresh.write_bytes(b"fresh")
+        now = 200_000.0
+        os.utime(old, (now - 90_000, now - 90_000))
+        os.utime(fresh, (now - 10, now - 10))
+
+        removed = media.cleanup_cache(cache, now=now)
+
+        self.assertEqual(removed, 1)
+        self.assertFalse(old.exists())
+        self.assertTrue(fresh.exists())
+
 
 class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
@@ -182,6 +253,26 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
                 "mediaType": "document",
                 "fileName": "report.xlsx",
             },
+        )
+
+    async def test_operator_declared_directory_is_deliverable(self):
+        reports = self.root / "reports"
+        reports.mkdir()
+        (self.root / "config.yaml").write_text(
+            "gateway:\n"
+            f"  media_delivery_allow_dirs: ['{reports.as_posix()}']\n",
+            encoding="utf-8",
+        )
+        config = Config.load(channel="whatsapp")
+        channel = WhatsAppChannel(config, _handle, _command)
+        channel._http = self.http
+        report = reports / "outside-workspace.pdf"
+        report.write_bytes(b"pdf")
+
+        self.assertTrue(await channel.send("chat", f"MEDIA:{report}"))
+        self.assertEqual(
+            self.http.posts[0]["json"]["filePath"],
+            str(report.resolve()),
         )
 
     async def test_plain_text_echo_cannot_turn_media_text_into_an_attachment(self):

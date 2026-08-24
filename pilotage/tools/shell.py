@@ -45,6 +45,8 @@ import uuid
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
+from .subprocess_env import build_subprocess_env
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 120
@@ -654,9 +656,11 @@ class Shell:
             cmd_string = _prepend_shell_init(cmd_string, _shell_init_files())
         args = [bash, "-l", "-c", cmd_string] if login else [bash, "-c", cmd_string]
 
-        run_env = None
-        if self.env:
-            run_env = {**os.environ, **self.env}
+        # A terminal command is model-controlled. Keep ordinary operator
+        # environment values available, but never inherit Pilotage's own
+        # provider, channel, or bridge credentials. This is the same targeted
+        # subprocess scrub used by current Hermes.
+        run_env = build_subprocess_env(extra=self.env)
 
         self._ensure_cwd()
 

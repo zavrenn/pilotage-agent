@@ -13,6 +13,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from .i18n import DEFAULT_LANGUAGE, t
+
 logger = logging.getLogger(__name__)
 
 APPROVAL_CATEGORIES = frozenset({"memory", "skills", "cron"})
@@ -70,8 +72,13 @@ def approval_error(outcome: ApprovalOutcome) -> str:
 class ApprovalManager:
     """Per-agent FIFO approval queues, one isolated queue per conversation."""
 
-    def __init__(self, timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS):
+    def __init__(
+        self,
+        timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
+        language: str = DEFAULT_LANGUAGE,
+    ):
         self._timeout_seconds = float(timeout_seconds)
+        self._language = str(language or DEFAULT_LANGUAGE)
         self._pending: Dict[str, List[_PendingApproval]] = {}
         self._blocked_sessions: Dict[str, int] = {}
         self._request_locks: Dict[str, asyncio.Lock] = {}
@@ -124,9 +131,9 @@ class ApprovalManager:
             self._pending.setdefault(session_id, []).append(entry)
 
             prompt = (
-                f"Approval required — {category}\n\n"
-                f"{entry.summary or 'Persistent change requested.'}\n\n"
-                "Reply /approve to allow this once, or /deny to refuse it."
+                f"{t('approval.required', self._language, category=category)}\n\n"
+                f"{entry.summary or t('approval.default_summary', self._language)}\n\n"
+                f"{t('approval.instructions', self._language)}"
             )
             try:
                 await notify(prompt)

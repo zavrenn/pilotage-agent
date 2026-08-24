@@ -4,8 +4,9 @@ The discovery, frontmatter, sorting, linked-file and path-containment behavior
 comes from ``tmp/hermes-agent/tools/skills_tool.py`` and
 ``tmp/hermes-agent/agent/prompt_builder.py``. Pilotage keeps one trusted,
 profile-local skills directory. Plugin skills, external trees, marketplaces,
-syncing and mutation are deliberately not carried over. Hermes' small,
-optional SKILL.md preprocessor is retained for compatibility.
+syncing and a separate mutation API are deliberately not carried over.
+Profile-local skill writes use Pilotage's approval-gated file tools. Hermes'
+small, optional SKILL.md preprocessor is retained for compatibility.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from .skill_utils import (
     MAX_SKILL_NAME_LENGTH as MAX_NAME_LENGTH,
     extract_skill_description,
     iter_skill_index_files,
+    normalize_skill_channels,
     parse_frontmatter,
     skill_matches_channel,
     skill_matches_platform,
@@ -150,7 +152,10 @@ def _metadata(skill_md: Path, root: Path, config: Any) -> Optional[Dict[str, Any
 
     if not skill_matches_platform(frontmatter):
         return None
-    if not skill_matches_channel(frontmatter, _channel(config)):
+    channels, channels_error = normalize_skill_channels(frontmatter)
+    if channels_error is None and not skill_matches_channel(
+        frontmatter, _channel(config)
+    ):
         return None
 
     raw_name = frontmatter.get("name")
@@ -167,6 +172,8 @@ def _metadata(skill_md: Path, root: Path, config: Any) -> Optional[Dict[str, Any
         problems.append("frontmatter description is required")
     if not version:
         problems.append("frontmatter version is required")
+    if channels_error:
+        problems.append(channels_error)
     if len(description) > MAX_DESCRIPTION_LENGTH:
         description = description[: MAX_DESCRIPTION_LENGTH - 3] + "..."
 
@@ -186,6 +193,7 @@ def _metadata(skill_md: Path, root: Path, config: Any) -> Optional[Dict[str, Any
         "category": _category(skill_md, root),
         "identifier": _identifier(skill_md, root),
         "version": version,
+        "channels": list(channels),
         "available": not problems,
         "required_credential_files": required,
         "missing_credential_files": missing,
@@ -242,11 +250,31 @@ def _public_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
     return public
 
 
-def skills_list(config: Any, category: Optional[str] = None) -> str:
+def _skill_is_allowed(
+    entry: Dict[str, Any],
+    allowed_skills: Optional[frozenset[str]],
+) -> bool:
+    if allowed_skills is None:
+        return True
+    return bool(
+        entry["name"] in allowed_skills
+        or entry["identifier"] in allowed_skills
+    )
+
+
+def skills_list(
+    config: Any,
+    category: Optional[str] = None,
+    allowed_skills: Optional[frozenset[str]] = None,
+) -> str:
     """List minimal skill metadata, Hermes progressive-disclosure tier one."""
     root = skills_directory(config)
     root.mkdir(parents=True, exist_ok=True)
-    skills = discover_skills(config)
+    skills = [
+        skill
+        for skill in discover_skills(config)
+        if _skill_is_allowed(skill, allowed_skills)
+    ]
     if category:
         skills = [skill for skill in skills if skill.get("category") == category]
     public = [_public_metadata(skill) for skill in skills]
@@ -267,9 +295,16 @@ def skills_list(config: Any, category: Optional[str] = None) -> str:
     )
 
 
-def build_skills_prompt(config: Any) -> str:
+def build_skills_prompt(
+    config: Any,
+    allowed_skills: Optional[frozenset[str]] = None,
+) -> str:
     """Build Hermes' compact name/description index for the system prompt."""
-    skills = [entry for entry in discover_skills(config) if entry["available"]]
+    skills = [
+        entry
+        for entry in discover_skills(config)
+        if entry["available"] and _skill_is_allowed(entry, allowed_skills)
+    ]
     if not skills:
         return ""
 
@@ -409,11 +444,17 @@ def skill_view(
     name: str,
     file_path: Optional[str] = None,
     session_id: Optional[str] = None,
+    allowed_skills: Optional[frozenset[str]] = None,
 ) -> str:
     """Load one SKILL.md or one contained linked file."""
     entry, error = _resolve_skill(config, name)
     if error or entry is None:
         return tool_error(error or "Skill lookup failed", success=False)
+    if not _skill_is_allowed(entry, allowed_skills):
+        return tool_error(
+            f"Skill {name!r} is not allowed for this scheduled run.",
+            success=False,
+        )
 
     skill_dir: Path = entry["_skill_dir"]
     target = entry["_skill_md"]
@@ -549,11 +590,23 @@ def _deduplicate_view(raw: str, args: Dict[str, Any], context: ToolContext) -> s
     return _json(payload)
 
 
+def reset_skill_view_dedup(context: ToolContext) -> None:
+    """Forget repeat-view fingerprints after visible context is compacted."""
+
+    with _DEDUP_LOCK:
+        context.state.pop("skill_views", None)
+
+
 async def handle_skills_list(args: Dict[str, Any], context: ToolContext) -> str:
     category = args.get("category")
     if category is not None and not isinstance(category, str):
         return tool_error("category must be text")
-    return await asyncio.to_thread(skills_list, context.config, category)
+    return await asyncio.to_thread(
+        skills_list,
+        context.config,
+        category,
+        context.allowed_skills,
+    )
 
 
 async def handle_skill_view(args: Dict[str, Any], context: ToolContext) -> str:
@@ -569,6 +622,7 @@ async def handle_skill_view(args: Dict[str, Any], context: ToolContext) -> str:
         name,
         file_path,
         context.chat_id,
+        context.allowed_skills,
     )
     return _deduplicate_view(raw, args, context)
 
@@ -621,6 +675,7 @@ __all__ = [
     "discover_skills",
     "handle_skill_view",
     "handle_skills_list",
+    "reset_skill_view_dedup",
     "skill_view",
     "skills_directory",
     "skills_list",

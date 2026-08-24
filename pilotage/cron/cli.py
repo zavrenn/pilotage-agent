@@ -21,12 +21,19 @@ def add_cron_parser(subparsers: Any) -> None:
     listing = commands.add_parser("list", help="list jobs")
     listing.add_argument("--all", action="store_true", help="include inactive jobs")
 
-    create = commands.add_parser("create", help="create a local-output job")
+    create = commands.add_parser("create", help="create a scheduled job")
     create.add_argument("schedule", help="30m, every 2h, cron expression, or ISO time")
     create.add_argument("--prompt", default="", help="self-contained scheduled task")
     create.add_argument("--name", default="")
     create.add_argument("--repeat", type=int)
     create.add_argument("--skill", action="append", default=[])
+    create.add_argument("--tool", action="append", dest="enabled_toolsets")
+    create.add_argument("--workdir")
+    create.add_argument(
+        "--deliver",
+        choices=("origin", "local", "whatsapp", "telegram"),
+        help="origin/local, or an enabled channel's configured home chat",
+    )
 
     update = commands.add_parser("update", help="update a job")
     update.add_argument("job_id")
@@ -37,6 +44,16 @@ def add_cron_parser(subparsers: Any) -> None:
     skills = update.add_mutually_exclusive_group()
     skills.add_argument("--skill", action="append")
     skills.add_argument("--clear-skills", action="store_true")
+    toolsets = update.add_mutually_exclusive_group()
+    toolsets.add_argument("--tool", action="append", dest="enabled_toolsets")
+    toolsets.add_argument("--clear-tools", action="store_true")
+    workdir = update.add_mutually_exclusive_group()
+    workdir.add_argument("--workdir")
+    workdir.add_argument("--clear-workdir", action="store_true")
+    update.add_argument(
+        "--deliver",
+        choices=("origin", "local", "whatsapp", "telegram"),
+    )
 
     pause = commands.add_parser("pause", help="pause a job")
     pause.add_argument("job_id")
@@ -72,10 +89,13 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
             "name": args.name,
             "repeat": args.repeat,
             "skills": args.skill,
+            "enabled_toolsets": args.enabled_toolsets,
+            "workdir": args.workdir,
+            "deliver": args.deliver,
         }
     if action == "update":
         result: dict[str, Any] = {"action": "update", "job_id": args.job_id}
-        for field in ("prompt", "name", "schedule", "repeat"):
+        for field in ("prompt", "name", "schedule", "repeat", "deliver"):
             value = getattr(args, field)
             if value is not None:
                 result[field] = value
@@ -83,6 +103,14 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
             result["skills"] = []
         elif args.skill is not None:
             result["skills"] = args.skill
+        if args.clear_tools:
+            result["enabled_toolsets"] = []
+        elif args.enabled_toolsets is not None:
+            result["enabled_toolsets"] = args.enabled_toolsets
+        if args.clear_workdir:
+            result["workdir"] = ""
+        elif args.workdir is not None:
+            result["workdir"] = args.workdir
         return result
     result = {"action": action, "job_id": args.job_id}
     if action == "pause":

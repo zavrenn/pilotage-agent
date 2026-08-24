@@ -48,6 +48,7 @@ VALID_SKILL = (
     "name: demo\n"
     "description: Demo workflow.\n"
     "version: 1.0.0\n"
+    "channels: [whatsapp, telegram]\n"
     "---\n\n"
     "# Demo\n\nFollow this workflow.\n"
 )

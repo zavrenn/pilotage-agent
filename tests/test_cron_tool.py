@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from pilotage.approvals import ApprovalOutcome
 from pilotage.cron.jobs import CronStore
+from pilotage.settings import Settings
 from pilotage.tools import ToolContext, build_registry
 
 
@@ -26,7 +27,11 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
         self.wakes = 0
         self.context = ToolContext(
             chat_id="session-1",
-            config=SimpleNamespace(cron_enabled=True, approval_cron=False),
+            config=SimpleNamespace(
+                cron_enabled=True,
+                approval_cron=False,
+                settings=Settings({}),
+            ),
             cron_store=self.store,
             origin={"channel": "whatsapp", "chat_id": "123@c.us"},
             cron_wake=self._wake,
@@ -90,6 +95,28 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed["count"], 1)
         self.assertLessEqual(len(listed["jobs"][0]["last_output_preview"]), 503)
         self.assertEqual(self.wakes, 1)
+
+    async def test_create_persists_workdir_and_tool_limits(self):
+        workdir = self.root / "project"
+        workdir.mkdir()
+        created = await self.create(
+            enabled_toolsets=["web", "file"],
+            workdir=str(workdir),
+        )
+        self.assertTrue(created["success"])
+        stored = self.store.resolve_job(created["job"]["job_id"])
+        self.assertEqual(stored["enabled_toolsets"], ["web", "file"])
+        self.assertEqual(stored["workdir"], str(workdir.resolve()))
+
+    async def test_invalid_cron_scope_is_rejected_before_persistence(self):
+        for values in (
+            {"enabled_toolsets": ["unknown"]},
+            {"enabled_toolsets": ["cron"]},
+            {"workdir": "relative/path"},
+        ):
+            with self.subTest(values=values):
+                result = await self.create(**values)
+                self.assertFalse(result["success"])
 
     async def test_cli_origin_creates_a_local_job(self):
         self.context.origin = None

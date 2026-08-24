@@ -54,6 +54,8 @@ class ProfileTests(unittest.TestCase):
         self.assertTrue((path / "config.yaml").is_file())
         settings = Settings.load(path / "config.yaml").for_channel("whatsapp")
         self.assertEqual(settings.count("whatsapp.bridge_port", 0), 8766)
+        self.assertEqual(settings.text("display.language"), "fr")
+        self.assertEqual(settings.get("timezone"), "")
         self.assertFalse((path / "codex-auth.json").exists())
 
     def test_each_profile_receives_an_explicit_unique_bridge_port(self):

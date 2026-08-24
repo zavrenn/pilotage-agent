@@ -35,6 +35,7 @@ from .registry import (
     tool_error,
     tool_result,
 )
+from .code_execution import EXECUTE_CODE_TOOL
 from .cron import CRONJOB_TOOL
 from .files import FILE_TOOLS
 from .image import IMAGE_GENERATE_TOOL
@@ -64,6 +65,7 @@ __all__ = [
 
 # Every tool the runtime has. Slices add to this list; nothing else changes.
 ALL_TOOLS: Sequence[Tool] = (
+    EXECUTE_CODE_TOOL,
     CRONJOB_TOOL,
     *FILE_TOOLS,
     IMAGE_GENERATE_TOOL,

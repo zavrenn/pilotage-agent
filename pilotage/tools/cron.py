@@ -16,9 +16,30 @@ logger = logging.getLogger(__name__)
 _ACTIONS = {"create", "list", "update", "pause", "resume", "remove", "run"}
 _MUTATING_ACTIONS = _ACTIONS - {"list"}
 _ACTION_ARGUMENTS = {
-    "create": {"action", "prompt", "schedule", "name", "repeat", "skills"},
+    "create": {
+        "action",
+        "prompt",
+        "schedule",
+        "name",
+        "repeat",
+        "skills",
+        "enabled_toolsets",
+        "workdir",
+        "deliver",
+    },
     "list": {"action", "include_disabled"},
-    "update": {"action", "job_id", "prompt", "schedule", "name", "repeat", "skills"},
+    "update": {
+        "action",
+        "job_id",
+        "prompt",
+        "schedule",
+        "name",
+        "repeat",
+        "skills",
+        "enabled_toolsets",
+        "workdir",
+        "deliver",
+    },
     "pause": {"action", "job_id", "reason"},
     "resume": {"action", "job_id"},
     "remove": {"action", "job_id"},
@@ -46,6 +67,8 @@ def _format_job(job: Dict[str, Any], store: CronStore) -> Dict[str, Any]:
         "name": job.get("name"),
         "prompt_preview": prompt[:100] + ("..." if len(prompt) > 100 else ""),
         "skills": list(job.get("skills") or []),
+        "enabled_toolsets": job.get("enabled_toolsets"),
+        "workdir": job.get("workdir"),
         "schedule": job.get("schedule_display"),
         "repeat": _repeat_display(job),
         "deliver": job.get("deliver", "local"),
@@ -79,6 +102,47 @@ def _skills(value: Any) -> Iterable[Any]:
         return (value,)
     if not isinstance(value, list):
         raise ValueError("skills must be a list of skill names")
+    return value
+
+
+def _enabled_toolsets(value: Any, context: ToolContext):
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError("enabled_toolsets must be a list of tool group names")
+    names = []
+    for raw in value:
+        name = str(raw or "").strip()
+        if name and name not in names:
+            names.append(name)
+
+    from pilotage.tools import build_registry, enabled_groups
+
+    registry = build_registry()
+    known = set(registry.groups())
+    unknown = sorted(set(names) - known)
+    if unknown:
+        raise ValueError(
+            "Unknown tool groups: " + ", ".join(unknown)
+        )
+    unavailable = sorted(
+        set(names) - set(enabled_groups(context.config.settings, registry))
+    )
+    if unavailable:
+        raise ValueError(
+            "Tool groups are disabled for this profile/channel: "
+            + ", ".join(unavailable)
+        )
+    if "cron" in names:
+        raise ValueError("The cron tool cannot be enabled inside a scheduled run.")
+    return names
+
+
+def _workdir(value: Any):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("workdir must be an absolute path string")
     return value
 
 
@@ -138,7 +202,12 @@ def execute_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
                 name=str(args.get("name") or ""),
                 repeat=args.get("repeat"),
                 skills=_skills(args.get("skills")),
+                enabled_toolsets=_enabled_toolsets(
+                    args.get("enabled_toolsets"), context
+                ),
+                workdir=_workdir(args.get("workdir")),
                 origin=context.origin,
+                deliver=args.get("deliver"),
             )
             _wake(context)
             return json.dumps(
@@ -206,11 +275,17 @@ def execute_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
             _wake(context)
         else:
             updates: Dict[str, Any] = {}
-            for field in ("name", "prompt", "schedule", "repeat"):
+            for field in ("name", "prompt", "schedule", "repeat", "deliver"):
                 if field in args:
                     updates[field] = args[field]
             if "skills" in args:
                 updates["skills"] = _skills(args["skills"])
+            if "enabled_toolsets" in args:
+                updates["enabled_toolsets"] = _enabled_toolsets(
+                    args["enabled_toolsets"], context
+                )
+            if "workdir" in args:
+                updates["workdir"] = _workdir(args["workdir"])
             if not updates:
                 return tool_error("No updates were provided.", success=False)
             updated = store.update_job(job_id, updates)
@@ -251,7 +326,16 @@ def _cron_approval_request(
             return None
         detail = {
             key: args.get(key)
-            for key in ("name", "schedule", "repeat", "skills", "prompt")
+            for key in (
+                "name",
+                "schedule",
+                "repeat",
+                "skills",
+                "enabled_toolsets",
+                "workdir",
+                "deliver",
+                "prompt",
+            )
             if key in args
         }
         rendered = json.dumps(detail, ensure_ascii=False)
@@ -270,7 +354,16 @@ def _cron_approval_request(
         if action == "update":
             changes = {
                 key: args.get(key)
-                for key in ("name", "prompt", "schedule", "repeat", "skills")
+                for key in (
+                    "name",
+                    "prompt",
+                    "schedule",
+                    "repeat",
+                    "skills",
+                    "enabled_toolsets",
+                    "workdir",
+                    "deliver",
+                )
                 if key in args
             }
             if not changes:
@@ -312,8 +405,10 @@ CRONJOB_SCHEMA = {
     "description": (
         "Manage this profile's scheduled AI jobs. Use create, list, update, "
         "pause, resume, remove, or run. Jobs execute in a fresh isolated "
-        "conversation and deliver back only to the WhatsApp chat that created "
-        "them; local jobs save output without sending. Prompts must be "
+        "conversation and normally deliver back to the messaging chat that "
+        "created them. A declared WhatsApp or Telegram home channel may be used "
+        "for unattended operator jobs; local jobs save output without sending. "
+        "Prompts must be "
         "self-contained. Attached skills are loaded in order at run time. "
         "Only create, change, pause, resume, run, or remove a job when the "
         "current user explicitly requested that change. Always list before "
@@ -348,6 +443,32 @@ CRONJOB_SCHEMA = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Ordered profile-local skills; [] clears them on update.",
+            },
+            "enabled_toolsets": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional tool-group allowlist for this job, such as "
+                    '["web", "file"]. Omit for the profile defaults; [] clears '
+                    "the restriction on update."
+                ),
+            },
+            "workdir": {
+                "type": "string",
+                "description": (
+                    "Optional existing absolute working directory. Its context "
+                    "instructions are loaded and terminal/file/code tools start "
+                    "there. An empty string clears it on update."
+                ),
+            },
+            "deliver": {
+                "type": "string",
+                "enum": ["origin", "local", "whatsapp", "telegram"],
+                "description": (
+                    "Where to send output. origin is the creating chat; whatsapp "
+                    "or telegram uses that configured home channel; local only "
+                    "saves the output."
+                ),
             },
             "reason": {
                 "type": "string",

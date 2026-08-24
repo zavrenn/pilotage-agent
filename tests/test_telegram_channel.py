@@ -477,6 +477,85 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         release.set()
         await channel.stop()
 
+    async def test_stop_drains_every_message_accepted_before_intake_closes(self):
+        delivered = []
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def handler(message):
+            delivered.append(message.text)
+            if len(delivered) == 1:
+                started.set()
+                await release.wait()
+
+        channel, _, _ = self._channel()
+        channel._handler = handler
+
+        def inbound(text, message_id):
+            return telegram.InboundMessage(
+                chat_id="42",
+                session_id="telegram:dm:42",
+                user_id="42",
+                user_name="Owner",
+                text=text,
+                is_group=False,
+                message_ids=[str(message_id)],
+            )
+
+        channel._queue_turn(inbound("one", 1))
+        await asyncio.wait_for(started.wait(), timeout=0.5)
+        channel._queue_turn(inbound("two", 2))
+        channel._enqueue(inbound("three", 3))
+
+        stopping = asyncio.create_task(
+            channel.stop(drain_timeout_seconds=0.5)
+        )
+        await asyncio.sleep(0)
+        self.assertFalse(stopping.done())
+        release.set()
+        await asyncio.wait_for(stopping, timeout=1)
+
+        self.assertEqual(delivered, ["one", "two\nthree"])
+        self.assertEqual(channel._turn_tasks, {})
+
+    async def test_shutdown_holds_and_drains_an_in_progress_media_update(self):
+        delivered = []
+        download_started = asyncio.Event()
+        release_download = asyncio.Event()
+
+        async def download(_message):
+            download_started.set()
+            await release_download.wait()
+            return [], []
+
+        async def handler(message):
+            delivered.append(message.text)
+
+        channel, _, _ = self._channel()
+        channel._handler = handler
+        channel._download_attachments = download
+        channel._app = SimpleNamespace(
+            updater=SimpleNamespace(running=True, stop=mock.AsyncMock()),
+            running=True,
+            stop=mock.AsyncMock(),
+            shutdown=mock.AsyncMock(),
+        )
+
+        update = SimpleNamespace(effective_message=_message(text="late media"))
+        handling = asyncio.create_task(channel._handle_media(update, None))
+        await asyncio.wait_for(download_started.wait(), timeout=0.5)
+
+        stopping = asyncio.create_task(
+            channel.stop(drain_timeout_seconds=0.5)
+        )
+        await asyncio.sleep(0)
+        release_download.set()
+        await asyncio.wait_for(stopping, timeout=1)
+        await handling
+
+        self.assertEqual(delivered, ["late media"])
+        self.assertEqual(channel._held_inbound, {})
+
     async def test_markdown_reply_and_topic_are_sent_natively(self):
         channel, _, _ = self._channel(
             "telegram:\n"

@@ -102,6 +102,24 @@ class ApprovalManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(manager.has_pending("chat"))
         self.assertFalse(manager.resolve("chat", approved=True))
 
+    async def test_user_prompt_uses_the_configured_language(self):
+        manager = ApprovalManager(timeout_seconds=1, language="fr")
+        delivered = asyncio.Event()
+        notices = []
+
+        async def notify(text):
+            notices.append(text)
+            delivered.set()
+
+        waiting = asyncio.create_task(
+            manager.request("chat", "memory", "", notify)
+        )
+        await asyncio.wait_for(delivered.wait(), timeout=0.2)
+        self.assertIn("Approbation requise", notices[0])
+        self.assertIn("Répondez /approve", notices[0])
+        self.assertTrue(manager.resolve("chat", approved=False))
+        await waiting
+
     async def test_reset_cancels_waiters_and_rejects_new_requests_until_unblocked(self):
         manager = ApprovalManager(timeout_seconds=1)
         sent = asyncio.Event()

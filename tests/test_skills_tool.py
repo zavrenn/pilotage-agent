@@ -22,6 +22,7 @@ from pilotage.tools.skills import (
     discover_skills,
     handle_skill_view,
     handle_skills_list,
+    reset_skill_view_dedup,
     skills_directory,
 )
 
@@ -42,17 +43,20 @@ def _make_skill(
     directory: str = "",
     description: str = "A useful workflow.",
     version: str = "1.0.0",
+    channels: str = "[whatsapp, telegram]",
     extra: str = "",
     body: str = "Follow this exact workflow.",
 ) -> Path:
     skill_dir = root / category / (directory or name)
     skill_dir.mkdir(parents=True, exist_ok=True)
     version_line = f"version: {version}\n" if version else ""
+    channels_line = f"channels: {channels}\n" if channels else ""
     content = (
         "---\n"
         f"name: {name}\n"
         f"description: {description}\n"
         f"{version_line}"
+        f"{channels_line}"
         f"{extra}"
         "---\n\n"
         f"# {name}\n\n{body}\n"
@@ -108,9 +112,17 @@ class DiscoveryTests(SkillCase):
 
     async def test_platform_and_channel_filters_apply_before_the_prompt(self):
         _make_skill(self.root, "wrong-platform", extra="platforms: [never-os]\n")
-        _make_skill(self.root, "telegram-only", extra="channels: [telegram]\n")
-        _make_skill(self.root, "whatsapp", extra="channels: [whatsapp]\n")
+        _make_skill(self.root, "telegram-only", channels="[telegram]")
+        _make_skill(self.root, "whatsapp", channels="[whatsapp]")
         self.assertEqual([skill["name"] for skill in discover_skills(self.config)], ["whatsapp"])
+
+    async def test_missing_or_unknown_channels_fail_loudly(self):
+        _make_skill(self.root, "missing-channels", channels="")
+        _make_skill(self.root, "unknown-channel", channels="[email]")
+        skills = discover_skills(self.config)
+        self.assertEqual(len(skills), 2)
+        self.assertTrue(all(not skill["available"] for skill in skills))
+        self.assertTrue(all("channels" in skill["error"] for skill in skills))
 
     async def test_missing_required_credential_is_unavailable_until_present(self):
         _make_skill(
@@ -201,6 +213,30 @@ class PromptAndListTests(SkillCase):
         disabled_config = _Config(self.home, enabled=["todo"])
         disabled = Agent(disabled_config, ConversationStore(path=None))
         self.assertNotIn("<available_skills>", disabled._instructions)
+
+    async def test_scheduled_allowlist_hides_and_blocks_other_skills(self):
+        _make_skill(self.root, "allowed")
+        _make_skill(self.root, "blocked")
+        self.context.allowed_skills = frozenset({"allowed"})
+
+        prompt = build_skills_prompt(
+            self.config,
+            self.context.allowed_skills,
+        )
+        self.assertIn("allowed", prompt)
+        self.assertNotIn("blocked", prompt)
+
+        listed = await self.call(handle_skills_list, {})
+        self.assertEqual(
+            [skill["name"] for skill in listed["skills"]],
+            ["allowed"],
+        )
+        denied = await self.call(
+            handle_skill_view,
+            {"name": "blocked"},
+        )
+        self.assertFalse(denied["success"])
+        self.assertIn("not allowed", denied["error"])
 
 
 class ViewTests(SkillCase):
@@ -306,6 +342,16 @@ class ViewTests(SkillCase):
         path.write_text(path.read_text(encoding="utf-8") + "\nNew step.\n", encoding="utf-8")
         third = await self.call(handle_skill_view, {"name": "repeat"})
         self.assertIn("New step", third["content"])
+
+    async def test_compaction_reset_makes_the_next_view_full_again(self):
+        _make_skill(self.root, "repeat")
+        await self.call(handle_skill_view, {"name": "repeat"})
+        self.assertTrue(
+            (await self.call(handle_skill_view, {"name": "repeat"}))["dedup"]
+        )
+        reset_skill_view_dedup(self.context)
+        reloaded = await self.call(handle_skill_view, {"name": "repeat"})
+        self.assertIn("Follow this exact workflow", reloaded["content"])
 
 
 class WriteSafetyTests(unittest.TestCase):

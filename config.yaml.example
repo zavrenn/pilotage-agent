@@ -1,6 +1,14 @@
 # Pilotage Agent behavior. Copied to ~/.pilotage-agent/config.yaml by
 # scripts/install.sh. Sensitive values belong in ~/.pilotage-agent/.env.
 
+# Static runtime messages only. Put the agent's response language and register
+# in SOUL.md. Supported values: en, fr, ar.
+display:
+  language: fr
+
+# IANA timezone. Blank means the machine's local timezone.
+timezone: ""
+
 agent:
   model: gpt-5.6-sol
   reasoning_effort: medium
@@ -10,10 +18,33 @@ agent:
   request_timeout: 300
   first_event_timeout: 120
   quiet_stream_timeout: 12
+  # Send one short heartbeat at this interval during long turns. 0 disables it.
+  working_notice_interval: 180
+  working_notice_text: Je continue.
 
 compression:
   codex_responses_native: true
   codex_responses_compact_threshold: 200000
+
+# Same reset modes and defaults as current Hermes. "none" means never.
+session_reset:
+  mode: none
+  idle_minutes: 1440
+  at_hour: 4
+  notify: true
+
+sessions:
+  # Ended sessions and their isolated workspaces remain until cleanup is enabled.
+  auto_prune: false
+  retention_days: 90
+  # Optional restricted mode: one workspace per conversation session, with
+  # native file delivery limited to that session's exports directory.
+  isolated_workspaces: false
+
+gateway:
+  # Extra absolute directories from which MEDIA: files may be delivered.
+  # The profile workspace is always included.
+  media_delivery_allow_dirs: []
 
 whatsapp:
   enabled: true
@@ -43,6 +74,7 @@ tools:
   enabled:
     - todo
     - terminal
+    - code_execution
     - web
     - image_gen
     - vision
@@ -90,8 +122,8 @@ stt:
 
 cron:
   enabled: true
-  # Blank uses the machine's local timezone. Example: Africa/Casablanca
-  timezone: ""
+  # Optional override; otherwise this inherits the profile timezone above.
+  # timezone: Africa/Casablanca
   tick_seconds: 1
   claim_ttl_seconds: 1800
   max_concurrent: 2
@@ -103,6 +135,11 @@ terminal:
   # Relative file-tool paths follow the terminal session's current directory.
   # cwd: /srv/agents/my-agent
   timeout: 120
+
+code_execution:
+  # Shared across profiles. Relative paths resolve from the installation root.
+  root: .pilotage-envs
+  timeout: 300
 
 skills:
   # Skills are installed per profile under ~/.pilotage-agent/skills.

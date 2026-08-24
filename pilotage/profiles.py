@@ -18,6 +18,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from .i18n import DEFAULT_PROFILE_LANGUAGE
 from .runtime_lock import ProfileRuntimeLock, RuntimeLockError
 
 _PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -273,6 +274,9 @@ def create_profile(name: str) -> Path:
         config_path.write_text(
             "# Profile-local settings. This port must stay unique on the host.\n"
             "# Put this profile's identity in SOUL.md beside this file.\n"
+            "display:\n"
+            f"  language: {DEFAULT_PROFILE_LANGUAGE}\n"
+            "timezone: \"\"\n"
             "whatsapp:\n"
             f"  bridge_port: {bridge_port}\n",
             encoding="utf-8",

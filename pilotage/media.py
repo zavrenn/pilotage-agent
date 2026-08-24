@@ -28,6 +28,9 @@ from __future__ import annotations
 import base64
 import logging
 import re
+import shutil
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -40,6 +43,7 @@ MAX_TEXT_INJECT_BYTES = 100 * 1024
 # worth the request it would build; WhatsApp itself compresses photos well
 # below it.
 MAX_IMAGE_BYTES = 15 * 1024 * 1024
+DEFAULT_CACHE_MAX_AGE_HOURS = 24
 
 IMAGE_MIME_TYPES = frozenset(
     {"image/jpeg", "image/png", "image/webp", "image/gif"}
@@ -154,6 +158,89 @@ def collect(event: Dict[str, Any], roots: Sequence[Path]) -> List[Attachment]:
     return attachments
 
 
+def stage_inbound(
+    attachments: Sequence[Attachment],
+    input_directory: Path,
+) -> List[Attachment]:
+    """Copy inbound cache files into the active session workspace."""
+
+    if not attachments:
+        return []
+    destination = input_directory.expanduser()
+    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+    destination = destination.resolve(strict=True)
+    destination.chmod(0o700)
+
+    staged: List[Attachment] = []
+    for attachment in attachments:
+        source = attachment.path.resolve(strict=True)
+        try:
+            source.relative_to(destination)
+        except ValueError:
+            display_name = Path(attachment.display_name()).name
+            safe_name = re.sub(
+                r"[^A-Za-z0-9._ -]",
+                "_",
+                display_name,
+            ).strip(" .")[:160]
+            if not safe_name:
+                safe_name = source.name[:160] or "attachment.bin"
+            target = (
+                destination
+                / f"in_{uuid.uuid4().hex[:12]}_{safe_name}"
+            )
+            temporary = target.with_name(f".{target.name}.tmp")
+            try:
+                shutil.copyfile(source, temporary)
+                temporary.chmod(0o600)
+                temporary.replace(target)
+            except BaseException:
+                temporary.unlink(missing_ok=True)
+                raise
+            source = target.resolve(strict=True)
+        staged.append(
+            Attachment(
+                path=source,
+                mime=attachment.mime,
+                media_type=attachment.media_type,
+                file_name=attachment.file_name,
+            )
+        )
+    return staged
+
+
+def cleanup_cache(
+    root: Path,
+    *,
+    max_age_hours: int = DEFAULT_CACHE_MAX_AGE_HOURS,
+    now: Optional[float] = None,
+) -> int:
+    """Delete stale bridge-cache files after they have been staged."""
+
+    if max_age_hours <= 0:
+        return 0
+    try:
+        cache_root = root.resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        return 0
+    if not cache_root.is_dir():
+        return 0
+
+    cutoff = float(time.time() if now is None else now) - (
+        max_age_hours * 3600
+    )
+    removed = 0
+    for path in cache_root.rglob("*"):
+        try:
+            if not path.is_file() or path.stat().st_mtime >= cutoff:
+                continue
+            path.unlink()
+            removed += 1
+        except OSError:
+            logger.debug("Could not prune stale media cache file", exc_info=True)
+    return removed
+
+
 def _accept_path(raw: str, roots: Sequence[Path]) -> Optional[Path]:
     if not raw:
         return None
@@ -257,7 +344,9 @@ def extract_outbound(
         raw = _normalize_media_tag_path(match.group("path"))
         accepted = _accept_outbound_path(raw, roots)
         if accepted is None:
-            logger.warning("Rejected an outbound MEDIA path outside the workspace")
+            logger.warning(
+                "Rejected an outbound MEDIA path outside declared delivery directories"
+            )
             continue
         if accepted in seen:
             continue
@@ -274,6 +363,39 @@ def extract_outbound(
         del chars[start:end]
     cleaned = re.sub(r"\n{3,}", "\n\n", "".join(chars)).strip()
     return attachments, cleaned
+
+
+def confine_outbound(
+    content: str,
+    roots: Sequence[Path],
+    *,
+    denied_notice: str = (
+        "[File delivery blocked: restricted sessions can only deliver files "
+        "from the current session's exports directory.]"
+    ),
+) -> str:
+    """Keep only live MEDIA directives accepted by restricted roots."""
+
+    if "MEDIA:" not in content:
+        return content
+
+    scan = _mask_protected_media_spans(content, roots)
+    scan = _mask_json_media_values(scan)
+    denied = any(
+        _accept_outbound_path(
+            _normalize_media_tag_path(match.group("path")),
+            roots,
+        )
+        is None
+        for match in MEDIA_TAG_RE.finditer(scan)
+    )
+    attachments, cleaned = extract_outbound(content, roots)
+
+    parts = [cleaned] if cleaned else []
+    parts.extend(f"MEDIA:{attachment.path}" for attachment in attachments)
+    if denied:
+        parts.append(denied_notice)
+    return "\n\n".join(parts)
 
 
 def inline_documents(text: str, attachments: Sequence[Attachment]) -> str:

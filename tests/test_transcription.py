@@ -454,6 +454,9 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
                 def __init__(self, _config, **_runtime_dependencies):
                     pass
 
+                async def close(self):
+                    pass
+
                 async def respond(
                     self,
                     _session_id,
@@ -496,7 +499,10 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
                     )
                     self.stopped.set()
 
-                async def stop(self):
+                async def stop_intake(self):
+                    pass
+
+                async def stop(self, *, drain_timeout_seconds=0):
                     pass
 
             with (

@@ -10,11 +10,31 @@ from __future__ import annotations
 
 from typing import Dict
 
+import httpx
 from openai import AsyncOpenAI
 
 from .auth import Credentials, chatgpt_account_id
 
 CODEX_USER_AGENT = "codex_cli_rs/0.0.0 (Pilotage Agent)"
+
+
+def build_http_client(*, timeout_seconds: float) -> httpx.AsyncClient:
+    """Hermes' resident SSE pool, narrowed to Pilotage's fixed backend."""
+
+    timeout = max(1.0, float(timeout_seconds))
+    return httpx.AsyncClient(
+        limits=httpx.Limits(
+            max_keepalive_connections=20,
+            max_connections=100,
+            keepalive_expiry=20.0,
+        ),
+        timeout=httpx.Timeout(
+            connect=min(15.0, timeout),
+            read=None,
+            write=min(15.0, timeout),
+            pool=min(10.0, timeout),
+        ),
+    )
 
 
 def cloudflare_headers(access_token: str) -> Dict[str, str]:
@@ -35,4 +55,8 @@ def build_client(credentials: Credentials, *, timeout_seconds: float) -> AsyncOp
         default_headers=cloudflare_headers(credentials.access_token),
         timeout=timeout_seconds,
         max_retries=2,
+        http_client=build_http_client(timeout_seconds=timeout_seconds),
     )
+
+
+__all__ = ["build_client", "build_http_client", "cloudflare_headers"]

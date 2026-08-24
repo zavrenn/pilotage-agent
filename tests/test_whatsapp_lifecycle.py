@@ -70,6 +70,41 @@ class BridgeOwnershipTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    def test_spawn_does_not_inherit_agent_secrets(self):
+        process = mock.Mock(pid=4321)
+        environment = {
+            "PATH": "node-path",
+            "LANG": "en_US.UTF-8",
+            "PILOTAGE_CODEX_BASE_URL": "sentinel-codex",
+            "VOICE_TOOLS_OPENAI_KEY": "sentinel-openai",
+            "DATABASE_PASSWORD": "sentinel-database",
+            "TELEGRAM_BOT_TOKEN": "sentinel-telegram",
+        }
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch.object(
+                whatsapp.subprocess,
+                "Popen",
+                return_value=process,
+            ) as popen,
+        ):
+            self.channel._spawn_bridge()
+
+        child = popen.call_args.kwargs["env"]
+        self.assertEqual(child["PATH"], "node-path")
+        self.assertEqual(child["LANG"], "en_US.UTF-8")
+        self.assertEqual(
+            child["PILOTAGE_BRIDGE_TOKEN"],
+            self.channel._bridge_token,
+        )
+        for secret in (
+            "sentinel-codex",
+            "sentinel-openai",
+            "sentinel-database",
+            "sentinel-telegram",
+        ):
+            self.assertNotIn(secret, child.values())
+
     def test_spawn_passes_the_group_allowlist_separately_from_dm_senders(self):
         object.__setattr__(self.channel._config, "group_policy", "allowlist")
         object.__setattr__(
@@ -326,9 +361,37 @@ class BatchLifecycleTests(unittest.IsolatedAsyncioTestCase):
         channel = WhatsAppChannel(Config.load(), handler, _command)
         channel._queue_turn(self._message("one", "m1"))
         await asyncio.wait_for(started.wait(), timeout=0.5)
-        await channel.stop()
+        await channel.stop(drain_timeout_seconds=0)
 
         self.assertTrue(cancelled.is_set())
+        self.assertEqual(channel._turn_tasks, {})
+
+    async def test_stop_drains_every_message_accepted_before_intake_closes(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        delivered = []
+
+        async def handler(message: InboundMessage) -> None:
+            delivered.append(message.text)
+            if len(delivered) == 1:
+                started.set()
+                await release.wait()
+
+        channel = WhatsAppChannel(Config.load(), handler, _command)
+        channel._queue_turn(self._message("one", "m1"))
+        await asyncio.wait_for(started.wait(), timeout=0.5)
+        channel._queue_turn(self._message("two", "m2"))
+        channel._enqueue(self._message("three", "m3"))
+
+        stopping = asyncio.create_task(
+            channel.stop(drain_timeout_seconds=0.5)
+        )
+        await asyncio.sleep(0)
+        self.assertFalse(stopping.done())
+        release.set()
+        await asyncio.wait_for(stopping, timeout=1)
+
+        self.assertEqual(delivered, ["one", "two\nthree"])
         self.assertEqual(channel._turn_tasks, {})
 
 

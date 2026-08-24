@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ..redact import redact_sensitive_text, redact_terminal_output
 from .registry import Tool, ToolContext, tool_error
 from .shell import DEFAULT_TIMEOUT_SECONDS, Shell
 
@@ -58,6 +59,9 @@ def _setting(context: ToolContext, name: str, default: Any) -> Any:
 
 def shell_cwd(context: ToolContext) -> str:
     """Resolve the terminal root without letting profiles share process cwd."""
+    scoped = getattr(context, "working_directory", None)
+    if scoped is not None:
+        return str(Path(scoped).expanduser())
     configured = str(_setting(context, "terminal.cwd", "")).strip()
     if configured:
         return os.path.expanduser(configured)
@@ -144,7 +148,7 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
         )
 
         response: Dict[str, Any] = {
-            "output": str(result.get("output") or ""),
+            "output": redact_terminal_output(result.get("output") or "", command),
             "exit_code": int(result.get("returncode", -1)),
         }
         # A per-command workdir is a scope, not a move. Shell only sets this
@@ -152,7 +156,7 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
         if result.get("cwd_observed"):
             response["cwd"] = session.shell.cwd
         if result.get("stdin_error"):
-            response["stdin_error"] = str(result["stdin_error"])
+            response["stdin_error"] = redact_sensitive_text(result["stdin_error"])
         return json.dumps(response, ensure_ascii=False)
 
 

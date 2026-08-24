@@ -617,9 +617,16 @@ def _generate(args: Dict[str, Any], context: ToolContext) -> Dict[str, Any]:
 
     try:
         pixel_size = _png_pixel_size(base64.b64decode(image_b64))
+        output_root = Path(
+            context.working_directory or context.config.workspace_dir
+        )
+        if getattr(
+            context.config, "session_isolated_workspaces", False
+        ):
+            output_root = output_root / "exports"
         saved_path = _save_b64_image(
             image_b64,
-            Path(context.config.workspace_dir),
+            output_root,
             model,
         )
     except Exception as exc:  # noqa: BLE001 - filesystem errors vary

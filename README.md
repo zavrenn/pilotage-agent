@@ -44,10 +44,15 @@ production-complete, and there is no stable public API.
 
 ## Install on Ubuntu
 
+In a fresh Ubuntu 24.04 container, first run
+sudo bash scripts/install-system-dependencies.sh as root. Then run the
+commands below as the unprivileged service user.
+
 ```bash
 scripts/install.sh
 # Edit ~/.pilotage-agent/.env and ~/.pilotage-agent/config.yaml
 ./.venv/bin/pilotage login
+./.venv/bin/pilotage whatsapp  # scan or verify the profile's linked device
 ./.venv/bin/pilotage run
 ```
 
@@ -62,6 +67,8 @@ uses TELEGRAM_BOT_TOKEN and numeric IDs in TELEGRAM_ALLOWED_USERS from the
 profile .env.
 Webhook delivery also requires TELEGRAM_WEBHOOK_URL and a long random
 TELEGRAM_WEBHOOK_SECRET; leaving the URL blank uses long polling.
+Set WHATSAPP_HOME_CHANNEL or TELEGRAM_HOME_CHANNEL in that same profile .env so
+unattended scheduled output has an explicit destination.
 After testing the enabled channels, install the resident user service:
 
 ```bash
@@ -76,12 +83,18 @@ Useful operator commands:
 # Edit ~/.pilotage-agent/profiles/work/.env and config.yaml
 ./.venv/bin/pilotage --profile work run
 bash scripts/install-service.sh --profile work
+./.venv/bin/pilotage --profile work service status
+./.venv/bin/pilotage --profile work service stop
+./.venv/bin/pilotage --profile work service start
 ./.venv/bin/pilotage cron list --all
 ```
 
 Each named profile owns its `SOUL.md` identity, configuration, WhatsApp session,
 Telegram credentials, conversations, memory, skills, workspace, cron jobs, and
 an automatically assigned bridge port. Only one live runtime may own a profile.
+A profile's `display.language` selects English, French, or Arabic for static
+runtime messages; the agent's own language and register remain in `SOUL.md`.
+The top-level `timezone` is shared by cron and daily conversation resets.
 A named profile may fall back only to the default profile's ChatGPT
 authentication. An optional `AGENTS.md` in
 the working directory supplies workspace instructions to each new conversation.

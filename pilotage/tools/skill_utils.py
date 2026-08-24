@@ -47,6 +47,7 @@ MAX_SKILL_DESCRIPTION_LENGTH = 1024
 MAX_SKILL_CONTENT_CHARS = 100_000
 MAX_SKILL_FILE_BYTES = 1_048_576
 VALID_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+SUPPORTED_SKILL_CHANNELS = frozenset({"whatsapp", "telegram"})
 
 
 def is_skill_support_path(path, *, root: Optional[Path] = None) -> bool:
@@ -168,6 +169,10 @@ def validate_skill_file_content(path: Path, content: str) -> Optional[str]:
     if not version:
         return "SKILL.md frontmatter must include a non-empty 'version'."
 
+    _, channel_error = normalize_skill_channels(frontmatter)
+    if channel_error:
+        return channel_error
+
     body = document[end_match.end() + 3 :].strip()
     if not body:
         return "SKILL.md must have instructions after its frontmatter."
@@ -196,13 +201,43 @@ def skill_matches_platform(frontmatter: Dict[str, Any]) -> bool:
 
 def skill_matches_channel(frontmatter: Dict[str, Any], channel: str) -> bool:
     """Pilotage adaptation: enforce a skill's declared messaging channels."""
-    channels = frontmatter.get("channels")
-    if not channels or not channel:
+    channels, error = normalize_skill_channels(frontmatter)
+    if error:
+        return False
+    if not channel:
         return True
-    if not isinstance(channels, list):
-        channels = [channels]
     wanted = channel.lower().strip()
-    return any(str(item).lower().strip() == wanted for item in channels)
+    return wanted in channels
+
+
+def normalize_skill_channels(
+    frontmatter: Dict[str, Any],
+) -> Tuple[Tuple[str, ...], Optional[str]]:
+    """Return the declared Pilotage channels, or a loud contract error."""
+
+    raw = frontmatter.get("channels")
+    if raw is None:
+        return (), "SKILL.md frontmatter must include non-empty 'channels'."
+    values = [raw] if isinstance(raw, str) else raw
+    if not isinstance(values, list):
+        return (), "SKILL.md frontmatter 'channels' must be a list or string."
+
+    channels: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            return (), "SKILL.md frontmatter 'channels' contains an invalid value."
+        channel = value.strip().lower()
+        if channel not in SUPPORTED_SKILL_CHANNELS:
+            allowed = ", ".join(sorted(SUPPORTED_SKILL_CHANNELS))
+            return (), (
+                "SKILL.md frontmatter 'channels' contains unsupported channel "
+                f"{channel!r}; allowed: {allowed}."
+            )
+        if channel not in channels:
+            channels.append(channel)
+    if not channels:
+        return (), "SKILL.md frontmatter must include non-empty 'channels'."
+    return tuple(channels), None
 
 
 SKILL_PROMPT_DESC_LIMIT = 60
@@ -247,11 +282,13 @@ __all__ = [
     "MAX_SKILL_DESCRIPTION_LENGTH",
     "MAX_SKILL_FILE_BYTES",
     "MAX_SKILL_NAME_LENGTH",
+    "SUPPORTED_SKILL_CHANNELS",
     "SKILL_SUPPORT_DIRS",
     "VALID_SKILL_NAME_RE",
     "extract_skill_description",
     "is_skill_support_path",
     "iter_skill_index_files",
+    "normalize_skill_channels",
     "parse_frontmatter",
     "skill_matches_channel",
     "skill_matches_platform",

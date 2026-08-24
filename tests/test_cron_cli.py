@@ -71,6 +71,65 @@ class CronCliTests(unittest.TestCase):
         self.assertIn("disabled", error)
         self.assertEqual(self.run_cli("cron", "list")[0], 0)
 
+    def test_operator_can_set_and_clear_workdir_and_toolsets(self):
+        workdir = self.root / "project"
+        workdir.mkdir()
+        code, output, error = self.run_cli(
+            "cron",
+            "create",
+            "1h",
+            "--prompt",
+            "Send status",
+            "--tool",
+            "web",
+            "--workdir",
+            str(workdir),
+        )
+        self.assertEqual((code, error), (0, ""))
+        job_id = output.split("\t", 1)[0]
+        store = CronStore(Config.load().state_dir)
+        job = store.resolve_job(job_id)
+        self.assertEqual(job["enabled_toolsets"], ["web"])
+        self.assertEqual(job["workdir"], str(workdir.resolve()))
+
+        self.assertEqual(
+            self.run_cli(
+                "cron",
+                "update",
+                job_id,
+                "--clear-tools",
+                "--clear-workdir",
+            )[0],
+            0,
+        )
+        cleared = store.resolve_job(job_id)
+        self.assertIsNone(cleared["enabled_toolsets"])
+        self.assertIsNone(cleared["workdir"])
+
+    def test_operator_can_choose_a_declared_home_delivery(self):
+        code, output, error = self.run_cli(
+            "cron",
+            "create",
+            "1h",
+            "--prompt",
+            "Send status",
+            "--deliver",
+            "telegram",
+        )
+        self.assertEqual((code, error), (0, ""))
+        job_id = output.split("\t", 1)[0]
+        job = CronStore(Config.load().state_dir).resolve_job(job_id)
+        self.assertEqual(job["deliver"], "telegram")
+
+        self.assertEqual(
+            self.run_cli("cron", "update", job_id, "--deliver", "local")[0],
+            0,
+        )
+        self.assertEqual(
+            CronStore(Config.load().state_dir).resolve_job(job_id)["deliver"],
+            "local",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

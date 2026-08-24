@@ -41,6 +41,53 @@ BRIDGE_READY_TIMEOUT_SECONDS = 120.0
 BRIDGE_RESTART_ATTEMPTS = 3
 BRIDGE_RESTART_DELAY_SECONDS = 5.0
 BRIDGE_TOKEN_HEADER = "X-Pilotage-Bridge-Token"
+# The Node bridge needs process basics, not the agent's model, database,
+# transcription, search, Telegram, or profile credentials.
+BRIDGE_INHERITED_ENV = frozenset(
+    {
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "FORCE_COLOR",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LANG",
+        "LANGUAGE",
+        "LC_ADDRESS",
+        "LC_ALL",
+        "LC_COLLATE",
+        "LC_CTYPE",
+        "LC_IDENTIFICATION",
+        "LC_MEASUREMENT",
+        "LC_MESSAGES",
+        "LC_MONETARY",
+        "LC_NAME",
+        "LC_NUMERIC",
+        "LC_PAPER",
+        "LC_TELEPHONE",
+        "LC_TIME",
+        "LOCALAPPDATA",
+        "LOGNAME",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "NO_COLOR",
+        "PATH",
+        "PATHEXT",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+        "USER",
+        "USERPROFILE",
+        "WINDIR",
+    }
+)
 # A single message this long is almost certainly one chunk of a longer paste, so
 # we wait longer for the rest of it.
 SPLIT_THRESHOLD = 6000
@@ -49,6 +96,32 @@ QUOTE_SNIPPET_LIMIT = 500
 # Start the conversation over. Typed by a person on a phone keyboard, so case
 # and a trailing space are not mistakes worth punishing.
 RESET_COMMAND = "/new"
+
+
+def build_bridge_environment(
+    *,
+    base: Optional[Dict[str, str]] = None,
+    token: str = "",
+    allowed_senders: Optional[List[str]] = None,
+    allowed_groups: Optional[List[str]] = None,
+) -> Dict[str, str]:
+    """Build the bridge's complete, intentionally small child environment."""
+
+    source = os.environ if base is None else base
+    child = {
+        name: value
+        for name, value in source.items()
+        if name.upper() in BRIDGE_INHERITED_ENV
+    }
+    child["PILOTAGE_ALLOWED_SENDERS"] = ",".join(
+        sorted(str(value) for value in (allowed_senders or ()))
+    )
+    child["PILOTAGE_ALLOWED_GROUPS"] = ",".join(
+        sorted(str(value) for value in (allowed_groups or ()))
+    )
+    if token:
+        child["PILOTAGE_BRIDGE_TOKEN"] = token
+    return child
 
 
 def _bare_whatsapp_id(value: str) -> str:
@@ -239,20 +312,49 @@ class WhatsAppChannel:
             )
         logger.info("WhatsApp channel ready")
 
-    async def stop(self) -> None:
+    async def stop_intake(self) -> None:
+        """Stop accepting bridge events and dispatch every accepted batch."""
+
         self._running = False
-        self.stopped.set()
         if self._poll_task is not None:
             self._poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._poll_task
             self._poll_task = None
 
+        timers = set(self._pending_tasks.values())
+        for key in list(self._pending):
+            self._flush_pending_now(key)
+        for task in timers:
+            task.cancel()
+        if timers:
+            await asyncio.gather(*timers, return_exceptions=True)
+        self._pending_tasks.clear()
+
+    async def stop(self, *, drain_timeout_seconds: float = 0.0) -> None:
+        """Stop intake, then give already accepted work a bounded drain."""
+
+        await self.stop_intake()
+
         owned = set(self._pending_tasks.values())
         owned.update(self._pending_tasks_background)
         owned.update(self._turn_tasks.values())
         owned.discard(asyncio.current_task())
-        for task in owned:
+        live = {task for task in owned if not task.done()}
+        timeout = (
+            0.0
+            if self.failure
+            else max(0.0, float(drain_timeout_seconds))
+        )
+        pending = live
+        if live and timeout > 0:
+            _, pending = await asyncio.wait(live, timeout=timeout)
+        if pending:
+            logger.warning(
+                "WhatsApp shutdown drain expired with %d accepted task(s)",
+                len(pending),
+            )
+        for task in pending:
             task.cancel()
         if owned:
             await asyncio.gather(*owned, return_exceptions=True)
@@ -268,7 +370,10 @@ class WhatsAppChannel:
                 await self._http.aclose()
                 self._http = None
         finally:
-            self._terminate_bridge()
+            try:
+                await asyncio.to_thread(self._terminate_bridge)
+            finally:
+                self.stopped.set()
 
     def _preflight(self) -> None:
         if shutil.which("node") is None:
@@ -347,14 +452,11 @@ class WhatsAppChannel:
             "1" if self._config.answer_groups else "0",
         ]
         # stdout is inherited on purpose: the pairing QR code is printed there.
-        child_env = {
-            **os.environ,
-            "PILOTAGE_BRIDGE_TOKEN": self._bridge_token,
-            "PILOTAGE_ALLOWED_SENDERS": ",".join(sorted(self._config.allowed_senders)),
-            "PILOTAGE_ALLOWED_GROUPS": ",".join(
-                sorted(self._config.group_allow_from)
-            ),
-        }
+        child_env = build_bridge_environment(
+            token=self._bridge_token,
+            allowed_senders=list(self._config.allowed_senders),
+            allowed_groups=list(self._config.group_allow_from),
+        )
         self._process = subprocess.Popen(
             command,
             cwd=str(self._config.bridge_dir),
@@ -780,7 +882,7 @@ class WhatsAppChannel:
                     raise
                 except Exception:  # noqa: BLE001 - one turn must not stop the channel
                     logger.exception("Handling a message from %s failed", message.chat_id)
-                if self.stopped.is_set():
+                if self.failure:
                     self._queued.pop(key, None)
                     break
                 message = self._queued.pop(key, None)
@@ -834,7 +936,7 @@ class WhatsAppChannel:
 
         if deliver_media:
             attachments, cleaned = media.extract_outbound(
-                text or "", (self._config.workspace_dir,)
+                text or "", self._config.outbound_media_roots
             )
         else:
             attachments, cleaned = [], text or ""

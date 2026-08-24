@@ -7,8 +7,8 @@ a stat call, and the answer must be the same on a path that does not exist yet.
 Two lists, and the difference between them matters. A binary file cannot be
 shown to the model at all. An opaque document — .docx and its relatives — must
 never be written as text: doing so would destroy the document while reporting
-success. Document text extraction belongs to the later document/vision slice,
-not to this file group.
+success. Supported document types are extracted before this guard by
+read_file.
 
 .pdf is deliberately in neither list. Its syntax is text, so writing a new one
 is legitimate; only overwriting an existing one is dangerous, and that is the

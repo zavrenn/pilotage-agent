@@ -66,7 +66,7 @@ def timezone_for_name(name: str = ""):
     try:
         return ZoneInfo(written)
     except ZoneInfoNotFoundError as exc:
-        raise ValueError(f"Unknown cron timezone: {written}") from exc
+        raise ValueError(f"Unknown timezone: {written}") from exc
 
 
 def _aware(value: datetime, tz) -> datetime:
@@ -229,6 +229,45 @@ def _normalize_skills(skills: Optional[Iterable[Any]]) -> List[str]:
     return result
 
 
+def _normalize_enabled_toolsets(
+    toolsets: Optional[Iterable[Any]],
+) -> Optional[List[str]]:
+    if toolsets is None:
+        return None
+    if isinstance(toolsets, (str, bytes)) or not isinstance(toolsets, Iterable):
+        raise ValueError("enabled_toolsets must be a list of tool group names")
+    result: List[str] = []
+    for raw in toolsets:
+        name = str(raw or "").strip()
+        if not name or name in result:
+            continue
+        if len(name) > 128:
+            raise ValueError("Tool group names cannot exceed 128 characters.")
+        result.append(name)
+    return result or None
+
+
+def _normalize_workdir(workdir: Optional[str]) -> Optional[str]:
+    """Normalize current Hermes' absolute, existing cron workdir contract."""
+
+    if workdir is None:
+        return None
+    raw = str(workdir).strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        raise ValueError(
+            f"Cron workdir must be an absolute path (got {raw!r})."
+        )
+    resolved = path.resolve(strict=False)
+    if not resolved.exists():
+        raise ValueError(f"Cron workdir does not exist: {resolved}")
+    if not resolved.is_dir():
+        raise ValueError(f"Cron workdir is not a directory: {resolved}")
+    return str(resolved)
+
+
 def _normalize_origin(origin: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
     if not isinstance(origin, dict):
         return None
@@ -241,6 +280,42 @@ def _normalize_origin(origin: Optional[Dict[str, Any]]) -> Optional[Dict[str, st
             normalized["thread_id"] = thread_id
         return normalized
     return {"channel": channel, "chat_id": chat_id} if channel and chat_id else None
+
+
+def _normalize_delivery(value: Any, origin: Optional[Dict[str, str]]) -> str:
+    """Normalize the current-Hermes delivery targets Pilotage actually uses."""
+
+    if value is None or not str(value).strip():
+        return "origin" if origin else "local"
+    written = str(value).strip().lower()
+    if written not in {"origin", "local", "whatsapp", "telegram"}:
+        raise ValueError(
+            "Cron delivery must be origin, local, whatsapp, or telegram."
+        )
+    return written
+
+
+def _normalize_stored_delivery(
+    value: Any,
+    origin: Optional[Dict[str, str]],
+    *,
+    job_id: str,
+) -> str:
+    """Read old or hand-edited delivery data without breaking startup."""
+
+    if isinstance(value, (list, tuple)):
+        parts = [str(part).strip() for part in value if str(part).strip()]
+        value = parts[0] if len(parts) == 1 else value
+    try:
+        return _normalize_delivery(value, origin)
+    except (TypeError, ValueError):
+        # Delivery corruption must fail safe: keep the job readable but do not
+        # route its output to any external chat until an operator fixes it.
+        logger.warning(
+            "Cron job %s has invalid delivery data; using local delivery",
+            job_id,
+        )
+        return "local"
 
 
 def _normalize_repeat_count(value: Any) -> Optional[int]:
@@ -412,6 +487,17 @@ class CronStore:
             normalized["skill"] = (
                 normalized["skills"][0] if normalized["skills"] else None
             )
+            normalized["enabled_toolsets"] = _normalize_enabled_toolsets(
+                normalized.get("enabled_toolsets")
+            )
+            raw_workdir = str(normalized.get("workdir") or "").strip()
+            normalized["workdir"] = raw_workdir or None
+            normalized["origin"] = _normalize_origin(normalized.get("origin"))
+            normalized["deliver"] = _normalize_stored_delivery(
+                normalized.get("deliver"),
+                normalized["origin"],
+                job_id=job_id,
+            )
             result.append(normalized)
         return result
 
@@ -463,10 +549,15 @@ class CronStore:
         name: str = "",
         repeat: Optional[int] = None,
         skills: Optional[Iterable[Any]] = None,
+        enabled_toolsets: Optional[Iterable[Any]] = None,
+        workdir: Optional[str] = None,
         origin: Optional[Dict[str, Any]] = None,
+        deliver: Optional[str] = None,
     ) -> Dict[str, Any]:
         prompt_text = validate_prompt(prompt)
         skill_names = _normalize_skills(skills)
+        normalized_toolsets = _normalize_enabled_toolsets(enabled_toolsets)
+        normalized_workdir = _normalize_workdir(workdir)
         if not prompt_text and not skill_names:
             raise ValueError("A cron job requires a prompt or at least one skill.")
         parsed = parse_schedule(schedule, now=self.now(), tz=self.timezone)
@@ -479,6 +570,7 @@ class CronStore:
                 f"One-shot time is more than {ONESHOT_GRACE_SECONDS}s in the past."
             )
         normalized_origin = _normalize_origin(origin)
+        normalized_delivery = _normalize_delivery(deliver, normalized_origin)
         label = str(name or "").strip() or prompt_text[:50].strip()
         if not label and skill_names:
             label = skill_names[0]
@@ -488,6 +580,8 @@ class CronStore:
             "prompt": prompt_text,
             "skills": skill_names,
             "skill": skill_names[0] if skill_names else None,
+            "enabled_toolsets": normalized_toolsets,
+            "workdir": normalized_workdir,
             "schedule": parsed,
             "schedule_display": parsed["display"],
             "repeat": {"times": repeat, "completed": 0},
@@ -502,7 +596,7 @@ class CronStore:
             "last_error": None,
             "last_delivery_error": None,
             "claim": None,
-            "deliver": "origin" if normalized_origin else "local",
+            "deliver": normalized_delivery,
             "origin": normalized_origin,
         }
         with self._locked():
@@ -517,7 +611,16 @@ class CronStore:
     def update_job(
         self, reference: str, updates: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
-        allowed = {"name", "prompt", "schedule", "skills", "repeat"}
+        allowed = {
+            "name",
+            "prompt",
+            "schedule",
+            "skills",
+            "repeat",
+            "enabled_toolsets",
+            "workdir",
+            "deliver",
+        }
         unknown = set(updates) - allowed
         if unknown:
             raise ValueError(
@@ -543,6 +646,16 @@ class CronStore:
             if "skills" in updates:
                 job["skills"] = _normalize_skills(updates["skills"])
                 job["skill"] = job["skills"][0] if job["skills"] else None
+            if "enabled_toolsets" in updates:
+                job["enabled_toolsets"] = _normalize_enabled_toolsets(
+                    updates["enabled_toolsets"]
+                )
+            if "workdir" in updates:
+                job["workdir"] = _normalize_workdir(updates["workdir"])
+            if "deliver" in updates:
+                job["deliver"] = _normalize_delivery(
+                    updates["deliver"], _normalize_origin(job.get("origin"))
+                )
             if not job.get("prompt") and not job.get("skills"):
                 raise ValueError("A cron job requires a prompt or at least one skill.")
             if "repeat" in updates:
@@ -892,4 +1005,3 @@ class CronStore:
             return files[-1].read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
-

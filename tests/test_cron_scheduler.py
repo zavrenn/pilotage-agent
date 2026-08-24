@@ -149,6 +149,59 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(factory.configs, [telegram_config])
 
+    async def test_explicit_platform_delivers_to_its_declared_home(self):
+        telegram_config = SimpleNamespace(
+            state_dir=self.root,
+            settings=Settings({}),
+            cron_max_concurrent=2,
+            cron_tick_seconds=0.02,
+            channel="telegram",
+            home_origin={
+                "channel": "telegram",
+                "chat_id": "-10042",
+                "thread_id": "7",
+            },
+        )
+        job = self.create(origin=False, deliver="telegram")
+
+        async def answer(_session, _prompt):
+            return "Home result"
+
+        _, factory = await self.scheduler(
+            answer,
+            channel_configs={"telegram": telegram_config},
+        )
+        await wait_until(
+            lambda: self.store.resolve_job(job["id"])["state"] == "completed"
+        )
+
+        self.assertEqual(factory.configs, [telegram_config])
+        self.assertEqual(
+            self.deliveries,
+            [(
+                {"channel": "telegram", "chat_id": "-10042", "thread_id": "7"},
+                "Home result",
+            )],
+        )
+
+    async def test_missing_explicit_home_is_a_visible_delivery_error(self):
+        job = self.create(origin=False, deliver="telegram")
+
+        async def answer(_session, _prompt):
+            return "Saved result"
+
+        await self.scheduler(answer)
+        finished = await wait_until(
+            lambda: (
+                value
+                if (value := self.store.resolve_job(job["id"]))["state"]
+                == "completed"
+                else None
+            )
+        )
+        self.assertIn("home channel", finished["last_delivery_error"])
+        self.assertEqual(self.store.latest_output(job["id"]), "Saved result")
+
     async def test_local_and_silent_jobs_do_not_deliver(self):
         local = self.create(origin=False, name="local")
         silent = self.create(name="silent")
@@ -184,6 +237,52 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("backend unavailable", finished["last_error"])
         self.assertIn("Cron run failed", self.store.latest_output(job["id"]))
         self.assertIn("failed", self.deliveries[0][1])
+
+    async def test_missing_configured_workdir_fails_closed(self):
+        workdir = self.root / "temporary-project"
+        workdir.mkdir()
+        job = self.create(workdir=str(workdir))
+        workdir.rmdir()
+        scheduler = CronScheduler(
+            self.config,
+            self.store,
+            deliver=self.deliver,
+        )
+        await scheduler.start()
+        self.addAsyncCleanup(scheduler.stop)
+
+        finished = await wait_until(
+            lambda: (
+                value
+                if (value := self.store.resolve_job(job["id"]))["state"] == "error"
+                else None
+            )
+        )
+        self.assertIn("workdir no longer exists", finished["last_error"])
+
+    def test_default_agent_receives_job_workdir_and_toolset(self):
+        captured = {}
+
+        class FakeAgent:
+            def __init__(self, *args, **kwargs):
+                captured.update(kwargs)
+
+        workdir = self.root / "project"
+        workdir.mkdir()
+        scheduler = CronScheduler(self.config, self.store)
+        with mock.patch("pilotage.cron.scheduler.Agent", FakeAgent):
+            scheduler._fresh_agent(
+                self.config,
+                {
+                    "enabled_toolsets": ["web", "file"],
+                    "skills": ["reporting"],
+                    "workdir": str(workdir),
+                },
+            )
+        self.assertEqual(captured["enabled_tool_groups"], ["web", "file"])
+        self.assertEqual(captured["enabled_skills"], ["reporting"])
+        self.assertEqual(captured["working_directory"], workdir)
+        self.assertEqual(captured["disabled_tool_groups"], ("cron",))
 
     async def test_delivery_failure_does_not_reclassify_model_success(self):
         job = self.create()
@@ -235,10 +334,35 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
 
         scheduler, _ = await self.scheduler(wait_forever)
         await asyncio.wait_for(started.wait(), timeout=1)
-        await scheduler.stop()
+        await scheduler.stop(drain_timeout_seconds=0)
         finished = self.store.resolve_job(job["id"])
         self.assertEqual(finished["state"], "error")
         self.assertIn("shutdown", finished["last_error"])
+
+    async def test_shutdown_drains_an_inflight_job_within_the_bound(self):
+        job = self.create()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def finish_during_shutdown(_session, _prompt):
+            started.set()
+            await release.wait()
+            return "completed during drain"
+
+        scheduler, _ = await self.scheduler(finish_during_shutdown)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        stopping = asyncio.create_task(
+            scheduler.stop(drain_timeout_seconds=0.5)
+        )
+        await asyncio.sleep(0)
+        self.assertFalse(stopping.done())
+        release.set()
+        await asyncio.wait_for(stopping, timeout=1)
+
+        finished = self.store.resolve_job(job["id"])
+        self.assertEqual(finished["state"], "completed")
+        self.assertEqual(finished["last_status"], "ok")
+
     async def test_shutdown_during_delivery_is_not_finalized_as_success(self):
         job = self.create()
         delivery_started = asyncio.Event()
@@ -252,7 +376,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
 
         scheduler, _ = await self.scheduler(answer, deliver=blocked_delivery)
         await asyncio.wait_for(delivery_started.wait(), timeout=1)
-        await scheduler.stop()
+        await scheduler.stop(drain_timeout_seconds=0)
 
         finished = self.store.resolve_job(job["id"])
         self.assertEqual(finished["state"], "error")
@@ -275,6 +399,7 @@ class PromptAssemblyTests(unittest.TestCase):
             f"name: {slug}\n"
             f"description: {slug} workflow\n"
             "version: 1.0.0\n"
+            "channels: [whatsapp, telegram]\n"
             "---\n\n"
             f"{body}\n",
             encoding="utf-8",

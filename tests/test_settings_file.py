@@ -212,6 +212,34 @@ class ConfigFileTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PILOTAGE_ALLOWED_SENDERS": "212600000000"}):
             self.assertEqual(Config.load().allowed_senders, frozenset({"212600000000"}))
 
+    def test_home_channels_are_profile_environment_identities(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "WHATSAPP_HOME_CHANNEL": "212600000000@c.us",
+                "TELEGRAM_HOME_CHANNEL": "-100123",
+                "TELEGRAM_HOME_CHANNEL_THREAD_ID": "42",
+            },
+        ):
+            whatsapp = Config.load()
+            telegram = Config.load(channel="telegram")
+        self.assertEqual(
+            whatsapp.home_origin,
+            {"channel": "whatsapp", "chat_id": "212600000000@c.us"},
+        )
+        self.assertEqual(
+            telegram.home_origin,
+            {"channel": "telegram", "chat_id": "-100123", "thread_id": "42"},
+        )
+
+    def test_invalid_telegram_home_topic_fails_startup(self):
+        with mock.patch.dict(
+            os.environ,
+            {"TELEGRAM_HOME_CHANNEL_THREAD_ID": "not-a-topic"},
+        ):
+            with self.assertRaisesRegex(ConfigError, "positive numeric"):
+                Config.load(channel="telegram")
+
 
     def test_wildcard_sender_allowlist_is_refused(self):
         with mock.patch.dict(os.environ, {"PILOTAGE_ALLOWED_SENDERS": "*"}):
@@ -232,6 +260,7 @@ class ConfigFileTests(unittest.TestCase):
             [
                 "todo",
                 "terminal",
+                "code_execution",
                 "web",
                 "image_gen",
                 "vision",
@@ -262,6 +291,46 @@ class ConfigFileTests(unittest.TestCase):
         self.assertTrue(config.approval_skills)
         self.assertTrue(config.approval_cron)
         self.assertEqual(config.approval_timeout_seconds, 300)
+        self.assertFalse(config.session_isolated_workspaces)
+        self.assertEqual(config.working_notice_interval_seconds, 180)
+        self.assertEqual(config.working_notice_text, "Je continue.")
+        self.assertEqual(config.language, "fr")
+        self.assertEqual(config.timezone, "")
+        self.assertEqual(config.cron_timezone, "")
+
+    def test_profile_language_and_timezone_are_configuration(self):
+        self._write(
+            "display:\n"
+            "  language: ar-MA\n"
+            "timezone: Africa/Casablanca\n"
+        )
+
+        config = Config.load()
+
+        self.assertEqual(config.language, "ar")
+        self.assertEqual(config.timezone, "Africa/Casablanca")
+        self.assertEqual(config.cron_timezone, "Africa/Casablanca")
+        self.assertEqual(config.working_notice_text, "ما زلت أعمل.")
+
+    def test_cron_may_explicitly_override_the_profile_timezone(self):
+        self._write(
+            "timezone: UTC\n"
+            "cron:\n"
+            "  timezone: Europe/Paris\n"
+        )
+        config = Config.load()
+        self.assertEqual(config.timezone, "UTC")
+        self.assertEqual(config.cron_timezone, "Europe/Paris")
+
+    def test_invalid_language_or_profile_timezone_stops_startup(self):
+        for body, expected in (
+            ("display:\n  language: klingon\n", "display.language"),
+            ("timezone: Mars/Olympus\n", "timezone"),
+        ):
+            with self.subTest(body=body):
+                self._write(body)
+                with self.assertRaisesRegex(ConfigError, expected):
+                    Config.load()
 
     def test_persistent_write_approvals_are_safe_by_default_and_independent(self):
         defaults = Config.load()
@@ -509,6 +578,74 @@ class ConfigFileTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "terminal.cwd"):
             Config.load()
 
+    def test_declared_media_delivery_roots_are_absolute_existing_directories(self):
+        allowed = self.home / "reports"
+        allowed.mkdir()
+        self._write(
+            "gateway:\n"
+            f"  media_delivery_allow_dirs: ['{allowed.as_posix()}']\n"
+        )
+        config = Config.load()
+        self.assertIn(allowed.resolve(), config.outbound_media_roots)
+        self.assertIn(config.workspace_dir.resolve(), config.outbound_media_roots)
+
+        for bad in ("relative/path", (self.home / "missing").as_posix()):
+            with self.subTest(bad=bad):
+                self._write(
+                    "gateway:\n"
+                    f"  media_delivery_allow_dirs: ['{bad}']\n"
+                )
+                with self.assertRaisesRegex(
+                    ConfigError, "media_delivery_allow_dirs"
+                ):
+                    Config.load()
+
+    def test_invalid_session_reset_settings_stop_startup(self):
+        for body in (
+            "mode: sometimes",
+            "idle_minutes: 0",
+            "at_hour: 24",
+        ):
+            with self.subTest(body=body):
+                self._write(f"session_reset:\n  {body}\n")
+                with self.assertRaisesRegex(ConfigError, "session_reset"):
+                    Config.load()
+
+    def test_invalid_working_notice_settings_stop_startup(self):
+        self._write("agent:\n  working_notice_interval: -1\n")
+        with self.assertRaisesRegex(ConfigError, "working_notice_interval"):
+            Config.load()
+
+        self._write(
+            "agent:\n"
+            f"  working_notice_text: {'x' * 281}\n"
+        )
+        with self.assertRaisesRegex(ConfigError, "working_notice_text"):
+            Config.load()
+
+    def test_isolated_workspaces_require_a_deliverable_terminal_root(self):
+        external = self.home / "external"
+        external.mkdir()
+        terminal = external.as_posix()
+        self._write(
+            "sessions:\n"
+            "  isolated_workspaces: true\n"
+            "terminal:\n"
+            f"  cwd: '{terminal}'\n"
+        )
+        with self.assertRaisesRegex(ConfigError, "terminal.cwd"):
+            Config.load()
+
+        self._write(
+            "sessions:\n"
+            "  isolated_workspaces: true\n"
+            "gateway:\n"
+            f"  media_delivery_allow_dirs: ['{terminal}']\n"
+            "terminal:\n"
+            f"  cwd: '{terminal}'\n"
+        )
+        self.assertTrue(Config.load().session_isolated_workspaces)
+
     def test_production_group_policy_is_loaded(self):
         self._write(
             "whatsapp:\n"
@@ -576,6 +713,9 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self, _config, **_runtime_dependencies):
                 pass
 
+            async def close(self):
+                pass
+
             async def respond(
                 self,
                 _session_id,
@@ -618,7 +758,10 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.stopped.set()
 
-            async def stop(self):
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
                 pass
 
         with (
@@ -648,6 +791,9 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self, config, **_runtime_dependencies):
                 seen["agent"] = config
 
+            async def close(self):
+                pass
+
         class FakeChannel:
             def __init__(self, config, handler, reset):
                 seen["channel"] = config
@@ -657,7 +803,10 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             async def start(self):
                 self.stopped.set()
 
-            async def stop(self):
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
                 pass
 
         with (

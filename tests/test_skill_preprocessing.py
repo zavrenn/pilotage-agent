@@ -39,6 +39,7 @@ def _skill(root: Path, body: str) -> Path:
         "name: example\n"
         "description: Example workflow.\n"
         "version: 1.0.0\n"
+        "channels: [whatsapp, telegram]\n"
         "---\n\n"
         + body,
         encoding="utf-8",
@@ -191,7 +192,8 @@ class SkillViewPreprocessingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_inline_shell_runs_only_when_profile_config_enables_it(self):
         (self.skill_dir / "SKILL.md").write_text(
-            "---\nname: example\ndescription: Example.\nversion: 1\n---\n"
+            "---\nname: example\ndescription: Example.\nversion: 1\n"
+            "channels: [whatsapp, telegram]\n---\n"
             "value=!`printf ready`",
             encoding="utf-8",
         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import threading
@@ -91,6 +92,30 @@ class CrudTests(StoreCase):
         self.assertEqual(restored["deliver"], "origin")
         self.assertEqual(CronStore(self.root / "profile-b", now=self.clock).load_jobs(), [])
 
+    def test_workdir_and_toolset_allowlist_roundtrip(self):
+        workdir = self.root / "project"
+        workdir.mkdir()
+        job = self.create(
+            enabled_toolsets=["web", "file", "web"],
+            workdir=str(workdir),
+        )
+        restored = self.store.resolve_job(job["id"])
+        self.assertEqual(restored["enabled_toolsets"], ["web", "file"])
+        self.assertEqual(restored["workdir"], str(workdir.resolve()))
+
+        cleared = self.store.update_job(
+            job["id"], {"enabled_toolsets": [], "workdir": ""}
+        )
+        self.assertIsNone(cleared["enabled_toolsets"])
+        self.assertIsNone(cleared["workdir"])
+
+    def test_workdir_must_be_an_existing_absolute_directory(self):
+        file_path = self.root / "file.txt"
+        file_path.write_text("x", encoding="utf-8")
+        for workdir in ("relative/path", str(self.root / "missing"), str(file_path)):
+            with self.subTest(workdir=workdir), self.assertRaises(ValueError):
+                self.create(workdir=workdir)
+
     def test_update_pause_resume_trigger_and_remove(self):
         job = self.create(schedule="every 1h", name="old")
         changed = self.store.update_job(job["id"], {"name": "new", "repeat": 3})
@@ -163,6 +188,24 @@ class CrudTests(StoreCase):
         self.store.jobs_path.write_text('{"jobs": [{"id": "bad"}]}', encoding="utf-8")
         with self.assertRaises(CronError):
             self.store.load_jobs()
+
+    def test_corrupt_delivery_data_is_read_safely_and_fails_local(self):
+        job = self.create(origin={"channel": "telegram", "chat_id": "42"})
+        payload = json.loads(self.store.jobs_path.read_text(encoding="utf-8"))
+
+        payload["jobs"][0]["deliver"] = ["telegram"]
+        self.store.jobs_path.write_text(json.dumps(payload), encoding="utf-8")
+        self.assertEqual(self.store.load_jobs()[0]["deliver"], "telegram")
+
+        for malformed in (42, {"platform": "telegram"}, ["telegram", "whatsapp"]):
+            with self.subTest(deliver=malformed):
+                payload["jobs"][0]["deliver"] = malformed
+                self.store.jobs_path.write_text(
+                    json.dumps(payload), encoding="utf-8"
+                )
+                loaded = self.store.load_jobs()[0]
+                self.assertEqual(loaded["id"], job["id"])
+                self.assertEqual(loaded["deliver"], "local")
 
     def test_threaded_creates_do_not_lose_updates(self):
         errors = []

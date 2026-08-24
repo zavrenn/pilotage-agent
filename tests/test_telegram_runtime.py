@@ -54,6 +54,9 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self, channel_config, **_runtime_dependencies):
                 seen["config"] = channel_config
 
+            async def close(self):
+                seen["agent_closed"] = True
+
             async def respond(
                 self,
                 session_id,
@@ -103,7 +106,11 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.stopped.set()
 
-            async def stop(self):
+            async def stop_intake(self):
+                seen["intake_stopped"] = True
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                seen["drain_timeout"] = drain_timeout_seconds
                 pass
 
         with (
@@ -141,6 +148,8 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(seen["session_id"], "telegram:dm:42:9")
         self.assertEqual(seen["text"], '"spoken"')
+        self.assertTrue(seen["intake_stopped"])
+        self.assertTrue(seen["agent_closed"])
         self.assertEqual(
             sent[0],
             (
@@ -176,6 +185,9 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self, _config, **_runtime_dependencies):
                 pass
 
+            async def close(self):
+                pass
+
         class FakeChannel:
             def __init__(self, channel_config, _handler, _manage):
                 self.channel_config = channel_config
@@ -185,7 +197,10 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
             async def start(self):
                 self.stopped.set()
 
-            async def stop(self):
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
                 pass
 
         class FakeScheduler:
@@ -209,7 +224,7 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
             async def start(self):
                 pass
 
-            async def stop(self):
+            async def stop(self, *, drain_timeout_seconds=0):
                 self.stopped.set()
 
         with (

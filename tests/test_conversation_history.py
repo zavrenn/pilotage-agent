@@ -11,16 +11,20 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import tempfile
+import time
 import unittest
 from contextlib import closing, redirect_stdout
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
-from pilotage import main
+from pilotage import main, media
 from pilotage.agent import Agent
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
-from pilotage.history import ConversationStore
+from pilotage.cron.jobs import timezone_for_name
+from pilotage.history import ConversationStore, session_workspace_path
 
 
 class StoreTests(unittest.TestCase):
@@ -76,6 +80,98 @@ class StoreTests(unittest.TestCase):
             self.store.new_session("chat")
         self.store.append("chat", [("user", "latest")])
         self.assertEqual(self.store.load("chat", 10), [("user", "latest")])
+
+    def test_current_session_tracks_each_durable_boundary(self):
+        self.assertEqual(self.store.current_session("chat"), 1)
+        self.store.new_session("chat")
+        self.assertEqual(self.store.current_session("chat"), 2)
+
+    def test_idle_policy_starts_a_fresh_durable_session(self):
+        self.store.append("chat", [("user", "old context")])
+        reset = self.store.prepare_session(
+            "chat",
+            mode="idle",
+            idle_minutes=30,
+            now=time.time() + 3600,
+        )
+        self.assertEqual((reset.reason, reset.had_activity), ("idle", True))
+        self.assertEqual(self.store.load("chat", 10), [])
+
+    def test_daily_policy_uses_the_configured_local_boundary(self):
+        before = datetime(2026, 1, 2, 3, 0, tzinfo=timezone.utc).timestamp()
+        after = datetime(2026, 1, 2, 5, 0, tzinfo=timezone.utc).timestamp()
+        self.store.append("chat", [("user", "before boundary")])
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.execute(
+                "UPDATE chats SET last_active = ? WHERE chat_id = 'chat'",
+                (before,),
+            )
+            connection.commit()
+        reset = self.store.prepare_session(
+            "chat",
+            mode="daily",
+            at_hour=4,
+            now=after,
+            tzinfo=timezone.utc,
+        )
+        self.assertEqual(reset.reason, "daily")
+
+    def test_prune_removes_only_old_ended_sessions(self):
+        self.store.append("chat", [("user", "old")])
+        self.store.new_session("chat")
+        self.store.append("chat", [("user", "current")])
+        cutoff_now = time.time() + (100 * 86400)
+        removed = self.store.prune_old_sessions(90, now=cutoff_now)
+        self.assertEqual(removed, 1)
+        self.assertEqual(self.store.load("chat", 10), [("user", "current")])
+        with closing(sqlite3.connect(self.path)) as connection:
+            rows = connection.execute(
+                "SELECT session, content FROM turns ORDER BY session"
+            ).fetchall()
+        self.assertEqual(rows, [(2, "current")])
+
+    def test_prune_removes_only_the_expired_session_workspace(self):
+        self.store.append("chat", [("user", "old")])
+        self.store.new_session("chat")
+        self.store.append("chat", [("user", "current")])
+        workspace = self.path.parent / "workspace"
+        old = session_workspace_path(workspace, "chat", 1)
+        current = session_workspace_path(workspace, "chat", 2)
+        unrelated = workspace / "sessions" / "unrelated" / "session-1"
+        for root in (old, current, unrelated):
+            (root / "inputs").mkdir(parents=True)
+            (root / "inputs" / "attachment.txt").write_text("keep or prune")
+
+        removed = self.store.prune_old_sessions(
+            90,
+            now=time.time() + (100 * 86400),
+            workspace_roots=(workspace,),
+        )
+
+        self.assertEqual(removed, 1)
+        self.assertFalse(old.exists())
+        self.assertTrue(current.is_dir())
+        self.assertTrue(unrelated.is_dir())
+
+    def test_workspace_failure_does_not_undo_the_database_prune(self):
+        self.store.append("chat", [("user", "old")])
+        self.store.new_session("chat")
+        self.store.append("chat", [("user", "current")])
+        workspace = self.path.parent / "workspace"
+        old = session_workspace_path(workspace, "chat", 1)
+        old.mkdir(parents=True)
+
+        with patch("pilotage.history.shutil.rmtree", side_effect=OSError):
+            removed = self.store.prune_old_sessions(
+                90,
+                now=time.time() + (100 * 86400),
+                workspace_roots=(workspace,),
+            )
+
+        self.assertEqual(removed, 1)
+        self.assertTrue(old.is_dir())
+        self.assertEqual(self.store.load("chat", 10), [("user", "current")])
+
     def test_only_opaque_compaction_checkpoints_are_replayable(self):
         self.store.append_with_replay(
             "chat",
@@ -217,6 +313,156 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
         said = [item.get("content") for item in self.sent["input"]]
         self.assertNotIn("the old business", said)
 
+    async def test_idle_auto_reset_clears_live_context_and_notifies_once(self):
+        agent = self._agent()
+        object.__setattr__(agent._config, "session_reset_mode", "idle")
+        object.__setattr__(agent._config, "session_reset_idle_minutes", 1)
+        object.__setattr__(agent._config, "session_reset_notify", True)
+        notices = []
+
+        async def notice(text):
+            notices.append(text)
+
+        await agent.respond("chat", "old context", on_notice=notice)
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.execute(
+                "UPDATE chats SET last_active = ? WHERE chat_id = 'chat'",
+                (time.time() - 300,),
+            )
+            connection.commit()
+
+        await agent.respond("chat", "new topic", on_notice=notice)
+
+        input_text = [
+            str(item.get("content") or "")
+            for item in self.sent["input"]
+            if isinstance(item, dict)
+        ]
+        self.assertFalse(any("old context" in text for text in input_text))
+        self.assertTrue(any("fresh conversation" in text for text in input_text))
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(
+            self.store_for_path().load("chat", 10),
+            [("user", "new topic"), ("assistant", "Answered.")],
+        )
+
+    async def test_automatic_reset_uses_the_profile_timezone(self):
+        agent = self._agent()
+        object.__setattr__(agent._config, "session_reset_mode", "daily")
+        object.__setattr__(agent._config, "timezone", "Africa/Casablanca")
+        seen = {}
+        real_prepare = agent._store.prepare_session
+
+        def capture(*args, **kwargs):
+            seen["timezone"] = kwargs["tzinfo"]
+            return real_prepare(*args, **kwargs)
+
+        agent._store.prepare_session = capture
+        await agent.respond("chat", "hello")
+
+        self.assertEqual(
+            getattr(seen["timezone"], "key", None),
+            getattr(timezone_for_name("Africa/Casablanca"), "key", None),
+        )
+
+    async def test_long_turn_sends_the_configured_generic_heartbeat(self):
+        agent = self._agent()
+        object.__setattr__(
+            agent._config,
+            "working_notice_interval_seconds",
+            0.01,
+        )
+        object.__setattr__(
+            agent._config,
+            "working_notice_text",
+            "Still safely working.",
+        )
+        notices = []
+
+        async def slow_stream(
+            request,
+            *,
+            force_refresh,
+            ttfb_timeout,
+            idle_timeout,
+        ):
+            await asyncio.sleep(0.04)
+            return codex_stream.StreamResult(text="Answered.")
+
+        async def notice(text):
+            notices.append(text)
+
+        agent._stream_once = slow_stream
+        await agent.respond("chat", "take your time", on_notice=notice)
+
+        self.assertGreaterEqual(len(notices), 1)
+        self.assertEqual(set(notices), {"Still safely working."})
+
+    async def test_restricted_mode_routes_each_session_to_new_exports(self):
+        agent = self._agent()
+        object.__setattr__(
+            agent._config,
+            "session_isolated_workspaces",
+            True,
+        )
+        agent._context_cwd = self.path.parent / "workspace"
+        agent._fixed_working_directory = False
+
+        self.assertEqual(
+            agent.session_workspace_root,
+            agent._context_cwd.resolve(strict=False),
+        )
+
+        await agent.respond("chat", "make a report")
+        first = agent._session_workdirs["chat"]
+        self.assertTrue((first / "inputs").is_dir())
+        self.assertTrue((first / "tmp").is_dir())
+        self.assertTrue((first / "exports").is_dir())
+        self.assertIn(str(first), self.sent["instructions"])
+        self.assertIn(str(first / "exports"), self.sent["instructions"])
+
+        await agent.forget("chat")
+        await agent.respond("chat", "start over")
+        second = agent._session_workdirs["chat"]
+        self.assertNotEqual(first, second)
+        self.assertEqual(first.name, "session-1")
+        self.assertEqual(second.name, "session-2")
+
+    async def test_inbound_document_path_is_rewritten_to_session_inputs(self):
+        agent = self._agent()
+        object.__setattr__(
+            agent._config,
+            "session_isolated_workspaces",
+            True,
+        )
+        agent._context_cwd = self.path.parent / "workspace"
+        agent._fixed_working_directory = False
+        cached = self.path.parent / "media" / "source.pdf"
+        cached.parent.mkdir()
+        cached.write_bytes(b"pdf")
+        attachment = media.Attachment(
+            path=cached.resolve(),
+            mime="application/pdf",
+            media_type="document",
+            file_name="source.pdf",
+        )
+
+        await agent.respond(
+            "chat",
+            f"The document is saved at: {cached.resolve()}",
+            [attachment],
+        )
+
+        session_root = agent._session_workdirs["chat"]
+        staged = list((session_root / "inputs").iterdir())
+        self.assertEqual(len(staged), 1)
+        user_content = str(self.sent["input"][-1]["content"])
+        self.assertIn(str(staged[0]), user_content)
+        self.assertNotIn(str(cached.resolve()), user_content)
+
+    def store_for_path(self):
+        return ConversationStore(self.path)
+
     async def test_history_is_read_once_per_chat_not_once_per_message(self):
         await self._agent().respond("chat", "remember this")
 
@@ -282,6 +528,9 @@ class OneShotTests(unittest.IsolatedAsyncioTestCase):
 
             async def respond(self, chat_id, question, on_notice=None):
                 return "Answered."
+
+            async def close(self):
+                pass
 
         real = main.Agent
         main.Agent = FakeAgent

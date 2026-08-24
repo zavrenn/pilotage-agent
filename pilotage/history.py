@@ -14,9 +14,9 @@ the API refusing the whole request.
 Pictures are left out for the same practical reason they are dropped from all
 but the newest turn while the process runs: they are enormous next to the text.
 
-Nothing older is ever deleted. "/new" starts a new session rather than erasing
-the old one, so ending a conversation stays cheap and reversible, and the
-history is already there when there is something to do with it.
+"/new" starts a new session rather than erasing the old one, so ending a
+conversation stays cheap and reversible. Optional retention later removes only
+ended sessions that have passed their configured age.
 
 A completed answer is still delivered if its history append fails. ``/new`` is
 the deliberate exception: its durable session boundary must succeed before the
@@ -26,12 +26,16 @@ user ended.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import shutil
 import sqlite3
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
@@ -57,8 +61,9 @@ CREATE INDEX IF NOT EXISTS turns_by_session ON turns (chat_id, session, id);
 -- Which session a chat is currently in. A row appears the first time "/new" is
 -- used; a chat that has never been reset is simply in session 1.
 CREATE TABLE IF NOT EXISTS chats (
-    chat_id TEXT PRIMARY KEY,
-    session INTEGER NOT NULL
+    chat_id     TEXT PRIMARY KEY,
+    session     INTEGER NOT NULL,
+    last_active REAL    NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS history_meta (
@@ -106,6 +111,42 @@ class ConversationSearchError(RuntimeError):
     """The durable history could not answer a conversation-search request."""
 
 
+@dataclass(frozen=True)
+class SessionReset:
+    """One automatic conversation boundary created before an inbound turn."""
+
+    reason: str
+    had_activity: bool
+
+
+def _automatic_reset_reason(
+    last_active: float,
+    now: float,
+    *,
+    mode: str,
+    idle_minutes: int,
+    at_hour: int,
+    tzinfo=None,
+) -> Optional[str]:
+    """Return Hermes' idle-first reset reason for one activity timestamp."""
+
+    if mode == "none":
+        return None
+    if mode in {"idle", "both"} and now > last_active + (idle_minutes * 60):
+        return "idle"
+    if mode in {"daily", "both"}:
+        zone = tzinfo or datetime.now().astimezone().tzinfo
+        local_now = datetime.fromtimestamp(now, tz=zone)
+        boundary = local_now.replace(
+            hour=at_hour, minute=0, second=0, microsecond=0
+        )
+        if local_now.hour < at_hour:
+            boundary -= timedelta(days=1)
+        if datetime.fromtimestamp(last_active, tz=zone) < boundary:
+            return "daily"
+    return None
+
+
 def _compaction_items(value: Any) -> List[Dict[str, str]]:
     return [
         {"type": "compaction", "encrypted_content": item["encrypted_content"]}
@@ -126,6 +167,20 @@ def _decode_replay(raw: str) -> List[Dict[str, str]]:
         logger.warning("Ignoring malformed replay data in conversation history")
         return []
     return _compaction_items(value)
+
+
+def session_workspace_path(
+    workspace_root: Path, chat_id: str, session: int
+) -> Path:
+    """Return the private workspace owned by one durable session."""
+
+    opaque_chat = hashlib.sha256(chat_id.encode("utf-8")).hexdigest()[:20]
+    return (
+        Path(workspace_root)
+        / "sessions"
+        / f"c-{opaque_chat}"
+        / f"session-{int(session)}"
+    )
 
 
 class ConversationStore:
@@ -168,6 +223,14 @@ class ConversationStore:
                     connection.execute(
                         "ALTER TABLE turns ADD COLUMN replay TEXT NOT NULL DEFAULT ''"
                     )
+                chat_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(chats)")
+                }
+                if "last_active" not in chat_columns:
+                    connection.execute(
+                        "ALTER TABLE chats"
+                        " ADD COLUMN last_active REAL NOT NULL DEFAULT 0"
+                    )
 
                 if self._fts_error is None:
                     had_fts = connection.execute(
@@ -209,6 +272,117 @@ class ConversationStore:
             "SELECT session FROM chats WHERE chat_id = ?", (chat_id,)
         ).fetchone()
         return row[0] if row else 1
+
+    def current_session(self, chat_id: str) -> int:
+        """Return the durable generation currently selected for one chat."""
+
+        if self._path is None:
+            return 1
+        try:
+            with self._connect() as connection:
+                return int(self._session(connection, chat_id))
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning(
+                "Could not read the current session for %s",
+                chat_id,
+                exc_info=True,
+            )
+            raise ConversationError(
+                f"Could not read the current session for {chat_id}"
+            ) from exc
+
+    def prepare_session(
+        self,
+        chat_id: str,
+        *,
+        mode: str = "none",
+        idle_minutes: int = 1440,
+        at_hour: int = 4,
+        now: Optional[float] = None,
+        tzinfo=None,
+    ) -> Optional[SessionReset]:
+        """Apply the configured automatic reset before an inbound user turn.
+
+        The boundary and activity timestamp are one SQLite transaction, so two
+        resident channel tasks cannot both reset the same conversation.
+        """
+
+        if self._path is None:
+            return None
+        current_time = float(time.time() if now is None else now)
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT session, last_active FROM chats WHERE chat_id = ?",
+                    (chat_id,),
+                ).fetchone()
+                if row is None:
+                    session = 1
+                    activity = connection.execute(
+                        "SELECT MAX(written_at) FROM turns"
+                        " WHERE chat_id = ? AND session = 1",
+                        (chat_id,),
+                    ).fetchone()[0]
+                    last_active = (
+                        float(activity) if activity is not None else current_time
+                    )
+                    connection.execute(
+                        "INSERT INTO chats (chat_id, session, last_active)"
+                        " VALUES (?, 1, ?)",
+                        (chat_id, current_time),
+                    )
+                else:
+                    session = int(row["session"])
+                    last_active = float(row["last_active"] or 0)
+                    if last_active <= 0:
+                        activity = connection.execute(
+                            "SELECT MAX(written_at) FROM turns"
+                            " WHERE chat_id = ? AND session = ?",
+                            (chat_id, session),
+                        ).fetchone()[0]
+                        last_active = (
+                            float(activity) if activity is not None else current_time
+                        )
+
+                reason = _automatic_reset_reason(
+                    last_active,
+                    current_time,
+                    mode=mode,
+                    idle_minutes=idle_minutes,
+                    at_hour=at_hour,
+                    tzinfo=tzinfo,
+                )
+                had_activity = bool(
+                    connection.execute(
+                        "SELECT 1 FROM turns"
+                        " WHERE chat_id = ? AND session = ? LIMIT 1",
+                        (chat_id, session),
+                    ).fetchone()
+                )
+                if reason is not None:
+                    connection.execute(
+                        "UPDATE chats"
+                        " SET session = session + 1, last_active = ?"
+                        " WHERE chat_id = ?",
+                        (current_time, chat_id),
+                    )
+                    return SessionReset(reason, had_activity)
+
+                connection.execute(
+                    "UPDATE chats SET last_active = ? WHERE chat_id = ?",
+                    (current_time, chat_id),
+                )
+                return None
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning(
+                "Could not apply session reset policy for %s",
+                chat_id,
+                exc_info=True,
+            )
+            raise ConversationError(
+                f"Could not durably prepare session for {chat_id}"
+            ) from exc
 
     def load(self, chat_id: str, limit: int) -> List[StoredTurn]:
         """The last *limit* turns of the chat's current session, oldest first."""
@@ -275,6 +449,13 @@ class ConversationStore:
         try:
             with self._connect() as connection:
                 session = self._session(connection, chat_id)
+                connection.execute(
+                    "INSERT INTO chats (chat_id, session, last_active)"
+                    " VALUES (?, ?, ?)"
+                    " ON CONFLICT (chat_id)"
+                    " DO UPDATE SET last_active = excluded.last_active",
+                    (chat_id, session, now),
+                )
                 connection.executemany(
                     "INSERT INTO turns"
                     " (chat_id, session, role, content, replay, written_at)"
@@ -305,15 +486,93 @@ class ConversationStore:
         try:
             with self._connect() as connection:
                 connection.execute(
-                    "INSERT INTO chats (chat_id, session) VALUES (?, 2)"
-                    " ON CONFLICT (chat_id) DO UPDATE SET session = session + 1",
-                    (chat_id,),
+                    "INSERT INTO chats (chat_id, session, last_active)"
+                    " VALUES (?, 2, ?)"
+                    " ON CONFLICT (chat_id) DO UPDATE"
+                    " SET session = session + 1, last_active = excluded.last_active",
+                    (chat_id, time.time()),
                 )
         except (sqlite3.Error, OSError) as exc:
             logger.warning("Could not start a new session for %s", chat_id, exc_info=True)
             raise ConversationError(
                 f"Could not durably start a new session for {chat_id}"
             ) from exc
+
+    def prune_old_sessions(
+        self,
+        retention_days: int,
+        *,
+        now: Optional[float] = None,
+        workspace_roots: Sequence[Path] = (),
+    ) -> int:
+        """Delete expired ended sessions and their isolated workspaces."""
+
+        if self._path is None or retention_days <= 0:
+            return 0
+        cutoff = float(time.time() if now is None else now) - (
+            int(retention_days) * 86400
+        )
+        pruned_sessions: List[Tuple[str, int]] = []
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                rows = connection.execute(
+                    "SELECT t.chat_id, t.session"
+                    " FROM turns t"
+                    " LEFT JOIN chats c ON c.chat_id = t.chat_id"
+                    " GROUP BY t.chat_id, t.session"
+                    " HAVING t.session != COALESCE(MAX(c.session), 1)"
+                    " AND MAX(t.written_at) < ?",
+                    (cutoff,),
+                ).fetchall()
+                pruned_sessions = [
+                    (str(row["chat_id"]), int(row["session"]))
+                    for row in rows
+                ]
+                connection.executemany(
+                    "DELETE FROM turns WHERE chat_id = ? AND session = ?",
+                    pruned_sessions,
+                )
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning("Could not prune old conversation sessions", exc_info=True)
+            raise ConversationError("Could not prune old conversation sessions") from exc
+
+        # Hermes removes filesystem state only after the DB transaction has
+        # committed, and a filesystem hiccup never rolls the DB prune back.
+        for workspace_root in dict.fromkeys(workspace_roots):
+            for chat_id, session in pruned_sessions:
+                self._remove_session_workspace(
+                    workspace_root,
+                    chat_id,
+                    session,
+                )
+        return len(pruned_sessions)
+
+    @staticmethod
+    def _remove_session_workspace(
+        workspace_root: Path, chat_id: str, session: int
+    ) -> None:
+        """Best-effort removal of one exact Pilotage session directory."""
+
+        try:
+            root = Path(workspace_root).expanduser().resolve(strict=False)
+            sessions_root = (root / "sessions").resolve(strict=False)
+            sessions_root.relative_to(root)
+            target = session_workspace_path(root, chat_id, session)
+            target.resolve(strict=False).relative_to(sessions_root)
+            if target.is_symlink():
+                target.unlink(missing_ok=True)
+            elif target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+        except (OSError, RuntimeError, ValueError):
+            logger.debug(
+                "Could not prune the session workspace for %s generation %d",
+                chat_id,
+                session,
+                exc_info=True,
+            )
 
     # -- conversation search ----------------------------------------------
 

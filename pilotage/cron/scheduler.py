@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import re
 import unicodedata
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
 from pilotage.agent import Agent
@@ -162,7 +164,7 @@ class CronScheduler:
         self.config = config
         self.store = store
         self._deliver = deliver
-        self._agent_factory = agent_factory or self._fresh_agent
+        self._agent_factory = agent_factory
         self._channel_configs = {
             str(channel).lower(): channel_config
             for channel, channel_config in (channel_configs or {}).items()
@@ -174,20 +176,77 @@ class CronScheduler:
         self.stopped = asyncio.Event()
         self.failure: Optional[str] = None
 
-    def _fresh_agent(self, config: Config) -> Agent:
+    def _fresh_agent(self, config: Config, job: Dict[str, Any]) -> Agent:
+        raw_workdir = str(job.get("workdir") or "").strip()
+        workdir = Path(raw_workdir) if raw_workdir else None
+        if workdir is not None and not workdir.is_dir():
+            raise CronExecutionError(
+                f"Configured cron workdir no longer exists: {workdir}"
+            )
         return Agent(
             config,
             ConversationStore(path=None),
             disabled_tool_groups=("cron",),
+            enabled_tool_groups=job.get("enabled_toolsets"),
+            enabled_skills=job.get("skills") or (),
+            working_directory=workdir,
         )
 
+    def _agent_for_job(self, config: Config, job: Dict[str, Any]) -> Agent:
+        if self._agent_factory is not None:
+            return self._agent_factory(config)
+        return self._fresh_agent(config, job)
+
+    @staticmethod
+    async def _close_agent(agent: Any) -> None:
+        close = getattr(agent, "close", None)
+        if not callable(close):
+            return
+        try:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.debug("Closing a cron Agent failed", exc_info=True)
+
     def _config_for_job(self, job: Dict[str, Any]) -> Config:
-        origin = job.get("origin")
+        origin = self._delivery_origin(job)
         if isinstance(origin, dict):
             channel = str(origin.get("channel") or "").lower()
             if channel in self._channel_configs:
                 return self._channel_configs[channel]
         return self.config
+
+    def _home_origin(self, channel: str) -> Optional[Dict[str, str]]:
+        config = self._channel_configs.get(channel)
+        if config is None and str(getattr(self.config, "channel", "whatsapp")) == channel:
+            config = self.config
+        origin = getattr(config, "home_origin", None) if config is not None else None
+        return dict(origin) if isinstance(origin, dict) else None
+
+    def _delivery_origin(self, job: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        deliver = str(job.get("deliver") or "local").strip().lower()
+        origin = job.get("origin")
+        if deliver == "local":
+            return None
+        if deliver == "origin" and isinstance(origin, dict):
+            channel = str(origin.get("channel") or "").strip().lower()
+            chat_id = str(origin.get("chat_id") or "").strip()
+            if channel in {"whatsapp", "telegram"} and chat_id:
+                resolved = {"channel": channel, "chat_id": chat_id}
+                thread_id = str(origin.get("thread_id") or "").strip()
+                if channel == "telegram" and thread_id:
+                    resolved["thread_id"] = thread_id
+                return resolved
+        if deliver in {"whatsapp", "telegram"}:
+            return self._home_origin(deliver)
+        if deliver == "origin":
+            # Current Hermes falls back to the first configured home when a
+            # CLI/API-created job has no live messaging origin.
+            for channel in ("whatsapp", "telegram"):
+                if home := self._home_origin(channel):
+                    return home
+        return None
 
     def wake(self) -> None:
         self._wake.set()
@@ -204,14 +263,26 @@ class CronScheduler:
         )
         logger.info("Cron scheduler ready")
 
-    async def stop(self) -> None:
+    async def stop(self, *, drain_timeout_seconds: float = 0.0) -> None:
+        """Stop claiming jobs, then drain already claimed work for a bound."""
+
         self._running = False
         self._wake.set()
         if self._loop_task is not None:
             await asyncio.gather(self._loop_task, return_exceptions=True)
             self._loop_task = None
         active = list(self._active)
-        for task in active:
+        live = {task for task in active if not task.done()}
+        pending = live
+        timeout = max(0.0, float(drain_timeout_seconds))
+        if live and timeout > 0:
+            _, pending = await asyncio.wait(live, timeout=timeout)
+        if pending:
+            logger.warning(
+                "Cron shutdown drain expired with %d in-flight job(s)",
+                len(pending),
+            )
+        for task in pending:
             task.cancel()
         if active:
             await asyncio.gather(*active, return_exceptions=True)
@@ -284,11 +355,16 @@ class CronScheduler:
                 return
 
     async def _deliver_text(self, job: Dict[str, Any], text: str) -> str:
-        if job.get("deliver") != "origin" or text.strip() == SILENT_RESPONSE:
+        deliver = str(job.get("deliver") or "local").strip().lower()
+        if deliver == "local" or text.strip() == SILENT_RESPONSE:
             return ""
-        origin = job.get("origin")
+        origin = self._delivery_origin(job)
         if not isinstance(origin, dict):
-            return "Cron job has no valid delivery origin."
+            if deliver == "origin":
+                # Match Hermes: output remains saved when no origin or home has
+                # been configured, instead of producing a false run failure.
+                return ""
+            return f"No configured {deliver.title()} home channel."
         channel = str(origin.get("channel") or "").lower()
         if channel not in {"whatsapp", "telegram"}:
             return "Cron delivery channel is unsupported by this runtime."
@@ -362,9 +438,11 @@ class CronScheduler:
             prompt = await asyncio.to_thread(
                 build_job_prompt, job_config, job, session_id
             )
-            answer = await self._agent_factory(job_config).respond(
-                session_id, prompt
-            )
+            agent = self._agent_for_job(job_config, job)
+            try:
+                answer = await agent.respond(session_id, prompt)
+            finally:
+                await self._close_agent(agent)
             if not str(answer or "").strip():
                 raise CronExecutionError("The scheduled agent returned an empty response.")
             if not await retain_claim():

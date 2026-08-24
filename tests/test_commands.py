@@ -82,6 +82,13 @@ class FormattingTests(unittest.TestCase):
         rendered = profile_text(self.config, "work")
         self.assertIn(f"State: {self.profile}", rendered)
 
+    def test_static_status_labels_follow_the_profile_language(self):
+        self.config.language = "fr"
+        rendered = status_text(self.config, "work")
+        self.assertIn("Profil : work", rendered)
+        self.assertIn("Modèle : gpt-test", rendered)
+        self.assertIn("Outils : todo", rendered)
+
 
 class StatusHealthTests(unittest.TestCase):
     def setUp(self):
@@ -190,6 +197,11 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
                 ("wa-chat", False, "not this change"),
             ],
         )
+
+    async def test_command_replies_follow_the_profile_language(self):
+        self.config.language = "ar"
+        self.assertIn("لا توجد موافقة", await self.execute("/approve"))
+        self.assertIn("أوامر الإدارة", await self.execute("/help"))
 
 
 if __name__ == "__main__":

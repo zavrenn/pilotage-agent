@@ -82,6 +82,19 @@ class CheckpointReplayTests(unittest.TestCase):
         users = [item["content"] for item in output if item.get("role") == "user"]
         self.assertEqual(users, ["x" * 400, "y" * 2000])
 
+    def test_image_only_user_turn_survives_checkpoint_pruning(self):
+        image_only = {
+            "role": "user",
+            "content": [
+                {"type": "input_image", "image_url": "data:image/png;base64,AA=="}
+            ],
+        }
+        checkpoint = {"type": "compaction", "encrypted_content": "opaque"}
+
+        output = compaction.prune_pre_checkpoint_items([image_only, checkpoint])
+
+        self.assertEqual(output, [checkpoint, image_only])
+
     def test_current_eligibility_gates_checkpoint_replay_and_pruning(self):
         active = codex_stream.build_request(
             model="gpt-5.6-sol",

@@ -3,6 +3,7 @@
     pilotage login          authenticate against ChatGPT (device code)
     pilotage ask "..."      one question straight to the model, no messaging
     pilotage run            answer enabled messaging channels until stopped
+    pilotage doctor         prove deployment readiness
 """
 
 from __future__ import annotations
@@ -11,12 +12,19 @@ import argparse
 import asyncio
 import logging
 import signal
+import shutil
+import subprocess
 import sys
 
-from . import profiles, transcription
+from . import media, profiles, transcription
 from .agent import Agent
 from .commands import CommandInvocation, execute_command, status_text
-from .channels.whatsapp import ChannelError, InboundMessage, WhatsAppChannel
+from .channels.whatsapp import (
+    ChannelError,
+    InboundMessage,
+    WhatsAppChannel,
+    build_bridge_environment,
+)
 from .channels.telegram import (
     ChannelError as TelegramChannelError,
     InboundMessage as TelegramInboundMessage,
@@ -29,14 +37,18 @@ from .cron.jobs import CronError, CronStore
 from .cron.scheduler import CronScheduler
 from .env import load_env_files
 from .history import ConversationStore
+from .i18n import t
+from .redact import RedactingFormatter
 from .runtime_lock import ProfileRuntimeLock, RuntimeLockError
+from .service import run_service_command
 
 logger = logging.getLogger("pilotage")
 
-# The only two things the agent says on its own. Written in the language its
-# users write in — the model already follows the conversation by itself.
-REPLY_ON_FAILURE = "Je n'ai pas pu répondre pour le moment. Réessayez."
-REPLY_ON_RESET = "On repart de zéro. J'ai oublié notre conversation."
+SESSION_MAINTENANCE_INTERVAL_SECONDS = 3600
+# Current Hermes gives in-flight cron work 30 seconds. Pilotage gives the same
+# bounded window to every already accepted task because it does not carry
+# Hermes' much larger interrupted-turn resume subsystem.
+SHUTDOWN_DRAIN_SECONDS = 30.0
 
 
 async def _deliver_scheduled(
@@ -52,10 +64,16 @@ async def _deliver_scheduled(
 
 
 def _configure_logging(verbose: bool) -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        RedactingFormatter(
+            "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        handlers=[handler],
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -102,6 +120,8 @@ async def command_ask(config: Config, question: str) -> int:
     except auth.AuthError as exc:
         print(f"{exc}", file=sys.stderr)
         return 1
+    finally:
+        await agent.close()
     print(answer)
     return 0
 
@@ -117,6 +137,65 @@ async def command_run(config: Config, profile_name: str = "default") -> int:
         return await _command_run_locked(config, profile_name)
     finally:
         runtime_lock.release()
+
+
+def command_whatsapp_pair(config: Config) -> int:
+    """Run Hermes' pair-only bridge flow without starting the agent runtime."""
+
+    if shutil.which("node") is None:
+        print("Node.js is not on PATH.", file=sys.stderr)
+        return 1
+    if not config.bridge_script.is_file():
+        print(f"The bridge script is missing at {config.bridge_script}.", file=sys.stderr)
+        return 1
+    if not (config.bridge_dir / "node_modules").is_dir():
+        print("WhatsApp bridge dependencies are not installed.", file=sys.stderr)
+        return 1
+
+    lock = ProfileRuntimeLock(config.state_dir)
+    try:
+        lock.acquire()
+    except RuntimeLockError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    try:
+        config.session_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            result = subprocess.run(
+                [
+                    "node",
+                    str(config.bridge_script),
+                    "--pair-only",
+                    "--session",
+                    str(config.session_dir),
+                ],
+                cwd=str(config.bridge_dir),
+                env=build_bridge_environment(
+                    allowed_senders=list(
+                        getattr(config, "allowed_senders", ())
+                    ),
+                    allowed_groups=list(
+                        getattr(config, "group_allow_from", ())
+                    ),
+                ),
+                check=False,
+            )
+        except (OSError, KeyboardInterrupt) as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                print("Pairing cancelled.", file=sys.stderr)
+            else:
+                print(f"Could not start WhatsApp pairing: {exc}", file=sys.stderr)
+            return 1
+        if result.returncode != 0:
+            print("WhatsApp pairing did not complete.", file=sys.stderr)
+            return 1
+        if not (config.session_dir / "creds.json").is_file():
+            print("WhatsApp pairing exited without saved credentials.", file=sys.stderr)
+            return 1
+        print("WhatsApp is connected and its profile credentials are saved.")
+        return 0
+    finally:
+        lock.release()
 
 
 async def _command_run_locked(config: Config, profile_name: str = "default") -> int:
@@ -146,7 +225,9 @@ async def _run_enabled_channels(
         claim_ttl_seconds=cron_config.cron_claim_ttl_seconds,
         output_retention=cron_config.cron_output_retention,
     )
+    conversation_store = ConversationStore(cron_config.conversations_path)
     channels = {}
+    agents: list[Agent] = []
 
     async def scheduled_delivery(
         origin: dict[str, str], text: str
@@ -186,11 +267,15 @@ async def _run_enabled_channels(
     cron_wake = scheduler.wake if scheduler is not None else None
 
     if whatsapp_enabled:
+        whatsapp_failure_reply = t("runtime.failure", config.language)
+        whatsapp_reset_reply = t("runtime.reset", config.language)
         whatsapp_agent = Agent(
             config,
+            store=conversation_store,
             cron_store=cron_store,
             cron_wake=cron_wake,
         )
+        agents.append(whatsapp_agent)
 
         async def handle_whatsapp(message: InboundMessage) -> None:
             quoted = message.message_ids[-1] if message.message_ids else ""
@@ -215,9 +300,9 @@ async def _run_enabled_channels(
                         config.settings,
                     )
                     logger.info(
-                        "%s: %s",
-                        message.sender_number or message.chat_id,
-                        enriched_text[:120],
+                        "WhatsApp inbound (%d chars, %d attachments)",
+                        len(enriched_text),
+                        len(message.attachments),
                     )
                     if transcripts and transcription.transcript_echo_enabled(
                         config.settings
@@ -242,10 +327,10 @@ async def _run_enabled_channels(
                     )
             except Exception:
                 logger.exception("The WhatsApp model call failed")
-                answer = REPLY_ON_FAILURE
+                answer = whatsapp_failure_reply
             await whatsapp_channel.send(
                 message.chat_id,
-                answer or REPLY_ON_FAILURE,
+                answer or whatsapp_failure_reply,
                 quoted,
             )
 
@@ -262,11 +347,11 @@ async def _run_enabled_channels(
                     config=config,
                     profile_name=profile_name,
                     session_id=session_id,
-                    reset_reply=REPLY_ON_RESET,
+                    reset_reply=whatsapp_reset_reply,
                 )
             except Exception:
                 logger.exception("WhatsApp management command failed")
-                answer = REPLY_ON_FAILURE
+                answer = whatsapp_failure_reply
             await whatsapp_channel.send(chat_id, answer, message_id)
 
         whatsapp_channel = WhatsAppChannel(
@@ -277,11 +362,17 @@ async def _run_enabled_channels(
         channels["whatsapp"] = whatsapp_channel
 
     if telegram_enabled:
+        telegram_failure_reply = t(
+            "runtime.failure", telegram_config.language
+        )
+        telegram_reset_reply = t("runtime.reset", telegram_config.language)
         telegram_agent = Agent(
             telegram_config,
+            store=conversation_store,
             cron_store=cron_store,
             cron_wake=cron_wake,
         )
+        agents.append(telegram_agent)
 
         async def handle_telegram(message: TelegramInboundMessage) -> None:
             quoted = message.message_ids[-1] if message.message_ids else ""
@@ -316,9 +407,9 @@ async def _run_enabled_channels(
                         telegram_config.settings,
                     )
                     logger.info(
-                        "Telegram %s: %s",
-                        message.user_id or message.chat_id,
-                        enriched_text[:120],
+                        "Telegram inbound (%d chars, %d attachments)",
+                        len(enriched_text),
+                        len(message.attachments),
                     )
                     if transcripts and transcription.transcript_echo_enabled(
                         telegram_config.settings
@@ -347,10 +438,10 @@ async def _run_enabled_channels(
                     )
             except Exception:
                 logger.exception("The Telegram model call failed")
-                answer = REPLY_ON_FAILURE
+                answer = telegram_failure_reply
             await telegram_channel.send(
                 message.chat_id,
-                answer or REPLY_ON_FAILURE,
+                answer or telegram_failure_reply,
                 quoted,
                 thread_id=message.thread_id,
             )
@@ -369,11 +460,11 @@ async def _run_enabled_channels(
                     config=telegram_config,
                     profile_name=profile_name,
                     session_id=session_id,
-                    reset_reply=REPLY_ON_RESET,
+                    reset_reply=telegram_reset_reply,
                 )
             except Exception:
                 logger.exception("Telegram management command failed")
-                answer = REPLY_ON_FAILURE
+                answer = telegram_failure_reply
             await telegram_channel.send(
                 chat_id,
                 answer,
@@ -410,6 +501,10 @@ async def _run_enabled_channels(
     except (ChannelError, TelegramChannelError) as exc:
         for running_channel in reversed(started):
             await running_channel.stop()
+        await asyncio.gather(
+            *(agent.close() for agent in agents),
+            return_exceptions=True,
+        )
         print(f"{exc}", file=sys.stderr)
         return 1
 
@@ -419,8 +514,53 @@ async def _run_enabled_channels(
         except (CronError, OSError) as exc:
             for running_channel in reversed(started):
                 await running_channel.stop()
+            await asyncio.gather(
+                *(agent.close() for agent in agents),
+                return_exceptions=True,
+            )
             print(f"Cron scheduler could not start: {exc}", file=sys.stderr)
             return 1
+
+    session_workspace_roots = []
+    for agent in agents:
+        workspace_root = getattr(agent, "session_workspace_root", None)
+        if (
+            workspace_root is not None
+            and workspace_root not in session_workspace_roots
+        ):
+            session_workspace_roots.append(workspace_root)
+
+    async def maintain_profile_state() -> None:
+        while True:
+            if getattr(cron_config, "session_auto_prune", False):
+                try:
+                    removed = await asyncio.to_thread(
+                        conversation_store.prune_old_sessions,
+                        cron_config.session_retention_days,
+                        workspace_roots=session_workspace_roots,
+                    )
+                    if removed:
+                        logger.info("Pruned %d old conversation session(s)", removed)
+                except Exception:
+                    logger.exception("Automatic conversation pruning failed")
+            try:
+                removed_media = await asyncio.to_thread(
+                    media.cleanup_cache,
+                    cron_config.media_dir,
+                )
+                if removed_media:
+                    logger.info(
+                        "Pruned %d stale inbound media file(s)",
+                        removed_media,
+                    )
+            except Exception:
+                logger.exception("Inbound media cache pruning failed")
+            await asyncio.sleep(SESSION_MAINTENANCE_INTERVAL_SECONDS)
+
+    maintenance_task = asyncio.create_task(
+        maintain_profile_state(),
+        name="pilotage-profile-maintenance",
+    )
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -450,10 +590,41 @@ async def _run_enabled_channels(
         for waiter in waiters:
             waiter.cancel()
         await asyncio.gather(*waiters, return_exceptions=True)
+        if maintenance_task is not None:
+            maintenance_task.cancel()
+            await asyncio.gather(maintenance_task, return_exceptions=True)
+
+        # Refuse new work first. Accepted batches are flushed now, so channel
+        # turns can finish while an in-flight cron job uses the same transport.
+        intake_results = await asyncio.gather(
+            *(running_channel.stop_intake() for running_channel in reversed(started)),
+            return_exceptions=True,
+        )
+        for result in intake_results:
+            if isinstance(result, BaseException):
+                logger.error("Stopping channel intake failed: %s", result)
+
+        deadline = loop.time() + SHUTDOWN_DRAIN_SECONDS
         if scheduler is not None:
-            await scheduler.stop()
-        for running_channel in reversed(started):
-            await running_channel.stop()
+            await scheduler.stop(
+                drain_timeout_seconds=max(0.0, deadline - loop.time())
+            )
+        channel_results = await asyncio.gather(
+            *(
+                running_channel.stop(
+                    drain_timeout_seconds=max(0.0, deadline - loop.time())
+                )
+                for running_channel in reversed(started)
+            ),
+            return_exceptions=True,
+        )
+        for result in channel_results:
+            if isinstance(result, BaseException):
+                logger.error("Stopping a messaging channel failed: %s", result)
+        await asyncio.gather(
+            *(agent.close() for agent in agents),
+            return_exceptions=True,
+        )
 
     if scheduler is not None and scheduler.failure:
         print(scheduler.failure, file=sys.stderr)
@@ -474,7 +645,14 @@ def main(argv: list[str] | None = None) -> int:
     ask = subparsers.add_parser("ask", help="ask one question, print the answer")
     ask.add_argument("question", nargs="+")
     subparsers.add_parser("run", help="answer enabled messaging channels until stopped")
+    subparsers.add_parser("whatsapp", help="connect or verify WhatsApp by QR pairing")
     subparsers.add_parser("status", help="show the selected agent's essential status")
+    subparsers.add_parser(
+        "doctor",
+        help="run the complete read-only deployment readiness check",
+    )
+    service = subparsers.add_parser("service", help="control the installed user service")
+    service.add_argument("service_action", choices=("start", "stop", "status"))
     add_cron_parser(subparsers)
 
     profile = subparsers.add_parser("profile", help="manage isolated agent profiles")
@@ -501,13 +679,20 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("%s", exc)
         return 1
 
+    if args.command == "service":
+        return run_service_command(args.service_action, profile_name)
+
     for path in load_env_files():
         logger.info("Read environment from %s", path)
     try:
         # Parse the exact view that will run while still inside the guarded
         # startup boundary. A malformed channel override must be a clean
         # startup error, not a traceback after the common config passed.
-        channel = "whatsapp" if args.command in {"run", "status"} else ""
+        channel = (
+            "whatsapp"
+            if args.command in {"run", "status", "doctor"}
+            else ""
+        )
         config = Config.load(channel=channel)
         if args.command == "status":
             telegram_config = config.for_channel("telegram")
@@ -524,10 +709,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "login":
         return command_login(config)
+    if args.command == "whatsapp":
+        return command_whatsapp_pair(config)
     if args.command == "ask":
         return asyncio.run(command_ask(config, " ".join(args.question)))
     if args.command == "status":
         return command_status(config, profile_name)
+    if args.command == "doctor":
+        from .doctor import run_doctor
+
+        return asyncio.run(run_doctor(config, profile_name))
     if args.command == "cron":
         return run_cron_command(args, config)
     return asyncio.run(command_run(config, profile_name))
