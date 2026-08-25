@@ -97,6 +97,62 @@ QUOTE_SNIPPET_LIMIT = 500
 # Start the conversation over. Typed by a person on a phone keyboard, so case
 # and a trailing space are not mistakes worth punishing.
 RESET_COMMAND = "/new"
+_BARE_PHONE_RE = re.compile(r"^\+?[\d \t().-]+$")
+_DIRECT_JID_DOMAINS = frozenset({"s.whatsapp.net", "lid", "c.us"})
+_HOME_JID_DOMAINS = _DIRECT_JID_DOMAINS | {"g.us"}
+
+
+class WhatsAppSessionError(ValueError):
+    """The linked-device credential file is absent or not registered."""
+
+
+def validate_whatsapp_session(session_dir: Path) -> None:
+    """Require the same registered credential state for setup and Doctor."""
+
+    path = Path(session_dir) / "creds.json"
+    try:
+        credentials = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise WhatsAppSessionError(
+            "WhatsApp linked-device credentials are missing or unreadable"
+        ) from exc
+    if not isinstance(credentials, dict) or credentials.get("registered") is not True:
+        raise WhatsAppSessionError(
+            "WhatsApp linked-device session is not registered"
+        )
+
+
+def normalize_whatsapp_chat_id(value: str) -> str:
+    """Return a bridge-safe direct/group JID or reject an invalid target."""
+
+    written = str(value or "").strip()
+    if not written:
+        raise ValueError("A WhatsApp home number or chat ID is required")
+
+    if "@" in written:
+        local, _, domain = written.partition("@")
+        local = local.split(":", 1)[0]
+        domain = domain.lower()
+        if domain in _DIRECT_JID_DOMAINS:
+            local = local.removeprefix("+")
+            valid_local = local.isascii() and local.isdigit()
+        elif domain == "g.us":
+            valid_local = bool(re.fullmatch(r"\d+(?:-\d+)?", local))
+        else:
+            valid_local = False
+        if domain not in _HOME_JID_DOMAINS or not valid_local:
+            raise ValueError(f"Invalid WhatsApp chat ID: {written!r}")
+        if domain == "c.us":
+            domain = "s.whatsapp.net"
+        return f"{local}@{domain}"
+
+    if _BARE_PHONE_RE.fullmatch(written):
+        digits = re.sub(r"\D+", "", written)
+        if digits.isascii() and digits.isdigit():
+            return f"{digits}@s.whatsapp.net"
+    raise ValueError(
+        "Invalid WhatsApp number; use the country code and digits"
+    )
 
 
 def build_bridge_environment(
@@ -945,6 +1001,10 @@ class WhatsAppChannel:
     ) -> SendResult:
         if self._http is None:
             return SendResult(False, "WhatsApp transport is not connected")
+        try:
+            target_chat_id = normalize_whatsapp_chat_id(chat_id)
+        except ValueError as exc:
+            return SendResult(False, str(exc))
 
         if deliver_media:
             attachments, cleaned = media.extract_outbound(
@@ -962,7 +1022,10 @@ class WhatsAppChannel:
         sent_any = False
         try:
             if body:
-                payload: Dict[str, Any] = {"chatId": chat_id, "message": body}
+                payload: Dict[str, Any] = {
+                    "chatId": target_chat_id,
+                    "message": body,
+                }
                 if reply_to:
                     # Quote the message being answered. One agent can be talking
                     # to several people at once, and an answer that arrives a
@@ -976,7 +1039,7 @@ class WhatsAppChannel:
 
             for attachment in attachments:
                 payload = {
-                    "chatId": chat_id,
+                    "chatId": target_chat_id,
                     "filePath": str(attachment.path),
                     "mediaType": attachment.media_type,
                 }
@@ -990,7 +1053,7 @@ class WhatsAppChannel:
                 response.raise_for_status()
                 sent_any = True
         except httpx.HTTPError as exc:
-            logger.error("Sending to %s failed: %s", chat_id, exc)
+            logger.error("Sending to %s failed: %s", target_chat_id, exc)
             retryable = False
             retry_after = None
             if isinstance(exc, httpx.HTTPStatusError):

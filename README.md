@@ -50,9 +50,9 @@ commands below as the unprivileged service user.
 
 ```bash
 scripts/install.sh
-# Edit ~/.pilotage-agent/.env and ~/.pilotage-agent/config.yaml
+# Edit ~/.pilotage-agent/config.yaml and any non-WhatsApp secrets in .env
 ./.venv/bin/pilotage login
-./.venv/bin/pilotage whatsapp  # scan or verify the profile's linked device
+./.venv/bin/pilotage whatsapp  # configure access/home and pair the device
 ./.venv/bin/pilotage run
 ```
 
@@ -62,13 +62,14 @@ Voice-message transcription requires VOICE_TOOLS_OPENAI_KEY in the profile
 Full-page web extraction requires FIRECRAWL_API_KEY in the profile .env, or
 FIRECRAWL_API_URL for a self-hosted Firecrawl instance. DDGS search needs no key.
 
-An enabled WhatsApp channel prints its pairing QR on the first run. Telegram
-uses TELEGRAM_BOT_TOKEN and numeric IDs in TELEGRAM_ALLOWED_USERS from the
-profile .env.
+`pilotage whatsapp` saves the WhatsApp allowlist and home destination in the
+effective profile environment file, then pairs or keeps the linked device.
+Telegram uses TELEGRAM_BOT_TOKEN and numeric IDs in TELEGRAM_ALLOWED_USERS from
+the profile .env.
 Webhook delivery also requires TELEGRAM_WEBHOOK_URL and a long random
 TELEGRAM_WEBHOOK_SECRET; leaving the URL blank uses long polling.
-Set WHATSAPP_HOME_CHANNEL or TELEGRAM_HOME_CHANNEL in that same profile .env so
-unattended scheduled output has an explicit destination.
+Set TELEGRAM_HOME_CHANNEL in that same profile .env so unattended Telegram
+output has an explicit destination.
 After testing the enabled channels, install the resident user service:
 
 ```bash

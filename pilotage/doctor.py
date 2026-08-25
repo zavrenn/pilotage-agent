@@ -24,6 +24,11 @@ from typing import Any, Awaitable, Callable, Optional
 import httpx
 
 from .agent import Agent
+from .channels.whatsapp import (
+    WhatsAppSessionError,
+    normalize_whatsapp_chat_id,
+    validate_whatsapp_session,
+)
 from .codex import auth
 from .history import ConversationStore
 from .redact import redact_sensitive_text
@@ -468,15 +473,10 @@ def _check_whatsapp_policy(config: Any) -> str:
 
 
 def _check_whatsapp_session(config: Any) -> str:
-    path = Path(config.session_dir) / "creds.json"
     try:
-        credentials = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError) as exc:
-        raise DoctorError(
-            "WhatsApp linked-device credentials are missing or unreadable"
-        ) from exc
-    if not isinstance(credentials, dict) or credentials.get("registered") is not True:
-        raise DoctorError("WhatsApp linked-device session is not registered")
+        validate_whatsapp_session(config.session_dir)
+    except WhatsAppSessionError as exc:
+        raise DoctorError(str(exc)) from exc
     return "linked device registered"
 
 
@@ -544,6 +544,10 @@ def _check_home_channel(
     if whatsapp_enabled and isinstance(
         getattr(whatsapp_config, "home_origin", None), dict
     ):
+        try:
+            normalize_whatsapp_chat_id(whatsapp_config.home_origin["chat_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DoctorError("WhatsApp home chat is invalid") from exc
         configured.append("WhatsApp")
     if telegram_enabled and isinstance(
         getattr(telegram_config, "home_origin", None), dict

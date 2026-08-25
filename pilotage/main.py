@@ -12,10 +12,15 @@ import argparse
 import asyncio
 import inspect
 import logging
+import os
+import re
 import signal
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import TypeVar
 
 from . import media, profiles, transcription
 from .agent import Agent
@@ -23,8 +28,11 @@ from .commands import CommandInvocation, execute_command, status_text
 from .channels.whatsapp import (
     ChannelError,
     InboundMessage,
+    WhatsAppSessionError,
     WhatsAppChannel,
     build_bridge_environment,
+    normalize_whatsapp_chat_id,
+    validate_whatsapp_session,
 )
 from .channels.telegram import (
     ChannelError as TelegramChannelError,
@@ -42,7 +50,7 @@ from .delivery import (
     deliver_final,
     redeliver_claimed_deliveries,
 )
-from .env import load_env_files
+from .env import candidate_env_files, load_env_files, update_env_values
 from .history import ConversationError, ConversationStore
 from .i18n import t
 from .redact import RedactingFormatter
@@ -56,6 +64,9 @@ SESSION_MAINTENANCE_INTERVAL_SECONDS = 3600
 # to 30 seconds.
 STARTUP_RECOVERY_DRAIN_SECONDS = 30.0
 SHUTDOWN_DRAIN_SECONDS = 30.0
+WHATSAPP_SETUP_ENV_KEYS = frozenset(
+    {"PILOTAGE_ALLOWED_SENDERS", "WHATSAPP_HOME_CHANNEL"}
+)
 
 
 async def _deliver_scheduled(
@@ -146,8 +157,13 @@ async def command_run(config: Config, profile_name: str = "default") -> int:
         runtime_lock.release()
 
 
-def command_whatsapp_pair(config: Config) -> int:
-    """Run Hermes' pair-only bridge flow without starting the agent runtime."""
+def command_whatsapp_pair(
+    config: Config,
+    *,
+    env_path: Path | None = None,
+    external_env: frozenset[str] = frozenset(),
+) -> int:
+    """Configure and pair WhatsApp without starting the agent runtime."""
 
     if shutil.which("node") is None:
         print("Node.js is not on PATH.", file=sys.stderr)
@@ -166,7 +182,60 @@ def command_whatsapp_pair(config: Config) -> int:
         print(exc, file=sys.stderr)
         return 1
     try:
+        try:
+            allowed_senders, updates = _prompt_whatsapp_configuration(config)
+        except _WhatsAppSetupCancelled:
+            print("WhatsApp setup cancelled.", file=sys.stderr)
+            return 1
+
+        if updates:
+            externally_managed = sorted(updates.keys() & external_env)
+            if externally_managed:
+                print(
+                    "Cannot update externally supplied environment value(s): "
+                    + ", ".join(externally_managed)
+                    + ". Change them at their deployment source.",
+                    file=sys.stderr,
+                )
+                return 1
+            try:
+                update_env_values(env_path or config.state_dir / ".env", updates)
+            except (OSError, ValueError) as exc:
+                print(
+                    f"Could not save WhatsApp configuration: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
+
         config.session_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        credentials_path = config.session_dir / "creds.json"
+        if credentials_path.is_file():
+            try:
+                validate_whatsapp_session(config.session_dir)
+            except WhatsAppSessionError as exc:
+                print(f"Existing WhatsApp session is invalid: {exc}", file=sys.stderr)
+                paired = False
+            else:
+                print("WhatsApp is already paired for this profile.")
+                paired = True
+            if not _prompt_yes_no(
+                "Re-pair? This will clear the existing WhatsApp session. [y/N] "
+            ):
+                if paired:
+                    print("WhatsApp configuration is saved; existing pairing kept.")
+                    return 0
+                print("WhatsApp remains unpaired.", file=sys.stderr)
+                return 1
+            try:
+                shutil.rmtree(config.session_dir)
+                config.session_dir.mkdir(mode=0o700, parents=True)
+            except OSError as exc:
+                print(
+                    f"Could not clear the existing WhatsApp session: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
+
         try:
             result = subprocess.run(
                 [
@@ -178,9 +247,7 @@ def command_whatsapp_pair(config: Config) -> int:
                 ],
                 cwd=str(config.bridge_dir),
                 env=build_bridge_environment(
-                    allowed_senders=list(
-                        getattr(config, "allowed_senders", ())
-                    ),
+                    allowed_senders=list(allowed_senders),
                     allowed_groups=list(
                         getattr(config, "group_allow_from", ())
                     ),
@@ -196,13 +263,149 @@ def command_whatsapp_pair(config: Config) -> int:
         if result.returncode != 0:
             print("WhatsApp pairing did not complete.", file=sys.stderr)
             return 1
-        if not (config.session_dir / "creds.json").is_file():
-            print("WhatsApp pairing exited without saved credentials.", file=sys.stderr)
+        try:
+            validate_whatsapp_session(config.session_dir)
+        except WhatsAppSessionError as exc:
+            print(
+                f"WhatsApp pairing did not register a linked device: {exc}",
+                file=sys.stderr,
+            )
             return 1
         print("WhatsApp is connected and its profile credentials are saved.")
         return 0
     finally:
         lock.release()
+
+
+class _WhatsAppSetupCancelled(Exception):
+    pass
+
+
+def _read_setup_input(prompt: str) -> str:
+    try:
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise _WhatsAppSetupCancelled from exc
+
+
+def _prompt_yes_no(prompt: str) -> bool:
+    try:
+        return input(prompt).strip().lower() in {"y", "yes"}
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
+def _normalize_allowed_senders(value: str) -> tuple[str, ...]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value.replace(";", ",").split(","):
+        written = item.strip()
+        if not written:
+            continue
+        domain = ""
+        if "@" in written:
+            _, _, domain = written.partition("@")
+            domain = domain.lower()
+            if domain not in {"s.whatsapp.net", "lid", "c.us"}:
+                raise ValueError(f"Invalid WhatsApp sender ID: {written!r}")
+        local = written.split("@", 1)[0].split(":", 1)[0]
+        digits = re.sub(r"[ \t().-]+", "", local).removeprefix("+")
+        if not digits.isascii() or not digits.isdigit():
+            raise ValueError(
+                f"Invalid WhatsApp number {written!r}; use the country code and digits"
+            )
+        if digits not in seen:
+            normalized.append(f"{digits}@lid" if domain == "lid" else digits)
+            seen.add(digits)
+    if not normalized:
+        raise ValueError("At least one allowed WhatsApp number is required")
+    return tuple(normalized)
+
+
+_WhatsAppValue = TypeVar("_WhatsAppValue")
+
+
+def _prompt_required_whatsapp_value(
+    prompt: str,
+    normalize: Callable[[str], _WhatsAppValue],
+    *,
+    existing: _WhatsAppValue | None = None,
+    default: str = "",
+) -> tuple[_WhatsAppValue, bool]:
+    while True:
+        written = _read_setup_input(prompt)
+        if not written:
+            if existing is not None:
+                return existing, False
+            written = default
+        try:
+            return normalize(written), True
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+
+
+def _prompt_whatsapp_configuration(
+    config: Config,
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    updates: dict[str, str] = {}
+    current_senders = tuple(
+        sorted(str(value) for value in getattr(config, "allowed_senders", ()))
+    )
+    senders_valid = bool(current_senders)
+    if current_senders:
+        try:
+            _normalize_allowed_senders(",".join(current_senders))
+        except ValueError as exc:
+            print(f"Existing WhatsApp allowlist is invalid: {exc}", file=sys.stderr)
+            senders_valid = False
+    if senders_valid:
+        current = ",".join(current_senders)
+        print(f"Allowed WhatsApp numbers: {current}")
+        if _prompt_yes_no("Update allowed numbers? [y/N] "):
+            allowed_senders, changed = _prompt_required_whatsapp_value(
+                "Allowed numbers, comma-separated (blank keeps existing): ",
+                _normalize_allowed_senders,
+                existing=current_senders,
+            )
+            if changed:
+                updates["PILOTAGE_ALLOWED_SENDERS"] = ",".join(allowed_senders)
+        else:
+            allowed_senders = current_senders
+    else:
+        allowed_senders, _ = _prompt_required_whatsapp_value(
+            "Allowed WhatsApp numbers, comma-separated: ",
+            _normalize_allowed_senders,
+        )
+        updates["PILOTAGE_ALLOWED_SENDERS"] = ",".join(allowed_senders)
+
+    current_home = str(getattr(config, "home_chat_id", "") or "").strip()
+    home_valid = bool(current_home)
+    if current_home:
+        try:
+            normalize_whatsapp_chat_id(current_home)
+        except ValueError as exc:
+            print(f"Existing WhatsApp home chat is invalid: {exc}", file=sys.stderr)
+            home_valid = False
+    if home_valid:
+        print(f"WhatsApp home chat: {current_home}")
+        if _prompt_yes_no("Update the home number/chat? [y/N] "):
+            home_chat_id, changed = _prompt_required_whatsapp_value(
+                "Home number/chat ID (blank keeps existing): ",
+                normalize_whatsapp_chat_id,
+                existing=current_home,
+            )
+            if changed:
+                updates["WHATSAPP_HOME_CHANNEL"] = home_chat_id
+    else:
+        suggested_home = allowed_senders[0]
+        home_chat_id, _ = _prompt_required_whatsapp_value(
+            f"Home WhatsApp number/chat ID [{suggested_home}]: ",
+            normalize_whatsapp_chat_id,
+            default=suggested_home,
+        )
+        updates["WHATSAPP_HOME_CHANNEL"] = home_chat_id
+
+    return allowed_senders, updates
 
 
 async def _command_run_locked(config: Config, profile_name: str = "default") -> int:
@@ -753,7 +956,9 @@ def main(argv: list[str] | None = None) -> int:
     ask = subparsers.add_parser("ask", help="ask one question, print the answer")
     ask.add_argument("question", nargs="+")
     subparsers.add_parser("run", help="answer enabled messaging channels until stopped")
-    subparsers.add_parser("whatsapp", help="connect or verify WhatsApp by QR pairing")
+    subparsers.add_parser(
+        "whatsapp", help="configure allowed numbers, home chat, and QR pairing"
+    )
     subparsers.add_parser("status", help="show the selected agent's essential status")
     subparsers.add_parser(
         "doctor",
@@ -790,7 +995,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "service":
         return run_service_command(args.service_action, profile_name)
 
-    for path in load_env_files():
+    external_setup_env = frozenset(
+        name for name in WHATSAPP_SETUP_ENV_KEYS if name in os.environ
+    )
+    loaded_env_files = load_env_files()
+    for path in loaded_env_files:
         logger.info("Read environment from %s", path)
     try:
         # Parse the exact view that will run while still inside the guarded
@@ -818,7 +1027,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "login":
         return command_login(config)
     if args.command == "whatsapp":
-        return command_whatsapp_pair(config)
+        env_path = (
+            loaded_env_files[0]
+            if loaded_env_files
+            else candidate_env_files()[0]
+        )
+        return command_whatsapp_pair(
+            config,
+            env_path=env_path,
+            external_env=external_setup_env,
+        )
     if args.command == "ask":
         return asyncio.run(command_ask(config, " ".join(args.question)))
     if args.command == "status":

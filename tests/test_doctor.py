@@ -280,7 +280,10 @@ class HomeChannelReadinessTests(unittest.TestCase):
         self.assertEqual(
             doctor._check_home_channel(
                 SimpleNamespace(
-                    home_origin={"channel": "whatsapp", "chat_id": "owner"}
+                    home_origin={
+                        "channel": "whatsapp",
+                        "chat_id": "212600000000@s.whatsapp.net",
+                    }
                 ),
                 SimpleNamespace(home_origin=None),
                 whatsapp_enabled=True,
@@ -288,6 +291,17 @@ class HomeChannelReadinessTests(unittest.TestCase):
             ),
             "configured for WhatsApp",
         )
+
+    def test_invalid_whatsapp_home_is_not_reported_ready(self):
+        with self.assertRaisesRegex(doctor.DoctorError, "home chat is invalid"):
+            doctor._check_home_channel(
+                SimpleNamespace(
+                    home_origin={"channel": "whatsapp", "chat_id": "owner"}
+                ),
+                SimpleNamespace(home_origin=None),
+                whatsapp_enabled=True,
+                telegram_enabled=False,
+            )
 
 
 class RuntimeTests(unittest.TestCase):

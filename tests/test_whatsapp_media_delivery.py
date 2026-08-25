@@ -16,6 +16,9 @@ from pilotage.channels.whatsapp import InboundMessage, WhatsAppChannel
 from pilotage.config import Config, WHATSAPP_MEDIA_NOTE
 
 
+CHAT_ID = "212600000000@s.whatsapp.net"
+
+
 class FakeResponse:
     status_code = 200
 
@@ -222,7 +225,7 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         chart.write_bytes(b"png")
 
         sent = await self.channel.send(
-            "chat", f"**Chart ready.**\nMEDIA:{chart}", "m7"
+            CHAT_ID, f"**Chart ready.**\nMEDIA:{chart}", "m7"
         )
 
         self.assertTrue(sent)
@@ -230,12 +233,16 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.http.posts[0]["url"].endswith("/send"))
         self.assertEqual(
             self.http.posts[0]["json"],
-            {"chatId": "chat", "message": "*Chart ready.*", "replyTo": "m7"},
+            {"chatId": CHAT_ID, "message": "*Chart ready.*", "replyTo": "m7"},
         )
         self.assertTrue(self.http.posts[1]["url"].endswith("/send-media"))
         self.assertEqual(
             self.http.posts[1]["json"],
-            {"chatId": "chat", "filePath": str(chart.resolve()), "mediaType": "image"},
+            {
+                "chatId": CHAT_ID,
+                "filePath": str(chart.resolve()),
+                "mediaType": "image",
+            },
         )
         self.assertEqual(self.http.posts[1]["timeout"], 120.0)
 
@@ -243,14 +250,14 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         report = self.config.workspace_dir / "report.xlsx"
         report.write_bytes(b"xlsx")
 
-        self.assertTrue(await self.channel.send("chat", f"MEDIA:{report}"))
+        self.assertTrue(await self.channel.send(CHAT_ID, f"MEDIA:{report}"))
 
         self.assertEqual(len(self.http.posts), 1)
         self.assertTrue(self.http.posts[0]["url"].endswith("/send-media"))
         self.assertEqual(
             self.http.posts[0]["json"],
             {
-                "chatId": "chat",
+                "chatId": CHAT_ID,
                 "filePath": str(report.resolve()),
                 "mediaType": "document",
                 "fileName": "report.xlsx",
@@ -271,7 +278,7 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         report = reports / "outside-workspace.pdf"
         report.write_bytes(b"pdf")
 
-        self.assertTrue(await channel.send("chat", f"MEDIA:{report}"))
+        self.assertTrue(await channel.send(CHAT_ID, f"MEDIA:{report}"))
         self.assertEqual(
             self.http.posts[0]["json"]["filePath"],
             str(report.resolve()),
@@ -283,7 +290,7 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(
             await self.channel.send(
-                "chat",
+                CHAT_ID,
                 f"MEDIA:{report}",
                 deliver_media=False,
             )
@@ -305,7 +312,7 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        sent = await self.channel.send("chat", "hello")
+        sent = await self.channel.send(CHAT_ID, "hello")
 
         self.assertFalse(sent)
         self.assertFalse(sent.retryable)
@@ -323,10 +330,34 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        sent = await self.channel.send("chat", "hello")
+        sent = await self.channel.send(CHAT_ID, "hello")
 
         self.assertFalse(sent)
         self.assertTrue(sent.retryable)
+
+    async def test_bare_home_number_is_normalized_before_delivery(self):
+        sent = await self.channel.send("+212 600 000 000", "hello")
+
+        self.assertTrue(sent)
+        self.assertEqual(self.http.posts[0]["json"]["chatId"], CHAT_ID)
+
+    async def test_legacy_direct_jid_is_normalized_before_delivery(self):
+        sent = await self.channel.send("212600000000@c.us", "hello")
+
+        self.assertTrue(sent)
+        self.assertEqual(self.http.posts[0]["json"]["chatId"], CHAT_ID)
+
+    async def test_plus_prefixed_direct_jid_is_normalized_before_delivery(self):
+        sent = await self.channel.send("+212600000000@s.whatsapp.net", "hello")
+
+        self.assertTrue(sent)
+        self.assertEqual(self.http.posts[0]["json"]["chatId"], CHAT_ID)
+
+    async def test_invalid_home_target_fails_before_bridge_delivery(self):
+        sent = await self.channel.send("not-a-chat", "hello")
+
+        self.assertFalse(sent)
+        self.assertEqual(self.http.posts, [])
 
 if __name__ == "__main__":
     unittest.main()

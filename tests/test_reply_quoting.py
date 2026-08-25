@@ -16,6 +16,9 @@ from pilotage.channels.whatsapp import InboundMessage, WhatsAppChannel
 from pilotage.config import Config
 
 
+CHAT_ID = "212600000000@s.whatsapp.net"
+
+
 class FakeResponse:
     status_code = 200
 
@@ -56,16 +59,16 @@ class SendTests(unittest.IsolatedAsyncioTestCase):
         self.channel._http = self.http
 
     async def test_an_answer_quotes_the_message_it_answers(self):
-        self.assertTrue(await self.channel.send("chat", "Voila.", "m7"))
+        self.assertTrue(await self.channel.send(CHAT_ID, "Voila.", "m7"))
         self.assertEqual(self.http.posts[0]["replyTo"], "m7")
 
     async def test_an_unattached_message_quotes_nothing(self):
-        await self.channel.send("chat", "Voila.")
+        await self.channel.send(CHAT_ID, "Voila.")
         self.assertNotIn("replyTo", self.http.posts[0])
 
     async def test_a_missing_id_is_not_sent_as_a_quote(self):
         """The bridge does not always give a message an id."""
-        await self.channel.send("chat", "Voila.", "")
+        await self.channel.send(CHAT_ID, "Voila.", "")
         self.assertNotIn("replyTo", self.http.posts[0])
 
 
