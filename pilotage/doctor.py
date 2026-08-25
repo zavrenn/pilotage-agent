@@ -29,6 +29,7 @@ from .channels.whatsapp import (
     normalize_whatsapp_chat_id,
     validate_whatsapp_session,
 )
+from .channels.telegram import normalize_telegram_home_chat_id
 from .codex import auth
 from .history import ConversationStore
 from .redact import redact_sensitive_text
@@ -552,6 +553,10 @@ def _check_home_channel(
     if telegram_enabled and isinstance(
         getattr(telegram_config, "home_origin", None), dict
     ):
+        try:
+            normalize_telegram_home_chat_id(telegram_config.home_origin["chat_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DoctorError("Telegram home chat is invalid") from exc
         configured.append("Telegram")
     if not configured:
         raise DoctorError(
@@ -727,7 +732,7 @@ async def collect_report(config: Any, profile_name: str) -> DoctorReport:
     ):
         await _probe(report, "Speech to text", _check_stt_configuration)
 
-    whatsapp_enabled = config.settings.flag("whatsapp.enabled", True)
+    whatsapp_enabled = config.settings.flag("whatsapp.enabled", False)
     telegram_enabled = telegram_config.settings.flag(
         "telegram.enabled", False
     )

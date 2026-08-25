@@ -70,6 +70,7 @@ _VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"})
 _VOICE_SUFFIXES = frozenset({".ogg", ".opus"})
 _AUDIO_SUFFIXES = frozenset({".mp3", ".m4a", ".aac"})
 _FOREIGN_BOT_HANDLE_RE = re.compile(r"[a-z0-9_]{2,29}bot", re.IGNORECASE)
+_BOT_TOKEN_RE = re.compile(r"[1-9][0-9]*:[A-Za-z0-9_-]{30,}")
 
 
 class ChannelError(RuntimeError):
@@ -88,6 +89,54 @@ def normalize_telegram_chat_id(value: Any) -> int | str:
         return int(written)
     except (TypeError, ValueError):
         return written
+
+
+def normalize_telegram_bot_token(value: str) -> str:
+    """Validate the BotFather token shape without exposing the secret."""
+    token = str(value or "").strip()
+    if _BOT_TOKEN_RE.fullmatch(token) is None:
+        raise ValueError("Telegram bot token format is invalid")
+    return token
+
+
+def normalize_telegram_allowed_users(value: str) -> tuple[str, ...]:
+    """Return a deduplicated, explicit Telegram user allowlist."""
+    users: list[str] = []
+    seen: set[str] = set()
+    for part in str(value or "").replace(";", ",").split(","):
+        user_id = part.strip()
+        if not user_id:
+            continue
+        if user_id == "*":
+            raise ValueError(
+                "TELEGRAM_ALLOWED_USERS must name explicit users; '*' is not allowed"
+            )
+        if re.fullmatch(r"[1-9][0-9]*", user_id) is None:
+            raise ValueError(
+                "TELEGRAM_ALLOWED_USERS must contain numeric Telegram user IDs only"
+            )
+        if user_id not in seen:
+            users.append(user_id)
+            seen.add(user_id)
+    if not users:
+        raise ValueError("At least one allowed Telegram user ID is required")
+    return tuple(users)
+
+
+def normalize_telegram_home_chat_id(value: str) -> str:
+    """Validate a Telegram user, group, or supergroup destination."""
+    chat_id = str(value or "").strip()
+    if re.fullmatch(r"-?[1-9][0-9]*", chat_id) is None:
+        raise ValueError("Telegram home chat must be a non-zero numeric chat ID")
+    return chat_id
+
+
+def normalize_telegram_topic_id(value: str) -> str:
+    """Validate an optional Telegram forum topic ID."""
+    topic_id = str(value or "").strip()
+    if topic_id and re.fullmatch(r"[1-9][0-9]*", topic_id) is None:
+        raise ValueError("Telegram topic ID must be a positive number")
+    return topic_id
 
 
 def _nonnegative_number(settings: Settings, name: str, default: float) -> float:
@@ -109,24 +158,40 @@ def validate_settings(settings: Settings) -> None:
             "telegram.allowed_users contains sensitive identities; set "
             "TELEGRAM_ALLOWED_USERS in ~/.pilotage-agent/.env instead"
         )
-    allowed_users = _split_env("TELEGRAM_ALLOWED_USERS")
-    if "*" in allowed_users:
-        raise ConfigError(
-            "TELEGRAM_ALLOWED_USERS must name explicit users; '*' is not allowed"
-        )
-    if any(
-        re.fullmatch(r"[1-9][0-9]*", user_id) is None
-        for user_id in allowed_users
-    ):
-        raise ConfigError(
-            "TELEGRAM_ALLOWED_USERS must contain numeric Telegram user IDs only"
-        )
+    raw_allowed_users = os.environ.get("TELEGRAM_ALLOWED_USERS", "").strip()
+    allowed_users: tuple[str, ...] = ()
+    if raw_allowed_users:
+        try:
+            allowed_users = normalize_telegram_allowed_users(raw_allowed_users)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
 
     enabled = settings.flag("telegram.enabled", False)
     if enabled and not os.environ.get("TELEGRAM_BOT_TOKEN", "").strip():
         raise ConfigError(
             "telegram.enabled is true but TELEGRAM_BOT_TOKEN is not configured"
         )
+    if enabled and not allowed_users:
+        raise ConfigError(
+            "telegram.enabled is true but TELEGRAM_ALLOWED_USERS is not configured"
+        )
+    home_chat_id = os.environ.get("TELEGRAM_HOME_CHANNEL", "").strip()
+    if home_chat_id:
+        try:
+            normalize_telegram_home_chat_id(home_chat_id)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+    topic_id = os.environ.get("TELEGRAM_HOME_CHANNEL_THREAD_ID", "").strip()
+    if topic_id:
+        try:
+            normalize_telegram_topic_id(topic_id)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+        if not home_chat_id.startswith("-"):
+            raise ConfigError(
+                "TELEGRAM_HOME_CHANNEL_THREAD_ID requires a negative Telegram "
+                "group or supergroup home chat ID"
+            )
     webhook_url = os.environ.get("TELEGRAM_WEBHOOK_URL", "").strip()
     if enabled and webhook_url:
         parsed = urlparse(webhook_url)
@@ -1694,6 +1759,10 @@ __all__ = [
     "ChannelError",
     "InboundMessage",
     "TelegramChannel",
+    "normalize_telegram_allowed_users",
+    "normalize_telegram_bot_token",
     "normalize_telegram_chat_id",
+    "normalize_telegram_home_chat_id",
+    "normalize_telegram_topic_id",
     "validate_settings",
 ]

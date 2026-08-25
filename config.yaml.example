@@ -47,7 +47,7 @@ gateway:
   media_delivery_allow_dirs: []
 
 whatsapp:
-  enabled: true
+  enabled: false
   # Group access is additional: the sender must still be in
   # PILOTAGE_ALLOWED_SENDERS. ["*"] means any group, never any participant.
   group_policy: disabled

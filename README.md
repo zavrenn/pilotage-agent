@@ -50,9 +50,10 @@ commands below as the unprivileged service user.
 
 ```bash
 scripts/install.sh
-# Edit ~/.pilotage-agent/config.yaml and any non-WhatsApp secrets in .env
+# Review ~/.pilotage-agent/config.yaml and add unrelated service secrets to .env
 ./.venv/bin/pilotage login
-./.venv/bin/pilotage whatsapp  # configure access/home and pair the device
+./.venv/bin/pilotage whatsapp  # optional: configure, pair, and enable WhatsApp
+./.venv/bin/pilotage telegram  # optional: configure, verify, and enable Telegram
 ./.venv/bin/pilotage run
 ```
 
@@ -63,13 +64,12 @@ Full-page web extraction requires FIRECRAWL_API_KEY in the profile .env, or
 FIRECRAWL_API_URL for a self-hosted Firecrawl instance. DDGS search needs no key.
 
 `pilotage whatsapp` saves the WhatsApp allowlist and home destination in the
-effective profile environment file, then pairs or keeps the linked device.
-Telegram uses TELEGRAM_BOT_TOKEN and numeric IDs in TELEGRAM_ALLOWED_USERS from
-the profile .env.
+effective profile environment file, then pairs and enables the channel.
+`pilotage telegram` securely collects and verifies the bot token, allowed user
+IDs, and home destination, then enables Telegram. Run either or both setup
+commands; a fresh install enables neither channel.
 Webhook delivery also requires TELEGRAM_WEBHOOK_URL and a long random
 TELEGRAM_WEBHOOK_SECRET; leaving the URL blank uses long polling.
-Set TELEGRAM_HOME_CHANNEL in that same profile .env so unattended Telegram
-output has an explicit destination.
 After testing the enabled channels, install the resident user service:
 
 ```bash

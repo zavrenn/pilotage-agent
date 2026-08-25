@@ -445,6 +445,10 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
                 "PILOTAGE_ALLOWED_SENDERS": "123",
             },
         ):
+            (Path(temp.name) / "config.yaml").write_text(
+                "whatsapp:\n  enabled: true\n",
+                encoding="utf-8",
+            )
             config = Config.load(channel="whatsapp")
             object.__setattr__(config, "cron_enabled", False)
             seen = {}

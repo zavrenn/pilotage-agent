@@ -13,6 +13,7 @@ import contextlib
 import os
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -22,7 +23,12 @@ from pilotage.config import (
     SOUL_MAX_CHARS,
     Config,
 )
-from pilotage.settings import ConfigError, Settings, config_path
+from pilotage.settings import (
+    ConfigError,
+    Settings,
+    config_path,
+    set_channel_enabled,
+)
 
 
 class LoadingTests(unittest.TestCase):
@@ -116,6 +122,76 @@ class LoadingTests(unittest.TestCase):
         settings = self._write("tools:\n  disabled:\n    terminal: true\n")
         with self.assertRaises(ConfigError):
             settings.names("tools.disabled")
+
+    def test_channel_enablement_preserves_operator_yaml(self):
+        original = (
+            "# operator comment\n"
+            "whatsapp:\n"
+            "  enabled: false  # remains documented\n"
+            "  bridge_port: 8765\n"
+        )
+        self.path.write_text(original, encoding="utf-8")
+
+        set_channel_enabled(self.path, "whatsapp")
+
+        self.assertEqual(
+            self.path.read_text(encoding="utf-8"),
+            original.replace("enabled: false", "enabled: true"),
+        )
+
+    def test_channel_enablement_adds_only_the_missing_flag(self):
+        original = (
+            "# profile\n"
+            "whatsapp:\n"
+            "  bridge_port: 8766\n"
+            "telegram:\n"
+            "  group_policy: disabled\n"
+        )
+        self.path.write_text(original, encoding="utf-8")
+
+        set_channel_enabled(self.path, "telegram")
+
+        self.assertEqual(
+            self.path.read_text(encoding="utf-8"),
+            "# profile\n"
+            "whatsapp:\n"
+            "  bridge_port: 8766\n"
+            "telegram:\n"
+            "  enabled: true\n"
+            "  group_policy: disabled\n",
+        )
+
+    def test_channel_enablement_creates_a_minimal_missing_config(self):
+        set_channel_enabled(self.path, "telegram")
+
+        self.assertEqual(
+            self.path.read_text(encoding="utf-8"),
+            "telegram:\n  enabled: true\n",
+        )
+
+    def test_each_channel_can_be_enabled_without_disabling_the_other(self):
+        self.path.write_text(
+            "whatsapp:\n  enabled: false\ntelegram:\n  enabled: false\n",
+            encoding="utf-8",
+        )
+
+        set_channel_enabled(self.path, "whatsapp")
+        set_channel_enabled(self.path, "telegram")
+
+        settings = Settings.load(self.path)
+        self.assertTrue(settings.flag("whatsapp.enabled", False))
+        self.assertTrue(settings.flag("telegram.enabled", False))
+
+    def test_channel_enablement_refuses_an_unsafe_structural_rewrite(self):
+        self.path.write_text("telegram: {group_policy: disabled}\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ConfigError, "flow-style YAML"):
+            set_channel_enabled(self.path, "telegram")
+
+        self.assertEqual(
+            self.path.read_text(encoding="utf-8"),
+            "telegram: {group_policy: disabled}\n",
+        )
 
 
 class ChannelTests(unittest.TestCase):
@@ -255,6 +331,8 @@ class ConfigFileTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PILOTAGE_CONFIG": str(template)}):
             config = Config.load(channel="whatsapp")
         self.assertEqual(config.model, "gpt-5.6-sol")
+        self.assertFalse(config.settings.flag("whatsapp.enabled", True))
+        self.assertFalse(config.settings.flag("telegram.enabled", True))
         self.assertEqual(
             config.settings.names("tools.enabled"),
             [
@@ -685,6 +763,21 @@ class ConfigFileTests(unittest.TestCase):
 
 
 class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.runtime_root = Path(temporary.name)
+        environment = mock.patch.dict(
+            os.environ,
+            {"PILOTAGE_HOME": str(self.runtime_root)},
+        )
+        environment.start()
+        self.addCleanup(environment.stop)
+        (self.runtime_root / "config.yaml").write_text(
+            "whatsapp:\n  enabled: true\n",
+            encoding="utf-8",
+        )
+
     async def test_rejected_scheduled_send_is_a_visible_delivery_failure(self):
         from pilotage import main
         from pilotage.channels.whatsapp import ChannelError
@@ -699,6 +792,26 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 {"channel": "whatsapp", "chat_id": "123@c.us"},
                 "result",
             )
+
+    async def test_runtime_refuses_to_guess_a_channel_on_a_fresh_profile(self):
+        from pilotage import main
+
+        (self.runtime_root / "config.yaml").write_text(
+            "whatsapp:\n  enabled: false\ntelegram:\n  enabled: false\n",
+            encoding="utf-8",
+        )
+        config = Config.load(channel="whatsapp")
+        with (
+            mock.patch.object(main, "WhatsAppChannel") as whatsapp,
+            mock.patch.object(main, "TelegramChannel") as telegram,
+            mock.patch("sys.stderr", new_callable=StringIO) as error,
+        ):
+            code = await main.command_run(config)
+
+        self.assertEqual(code, 1)
+        whatsapp.assert_not_called()
+        telegram.assert_not_called()
+        self.assertIn("No messaging channel is enabled", error.getvalue())
 
     async def test_whatsapp_origin_is_stamped_on_the_agent_turn(self):
         from pilotage import main

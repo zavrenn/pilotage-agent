@@ -61,7 +61,7 @@ chmod 700 "$state_dir"
 chmod 700 "$state_dir/workspace"
 if [ ! -f "$state_dir/.env" ] && [ -f .env.example ]; then
   cp .env.example "$state_dir/.env"
-  echo "==> Wrote $state_dir/.env — configure enabled channel credentials before starting."
+  echo "==> Wrote $state_dir/.env — channel setup commands will add their credentials."
 fi
 if [ -f "$state_dir/.env" ]; then
   chmod 600 "$state_dir/.env"
@@ -76,9 +76,9 @@ fi
 
 echo
 echo "Installed. Next:"
-echo "  1. edit $state_dir/.env and configure enabled channel credentials"
-echo "  2. review $state_dir/config.yaml"
-echo "  3. ./.venv/bin/pilotage login"
-echo "  4. ./.venv/bin/pilotage run  # pair and test enabled channels"
+echo "  1. review $state_dir/config.yaml"
+echo "  2. ./.venv/bin/pilotage login"
+echo "  3. run ./.venv/bin/pilotage whatsapp and/or ./.venv/bin/pilotage telegram"
+echo "  4. ./.venv/bin/pilotage run"
 echo "  5. bash scripts/install-service.sh # keep it running under systemd"
 echo "  6. ./.venv/bin/pilotage doctor # prove the full deployment is ready"

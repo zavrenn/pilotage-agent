@@ -2,6 +2,8 @@
 
     pilotage login          authenticate against ChatGPT (device code)
     pilotage ask "..."      one question straight to the model, no messaging
+    pilotage whatsapp       configure, pair, and enable WhatsApp
+    pilotage telegram       configure, verify, and enable Telegram
     pilotage run            answer enabled messaging channels until stopped
     pilotage doctor         prove deployment readiness
 """
@@ -10,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import inspect
 import logging
 import os
@@ -21,6 +24,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
+
+import httpx
 
 from . import media, profiles, transcription
 from .agent import Agent
@@ -38,6 +43,10 @@ from .channels.telegram import (
     ChannelError as TelegramChannelError,
     InboundMessage as TelegramInboundMessage,
     TelegramChannel,
+    normalize_telegram_allowed_users,
+    normalize_telegram_bot_token,
+    normalize_telegram_home_chat_id,
+    normalize_telegram_topic_id,
 )
 from .codex import auth
 from .config import Config, ConfigError
@@ -56,6 +65,7 @@ from .i18n import t
 from .redact import RedactingFormatter
 from .runtime_lock import ProfileRuntimeLock, RuntimeLockError
 from .service import run_service_command
+from .settings import config_path, set_channel_enabled
 
 logger = logging.getLogger("pilotage")
 
@@ -67,6 +77,15 @@ SHUTDOWN_DRAIN_SECONDS = 30.0
 WHATSAPP_SETUP_ENV_KEYS = frozenset(
     {"PILOTAGE_ALLOWED_SENDERS", "WHATSAPP_HOME_CHANNEL"}
 )
+TELEGRAM_SETUP_ENV_KEYS = frozenset(
+    {
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_ALLOWED_USERS",
+        "TELEGRAM_HOME_CHANNEL",
+        "TELEGRAM_HOME_CHANNEL_THREAD_ID",
+    }
+)
+CHANNEL_SETUP_ENV_KEYS = WHATSAPP_SETUP_ENV_KEYS | TELEGRAM_SETUP_ENV_KEYS
 
 
 async def _deliver_scheduled(
@@ -157,10 +176,24 @@ async def command_run(config: Config, profile_name: str = "default") -> int:
         runtime_lock.release()
 
 
+def _save_channel_enabled(path: Path, channel: str, enabled: bool) -> bool:
+    try:
+        set_channel_enabled(path, channel, enabled)
+    except (ConfigError, OSError) as exc:
+        print(f"Could not update {channel} enablement: {exc}", file=sys.stderr)
+        return False
+    return True
+
+
+class _SetupCancelled(Exception):
+    pass
+
+
 def command_whatsapp_pair(
     config: Config,
     *,
     env_path: Path | None = None,
+    settings_path: Path | None = None,
     external_env: frozenset[str] = frozenset(),
 ) -> int:
     """Configure and pair WhatsApp without starting the agent runtime."""
@@ -182,9 +215,10 @@ def command_whatsapp_pair(
         print(exc, file=sys.stderr)
         return 1
     try:
+        selected_settings_path = settings_path or config_path(config.state_dir)
         try:
             allowed_senders, updates = _prompt_whatsapp_configuration(config)
-        except _WhatsAppSetupCancelled:
+        except _SetupCancelled:
             print("WhatsApp setup cancelled.", file=sys.stderr)
             return 1
 
@@ -218,14 +252,33 @@ def command_whatsapp_pair(
             else:
                 print("WhatsApp is already paired for this profile.")
                 paired = True
-            if not _prompt_yes_no(
-                "Re-pair? This will clear the existing WhatsApp session. [y/N] "
-            ):
+            try:
+                repair = _prompt_yes_no(
+                    "Re-pair? This will clear the existing WhatsApp session. [y/N] "
+                )
+            except _SetupCancelled:
+                print("WhatsApp setup cancelled.", file=sys.stderr)
+                return 1
+            if not repair:
                 if paired:
+                    if not _save_channel_enabled(
+                        selected_settings_path, "whatsapp", True
+                    ):
+                        return 1
                     print("WhatsApp configuration is saved; existing pairing kept.")
                     return 0
+                if not _save_channel_enabled(
+                    selected_settings_path, "whatsapp", False
+                ):
+                    return 1
                 print("WhatsApp remains unpaired.", file=sys.stderr)
                 return 1
+
+        # A failed or interrupted pairing must not leave an unusable channel
+        # selected for the resident runtime.
+        if not _save_channel_enabled(selected_settings_path, "whatsapp", False):
+            return 1
+        if credentials_path.is_file():
             try:
                 shutil.rmtree(config.session_dir)
                 config.session_dir.mkdir(mode=0o700, parents=True)
@@ -271,28 +324,274 @@ def command_whatsapp_pair(
                 file=sys.stderr,
             )
             return 1
+        if not _save_channel_enabled(selected_settings_path, "whatsapp", True):
+            return 1
         print("WhatsApp is connected and its profile credentials are saved.")
         return 0
     finally:
         lock.release()
 
 
-class _WhatsAppSetupCancelled(Exception):
-    pass
+def _read_telegram_setup_input(prompt: str, *, secret: bool = False) -> str:
+    try:
+        reader = getpass.getpass if secret else input
+        return reader(prompt).strip()
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise _SetupCancelled from exc
+
+
+def _prompt_telegram_token(updates: dict[str, str]) -> str:
+    current_raw = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    current = ""
+    if current_raw:
+        try:
+            current = normalize_telegram_bot_token(current_raw)
+        except ValueError:
+            print("Existing Telegram bot token is invalid.", file=sys.stderr)
+    if current:
+        print("Telegram bot token is configured.")
+        if not _prompt_yes_no("Update the bot token? [y/N] "):
+            return current
+
+    while True:
+        prompt = (
+            "New Telegram bot token (hidden; blank keeps existing): "
+            if current
+            else "Telegram bot token from @BotFather (hidden): "
+        )
+        written = _read_telegram_setup_input(prompt, secret=True)
+        if not written and current:
+            return current
+        try:
+            token = normalize_telegram_bot_token(written)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            continue
+        if token != current:
+            updates["TELEGRAM_BOT_TOKEN"] = token
+        return token
+
+
+def _prompt_telegram_allowed_users(updates: dict[str, str]) -> tuple[str, ...]:
+    current_raw = os.environ.get("TELEGRAM_ALLOWED_USERS", "").strip()
+    current: tuple[str, ...] = ()
+    if current_raw:
+        try:
+            current = normalize_telegram_allowed_users(current_raw)
+        except ValueError as exc:
+            print(f"Existing Telegram allowlist is invalid: {exc}", file=sys.stderr)
+    if current:
+        print("Allowed Telegram user IDs: " + ",".join(current))
+        if not _prompt_yes_no("Update allowed user IDs? [y/N] "):
+            return current
+    else:
+        print("Find your numeric Telegram user ID by messaging @userinfobot.")
+
+    while True:
+        prompt = (
+            "Allowed user IDs, comma-separated (blank keeps existing): "
+            if current
+            else "Allowed Telegram user IDs, comma-separated: "
+        )
+        written = _read_telegram_setup_input(prompt)
+        if not written and current:
+            return current
+        try:
+            users = normalize_telegram_allowed_users(written)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            continue
+        if users != current:
+            updates["TELEGRAM_ALLOWED_USERS"] = ",".join(users)
+        return users
+
+
+def _prompt_telegram_home(
+    allowed_users: tuple[str, ...], updates: dict[str, str]
+) -> str:
+    current_raw = os.environ.get("TELEGRAM_HOME_CHANNEL", "").strip()
+    current = ""
+    if current_raw:
+        try:
+            current = normalize_telegram_home_chat_id(current_raw)
+        except ValueError as exc:
+            print(f"Existing Telegram home chat is invalid: {exc}", file=sys.stderr)
+    if current:
+        print(f"Telegram home chat: {current}")
+        if not _prompt_yes_no("Update the home chat? [y/N] "):
+            return current
+
+    while True:
+        default = allowed_users[0]
+        prompt = (
+            "Home chat ID (blank keeps existing): "
+            if current
+            else f"Home Telegram chat ID [{default}]: "
+        )
+        written = _read_telegram_setup_input(prompt)
+        if not written:
+            if current:
+                return current
+            written = default
+        try:
+            home = normalize_telegram_home_chat_id(written)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            continue
+        if home != current:
+            updates["TELEGRAM_HOME_CHANNEL"] = home
+        return home
+
+
+def _prompt_telegram_topic(home: str, updates: dict[str, str]) -> str:
+    current_raw = os.environ.get("TELEGRAM_HOME_CHANNEL_THREAD_ID", "").strip()
+    if not home.startswith("-"):
+        if current_raw:
+            print("Clearing the Telegram home topic for a direct-message home.")
+            updates["TELEGRAM_HOME_CHANNEL_THREAD_ID"] = ""
+        return ""
+    current = ""
+    if current_raw:
+        try:
+            current = normalize_telegram_topic_id(current_raw)
+        except ValueError as exc:
+            print(f"Existing Telegram topic is invalid: {exc}", file=sys.stderr)
+            while True:
+                written = _read_telegram_setup_input(
+                    "Home topic ID (blank clears it): "
+                )
+                try:
+                    topic = normalize_telegram_topic_id(written)
+                except ValueError as topic_exc:
+                    print(topic_exc, file=sys.stderr)
+                    continue
+                updates["TELEGRAM_HOME_CHANNEL_THREAD_ID"] = topic
+                return topic
+    if current:
+        print(f"Telegram home topic: {current}")
+        if not _prompt_yes_no("Update or clear the home topic? [y/N] "):
+            return current
+        while True:
+            written = _read_telegram_setup_input(
+                "Home topic ID (blank clears it): "
+            )
+            try:
+                topic = normalize_telegram_topic_id(written)
+            except ValueError as exc:
+                print(exc, file=sys.stderr)
+                continue
+            if topic != current:
+                updates["TELEGRAM_HOME_CHANNEL_THREAD_ID"] = topic
+            return topic
+    if home.startswith("-"):
+        while True:
+            written = _read_telegram_setup_input(
+                "Home topic ID (blank for no topic): "
+            )
+            try:
+                topic = normalize_telegram_topic_id(written)
+            except ValueError as exc:
+                print(exc, file=sys.stderr)
+                continue
+            if topic:
+                updates["TELEGRAM_HOME_CHANNEL_THREAD_ID"] = topic
+            return topic
+    return ""
+
+
+def _prompt_telegram_configuration() -> tuple[str, dict[str, str]]:
+    updates: dict[str, str] = {}
+    token = _prompt_telegram_token(updates)
+    allowed_users = _prompt_telegram_allowed_users(updates)
+    home = _prompt_telegram_home(allowed_users, updates)
+    _prompt_telegram_topic(home, updates)
+    return token, updates
+
+
+def _verify_telegram_bot_token(token: str) -> str:
+    try:
+        response = httpx.get(
+            f"https://api.telegram.org/bot{token}/getMe",
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        raise ValueError("Could not verify the Telegram bot token.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Telegram returned an invalid verification response.")
+    result = payload.get("result")
+    if payload.get("ok") is not True or not isinstance(result, dict):
+        raise ValueError("Telegram rejected the bot token.")
+    username = str(result.get("username") or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_]{1,64}", username) is None:
+        username = ""
+    return f"@{username}" if username else "the configured bot"
+
+
+def command_telegram_setup(
+    state_dir: Path,
+    *,
+    env_path: Path | None = None,
+    settings_path: Path | None = None,
+    external_env: frozenset[str] = frozenset(),
+) -> int:
+    """Configure, verify, and enable Telegram for one profile."""
+
+    lock = ProfileRuntimeLock(state_dir)
+    try:
+        lock.acquire()
+    except RuntimeLockError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    try:
+        try:
+            token, updates = _prompt_telegram_configuration()
+        except _SetupCancelled:
+            print("Telegram setup cancelled.", file=sys.stderr)
+            return 1
+
+        externally_managed = sorted(updates.keys() & external_env)
+        if externally_managed:
+            print(
+                "Cannot update externally supplied environment value(s): "
+                + ", ".join(externally_managed)
+                + ". Change them at their deployment source.",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            bot_name = _verify_telegram_bot_token(token)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        if updates:
+            try:
+                update_env_values(env_path or state_dir / ".env", updates)
+            except (OSError, ValueError) as exc:
+                print(f"Could not save Telegram configuration: {exc}", file=sys.stderr)
+                return 1
+        selected_settings_path = settings_path or config_path(state_dir)
+        if not _save_channel_enabled(selected_settings_path, "telegram", True):
+            return 1
+        print(f"Telegram {bot_name} is verified, configured, and enabled.")
+        return 0
+    finally:
+        lock.release()
 
 
 def _read_setup_input(prompt: str) -> str:
     try:
         return input(prompt).strip()
     except (EOFError, KeyboardInterrupt) as exc:
-        raise _WhatsAppSetupCancelled from exc
+        raise _SetupCancelled from exc
 
 
 def _prompt_yes_no(prompt: str) -> bool:
     try:
         return input(prompt).strip().lower() in {"y", "yes"}
-    except (EOFError, KeyboardInterrupt):
-        return False
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise _SetupCancelled from exc
 
 
 def _normalize_allowed_senders(value: str) -> tuple[str, ...]:
@@ -416,7 +715,7 @@ async def _run_enabled_channels(
     config: Config, profile_name: str
 ) -> int:
     """Run the enabled first-class messaging channels for one profile."""
-    whatsapp_enabled = config.settings.flag("whatsapp.enabled", True)
+    whatsapp_enabled = config.settings.flag("whatsapp.enabled", False)
     telegram_config = config.for_channel("telegram")
     telegram_enabled = telegram_config.settings.flag("telegram.enabled", False)
     if not whatsapp_enabled and not telegram_enabled:
@@ -959,6 +1258,9 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser(
         "whatsapp", help="configure allowed numbers, home chat, and QR pairing"
     )
+    subparsers.add_parser(
+        "telegram", help="configure allowed users, home chat, and bot token"
+    )
     subparsers.add_parser("status", help="show the selected agent's essential status")
     subparsers.add_parser(
         "doctor",
@@ -987,7 +1289,7 @@ def main(argv: list[str] | None = None) -> int:
         return _command_profile(args)
 
     try:
-        profile_name, _ = profiles.activate_for_process(args.profile)
+        profile_name, profile_path = profiles.activate_for_process(args.profile)
     except (FileNotFoundError, ValueError) as exc:
         logger.error("%s", exc)
         return 1
@@ -996,11 +1298,22 @@ def main(argv: list[str] | None = None) -> int:
         return run_service_command(args.service_action, profile_name)
 
     external_setup_env = frozenset(
-        name for name in WHATSAPP_SETUP_ENV_KEYS if name in os.environ
+        name for name in CHANNEL_SETUP_ENV_KEYS if name in os.environ
     )
     loaded_env_files = load_env_files()
     for path in loaded_env_files:
         logger.info("Read environment from %s", path)
+    setup_env_path = (
+        loaded_env_files[0] if loaded_env_files else candidate_env_files()[0]
+    )
+    selected_settings_path = config_path(profile_path)
+    if args.command == "telegram":
+        return command_telegram_setup(
+            profile_path,
+            env_path=setup_env_path,
+            settings_path=selected_settings_path,
+            external_env=external_setup_env,
+        )
     try:
         # Parse the exact view that will run while still inside the guarded
         # startup boundary. A malformed channel override must be a clean
@@ -1014,7 +1327,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             telegram_config = config.for_channel("telegram")
             if (
-                not config.settings.flag("whatsapp.enabled", True)
+                not config.settings.flag("whatsapp.enabled", False)
                 and telegram_config.settings.flag("telegram.enabled", False)
             ):
                 config = telegram_config
@@ -1027,14 +1340,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "login":
         return command_login(config)
     if args.command == "whatsapp":
-        env_path = (
-            loaded_env_files[0]
-            if loaded_env_files
-            else candidate_env_files()[0]
-        )
         return command_whatsapp_pair(
             config,
-            env_path=env_path,
+            env_path=setup_env_path,
+            settings_path=selected_settings_path,
             external_env=external_setup_env,
         )
     if args.command == "ask":

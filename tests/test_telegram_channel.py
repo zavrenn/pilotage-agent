@@ -122,6 +122,35 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         ):
             Config.load(channel="telegram")
 
+    def test_enabled_telegram_requires_explicit_allowed_users(self):
+        self._write_config("telegram:\n  enabled: true\n")
+
+        with (
+            mock.patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": ""}),
+            self.assertRaisesRegex(ConfigError, "TELEGRAM_ALLOWED_USERS"),
+        ):
+            Config.load(channel="telegram")
+
+    def test_telegram_home_must_be_a_numeric_chat(self):
+        with (
+            mock.patch.dict(os.environ, {"TELEGRAM_HOME_CHANNEL": "@owner"}),
+            self.assertRaisesRegex(ConfigError, "non-zero numeric chat ID"),
+        ):
+            Config.load(channel="telegram")
+
+    def test_telegram_topic_requires_a_group_home(self):
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "TELEGRAM_HOME_CHANNEL": "42",
+                    "TELEGRAM_HOME_CHANNEL_THREAD_ID": "7",
+                },
+            ),
+            self.assertRaisesRegex(ConfigError, "negative Telegram group"),
+        ):
+            Config.load(channel="telegram")
+
     def test_secrets_wildcard_users_and_usernames_are_rejected(self):
         self._write_config("telegram:\n  bot_token: secret\n")
         with self.assertRaisesRegex(ConfigError, "secret"):

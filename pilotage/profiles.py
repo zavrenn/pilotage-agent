@@ -278,7 +278,10 @@ def create_profile(name: str) -> Path:
             f"  language: {DEFAULT_PROFILE_LANGUAGE}\n"
             "timezone: \"\"\n"
             "whatsapp:\n"
-            f"  bridge_port: {bridge_port}\n",
+            "  enabled: false\n"
+            f"  bridge_port: {bridge_port}\n"
+            "telegram:\n"
+            "  enabled: false\n",
             encoding="utf-8",
         )
         for protected in (env_path, config_path):

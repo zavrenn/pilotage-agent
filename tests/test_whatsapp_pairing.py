@@ -90,6 +90,10 @@ class WhatsAppPairingTests(unittest.TestCase):
             "WHATSAPP_HOME_CHANNEL=212600000000@s.whatsapp.net\n",
             env_text,
         )
+        self.assertTrue(
+            (self.config.state_dir / "config.yaml").read_text(encoding="utf-8")
+            .startswith("whatsapp:\n  enabled: true\n")
+        )
         lock = ProfileRuntimeLock(self.config.state_dir)
         lock.acquire()
         lock.release()
@@ -211,6 +215,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         pair.assert_called_once_with(
             self.config,
             env_path=selected,
+            settings_path=self.root / "config.yaml",
             external_env=frozenset(),
         )
 
@@ -252,6 +257,10 @@ class WhatsAppPairingTests(unittest.TestCase):
             code = command_whatsapp_pair(self.config)
         self.assertEqual(code, 1)
         self.assertIn("did not register a linked device", error.getvalue())
+        self.assertIn(
+            "whatsapp:\n  enabled: false\n",
+            (self.config.state_dir / "config.yaml").read_text(encoding="utf-8"),
+        )
 
     def test_unregistered_credentials_do_not_count_as_pairing_success(self):
         def run(command, **kwargs):
@@ -304,12 +313,52 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertIn("existing pairing kept", output.getvalue())
         self.assertEqual(env_path.read_text(encoding="utf-8"), original_env)
 
+    def test_interrupting_repair_does_not_enable_whatsapp(self):
+        self.config.allowed_senders = frozenset({"212600000000"})
+        self.config.home_chat_id = "212600000000@s.whatsapp.net"
+        self.config.state_dir.mkdir(parents=True)
+        settings_path = self.config.state_dir / "config.yaml"
+        settings_path.write_text(
+            "whatsapp:\n  enabled: false\n",
+            encoding="utf-8",
+        )
+        self.session.mkdir(parents=True)
+        (self.session / "creds.json").write_text(
+            json.dumps({"registered": True}),
+            encoding="utf-8",
+        )
+
+        with (
+            mock.patch("pilotage.main.shutil.which", return_value="node"),
+            mock.patch(
+                "builtins.input",
+                side_effect=["", "", KeyboardInterrupt()],
+            ),
+            mock.patch("pilotage.main.subprocess.run") as run,
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()) as error,
+        ):
+            code = command_whatsapp_pair(self.config)
+
+        self.assertEqual(code, 1)
+        run.assert_not_called()
+        self.assertIn("setup cancelled", error.getvalue())
+        self.assertIn(
+            "whatsapp:\n  enabled: false\n",
+            settings_path.read_text(encoding="utf-8"),
+        )
+
     def test_invalid_existing_session_is_not_kept_as_paired(self):
         self.config.allowed_senders = frozenset({"212600000000"})
         self.config.home_chat_id = "212600000000@s.whatsapp.net"
         self.session.mkdir(parents=True)
         credentials = self.session / "creds.json"
         credentials.write_text("{}", encoding="utf-8")
+        settings_path = self.config.state_dir / "config.yaml"
+        settings_path.write_text(
+            "whatsapp:\n  enabled: true\n",
+            encoding="utf-8",
+        )
 
         with (
             mock.patch("pilotage.main.shutil.which", return_value="node"),
@@ -325,6 +374,10 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertTrue(credentials.is_file())
         self.assertIn("session is not registered", error.getvalue())
         self.assertIn("remains unpaired", error.getvalue())
+        self.assertIn(
+            "whatsapp:\n  enabled: false\n",
+            settings_path.read_text(encoding="utf-8"),
+        )
 
     def test_existing_values_can_be_updated_and_session_repaired(self):
         self.config.allowed_senders = frozenset({"212600000000"})

@@ -22,10 +22,13 @@ from __future__ import annotations
 
 import math
 import os
+import re
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 CONFIG_FILENAME = "config.yaml"
+_CHANNEL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 
 class ConfigError(RuntimeError):
@@ -38,6 +41,146 @@ def config_path(state_dir: Path) -> Path:
     if override:
         return Path(override).expanduser()
     return state_dir / CONFIG_FILENAME
+
+
+def set_channel_enabled(path: Path, channel: str, enabled: bool = True) -> None:
+    """Safely update one top-level channel flag without rewriting operator YAML."""
+
+    path = Path(path)
+    if not _CHANNEL_NAME_RE.fullmatch(channel):
+        raise ConfigError(f"Invalid channel name: {channel!r}")
+    if os.path.lexists(path) and path.is_symlink():
+        raise ConfigError(f"Refusing to replace symbolic-link configuration: {path}")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    except OSError as exc:
+        raise ConfigError(f"Could not read {path}: {exc}") from exc
+
+    try:
+        import yaml
+        from yaml.nodes import MappingNode, ScalarNode
+    except ImportError as exc:  # pragma: no cover - dependency is declared
+        raise ConfigError("PyYAML is required to update the configuration file.") from exc
+
+    try:
+        root = yaml.compose(text) if text.strip() else None
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"{path} is not valid YAML: {exc}") from exc
+
+    written = "true" if enabled else "false"
+    block = f"{channel}:\n  enabled: {written}\n"
+    if root is None:
+        separator = "" if not text or text.endswith("\n") else "\n"
+        updated = text + separator + block
+    elif not isinstance(root, MappingNode):
+        raise ConfigError(f"{path} must describe settings by name")
+    else:
+        sections = [
+            value
+            for key, value in root.value
+            if isinstance(key, ScalarNode) and key.value == channel
+        ]
+        if len(sections) > 1:
+            raise ConfigError(f"{path} contains duplicate {channel!r} sections")
+        if not sections:
+            if root.flow_style:
+                if root.value:
+                    raise ConfigError(
+                        f"Cannot safely add {channel}.enabled to flow-style YAML in {path}"
+                    )
+                updated = (
+                    text[: root.start_mark.index]
+                    + block.rstrip("\n")
+                    + text[root.end_mark.index :]
+                )
+            else:
+                separator = "" if text.endswith("\n") else "\n"
+                updated = text + separator + block
+        else:
+            section = sections[0]
+            if isinstance(section, MappingNode):
+                flags = [
+                    value
+                    for key, value in section.value
+                    if isinstance(key, ScalarNode) and key.value == "enabled"
+                ]
+                if len(flags) > 1:
+                    raise ConfigError(
+                        f"{path} contains duplicate {channel}.enabled values"
+                    )
+                if flags:
+                    flag = flags[0]
+                    if not isinstance(flag, ScalarNode):
+                        raise ConfigError(f"{channel}.enabled must be a scalar value")
+                    updated = (
+                        text[: flag.start_mark.index]
+                        + written
+                        + text[flag.end_mark.index :]
+                    )
+                elif section.flow_style:
+                    raise ConfigError(
+                        f"Cannot safely add {channel}.enabled to flow-style YAML in {path}"
+                    )
+                elif section.value:
+                    first_key = section.value[0][0]
+                    indentation = max(2, first_key.start_mark.column)
+                    insertion = " " * indentation + f"enabled: {written}\n"
+                    line_start = first_key.start_mark.index - first_key.start_mark.column
+                    updated = (
+                        text[:line_start]
+                        + insertion
+                        + text[line_start:]
+                    )
+                else:  # pragma: no cover - empty block mappings compose as null
+                    raise ConfigError(f"Cannot safely update empty {channel} section")
+            elif isinstance(section, ScalarNode) and section.value in {"", None}:
+                updated = (
+                    text[: section.start_mark.index]
+                    + f"\n  enabled: {written}"
+                    + text[section.end_mark.index :]
+                )
+            else:
+                raise ConfigError(f"{channel} must be a settings block in {path}")
+
+    try:
+        parsed = yaml.safe_load(updated)
+    except yaml.YAMLError as exc:  # pragma: no cover - guarded construction
+        raise ConfigError(f"Could not safely update {path}: {exc}") from exc
+    if (
+        not isinstance(parsed, dict)
+        or not isinstance(parsed.get(channel), dict)
+        or parsed[channel].get("enabled") is not enabled
+    ):
+        raise ConfigError(f"Could not prove {channel}.enabled was updated in {path}")
+    if updated == text:
+        return
+
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(updated)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 class Settings:
