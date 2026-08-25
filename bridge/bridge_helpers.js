@@ -2,6 +2,61 @@ import path from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
 import { randomBytes } from 'crypto';
 
+/**
+ * Track Baileys credential writes and provide a real completion barrier.
+ * Baileys owns file ordering through its per-path mutex, so every save must be
+ * invoked immediately to enter that mutex before a reconnect can read state.
+ */
+export function createCredentialSaveCoordinator({ log = () => {} } = {}) {
+  const pending = new Set();
+  let firstError = null;
+  let revision = 0;
+
+  function queue(saveCreds) {
+    if (typeof saveCreds !== 'function') {
+      throw new TypeError('saveCreds must be a function');
+    }
+
+    revision += 1;
+    let write;
+    try {
+      write = Promise.resolve(saveCreds());
+    } catch (error) {
+      write = Promise.reject(error);
+    }
+
+    let tracked;
+    tracked = write.catch((error) => {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      firstError ||= normalized;
+      log(`credential save failed: ${normalized.message}`);
+    }).finally(() => {
+      pending.delete(tracked);
+    });
+    pending.add(tracked);
+    return write;
+  }
+
+  async function drain() {
+    while (pending.size) {
+      await Promise.all([...pending]);
+    }
+  }
+
+  async function flush(saveCreds) {
+    while (true) {
+      await drain();
+      queue(saveCreds);
+      const finalRevision = revision;
+      await drain();
+      if (revision === finalRevision) break;
+    }
+    if (firstError) throw firstError;
+  }
+
+  return { queue, flush };
+}
+
 export const MIME_MAP = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
   webp: 'image/webp', gif: 'image/gif',

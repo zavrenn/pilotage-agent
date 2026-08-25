@@ -208,7 +208,7 @@ class WhatsAppReadinessTests(unittest.TestCase):
             "explicit access policy",
         )
 
-    def test_linked_session_must_be_registered(self):
+    def test_linked_session_requires_completed_pairing_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             session = root / "whatsapp"
@@ -222,17 +222,32 @@ class WhatsAppReadinessTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 doctor.DoctorError,
-                "not registered",
+                "credentials are incomplete",
             ):
                 doctor._check_whatsapp_session(config)
 
             path.write_text(
-                json.dumps({"registered": True, "noiseKey": "secret"}),
+                json.dumps({"registered": True}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                doctor.DoctorError,
+                "credentials are incomplete",
+            ):
+                doctor._check_whatsapp_session(config)
+
+            path.write_text(
+                json.dumps({
+                    "registered": False,
+                    "me": {"id": "212600000000:1@s.whatsapp.net"},
+                    "account": {"details": "signed-device-identity"},
+                    "signalIdentities": [{"identifier": "linked-device"}],
+                }),
                 encoding="utf-8",
             )
             self.assertEqual(
                 doctor._check_whatsapp_session(config),
-                "linked device registered",
+                "linked device credentials ready",
             )
 
     def test_bridge_health_must_match_owner_and_be_connected(self):

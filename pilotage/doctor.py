@@ -478,7 +478,7 @@ def _check_whatsapp_session(config: Any) -> str:
         validate_whatsapp_session(config.session_dir)
     except WhatsAppSessionError as exc:
         raise DoctorError(str(exc)) from exc
-    return "linked device registered"
+    return "linked device credentials ready"
 
 
 def _check_whatsapp_bridge(config: Any) -> str:

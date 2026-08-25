@@ -46,6 +46,7 @@ import {
 import {
   buildTextSendPayload,
   createBoundedMessageStore,
+  createCredentialSaveCoordinator,
   createReconnectScheduler,
   createVersionResolver,
   extractBridgeEvent,
@@ -105,6 +106,7 @@ const SEND_TIMEOUT_MS = 60_000;
 const VERSION_FETCH_TIMEOUT_MS = 15_000;
 const RECONNECT_DELAY_MS = 3_000;
 const RESTART_DELAY_MS = 1_000;
+const PAIR_SETTLE_MS = 2_000;
 
 const logger = pino({ level: 'silent' });
 
@@ -122,6 +124,35 @@ const messageQueue = [];
 
 function log(...args) {
   console.log(`[bridge] ${args.join(' ')}`);
+}
+
+const credentialSaves = createCredentialSaveCoordinator({ log });
+let pairingFinalizing = false;
+
+async function finishPairOnly(saveCreds, pairingSocket) {
+  if (pairingFinalizing) return;
+  pairingFinalizing = true;
+
+  try {
+    // Preserve Hermes' proven post-connect settling window for Baileys' other
+    // auth-state work, then put a real save barrier after it.
+    await new Promise((resolve) => setTimeout(resolve, PAIR_SETTLE_MS));
+    await credentialSaves.flush(saveCreds);
+  } catch (error) {
+    log(`pairing failed: credentials could not be saved (${error.message})`);
+    process.exitCode = 1;
+    try { await pairingSocket?.end?.(undefined); } catch { /* already down */ }
+    return;
+  }
+
+  log('pairing complete; credentials saved');
+  process.exitCode = 0;
+  try {
+    await pairingSocket?.end?.(undefined);
+  } catch (error) {
+    log(`pairing shutdown failed: ${error.message}`);
+    process.exitCode = 1;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -287,7 +318,7 @@ async function startSocket() {
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
   const version = await getWAVersion();
 
-  sock = makeWASocket({
+  const socket = makeWASocket({
     ...(version ? { version } : {}),
     auth: state,
     logger,
@@ -299,8 +330,11 @@ async function startSocket() {
     // session re-establishment arrive with `message === null` and are lost.
     getMessage: async () => ({ conversation: '' }),
   });
+  sock = socket;
 
-  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('creds.update', () => {
+    credentialSaves.queue(saveCreds);
+  });
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -312,17 +346,17 @@ async function startSocket() {
 
     if (connection === 'open') {
       connected = true;
-      meId = sock.user?.id || null;
+      meId = socket.user?.id || null;
       log(`connected as ${meId}`);
       if (PAIR_ONLY) {
-        log('pairing complete; credentials saved');
-        setTimeout(() => process.exit(0), 2000);
+        void finishPairOnly(saveCreds, socket);
       }
       return;
     }
 
     if (connection === 'close') {
       connected = false;
+      if (pairingFinalizing) return;
       // Hermes wraps this in Boom; a plain read reaches the same two branches,
       // since an unwrapped or missing error falls through to the reconnect.
       const reason = lastDisconnect?.error?.output?.statusCode;

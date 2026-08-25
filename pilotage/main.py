@@ -320,7 +320,7 @@ def command_whatsapp_pair(
             validate_whatsapp_session(config.session_dir)
         except WhatsAppSessionError as exc:
             print(
-                f"WhatsApp pairing did not register a linked device: {exc}",
+                f"WhatsApp pairing did not save usable linked-device credentials: {exc}",
                 file=sys.stderr,
             )
             return 1

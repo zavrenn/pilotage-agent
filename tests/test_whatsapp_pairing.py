@@ -17,6 +17,17 @@ from pilotage.main import command_whatsapp_pair
 from pilotage.runtime_lock import ProfileRuntimeLock
 
 
+def _qr_credentials() -> dict[str, object]:
+    """Minimal shape persisted by Baileys after successful QR pairing."""
+
+    return {
+        "registered": False,
+        "me": {"id": "212600000000:1@s.whatsapp.net"},
+        "account": {"details": "signed-device-identity"},
+        "signalIdentities": [{"identifier": "linked-device"}],
+    }
+
+
 class WhatsAppPairingTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -44,7 +55,7 @@ class WhatsAppPairingTests(unittest.TestCase):
             commands.append((command, kwargs))
             self.session.mkdir(parents=True, exist_ok=True)
             (self.session / "creds.json").write_text(
-                json.dumps({"registered": True}),
+                json.dumps(_qr_credentials()),
                 encoding="utf-8",
             )
             return subprocess.CompletedProcess(command, 0)
@@ -105,7 +116,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         def run(command, **kwargs):
             self.session.mkdir(parents=True, exist_ok=True)
             (self.session / "creds.json").write_text(
-                json.dumps({"registered": True}),
+                json.dumps(_qr_credentials()),
                 encoding="utf-8",
             )
             return subprocess.CompletedProcess(command, 0)
@@ -135,7 +146,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         def run(command, **kwargs):
             self.session.mkdir(parents=True, exist_ok=True)
             (self.session / "creds.json").write_text(
-                json.dumps({"registered": True}),
+                json.dumps(_qr_credentials()),
                 encoding="utf-8",
             )
             return subprocess.CompletedProcess(command, 0)
@@ -161,7 +172,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         def run(command, **kwargs):
             self.session.mkdir(parents=True, exist_ok=True)
             (self.session / "creds.json").write_text(
-                json.dumps({"registered": True}),
+                json.dumps(_qr_credentials()),
                 encoding="utf-8",
             )
             return subprocess.CompletedProcess(command, 0)
@@ -256,13 +267,16 @@ class WhatsAppPairingTests(unittest.TestCase):
         ):
             code = command_whatsapp_pair(self.config)
         self.assertEqual(code, 1)
-        self.assertIn("did not register a linked device", error.getvalue())
+        self.assertIn(
+            "did not save usable linked-device credentials",
+            error.getvalue(),
+        )
         self.assertIn(
             "whatsapp:\n  enabled: false\n",
             (self.config.state_dir / "config.yaml").read_text(encoding="utf-8"),
         )
 
-    def test_unregistered_credentials_do_not_count_as_pairing_success(self):
+    def test_incomplete_credentials_do_not_count_as_pairing_success(self):
         def run(command, **kwargs):
             self.session.mkdir(parents=True, exist_ok=True)
             (self.session / "creds.json").write_text(
@@ -280,7 +294,7 @@ class WhatsAppPairingTests(unittest.TestCase):
             code = command_whatsapp_pair(self.config)
 
         self.assertEqual(code, 1)
-        self.assertIn("session is not registered", error.getvalue())
+        self.assertIn("credentials are incomplete", error.getvalue())
 
     def test_existing_configuration_and_pairing_are_kept_by_default(self):
         self.config.allowed_senders = frozenset({"212600000000", "212611111111"})
@@ -295,7 +309,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         env_path.write_text(original_env, encoding="utf-8")
         self.session.mkdir(parents=True)
         (self.session / "creds.json").write_text(
-            json.dumps({"registered": True}),
+            json.dumps(_qr_credentials()),
             encoding="utf-8",
         )
 
@@ -324,7 +338,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         )
         self.session.mkdir(parents=True)
         (self.session / "creds.json").write_text(
-            json.dumps({"registered": True}),
+            json.dumps(_qr_credentials()),
             encoding="utf-8",
         )
 
@@ -372,7 +386,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertEqual(code, 1)
         run.assert_not_called()
         self.assertTrue(credentials.is_file())
-        self.assertIn("session is not registered", error.getvalue())
+        self.assertIn("credentials are incomplete", error.getvalue())
         self.assertIn("remains unpaired", error.getvalue())
         self.assertIn(
             "whatsapp:\n  enabled: false\n",
@@ -393,7 +407,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         )
         self.session.mkdir()
         (self.session / "creds.json").write_text(
-            json.dumps({"registered": True}),
+            json.dumps(_qr_credentials()),
             encoding="utf-8",
         )
         (self.session / "old-session-file").write_text("old", encoding="utf-8")
@@ -401,7 +415,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         def run(command, **kwargs):
             self.session.mkdir(parents=True, exist_ok=True)
             (self.session / "creds.json").write_text(
-                json.dumps({"registered": True}),
+                json.dumps(_qr_credentials()),
                 encoding="utf-8",
             )
             return subprocess.CompletedProcess(command, 0)
@@ -460,7 +474,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         def run(command, **kwargs):
             self.session.mkdir(parents=True, exist_ok=True)
             (self.session / "creds.json").write_text(
-                json.dumps({"registered": True}),
+                json.dumps(_qr_credentials()),
                 encoding="utf-8",
             )
             return subprocess.CompletedProcess(command, 0)

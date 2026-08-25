@@ -103,11 +103,11 @@ _HOME_JID_DOMAINS = _DIRECT_JID_DOMAINS | {"g.us"}
 
 
 class WhatsAppSessionError(ValueError):
-    """The linked-device credential file is absent or not registered."""
+    """The linked-device credential file is absent, unreadable, or incomplete."""
 
 
 def validate_whatsapp_session(session_dir: Path) -> None:
-    """Require the same registered credential state for setup and Doctor."""
+    """Require credentials produced by a completed Baileys pairing flow."""
 
     path = Path(session_dir) / "creds.json"
     try:
@@ -116,9 +116,31 @@ def validate_whatsapp_session(session_dir: Path) -> None:
         raise WhatsAppSessionError(
             "WhatsApp linked-device credentials are missing or unreadable"
         ) from exc
-    if not isinstance(credentials, dict) or credentials.get("registered") is not True:
+    if not isinstance(credentials, dict):
         raise WhatsAppSessionError(
-            "WhatsApp linked-device session is not registered"
+            "WhatsApp linked-device credentials are incomplete"
+        )
+
+    me = credentials.get("me")
+    has_linked_identity = (
+        isinstance(me, dict)
+        and isinstance(me.get("id"), str)
+        and bool(me["id"].strip())
+    )
+    # Baileys 7 QR pairing persists the signed account and signal identity but
+    # leaves `registered` false. Pairing by phone-number code sets that flag.
+    qr_pairing_complete = (
+        isinstance(credentials.get("account"), dict)
+        and bool(credentials["account"])
+        and isinstance(credentials.get("signalIdentities"), list)
+        and bool(credentials["signalIdentities"])
+    )
+    pairing_code_complete = credentials.get("registered") is True
+    if not has_linked_identity or not (
+        qr_pairing_complete or pairing_code_complete
+    ):
+        raise WhatsAppSessionError(
+            "WhatsApp linked-device credentials are incomplete"
         )
 
 

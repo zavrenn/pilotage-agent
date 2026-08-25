@@ -245,6 +245,21 @@ class BridgeOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(sender_rejection, group_gate)
         self.assertLess(group_gate, extraction)
 
+    def test_pair_only_waits_for_credentials_before_reporting_success(self):
+        source = (Path(__file__).resolve().parent.parent / "bridge" / "bridge.js").read_text(
+            encoding="utf-8"
+        )
+        finalizer = source.index("async function finishPairOnly")
+        settle = source.index("setTimeout(resolve, PAIR_SETTLE_MS)", finalizer)
+        flush = source.index("await credentialSaves.flush(saveCreds)", finalizer)
+        success = source.index("pairing complete; credentials saved", finalizer)
+        close = source.index("await pairingSocket?.end?.(undefined)", success)
+
+        self.assertLess(settle, flush)
+        self.assertLess(flush, success)
+        self.assertLess(success, close)
+        self.assertNotIn("setTimeout(() => process.exit(0), 2000)", source)
+
 
 
 class BatchLifecycleTests(unittest.IsolatedAsyncioTestCase):
