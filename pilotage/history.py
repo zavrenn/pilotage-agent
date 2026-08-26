@@ -40,6 +40,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from .redact import identity_pseudonym
+
 logger = logging.getLogger(__name__)
 
 # One writer and no readers outside this process, so a lock is only ever held
@@ -200,11 +202,9 @@ def session_workspace_path(
 class ConversationStore:
     """Every turn of every chat, in one file.
 
-    Built without a path it keeps nothing, on purpose. `pilotage ask` is the
-    one caller that wants that: it is the check you run when the agent goes
-    quiet, and a check that carries yesterday's questions into today's answer
-    tells you less, besides writing into the conversations of an agent that is
-    still running.
+    Built without a path it keeps nothing, on purpose. Stateless readiness
+    probes and isolated scheduled work must not write into a live channel's
+    conversation history.
     """
 
     def __init__(self, path: Optional[Path]):
@@ -298,11 +298,12 @@ class ConversationStore:
         except (sqlite3.Error, OSError) as exc:
             logger.warning(
                 "Could not read the current session for %s",
-                chat_id,
+                identity_pseudonym(chat_id, "session"),
                 exc_info=True,
             )
             raise ConversationError(
-                f"Could not read the current session for {chat_id}"
+                "Could not read the current session for "
+                f"{identity_pseudonym(chat_id, 'session')}"
             ) from exc
 
     def prepare_session(
@@ -401,11 +402,12 @@ class ConversationStore:
         except (sqlite3.Error, OSError) as exc:
             logger.warning(
                 "Could not apply session reset policy for %s",
-                chat_id,
+                identity_pseudonym(chat_id, "session"),
                 exc_info=True,
             )
             raise ConversationError(
-                f"Could not durably prepare session for {chat_id}"
+                "Could not durably prepare session for "
+                f"{identity_pseudonym(chat_id, 'session')}"
             ) from exc
 
     def load(self, chat_id: str, limit: int) -> List[StoredTurn]:
@@ -421,7 +423,11 @@ class ConversationStore:
                     (chat_id, self._session(connection, chat_id), limit),
                 ).fetchall()
         except (sqlite3.Error, OSError):
-            logger.warning("Could not read the history of %s", chat_id, exc_info=True)
+            logger.warning(
+                "Could not read the history of %s",
+                identity_pseudonym(chat_id, "session"),
+                exc_info=True,
+            )
             return []
         return [(role, content) for role, content in reversed(rows)]
 
@@ -450,7 +456,11 @@ class ConversationStore:
                     ).fetchall()
                     rows.reverse()
         except (sqlite3.Error, OSError):
-            logger.warning("Could not read the history of %s", chat_id, exc_info=True)
+            logger.warning(
+                "Could not read the history of %s",
+                identity_pseudonym(chat_id, "session"),
+                exc_info=True,
+            )
             return []
         return [
             (role, content, _decode_replay(replay))
@@ -497,9 +507,14 @@ class ConversationStore:
                     ],
                 )
         except (sqlite3.Error, OSError, TypeError) as exc:
-            logger.warning("Could not write the history of %s", chat_id, exc_info=True)
+            logger.warning(
+                "Could not write the history of %s",
+                identity_pseudonym(chat_id, "session"),
+                exc_info=True,
+            )
             raise ConversationError(
-                f"Could not write the history of {chat_id}"
+                "Could not write the history of "
+                f"{identity_pseudonym(chat_id, 'session')}"
             ) from exc
 
     def begin_turn(self, chat_id: str, user_content: str) -> None:
@@ -538,9 +553,14 @@ class ConversationStore:
         except ConversationError:
             raise
         except (sqlite3.Error, OSError) as exc:
-            logger.warning("Could not begin the turn for %s", chat_id, exc_info=True)
+            logger.warning(
+                "Could not begin the turn for %s",
+                identity_pseudonym(chat_id, "session"),
+                exc_info=True,
+            )
             raise ConversationError(
-                f"Could not begin the turn for {chat_id}"
+                "Could not begin the turn for "
+                f"{identity_pseudonym(chat_id, 'session')}"
             ) from exc
 
     def checkpoint_turn(
@@ -571,7 +591,8 @@ class ConversationStore:
                 )
                 if cursor.rowcount != 1:
                     raise ConversationError(
-                        f"No active turn can be checkpointed for {chat_id}"
+                        "No active turn can be checkpointed for "
+                        f"{identity_pseudonym(chat_id, 'session')}"
                     )
         except ConversationError:
             raise
@@ -579,11 +600,12 @@ class ConversationStore:
             logger.warning(
                 "Could not checkpoint the %s turn for %s",
                 phase,
-                chat_id,
+                identity_pseudonym(chat_id, "session"),
                 exc_info=True,
             )
             raise ConversationError(
-                f"Could not checkpoint the turn for {chat_id}"
+                "Could not checkpoint the turn for "
+                f"{identity_pseudonym(chat_id, 'session')}"
             ) from exc
 
     def discard_unstarted_turn(self, chat_id: str) -> None:
@@ -602,11 +624,12 @@ class ConversationStore:
         except (sqlite3.Error, OSError) as exc:
             logger.warning(
                 "Could not discard the unstarted turn for %s",
-                chat_id,
+                identity_pseudonym(chat_id, "session"),
                 exc_info=True,
             )
             raise ConversationError(
-                f"Could not discard the unstarted turn for {chat_id}"
+                "Could not discard the unstarted turn for "
+                f"{identity_pseudonym(chat_id, 'session')}"
             ) from exc
 
     def complete_turn(
@@ -635,7 +658,8 @@ class ConversationStore:
                 ).fetchone()
                 if active is None:
                     raise ConversationError(
-                        f"No active turn can be completed for {chat_id}"
+                        "No active turn can be completed for "
+                        f"{identity_pseudonym(chat_id, 'session')}"
                     )
                 connection.execute(
                     "INSERT INTO chats (chat_id, session, last_active)"
@@ -668,9 +692,14 @@ class ConversationStore:
         except ConversationError:
             raise
         except (sqlite3.Error, OSError, TypeError) as exc:
-            logger.warning("Could not complete the turn for %s", chat_id, exc_info=True)
+            logger.warning(
+                "Could not complete the turn for %s",
+                identity_pseudonym(chat_id, "session"),
+                exc_info=True,
+            )
             raise ConversationError(
-                f"Could not complete the turn for {chat_id}"
+                "Could not complete the turn for "
+                f"{identity_pseudonym(chat_id, 'session')}"
             ) from exc
 
     def new_session(self, chat_id: str) -> None:
@@ -698,9 +727,14 @@ class ConversationStore:
                     (chat_id, previous_session),
                 )
         except (sqlite3.Error, OSError) as exc:
-            logger.warning("Could not start a new session for %s", chat_id, exc_info=True)
+            logger.warning(
+                "Could not start a new session for %s",
+                identity_pseudonym(chat_id, "session"),
+                exc_info=True,
+            )
             raise ConversationError(
-                f"Could not durably start a new session for {chat_id}"
+                "Could not durably start a new session for "
+                f"{identity_pseudonym(chat_id, 'session')}"
             ) from exc
 
     def prune_old_sessions(
@@ -774,7 +808,7 @@ class ConversationStore:
         except (OSError, RuntimeError, ValueError):
             logger.debug(
                 "Could not prune the session workspace for %s generation %d",
-                chat_id,
+                identity_pseudonym(chat_id, "session"),
                 session,
                 exc_info=True,
             )

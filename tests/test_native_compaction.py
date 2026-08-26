@@ -129,6 +129,26 @@ class CheckpointReplayTests(unittest.TestCase):
             [{"type": "compaction", "encrypted_content": "opaque"}],
         )
 
+    def test_replay_repair_strips_only_opaque_reasoning_and_compaction(self):
+        user = {"role": "user", "content": "continue"}
+        ordinary = {"type": "message", "encrypted_content": "not-replay"}
+
+        stripped = compaction.strip_opaque_replay(
+            [
+                {"type": "reasoning", "encrypted_content": "reasoning"},
+                {"type": "compaction", "encrypted_content": "checkpoint"},
+                ordinary,
+                user,
+            ]
+        )
+
+        self.assertEqual(stripped, [ordinary, user])
+        self.assertTrue(
+            compaction.has_opaque_replay(
+                [{"type": "reasoning", "encrypted_content": "reasoning"}]
+            )
+        )
+
 
 class _Stream:
     def __init__(self, events):

@@ -48,10 +48,7 @@ gateway:
 
 whatsapp:
   enabled: false
-  # Group access is additional: the sender must still be in
-  # PILOTAGE_ALLOWED_SENDERS. ["*"] means any group, never any participant.
-  group_policy: disabled
-  group_allow_from: []
+  # Allowed numbers may use DMs or any group. Require a direct mention in groups.
   require_mention: true
   batch_delay: 5
   batch_split_delay: 10
@@ -61,11 +58,7 @@ whatsapp:
 
 telegram:
   enabled: false
-  # Group access is additional: the sender must still be in
-  # TELEGRAM_ALLOWED_USERS. ["*"] means any group, never any participant.
-  group_policy: disabled
-  # Quoted numeric group/supergroup IDs.
-  group_allow_from: []
+  # Allowed user IDs may use DMs or any group. Require a direct mention in groups.
   require_mention: true
   reply_to_mode: first
   batch_delay: 0.3

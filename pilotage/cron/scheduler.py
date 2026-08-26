@@ -38,7 +38,7 @@ _EMOJI_RANGES = (
     (0x20E3, 0x20E3),
 )
 
-Delivery = Callable[[Dict[str, str], str], Awaitable[None]]
+Delivery = Callable[[Dict[str, str], str, str], Awaitable[None]]
 AgentFactory = Callable[[Config], Agent]
 
 
@@ -371,7 +371,11 @@ class CronScheduler:
         if self._deliver is None:
             return "Messaging delivery adapter is unavailable."
         try:
-            await self._deliver(origin, text)
+            claim = job.get("claim") or {}
+            owner = str(claim.get("by") or "") if isinstance(claim, dict) else ""
+            if not owner:
+                return "Cron delivery has no durable run reference."
+            await self._deliver(origin, text, f"{job.get('id') or ''}:{owner}")
         except Exception as exc:
             logger.exception("Cron delivery failed for %s", job.get("id"))
             return _bounded(f"{type(exc).__name__}: {exc}", MAX_ERROR_CHARS)
@@ -440,9 +444,19 @@ class CronScheduler:
             )
             agent = self._agent_for_job(job_config, job)
             try:
-                answer = await agent.respond(session_id, prompt)
+                respond_result = getattr(agent, "respond_result", None)
+                if not callable(respond_result):
+                    raise CronExecutionError(
+                        "The scheduled agent cannot publish terminal completion proof."
+                    )
+                turn = await respond_result(session_id, prompt)
             finally:
                 await self._close_agent(agent)
+            if getattr(turn, "terminal_completed", None) is not True:
+                raise CronExecutionError(
+                    "The scheduled agent ended without positive terminal completion proof."
+                )
+            answer = str(getattr(turn, "text", "") or "")
             if not str(answer or "").strip():
                 raise CronExecutionError("The scheduled agent returned an empty response.")
             if not await retain_claim():
@@ -459,6 +473,16 @@ class CronScheduler:
                 lost_claim.set()
                 cancelled = True
                 raise asyncio.CancelledError
+            try:
+                persisted = saved.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise CronExecutionError(
+                    "The scheduled output artifact could not be verified."
+                ) from exc
+            if persisted != answer:
+                raise CronExecutionError(
+                    "The scheduled output artifact failed verification."
+                )
             success = True
             delivery_error = await self._deliver_text(job, answer)
         except asyncio.CancelledError:

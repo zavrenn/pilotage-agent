@@ -6,15 +6,14 @@ Implements a multi-strategy matching chain to robustly find and replace text,
 accommodating variations in whitespace, indentation, and escaping common
 in LLM-generated code.
 
-The 9-strategy chain (inspired by OpenCode), tried in order:
+The 7-strategy chain (inspired by OpenCode), tried in order:
 1. Exact match - Direct string comparison
 2. Line-trimmed - Strip leading/trailing whitespace per line
 3. Whitespace normalized - Collapse multiple spaces/tabs to single space
 4. Indentation flexible - Ignore indentation differences entirely
 5. Escape normalized - Convert \\n literals to actual newlines
 6. Trimmed boundary - Trim first/last line whitespace only
-7. Block anchor - Match first+last lines, use similarity for middle
-8. Context-aware - 50% line similarity threshold
+7. Unicode normalized - Match equivalent typographic characters
 
 Multi-occurrence matching is handled via the replace_all flag.
 
@@ -43,10 +42,9 @@ UNICODE_MAP = {
     "\u2212": "-",
     # Space-separator family (Zs) beyond NBSP.  Files with typographic
     # spacing (en/em/thin spaces, narrow NBSP in French text, ideographic
-    # space in CJK text) never match a model's ASCII-space old_string via
-    # the precise strategies, falling through to the similarity-based
-    # context_aware fallback — which can pick the wrong region and flattens
-    # the file's Unicode on replacement.  (anomalyco/opencode#38133 corpus)
+    # space in CJK text) never match a model's ASCII-space old_string via the
+    # precise strategies unless normalized here. Similarity is not sufficient
+    # proof that a mutation targets the requested region.
     "\u2000": " ", "\u2001": " ",  # en/em quad
     "\u2002": " ", "\u2003": " ",  # en/em space
     "\u2004": " ", "\u2005": " ", "\u2006": " ",  # three/four/six-per-em
@@ -152,7 +150,9 @@ def fuzzy_find_and_replace(content: str, old_string: str, new_string: str,
     if old_string == new_string:
         return content, 0, None, IDENTICAL_STRINGS_ERROR
 
-    # Try each matching strategy in order
+    # Every strategy in the mutation chain proves textual equivalence after a
+    # bounded normalization. Similarity is used only for non-mutating
+    # diagnostics because it cannot prove that the caller named the right block.
     strategies: List[Tuple[str, Callable]] = [
         ("exact", _strategy_exact),
         ("line_trimmed", _strategy_line_trimmed),
@@ -161,16 +161,7 @@ def fuzzy_find_and_replace(content: str, old_string: str, new_string: str,
         ("escape_normalized", _strategy_escape_normalized),
         ("trimmed_boundary", _strategy_trimmed_boundary),
         ("unicode_normalized", _strategy_unicode_normalized),
-        ("block_anchor", _strategy_block_anchor),
-        ("context_aware", _strategy_context_aware),
     ]
-
-    # Strategies whose matches are similarity-based rather than exact-content:
-    # they can accept a region that only *approximately* resembles old_string.
-    # Safe for a single unique replacement (the caller asked to change that one
-    # spot), but NEVER safe under replace_all — "replace every approximate
-    # match" silently rewrites regions that don't actually contain old_string.
-    _SIMILARITY_STRATEGIES = {"block_anchor", "context_aware"}
 
     for strategy_name, strategy_fn in strategies:
         matches = strategy_fn(content, old_string)
@@ -183,18 +174,6 @@ def fuzzy_find_and_replace(content: str, old_string: str, new_string: str,
                     f"Found {len(matches)} matches for old_string. "
                     f"Provide more context to make it unique, or use replace_all=True. "
                     f"Matches:\n{locations}"
-                )
-
-            # replace_all with a similarity-based strategy would overwrite
-            # every approximately-matching block, not just exact ones — refuse
-            # and make the caller narrow old_string to something a precise
-            # strategy can match exactly.
-            if replace_all and len(matches) > 1 and strategy_name in _SIMILARITY_STRATEGIES:
-                return content, 0, None, (
-                    f"Found {len(matches)} approximate matches via the "
-                    f"'{strategy_name}' strategy; replace_all only applies to exact "
-                    f"matches. Provide the precise text (whitespace included) so an "
-                    f"exact/line-trimmed match can be made."
                 )
 
             # Escape-drift guard: when the matched strategy is NOT `exact`,
@@ -811,128 +790,6 @@ def _strategy_unicode_normalized(content: str, pattern: str) -> List[Tuple[int, 
 
     orig_to_norm = _build_orig_to_norm_map(content)
     return _map_positions_norm_to_orig(orig_to_norm, norm_matches)
-
-
-def _strategy_block_anchor(content: str, pattern: str) -> List[Tuple[int, int]]:
-    """
-    Strategy 8: Match by anchoring on first and last lines.
-    Adjusted with permissive thresholds and unicode normalization.
-    """
-    # Normalize both strings for comparison while keeping original content for offset calculation
-    norm_pattern = _unicode_normalize(pattern)
-    norm_content = _unicode_normalize(content)
-    
-    pattern_lines = norm_pattern.split('\n')
-    if len(pattern_lines) < 2:
-        return []
-    
-    first_line = pattern_lines[0].strip()
-    last_line = pattern_lines[-1].strip()
-    
-    # Use normalized lines for matching logic
-    norm_content_lines = norm_content.split('\n')
-    # BUT use original lines for calculating start/end positions to prevent index shift
-    orig_content_lines = content.split('\n')
-    
-    pattern_line_count = len(pattern_lines)
-    
-    potential_matches = []
-    for i in range(len(norm_content_lines) - pattern_line_count + 1):
-        if (norm_content_lines[i].strip() == first_line and 
-            norm_content_lines[i + pattern_line_count - 1].strip() == last_line):
-            potential_matches.append(i)
-            
-    matches = []
-    candidate_count = len(potential_matches)
-    
-    # Thresholding logic: 0.50 for unique matches, 0.70 for multiple candidates.
-    # Previous values (0.10 / 0.30) were dangerously loose — a 10% middle-section
-    # similarity could match completely unrelated blocks.
-    threshold = 0.50 if candidate_count == 1 else 0.70
-
-    for i in potential_matches:
-        if pattern_line_count <= 2:
-            similarity = 1.0
-        else:
-            # Compare normalized middle sections
-            content_middle = '\n'.join(norm_content_lines[i+1:i+pattern_line_count-1])
-            pattern_middle = '\n'.join(pattern_lines[1:-1])
-            similarity = SequenceMatcher(None, content_middle, pattern_middle).ratio()
-        
-        if similarity >= threshold:
-            # Calculate positions using ORIGINAL lines to ensure correct character offsets in the file
-            start_pos, end_pos = _calculate_line_positions(
-                orig_content_lines, i, i + pattern_line_count, len(content)
-            )
-            matches.append((start_pos, end_pos))
-    
-    return matches
-
-
-def _strategy_context_aware(content: str, pattern: str) -> List[Tuple[int, int]]:
-    """
-    Strategy 9 (last resort): anchored line-by-line similarity.
-
-    Only considers blocks whose first AND last lines closely match the
-    pattern's first/last lines (an anchor pre-filter), then requires EVERY
-    non-blank pattern line to be highly similar (>=0.80) to the aligned
-    content line. The anchor filter keeps this from being an O(file x pattern)
-    scan on every miss, and the all-lines requirement stops a single
-    coincidental line-match from silently replacing an unrelated block
-    (the old 50%-of-lines threshold accepted half-garbage patterns and
-    destroyed the non-matching lines).
-    """
-    pattern_lines = pattern.split('\n')
-    content_lines = content.split('\n')
-
-    if not pattern_lines:
-        return []
-
-    pattern_line_count = len(pattern_lines)
-    if pattern_line_count > len(content_lines):
-        return []
-
-    # Anchor pre-filter: a block is only a candidate when its first and last
-    # lines are strong matches for the pattern's first/last lines. This is the
-    # cheap gate that avoids scoring every window in the file.
-    first_pat = pattern_lines[0].strip()
-    last_pat = pattern_lines[-1].strip()
-    ANCHOR_THRESHOLD = 0.80
-
-    def _sim(a: str, b: str) -> float:
-        if a == b:
-            return 1.0
-        return SequenceMatcher(None, a, b).ratio()
-
-    matches = []
-    for i in range(len(content_lines) - pattern_line_count + 1):
-        block_lines = content_lines[i:i + pattern_line_count]
-
-        # Cheap anchor check first — skip non-candidate windows without
-        # scoring their interior.
-        if _sim(first_pat, block_lines[0].strip()) < ANCHOR_THRESHOLD:
-            continue
-        if _sim(last_pat, block_lines[-1].strip()) < ANCHOR_THRESHOLD:
-            continue
-
-        # Candidate: require EVERY non-blank pattern line to match its aligned
-        # content line closely. One garbage line disqualifies the block.
-        all_match = True
-        for p_line, c_line in zip(pattern_lines, block_lines):
-            p_stripped = p_line.strip()
-            if not p_stripped:
-                continue  # blank pattern lines don't constrain the match
-            if _sim(p_stripped, c_line.strip()) < 0.80:
-                all_match = False
-                break
-
-        if all_match:
-            start_pos, end_pos = _calculate_line_positions(
-                content_lines, i, i + pattern_line_count, len(content)
-            )
-            matches.append((start_pos, end_pos))
-
-    return matches
 
 
 # =============================================================================

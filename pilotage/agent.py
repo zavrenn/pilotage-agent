@@ -35,6 +35,7 @@ from .context_files import build_context_files_prompt
 from .cron.jobs import CronStore, timezone_for_name
 from .history import ConversationStore, session_workspace_path
 from .i18n import DEFAULT_LANGUAGE, t
+from .redact import identity_pseudonym
 from .tools.memory import MemoryStore
 from .tools.skills import reset_skill_view_dedup
 from .tools import (
@@ -72,6 +73,19 @@ CODEX_INCOMPLETE_RESPONSE = (
     "Codex response remained incomplete after 3 continuation attempts"
 )
 
+
+def _is_masked_codex_replay_rejection(exc: APIStatusError) -> bool:
+    """Match only Codex's exact stale-encrypted-replay 400 envelope."""
+
+    if exc.status_code != 400 or not isinstance(exc.body, dict):
+        return False
+    error = exc.body.get("error")
+    payload = error if isinstance(error, dict) else exc.body
+    return (
+        payload.get("code") == "invalid_prompt"
+        and payload.get("message") == "Request blocked."
+    )
+
 ISOLATED_WORKSPACE_NOTE = (
     "This conversation's restricted working directory is {root}. "
     "Use inputs for inbound copies, tmp for temporary work, and exports for "
@@ -81,6 +95,7 @@ ISOLATED_WORKSPACE_NOTE = (
 
 # Called with a line to show the person waiting, mid-turn.
 Notice = Callable[[str], Awaitable[None]]
+ApprovalNotice = Callable[[str], Awaitable[Any]]
 
 
 @dataclass
@@ -104,6 +119,7 @@ class TurnResult:
 
     text: str = ""
     items: List[Dict[str, Any]] = field(default_factory=list)
+    terminal_completed: bool = False
 
 
 def _retire_tool_result_images(items: List[Dict[str, Any]]) -> None:
@@ -553,7 +569,11 @@ class Agent:
             history = [Turn(role=role, content=content) for role, content in stored]
         if history:
             self._history[chat_id] = history
-            logger.info("Picked up %d stored turns for %s", len(stored), chat_id)
+            logger.info(
+                "Picked up %d stored turns for %s",
+                len(stored),
+                identity_pseudonym(chat_id, "session"),
+            )
 
     def _history_limit(self) -> int:
         """Turns kept per chat — a question and its answer count as two."""
@@ -642,8 +662,30 @@ class Agent:
         on_notice: Optional[Notice] = None,
         *,
         origin: Optional[Dict[str, str]] = None,
-        approval_notify: Optional[Notice] = None,
+        approval_notify: Optional[ApprovalNotice] = None,
     ) -> str:
+        result = await self.respond_result(
+            chat_id,
+            user_text,
+            attachments,
+            on_notice,
+            origin=origin,
+            approval_notify=approval_notify,
+        )
+        return result.text
+
+    async def respond_result(
+        self,
+        chat_id: str,
+        user_text: str,
+        attachments: Sequence[media.Attachment] = (),
+        on_notice: Optional[Notice] = None,
+        *,
+        origin: Optional[Dict[str, str]] = None,
+        approval_notify: Optional[ApprovalNotice] = None,
+    ) -> TurnResult:
+        """Return a persisted turn plus its positive terminal-completion proof."""
+
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
             reset_mode = getattr(self._config, "session_reset_mode", "none")
@@ -760,7 +802,7 @@ class Agent:
                     except Exception:
                         logger.warning(
                             "Could not clear the unstarted turn for %s",
-                            chat_id,
+                            identity_pseudonym(chat_id, "session"),
                             exc_info=True,
                         )
                 raise
@@ -783,7 +825,7 @@ class Agent:
                 checkpoints,
             )
             self._remember(chat_id, user_text, image_parts, result)
-            return result.text
+            return result
 
     async def _run_turn(
         self,
@@ -793,7 +835,7 @@ class Agent:
         on_notice: Optional[Notice] = None,
         *,
         origin: Optional[Dict[str, str]] = None,
-        approval_notify: Optional[Notice] = None,
+        approval_notify: Optional[ApprovalNotice] = None,
         turn_note: str = "",
         working_directory: Optional[Path] = None,
     ) -> TurnResult:
@@ -828,7 +870,7 @@ class Agent:
         items: List[Dict[str, Any]] = []
         limit = max(1, self._config.max_tool_iterations)
 
-        def _finish(text: str) -> TurnResult:
+        def _finish(text: str, *, terminal_completed: bool = False) -> TurnResult:
             isolated = getattr(
                 self._config, "session_isolated_workspaces", False
             )
@@ -860,6 +902,7 @@ class Agent:
             return TurnResult(
                 text=finished_text,
                 items=items,
+                terminal_completed=terminal_completed,
             )
 
         async def _next_action_or_answer(
@@ -880,7 +923,7 @@ class Agent:
                 if attempt < MAX_CODEX_INCOMPLETE_RESPONSES:
                     logger.info(
                         "Codex response for %s paused after commentary; continuing (%d/%d)",
-                        chat_id,
+                        identity_pseudonym(chat_id, "session"),
                         attempt,
                         MAX_CODEX_INCOMPLETE_RESPONSES,
                     )
@@ -891,15 +934,29 @@ class Agent:
             if result is None:
                 logger.warning(
                     "Codex response for %s remained incomplete after %d attempts",
-                    chat_id,
+                    identity_pseudonym(chat_id, "session"),
                     MAX_CODEX_INCOMPLETE_RESPONSES,
                 )
                 return _finish(CODEX_INCOMPLETE_RESPONSE)
+            if result.terminal_completed is False:
+                logger.warning(
+                    "Codex response for %s ended without positive completion proof",
+                    identity_pseudonym(chat_id, "session"),
+                )
+                return _finish(result.text or CODEX_INCOMPLETE_RESPONSE)
             if not result.tool_calls:
-                return _finish(result.text)
+                return _finish(
+                    result.text,
+                    terminal_completed=result.terminal_completed is True,
+                )
 
             names = ", ".join(call["name"] for call in result.tool_calls)
-            logger.info("Step %d for %s: %s", step + 1, chat_id, names)
+            logger.info(
+                "Step %d for %s: %s",
+                step + 1,
+                identity_pseudonym(chat_id, "session"),
+                names,
+            )
             await asyncio.to_thread(
                 self._store.checkpoint_turn,
                 chat_id,
@@ -933,12 +990,19 @@ class Agent:
 
         # Out of steps. Ask for what it has rather than sending nothing: the
         # work is already done and paid for, and the person is still waiting.
-        logger.warning("Chat %s used all %d tool steps; asking for a summary", chat_id, limit)
+        logger.warning(
+            "Chat %s used all %d tool steps; asking for a summary",
+            identity_pseudonym(chat_id, "session"),
+            limit,
+        )
         items.append({"role": "user", "content": MAX_ITERATIONS_SUMMARY_REQUEST})
         result = await _next_action_or_answer(None)
         if result is None:
             return _finish(CODEX_INCOMPLETE_RESPONSE)
-        return _finish(result.text)
+        return _finish(
+            result.text,
+            terminal_completed=result.terminal_completed is True,
+        )
 
     async def _call_model(
         self,
@@ -969,6 +1033,7 @@ class Agent:
         force_refresh = False
         refreshed = False
         reconnects = 0
+        replay_retried = False
         while True:
             try:
                 return await self._stream_once(
@@ -978,6 +1043,23 @@ class Agent:
                     idle_timeout=idle_timeout,
                 )
             except APIStatusError as exc:
+                request_input = request.get("input")
+                if (
+                    not replay_retried
+                    and _is_masked_codex_replay_rejection(exc)
+                    and compaction.has_opaque_replay(request_input)
+                ):
+                    request = dict(request)
+                    request["input"] = compaction.strip_opaque_replay(
+                        request_input
+                    )
+                    replay_retried = True
+                    force_refresh = False
+                    logger.warning(
+                        "Codex rejected opaque replay for %s; stripping it and retrying once",
+                        identity_pseudonym(chat_id, "session"),
+                    )
+                    continue
                 if exc.status_code not in (401, 403) or refreshed:
                     raise
                 # The token went stale between the expiry check and the request.

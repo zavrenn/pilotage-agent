@@ -37,12 +37,6 @@ class GroupAdmissionTests(unittest.IsolatedAsyncioTestCase):
         environment.start()
         self.addCleanup(environment.stop)
         config = Config.load()
-        object.__setattr__(config, "group_policy", "allowlist")
-        object.__setattr__(
-            config,
-            "group_allow_from",
-            frozenset({"120363001234567890@g.us"}),
-        )
         object.__setattr__(config, "require_mention", True)
         object.__setattr__(config, "text_batch_delay_seconds", 30.0)
         self.channel = WhatsAppChannel(config, _handle, _command)
@@ -84,7 +78,7 @@ class GroupAdmissionTests(unittest.IsolatedAsyncioTestCase):
             "120363001234567890@g.us:212600000000",
         )
 
-    async def test_mention_never_bypasses_the_group_allowlist(self):
+    async def test_allowed_person_may_use_another_group(self):
         self.channel._accept(
             self._event(
                 "@15551230000 hello",
@@ -92,10 +86,13 @@ class GroupAdmissionTests(unittest.IsolatedAsyncioTestCase):
                 mentionedIds=["15551230000@s.whatsapp.net"],
             )
         )
-        self.assertEqual(self.channel._pending, {})
+        pending = next(iter(self.channel._pending.values()))
+        self.assertEqual(
+            pending.session_id,
+            "120363999999999999@g.us:212600000000",
+        )
 
-    async def test_group_wildcard_never_bypasses_the_sender_allowlist(self):
-        object.__setattr__(self.channel._config, "group_allow_from", frozenset({"*"}))
+    async def test_group_never_bypasses_the_person_allowlist(self):
         self.channel._accept(
             self._event(
                 "@15551230000 what is the weather?",

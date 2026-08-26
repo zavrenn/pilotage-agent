@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import sqlite3
 import tempfile
 import unittest
 from io import StringIO
@@ -145,7 +146,7 @@ class LoadingTests(unittest.TestCase):
             "whatsapp:\n"
             "  bridge_port: 8766\n"
             "telegram:\n"
-            "  group_policy: disabled\n"
+            "  require_mention: true\n"
         )
         self.path.write_text(original, encoding="utf-8")
 
@@ -158,7 +159,7 @@ class LoadingTests(unittest.TestCase):
             "  bridge_port: 8766\n"
             "telegram:\n"
             "  enabled: true\n"
-            "  group_policy: disabled\n",
+            "  require_mention: true\n",
         )
 
     def test_channel_enablement_creates_a_minimal_missing_config(self):
@@ -183,14 +184,14 @@ class LoadingTests(unittest.TestCase):
         self.assertTrue(settings.flag("telegram.enabled", False))
 
     def test_channel_enablement_refuses_an_unsafe_structural_rewrite(self):
-        self.path.write_text("telegram: {group_policy: disabled}\n", encoding="utf-8")
+        self.path.write_text("telegram: {require_mention: true}\n", encoding="utf-8")
 
         with self.assertRaisesRegex(ConfigError, "flow-style YAML"):
             set_channel_enabled(self.path, "telegram")
 
         self.assertEqual(
             self.path.read_text(encoding="utf-8"),
-            "telegram: {group_policy: disabled}\n",
+            "telegram: {require_mention: true}\n",
         )
 
 
@@ -321,6 +322,23 @@ class ConfigFileTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PILOTAGE_ALLOWED_SENDERS": "*"}):
             with self.assertRaisesRegex(ConfigError, "explicit senders"):
                 Config.load()
+
+    def test_whatsapp_sender_allowlist_accepts_people_not_group_ids(self):
+        with mock.patch.dict(
+            os.environ,
+            {"PILOTAGE_ALLOWED_SENDERS": "+212 600-000-000,67427329167522@lid"},
+        ):
+            self.assertEqual(
+                Config.load().allowed_senders,
+                frozenset({"212600000000", "67427329167522@lid"}),
+            )
+
+        with mock.patch.dict(
+            os.environ,
+            {"PILOTAGE_ALLOWED_SENDERS": "120363001234567890@g.us"},
+        ):
+            with self.assertRaisesRegex(ConfigError, "sender ID"):
+                Config.load()
     def test_allowed_senders_are_refused_in_behavioral_configuration(self):
         self._write("whatsapp:\n  allowed_senders: ['212600000000']\n")
         with self.assertRaises(ConfigError):
@@ -361,9 +379,6 @@ class ConfigFileTests(unittest.TestCase):
         self.assertTrue(config.codex_native_compaction)
         self.assertEqual(config.codex_compact_threshold, 200_000)
         self.assertEqual(config.text_batch_hard_cap_seconds, 20.0)
-        self.assertFalse(config.answer_groups)
-        self.assertEqual(config.group_policy, "disabled")
-        self.assertEqual(config.group_allow_from, frozenset())
         self.assertTrue(config.require_mention)
         self.assertTrue(config.approval_memory)
         self.assertTrue(config.approval_skills)
@@ -724,27 +739,24 @@ class ConfigFileTests(unittest.TestCase):
         )
         self.assertTrue(Config.load().session_isolated_workspaces)
 
-    def test_production_group_policy_is_loaded(self):
+    def test_person_allowlist_applies_to_groups_without_location_settings(self):
         self._write(
             "whatsapp:\n"
-            "  group_policy: allowlist\n"
-            "  group_allow_from: ['*']\n"
             "  require_mention: true\n"
         )
         config = Config.load()
-        self.assertTrue(config.answer_groups)
-        self.assertEqual(config.group_policy, "allowlist")
-        self.assertEqual(config.group_allow_from, frozenset({"*"}))
         self.assertTrue(config.require_mention)
 
-    def test_unsupported_group_policy_stops_startup(self):
-        self._write("whatsapp:\n  group_policy: open\n")
-        with self.assertRaisesRegex(ConfigError, "group_policy"):
-            Config.load()
+    def test_group_location_settings_stop_startup(self):
+        for setting in ("group_policy: disabled", "group_allow_from: []"):
+            with self.subTest(setting=setting):
+                self._write(f"whatsapp:\n  {setting}\n")
+                with self.assertRaisesRegex(ConfigError, "no longer supported"):
+                    Config.load()
 
-    def test_old_group_switch_cannot_bypass_the_new_policy(self):
+    def test_old_group_switch_is_rejected(self):
         self._write("whatsapp:\n  answer_groups: true\n")
-        with self.assertRaisesRegex(ConfigError, "group_policy"):
+        with self.assertRaisesRegex(ConfigError, "no longer supported"):
             Config.load()
 
     def test_non_positive_batch_hard_cap_is_refused(self):
@@ -783,15 +795,109 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         from pilotage.channels.whatsapp import ChannelError
 
         class RejectingChannel:
-            async def send(self, _chat_id, _text):
+            async def send(self, _chat_id, _text, **_kwargs):
                 return False
 
+        store = main.DeliveryStore(self.runtime_root / "scheduled-delivery.db")
         with self.assertRaisesRegex(ChannelError, "rejected"):
             await main._deliver_scheduled(
+                store,
                 RejectingChannel(),
                 {"channel": "whatsapp", "chat_id": "123@c.us"},
                 "result",
+                "job:run",
             )
+
+    async def test_runtime_refuses_channels_when_delivery_database_is_unwritable(self):
+        from pilotage import main
+
+        channel_config = Config.load(channel="whatsapp")
+        with (
+            mock.patch.object(
+                main.DeliveryStore,
+                "verify_writable",
+                side_effect=sqlite3.OperationalError(
+                    "attempt to write a readonly database"
+                ),
+            ),
+            mock.patch.object(main, "WhatsAppChannel") as channel,
+            mock.patch("sys.stderr", new_callable=StringIO) as error,
+        ):
+            code = await main._run_enabled_channels(channel_config, "default")
+
+        self.assertEqual(code, 1)
+        channel.assert_not_called()
+        self.assertIn("Delivery database is not writable", error.getvalue())
+
+    async def test_live_delivery_recovery_continues_after_an_unexpected_error(self):
+        from pilotage import main
+
+        calls = 0
+        continued = asyncio.Event()
+
+        async def recover(_store, _channels):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("unexpected recovery failure")
+            continued.set()
+            return 0
+
+        with (
+            mock.patch.object(main, "recover_live_deliveries", new=recover),
+            self.assertLogs("pilotage", level="ERROR") as captured,
+        ):
+            task = asyncio.create_task(
+                main._recover_live_final_responses(
+                    mock.Mock(),
+                    {},
+                    interval_seconds=0.001,
+                )
+            )
+            await asyncio.wait_for(continued.wait(), 0.2)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        self.assertGreaterEqual(calls, 2)
+        self.assertIn(
+            "Live final-response recovery sweep failed",
+            "\n".join(captured.output),
+        )
+
+    async def test_scheduled_send_uses_the_durable_unit_ledger(self):
+        from pilotage import main
+
+        class AcceptingChannel:
+            async def send(self, _chat_id, _text, *, delivery_ledger=None):
+                self.assert_ledger(delivery_ledger)
+                units = await delivery_ledger.prepare([("text", "fingerprint")])
+
+                async def accepted():
+                    return True
+
+                return await delivery_ledger.run(units[0], accepted)
+
+            @staticmethod
+            def assert_ledger(value):
+                if value is None:
+                    raise AssertionError("scheduled delivery bypassed its ledger")
+
+        path = self.runtime_root / "scheduled-success.db"
+        store = main.DeliveryStore(path)
+        await main._deliver_scheduled(
+            store,
+            AcceptingChannel(),
+            {"channel": "whatsapp", "chat_id": "123@c.us"},
+            "result",
+            "job:run",
+        )
+
+        with contextlib.closing(sqlite3.connect(path)) as connection:
+            obligation = connection.execute(
+                "SELECT state FROM delivery_obligations"
+            ).fetchone()[0]
+            unit = connection.execute("SELECT state FROM delivery_units").fetchone()[0]
+        self.assertEqual((obligation, unit), ("delivered", "delivered"))
 
     async def test_runtime_refuses_to_guess_a_channel_on_a_fresh_profile(self):
         from pilotage import main
@@ -853,7 +959,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             async def typing(self, _chat_id):
                 yield
 
-            async def send(self, *_args):
+            async def send(self, *_args, **_kwargs):
                 return delivery["accepted"]
 
             async def start(self):
@@ -890,8 +996,9 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(seen["approval_notify"])
         delivery["accepted"] = False
-        with self.assertRaisesRegex(main.ChannelError, "approval request"):
+        self.assertFalse(
             await seen["approval_notify"]("Approve this change")
+        )
 
     async def test_whatsapp_runs_with_its_channel_configuration(self):
         from pilotage import main

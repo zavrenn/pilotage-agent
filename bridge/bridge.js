@@ -5,7 +5,9 @@
  * loopback HTTP API to the Python runtime:
  *
  *   GET  /health    -> { status, pid, connected, me }
- *   GET  /messages  -> drains the inbound queue
+ *   GET  /messages  -> durably claims inbound work
+ *   POST /messages/ack -> completes claimed work
+ *   POST /messages/release -> returns failed work for retry
  *   POST /typing    -> { chatId }
  *   POST /read      -> { key }
  *   POST /send      -> { chatId, message, replyTo? }
@@ -31,10 +33,12 @@ import qrcode from 'qrcode-terminal';
 
 import {
   makeWASocket,
-  useMultiFileAuthState,
+  BufferJSON,
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
+  initAuthCreds,
+  proto,
 } from '@whiskeysockets/baileys';
 
 import {
@@ -47,12 +51,17 @@ import {
   buildTextSendPayload,
   createBoundedMessageStore,
   createCredentialSaveCoordinator,
+  createDurableInboundQueue,
+  createIdentityRedactor,
   createReconnectScheduler,
   createVersionResolver,
   extractBridgeEvent,
+  hasDownloadableMedia,
+  INBOUND_MEDIA_LIMIT_BYTES,
   inboundReadReceiptKeys,
   mediaPayloadForFile,
   normalizeWhatsAppId,
+  useAtomicMultiFileAuthState,
 } from './bridge_helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -77,6 +86,8 @@ function readFlag(name, envName, fallback = false) {
 const PORT = Number.parseInt(readArg('port', '8765'), 10);
 const INSTANCE_TOKEN = readArg('instance-token', process.env.PILOTAGE_BRIDGE_TOKEN || '');
 const SESSION_DIR = readArg('session', './session');
+const LOG_KEY_FILE = readArg('log-key', '');
+const INBOUND_QUEUE_DIR = readArg('inbound-queue', '');
 const PAIR_ONLY = process.argv.includes('--pair-only');
 // Inbound media is written here, outside the session directory: re-pairing
 // deletes the session, and a cached voice note should not depend on that.
@@ -84,12 +95,26 @@ const MEDIA_DIR = readArg('media', './media');
 // Read receipts (the blue ticks) are off unless the operator asks for them, so
 // an agent watching a chat does not silently mark everything as read. (Hermes)
 const SEND_READ_RECEIPTS = readFlag('read-receipts', 'PILOTAGE_SEND_READ_RECEIPTS', false);
-const ANSWER_GROUPS = readFlag('answer-groups', 'PILOTAGE_ANSWER_GROUPS', false);
 const ALLOWED_USERS = parseAllowedUsers(process.env.PILOTAGE_ALLOWED_SENDERS || '');
-const ALLOWED_GROUPS = parseAllowedUsers(process.env.PILOTAGE_ALLOWED_GROUPS || '');
 
 if (!PAIR_ONLY && !INSTANCE_TOKEN) {
   console.error('[bridge] --instance-token is required');
+  process.exit(2);
+}
+if (!PAIR_ONLY && !INBOUND_QUEUE_DIR) {
+  console.error('[bridge] --inbound-queue is required');
+  process.exit(2);
+}
+if (!LOG_KEY_FILE) {
+  console.error('[bridge] --log-key is required');
+  process.exit(2);
+}
+
+let identityRedactor;
+try {
+  identityRedactor = createIdentityRedactor(readFileSync(LOG_KEY_FILE));
+} catch {
+  console.error('[bridge] identity-log key is missing or corrupt');
   process.exit(2);
 }
 
@@ -99,7 +124,8 @@ const CACHE_DIRS = {
   audio: path.join(MEDIA_DIR, 'audio'),
 };
 
-const MAX_QUEUE_SIZE = 100;
+const QUEUE_HIGH_WATER_MARK = 100;
+const QUEUE_CLAIM_BATCH_SIZE = 25;
 const MAX_MESSAGE_LENGTH = 4096;
 const CHUNK_DELAY_MS = 300;
 const SEND_TIMEOUT_MS = 60_000;
@@ -120,11 +146,22 @@ for (const dir of Object.values(CACHE_DIRS)) mkdirSync(dir, { recursive: true })
 let sock = null;
 let connected = false;
 let meId = null;
-const messageQueue = [];
 
 function log(...args) {
-  console.log(`[bridge] ${args.join(' ')}`);
+  console.log(`[bridge] ${identityRedactor.redact(args.join(' '))}`);
 }
+
+const inboundQueue = PAIR_ONLY ? null : createDurableInboundQueue(
+  INBOUND_QUEUE_DIR,
+  {
+    highWaterMark: QUEUE_HIGH_WATER_MARK,
+    claimBatchSize: QUEUE_CLAIM_BATCH_SIZE,
+    log,
+  },
+);
+const inboundQueueReady = inboundQueue?.initialize() || Promise.resolve();
+const pendingMediaFences = new Map();
+let mediaFenceSequence = 0;
 
 const credentialSaves = createCredentialSaveCoordinator({ log });
 let pairingFinalizing = false;
@@ -252,6 +289,48 @@ function digitsOf(value) {
   return /^\d+$/.test(normalized) ? normalized : '';
 }
 
+function describeInbound(msg) {
+  const chatId = msg.key?.remoteJid;
+  if (!chatId || chatId === 'status@broadcast') return null;
+
+  const isGroup = chatId.endsWith('@g.us');
+  const senderId = (isGroup ? msg.key?.participant : chatId) || chatId;
+  const senderPn = msg.key?.senderPn || msg.key?.participantPn || null;
+  const senderNumber = digitsOf(senderPn) || digitsOf(senderId);
+  const identities = new Set();
+  for (const candidate of [senderId, senderPn]) {
+    for (const alias of expandWhatsAppIdentifiers(candidate, SESSION_DIR)) {
+      identities.add(alias);
+    }
+  }
+  return {
+    chatId,
+    identities: Array.from(identities),
+    isGroup,
+    senderId,
+    senderNumber,
+    senderPn,
+  };
+}
+
+function registerMediaFence(msg, description) {
+  if (!hasDownloadableMedia(msg)) return null;
+  const messageId = String(msg.key?.id || '');
+  if (!messageId) return null;
+  mediaFenceSequence += 1;
+  const fenceId = `${process.pid}-${mediaFenceSequence}`;
+  pendingMediaFences.set(fenceId, {
+    fenceId,
+    messageId,
+    chatId: description.chatId,
+    senderId: description.senderId,
+    senderNumber: description.senderNumber,
+    identities: description.identities,
+    isGroup: description.isGroup,
+  });
+  return fenceId;
+}
+
 /**
  * Turn a raw Baileys message into the event the Python runtime consumes.
  *
@@ -261,24 +340,15 @@ function digitsOf(value) {
  * identifier expansion the allowlist needs, and a plain-number timestamp
  * (Baileys hands back a protobuf Long, which does not survive JSON).
  */
-async function buildEvent(msg) {
-  const chatId = msg.key?.remoteJid;
-  if (!chatId || chatId === 'status@broadcast') return null;
-
-  const isGroup = chatId.endsWith('@g.us');
-  const senderId = (isGroup ? msg.key?.participant : chatId) || chatId;
-  // `senderPn` carries the real phone number when the jid is a @lid alias.
-  const senderPn = msg.key?.senderPn || msg.key?.participantPn || null;
-  const senderNumber = digitsOf(senderPn) || digitsOf(senderId);
-
-  // Every form this person is known by — phone and LID — resolved from the
-  // session's mapping files, so the allowlist matches whichever one arrives.
-  const identities = new Set();
-  for (const candidate of [senderId, senderPn]) {
-    for (const alias of expandWhatsAppIdentifiers(candidate, SESSION_DIR)) {
-      identities.add(alias);
-    }
-  }
+async function buildEvent(msg, description = describeInbound(msg)) {
+  if (!description) return null;
+  const {
+    chatId,
+    identities,
+    isGroup,
+    senderId,
+    senderNumber,
+  } = description;
 
   const event = await extractBridgeEvent({
     msg,
@@ -294,17 +364,19 @@ async function buildEvent(msg) {
     isGroup,
     downloadMedia: async (mediaMsg) => downloadMediaMessage(
       mediaMsg,
-      'buffer',
+      'stream',
       {},
       { logger, reuploadRequest: sock.updateMediaMessage },
     ),
     cacheDirs: CACHE_DIRS,
+    mediaLimits: INBOUND_MEDIA_LIMIT_BYTES,
+    log,
   });
 
   return {
     ...event,
     senderNumber,
-    identities: Array.from(identities),
+    identities,
     pushName: msg.pushName || '',
     timestamp: Number(msg.messageTimestamp) || 0,
   };
@@ -315,7 +387,11 @@ async function buildEvent(msg) {
 // ---------------------------------------------------------------------------
 
 async function startSocket() {
-  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+  await inboundQueueReady;
+  const { state, saveCreds } = await useAtomicMultiFileAuthState(
+    SESSION_DIR,
+    { BufferJSON, initAuthCreds, proto },
+  );
   const version = await getWAVersion();
 
   const socket = makeWASocket({
@@ -333,7 +409,12 @@ async function startSocket() {
   sock = socket;
 
   sock.ev.on('creds.update', () => {
-    credentialSaves.queue(saveCreds);
+    void credentialSaves.queue(saveCreds).catch(() => {
+      // The atomic writer preserved the last good state, but continuing with
+      // credentials that are known not to be durable makes reconnect unsafe.
+      log('credential persistence failed; stopping the bridge');
+      process.exit(1);
+    });
   });
 
   sock.ev.on('connection.update', (update) => {
@@ -374,6 +455,7 @@ async function startSocket() {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify' && type !== 'append') return;
 
+    const accepted = [];
     for (const msg of messages || []) {
       try {
         if (!msg.message) continue;
@@ -385,37 +467,54 @@ async function startSocket() {
         // Reject before extractBridgeEvent can download or cache media. Python
         // repeats this gate before dispatch, but unauthorized content should
         // never cross the bridge boundary in the first place.
-        const chatId = msg.key?.remoteJid;
-        if (!chatId || chatId === 'status@broadcast') continue;
-        const isGroup = chatId.endsWith('@g.us');
-        const senderId = (isGroup ? msg.key?.participant : chatId) || chatId;
-        const senderPn = msg.key?.senderPn || msg.key?.participantPn || null;
+        const description = describeInbound(msg);
+        if (!description) continue;
+        const {
+          senderId,
+          senderPn,
+        } = description;
         const senderAllowed = (
           matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)
           || matchesAllowedUser(senderPn, ALLOWED_USERS, SESSION_DIR)
         );
         if (!senderAllowed) continue;
-        if (isGroup) {
-          // Every sender is explicitly allowed above. Group traffic additionally
-          // needs an allowed chat; Python repeats both gates and applies mentions.
-          if (
-            !ANSWER_GROUPS
-            || !matchesAllowedUser(chatId, ALLOWED_GROUPS, SESSION_DIR)
-          ) continue;
-        }
+        // The person allowlist is the complete access policy: an authorized
+        // person may use DMs or any group. Python repeats the sender gate and
+        // applies the optional direct-mention rule.
 
+        accepted.push({ description, fenceId: null, msg });
+      } catch (error) {
+        log(`failed to inspect an inbound message: ${error.message}`);
+      }
+    }
+
+    // Register the entire accepted media burst before the first fsync or
+    // download can yield back to the HTTP poller. Python can then hold an
+    // already-durable text sibling for one bounded grace window.
+    for (const item of accepted) {
+      item.fenceId = registerMediaFence(item.msg, item.description);
+    }
+
+    for (const { description, fenceId, msg } of accepted) {
+      try {
         messageStore.remember(msg);
         // eslint-disable-next-line no-await-in-loop
-        const event = await buildEvent(msg);
+        const event = await buildEvent(msg, description);
         if (!event) continue;
         // Nothing to answer and nothing attached: a receipt, an empty
         // protocol message, or a form we do not read. (Hermes)
         if (!event.body && !event.hasMedia) continue;
 
-        messageQueue.push(event);
-        if (messageQueue.length > MAX_QUEUE_SIZE) messageQueue.shift();
+        if (inboundQueue) {
+          // The event is accepted only after its fsync+atomic-rename barrier.
+          // Duplicate Baileys replays resolve to the same durable identity.
+          // eslint-disable-next-line no-await-in-loop
+          await inboundQueue.enqueue(event);
+        }
       } catch (error) {
         log(`failed to read an inbound message: ${error.message}`);
+      } finally {
+        if (fenceId) pendingMediaFences.delete(fenceId);
       }
     }
   });
@@ -452,19 +551,71 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/health', (_req, res) => {
-  res.json({
-    status: connected ? 'connected' : 'connecting',
-    connected,
-    pid: process.pid,
-    me: meId,
-    queued: messageQueue.length,
-    sendReadReceipts: SEND_READ_RECEIPTS,
-  });
+app.get('/health', async (_req, res) => {
+  try {
+    await inboundQueueReady;
+    const queue = await inboundQueue.status();
+    const payload = {
+      status: queue.healthy ? (connected ? 'connected' : 'connecting') : 'unhealthy',
+      connected,
+      pid: process.pid,
+      me: meId,
+      queued: queue.depth,
+      queue,
+      sendReadReceipts: SEND_READ_RECEIPTS,
+    };
+    if (!queue.storageHealthy) {
+      res.status(503).json(payload);
+      return;
+    }
+    res.json(payload);
+  } catch (error) {
+    log(`durable inbound queue health check failed: ${error.message}`);
+    res.status(503).json({ error: 'durable inbound queue unavailable' });
+  }
 });
 
-app.get('/messages', (_req, res) => {
-  res.json(messageQueue.splice(0, messageQueue.length));
+app.get('/messages', async (_req, res) => {
+  try {
+    await inboundQueueReady;
+    const messages = await inboundQueue.claim();
+    const queue = await inboundQueue.status();
+    const mediaFences = Array.from(pendingMediaFences.values());
+    res.json({ messages, mediaFences, queue });
+  } catch (error) {
+    log(`durable inbound claim failed: ${error.message}`);
+    res.status(503).json({ error: 'durable inbound queue unavailable' });
+  }
+});
+
+app.post('/messages/ack', async (req, res) => {
+  const claims = req.body?.claims;
+  if (!Array.isArray(claims)) {
+    res.status(400).json({ error: 'claims must be an array' });
+    return;
+  }
+  try {
+    const settled = await inboundQueue.ack(claims);
+    res.json({ success: true, settled });
+  } catch (error) {
+    log(`durable inbound acknowledgement failed: ${error.message}`);
+    res.status(503).json({ error: 'durable inbound queue unavailable' });
+  }
+});
+
+app.post('/messages/release', async (req, res) => {
+  const claims = req.body?.claims;
+  if (!Array.isArray(claims)) {
+    res.status(400).json({ error: 'claims must be an array' });
+    return;
+  }
+  try {
+    const released = await inboundQueue.release(claims);
+    res.json({ success: true, released });
+  } catch (error) {
+    log(`durable inbound release failed: ${error.message}`);
+    res.status(503).json({ error: 'durable inbound queue unavailable' });
+  }
 });
 
 app.post('/shutdown', (_req, res) => {

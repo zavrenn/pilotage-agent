@@ -15,6 +15,12 @@ from pilotage.config import (
     TELEGRAM_FORMATTING_NOTE,
     TELEGRAM_MEDIA_NOTE,
 )
+from pilotage.delivery import (
+    DeliveryPlanError,
+    DeliveryStore,
+    DeliveryUnitLedger,
+    compute_obligation_id,
+)
 from pilotage.settings import ConfigError
 
 
@@ -199,11 +205,15 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(channel._authorized(_message(user_id=77, username="other")))
 
-    def test_group_requires_allowlist_and_direct_bot_trigger(self):
+    def test_group_location_settings_are_rejected(self):
+        for setting in ("group_policy: disabled", "group_allow_from: []"):
+            with self.subTest(setting=setting):
+                with self.assertRaisesRegex(ConfigError, "no longer supported"):
+                    self._channel(f"telegram:\n  {setting}\n")
+
+    def test_allowed_user_can_use_any_group_with_direct_bot_trigger(self):
         channel, _, _ = self._channel(
             "telegram:\n"
-            "  group_policy: allowlist\n"
-            '  group_allow_from: ["-100"]\n'
             "  require_mention: true\n"
         )
         mention = "@pilotage_bot"
@@ -245,7 +255,7 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(channel._authorized(unmentioned))
         self.assertFalse(channel._authorized(addressed_elsewhere))
         self.assertTrue(channel._authorized(replying))
-        self.assertFalse(
+        self.assertTrue(
             channel._authorized(
                 _message(
                     chat_id=-200,
@@ -256,11 +266,9 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    def test_group_wildcard_allows_any_group_only_for_authorized_users(self):
+    def test_group_authorization_is_based_only_on_the_user(self):
         channel, _, _ = self._channel(
             "telegram:\n"
-            "  group_policy: allowlist\n"
-            '  group_allow_from: ["*"]\n'
             "  require_mention: false\n"
         )
 
@@ -287,8 +295,6 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
     def test_targeted_group_command_is_cleaned_for_management_registry(self):
         channel, _, _ = self._channel(
             "telegram:\n"
-            "  group_policy: allowlist\n"
-            '  group_allow_from: ["-100"]\n'
             "  require_mention: true\n"
         )
         command = "/new@pilotage_bot"
@@ -367,9 +373,15 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         )
         message = _message(text="", voice=source)
 
-        attachments, notes = await channel._download_attachments(message)
+        with mock.patch.object(
+            telegram.asyncio,
+            "to_thread",
+            wraps=asyncio.to_thread,
+        ) as offload:
+            attachments, notes = await channel._download_attachments(message)
 
         self.assertEqual(notes, [])
+        offload.assert_awaited_once()
         self.assertEqual(len(attachments), 1)
         self.assertEqual(attachments[0].media_type, "ptt")
         self.assertTrue(attachments[0].is_voice_message)
@@ -475,6 +487,80 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         inbound = handler.await_args.args[0]
         self.assertEqual(inbound.text, "one\ntwo")
         await channel.stop()
+
+    async def test_text_waits_for_same_session_media_download(self):
+        delivered = []
+        handled = asyncio.Event()
+        download_started = asyncio.Event()
+        release_download = asyncio.Event()
+        channel, _, _ = self._channel(
+            "telegram:\n"
+            "  batch_delay: 0.01\n"
+            "  media_batch_delay: 0.01\n"
+            "  batch_hard_cap: 1\n"
+        )
+        self.addAsyncCleanup(channel.stop)
+
+        async def handler(message):
+            delivered.append(message)
+            handled.set()
+
+        async def download(_message):
+            download_started.set()
+            await release_download.wait()
+            return [
+                telegram.media.Attachment(
+                    path=self.root / "photo.jpg",
+                    mime="image/jpeg",
+                    media_type="image",
+                    file_name="photo.jpg",
+                )
+            ], []
+
+        channel._handler = handler
+        channel._download_attachments = download
+        await channel._accept_message(_message(text="question", message_id=1), [])
+        media_task = asyncio.create_task(
+            channel._handle_media(
+                SimpleNamespace(
+                    effective_message=_message(
+                        text="",
+                        message_id=2,
+                        voice=SimpleNamespace(),
+                    )
+                ),
+                None,
+            )
+        )
+        await asyncio.wait_for(download_started.wait(), timeout=0.5)
+        await asyncio.sleep(0.05)
+
+        self.assertFalse(handled.is_set())
+        release_download.set()
+        await asyncio.wait_for(media_task, timeout=0.5)
+        await asyncio.wait_for(handled.wait(), timeout=0.5)
+
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(delivered[0].text, "question")
+        self.assertEqual(delivered[0].message_ids, ["1", "2"])
+        self.assertEqual(len(delivered[0].attachments), 1)
+
+    async def test_stuck_media_download_cannot_exceed_batch_hard_cap(self):
+        handled = asyncio.Event()
+        channel, _, _ = self._channel(
+            "telegram:\n"
+            "  batch_delay: 0\n"
+            "  batch_hard_cap: 0.05\n"
+        )
+        self.addAsyncCleanup(channel.stop)
+        channel._handler = mock.AsyncMock(side_effect=lambda _message: handled.set())
+        session_id = telegram._session_id("42", "42", False, "")
+        channel._begin_media_download(session_id)
+
+        await channel._accept_message(_message(text="question", message_id=1), [])
+        await asyncio.wait_for(handled.wait(), timeout=0.3)
+
+        channel._end_media_download(session_id)
 
     async def test_management_commands_bypass_the_model_batch(self):
         channel, handler, command_handler = self._channel()
@@ -722,6 +808,83 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(delivered)
         bot.send_document.assert_awaited_once()
 
+    async def test_unit_ledger_retries_only_missing_attachment_with_fresh_handle(self):
+        channel, _, _ = self._channel()
+        channel._config.workspace_dir.mkdir(parents=True)
+        document = channel._config.workspace_dir / "report.pdf"
+        document.write_bytes(b"%PDF")
+        streams = []
+
+        async def send_document(**kwargs):
+            streams.append(kwargs["document"])
+            if len(streams) == 1:
+                raise telegram.NetworkError("offline")
+            return SimpleNamespace(message_id=22)
+
+        bot = SimpleNamespace(
+            send_message=mock.AsyncMock(return_value=SimpleNamespace(message_id=21)),
+            send_document=send_document,
+        )
+        channel._bot = bot
+        content = f"ready\nMEDIA:{document}"
+        obligation_id = compute_obligation_id("session", "message", content)
+        store = DeliveryStore(self.root / "delivery-ledger.db")
+        store.record(
+            obligation_id=obligation_id,
+            session_key="session",
+            platform="telegram",
+            chat_id="42",
+            thread_id="",
+            content=content,
+        )
+        self.assertTrue(store.mark_attempting(obligation_id))
+        ledger = DeliveryUnitLedger(store, obligation_id)
+
+        first = await channel.send("42", content, delivery_ledger=ledger)
+        second = await channel.send("42", content, delivery_ledger=ledger)
+
+        self.assertFalse(first)
+        self.assertTrue(first.retryable)
+        self.assertTrue(second)
+        bot.send_message.assert_awaited_once()
+        self.assertEqual(len(streams), 2)
+        self.assertIsNot(streams[0], streams[1])
+        self.assertTrue(all(stream.closed for stream in streams))
+        self.assertTrue(store.mark_delivered(obligation_id))
+
+    async def test_unit_ledger_fingerprints_the_effective_reply_mode(self):
+        channel, _, _ = self._channel(
+            "telegram:\n"
+            "  reply_to_mode: all\n"
+        )
+        channel._bot = SimpleNamespace(
+            send_message=mock.AsyncMock(
+                return_value=SimpleNamespace(message_id=101)
+            )
+        )
+        content = "reply"
+        obligation_id = compute_obligation_id("session", "message", content)
+        store = DeliveryStore(self.root / "reply-mode-ledger.db")
+        store.record(
+            obligation_id=obligation_id,
+            session_key="session",
+            platform="telegram",
+            chat_id="42",
+            thread_id="",
+            reply_to="7",
+            content=content,
+        )
+        self.assertTrue(store.mark_attempting(obligation_id))
+        ledger = DeliveryUnitLedger(store, obligation_id)
+
+        self.assertTrue(
+            await channel.send("42", content, "7", delivery_ledger=ledger)
+        )
+        channel._reply_to_mode = "off"
+
+        with self.assertRaisesRegex(DeliveryPlanError, "plan changed"):
+            await channel.send("42", content, "7", delivery_ledger=ledger)
+
     async def test_system_echo_cannot_turn_media_text_into_delivery(self):
         channel, _, _ = self._channel()
         channel._config.workspace_dir.mkdir(parents=True)
@@ -747,7 +910,7 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TelegramLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_polling_startup_drops_stale_updates_and_shutdown_is_owned(self):
+    async def test_polling_startup_preserves_pending_updates_and_shutdown_is_owned(self):
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch.dict(
                 os.environ,
@@ -798,10 +961,10 @@ class TelegramLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         app.initialize.assert_awaited_once()
         bot.delete_webhook.assert_awaited_once_with(
-            drop_pending_updates=True
+            drop_pending_updates=False
         )
         updater.start_polling.assert_awaited_once()
-        self.assertTrue(
+        self.assertFalse(
             updater.start_polling.await_args.kwargs[
                 "drop_pending_updates"
             ]
@@ -809,6 +972,73 @@ class TelegramLifecycleTests(unittest.IsolatedAsyncioTestCase):
         updater.stop.assert_awaited_once()
         app.stop.assert_awaited_once()
         app.shutdown.assert_awaited_once()
+
+    async def test_failed_start_drains_updates_already_accepted_by_polling(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "PILOTAGE_HOME": temporary,
+                    "TELEGRAM_BOT_TOKEN": "123456:test-token",
+                    "TELEGRAM_ALLOWED_USERS": "42",
+                    "TELEGRAM_WEBHOOK_URL": "",
+                    "TELEGRAM_WEBHOOK_SECRET": "",
+                },
+            ):
+                channel = telegram.TelegramChannel(
+                    Config.load(channel="telegram"),
+                    mock.AsyncMock(),
+                    mock.AsyncMock(),
+                )
+
+        completed = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def accepted_work():
+            try:
+                await asyncio.sleep(0)
+                completed.set()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        async def replay(_kind, _update, _context):
+            channel._turn_tasks["held"] = asyncio.create_task(accepted_work())
+
+        async def fail_after_accepting(**_kwargs):
+            channel._startup_updates.append(("text", object(), object()))
+            raise RuntimeError("polling startup failed")
+
+        bot = SimpleNamespace(
+            username="pilotage_bot",
+            delete_webhook=mock.AsyncMock(),
+        )
+        updater = SimpleNamespace(
+            running=True,
+            start_polling=mock.AsyncMock(side_effect=fail_after_accepting),
+            stop=mock.AsyncMock(),
+        )
+        app = SimpleNamespace(
+            bot=bot,
+            updater=updater,
+            running=True,
+            initialize=mock.AsyncMock(),
+            start=mock.AsyncMock(),
+            stop=mock.AsyncMock(),
+            shutdown=mock.AsyncMock(),
+        )
+        channel.hold_inbound()
+
+        with (
+            mock.patch.object(telegram, "TELEGRAM_AVAILABLE", True),
+            mock.patch.object(channel, "_build_application", return_value=app),
+            mock.patch.object(channel, "_replay_startup_update", side_effect=replay),
+            self.assertRaisesRegex(telegram.ChannelError, "could not start"),
+        ):
+            await channel.start()
+
+        self.assertTrue(completed.is_set())
+        self.assertFalse(cancelled.is_set())
 
     async def test_polling_conflict_fails_loudly(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -965,7 +1195,7 @@ class TelegramWebhookTests(unittest.IsolatedAsyncioTestCase):
             webhook_url="https://agent.example/telegram",
             secret_token="long_random_secret",
             allowed_updates=("message",),
-            drop_pending_updates=True,
+            drop_pending_updates=False,
         )
         updater.start_polling.assert_not_awaited()
         bot.delete_webhook.assert_not_awaited()

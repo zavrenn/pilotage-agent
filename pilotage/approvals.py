@@ -13,6 +13,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from .delivery import send_with_retry
 from .i18n import DEFAULT_LANGUAGE, t
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 APPROVAL_CATEGORIES = frozenset({"memory", "skills", "cron"})
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 
-Notify = Callable[[str], Awaitable[None]]
+Notify = Callable[[str], Awaitable[Any]]
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,7 @@ class ApprovalManager:
                 )
 
             loop = asyncio.get_running_loop()
+            deadline = loop.time() + self._timeout_seconds
             entry = _PendingApproval(
                 category=category,
                 summary=summary.strip(),
@@ -136,16 +138,34 @@ class ApprovalManager:
                 f"{t('approval.instructions', self._language)}"
             )
             try:
-                await notify(prompt)
+                delivery = await send_with_retry(
+                    lambda: notify(prompt),
+                    deadline=deadline,
+                )
+                if not delivery.success:
+                    if delivery.error == "delivery deadline expired":
+                        raise asyncio.TimeoutError
+                    raise RuntimeError(
+                        delivery.error or "approval prompt delivery rejected"
+                    )
                 entry.notified = True
             except asyncio.CancelledError:
                 self._remove(session_id, entry)
                 if not entry.future.done():
                     entry.future.cancel()
                 raise
+            except asyncio.TimeoutError:
+                self._remove(session_id, entry)
+                if not entry.future.done():
+                    entry.future.cancel()
+                return ApprovalOutcome(
+                    False,
+                    "timed out",
+                    "The approval request could not be delivered before the timeout.",
+                )
             except Exception as exc:  # noqa: BLE001 - failure must close the gate
                 logger.warning(
-                    "Could not send approval request for %s: %s", session_id, exc
+                    "Could not send approval request: %s", exc
                 )
                 self._remove(session_id, entry)
                 if not entry.future.done():
@@ -157,8 +177,15 @@ class ApprovalManager:
                 )
 
             try:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return ApprovalOutcome(
+                        False,
+                        "timed out",
+                        "The approval request deadline expired after delivery.",
+                    )
                 return await asyncio.wait_for(
-                    asyncio.shield(entry.future), self._timeout_seconds
+                    asyncio.shield(entry.future), remaining
                 )
             except asyncio.CancelledError:
                 if not entry.future.done():

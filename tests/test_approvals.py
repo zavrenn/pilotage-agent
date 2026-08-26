@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 from pilotage.approvals import ApprovalManager, ApprovalOutcome
+from pilotage.delivery import SendResult
 from pilotage.settings import Settings
 from pilotage.tools import ToolContext
 
@@ -20,6 +22,7 @@ class ApprovalManagerTests(unittest.IsolatedAsyncioTestCase):
         async def notify(text):
             notices.append(text)
             sent.set()
+            return SendResult(True, message_id="approval-prompt")
 
         waiting = asyncio.create_task(
             manager.request("chat-a", "memory", "Add: concise replies", notify)
@@ -50,6 +53,7 @@ class ApprovalManagerTests(unittest.IsolatedAsyncioTestCase):
                 first_delivered.set()
             else:
                 second_delivered.set()
+            return SendResult(True, message_id="approval-prompt")
 
         first = asyncio.create_task(
             manager.request("chat", "memory", "first", notify)
@@ -81,7 +85,7 @@ class ApprovalManagerTests(unittest.IsolatedAsyncioTestCase):
         manager = ApprovalManager(timeout_seconds=0.01)
 
         async def notify(_text):
-            return None
+            return SendResult(True, message_id="approval-prompt")
 
         timed_out = await manager.request("chat", "skills", "write", notify)
         unavailable = await manager.request("chat", "skills", "write", None)
@@ -110,6 +114,7 @@ class ApprovalManagerTests(unittest.IsolatedAsyncioTestCase):
         async def notify(text):
             notices.append(text)
             delivered.set()
+            return SendResult(True, message_id="approval-prompt")
 
         waiting = asyncio.create_task(
             manager.request("chat", "memory", "", notify)
@@ -126,6 +131,7 @@ class ApprovalManagerTests(unittest.IsolatedAsyncioTestCase):
 
         async def notify(_text):
             sent.set()
+            return SendResult(True, message_id="approval-prompt")
 
         waiting = asyncio.create_task(
             manager.request("chat", "memory", "write", notify)
@@ -143,9 +149,11 @@ class ApprovalManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(blocked.status, "cancelled")
 
         manager.unblock("chat")
+        sent.clear()
         fresh = asyncio.create_task(
             manager.request("chat", "memory", "write", notify)
         )
+        await asyncio.wait_for(sent.wait(), timeout=0.2)
         await asyncio.sleep(0)
         self.assertTrue(manager.resolve("chat", approved=True))
         self.assertTrue((await fresh).approved)
@@ -166,6 +174,70 @@ class ApprovalManagerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await waiting
         self.assertFalse(manager.has_pending("chat"))
+
+    async def test_retryable_prompt_delivery_retries_the_exact_prompt(self):
+        manager = ApprovalManager(timeout_seconds=1)
+        delivered = asyncio.Event()
+        prompts = []
+
+        async def notify(text):
+            prompts.append(text)
+            if len(prompts) == 1:
+                return SendResult(
+                    False,
+                    "flood control",
+                    retryable=True,
+                    retry_after=0,
+                )
+            delivered.set()
+            return SendResult(True, message_id="approval-prompt")
+
+        with (
+            mock.patch("pilotage.delivery.random.uniform", return_value=0),
+            mock.patch(
+                "pilotage.delivery.asyncio.sleep", new=mock.AsyncMock()
+            ) as sleep,
+        ):
+            waiting = asyncio.create_task(
+                manager.request("chat", "cron", "create report", notify)
+            )
+            await asyncio.wait_for(delivered.wait(), timeout=0.2)
+            self.assertTrue(manager.resolve("chat", approved=True))
+            outcome = await waiting
+
+        self.assertTrue(outcome.approved)
+        self.assertEqual(len(prompts), 2)
+        self.assertEqual(prompts[0], prompts[1])
+        sleep.assert_awaited_once_with(0.0)
+
+    async def test_prompt_retry_never_outlives_the_approval_deadline(self):
+        manager = ApprovalManager(timeout_seconds=0.02)
+        attempts = 0
+
+        async def notify(_text):
+            nonlocal attempts
+            attempts += 1
+            return SendResult(
+                False,
+                "flood control",
+                retryable=True,
+                retry_after=1,
+            )
+
+        with (
+            mock.patch("pilotage.delivery.random.uniform", return_value=0),
+            mock.patch(
+                "pilotage.delivery.asyncio.sleep", new=mock.AsyncMock()
+            ) as sleep,
+        ):
+            outcome = await manager.request(
+                "chat", "skills", "install reviewed skill", notify
+            )
+
+        self.assertEqual(outcome.status, "unavailable")
+        self.assertEqual(attempts, 1)
+        sleep.assert_not_awaited()
+        self.assertFalse(manager.resolve("chat", approved=True))
 
 
 class ToolContextApprovalTests(unittest.IsolatedAsyncioTestCase):

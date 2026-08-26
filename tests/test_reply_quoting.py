@@ -168,12 +168,6 @@ class GroupIsolationTests(unittest.IsolatedAsyncioTestCase):
             "allowed_senders",
             frozenset({"212600000000", "212611111111"}),
         )
-        object.__setattr__(
-            self.channel._config,
-            "group_policy",
-            "allowlist",
-        )
-        object.__setattr__(self.channel._config, "group_allow_from", frozenset({"*"}))
         object.__setattr__(self.channel._config, "require_mention", False)
 
     def _event(

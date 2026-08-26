@@ -1,4 +1,4 @@
-"""Read-only deployment readiness checks.
+"""Non-destructive deployment readiness checks.
 
 Hermes's doctor pattern is kept: every probe is failure-isolated and the full
 report is shown even when early checks fail.  Pilotage narrows the probes to
@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,7 @@ from .channels.whatsapp import (
 )
 from .channels.telegram import normalize_telegram_home_chat_id
 from .codex import auth
+from .delivery import DeliveryStore
 from .history import ConversationStore
 from .redact import redact_sensitive_text
 from .runtime_lock import RuntimeLockError, runtime_lock_is_held
@@ -448,6 +450,16 @@ def _check_profile_state(config: Any) -> str:
     return "state and workspace accessible"
 
 
+def _check_delivery_store(config: Any) -> str:
+    try:
+        DeliveryStore(Path(config.state_dir) / "delivery.db").verify_writable()
+    except (OSError, sqlite3.Error) as exc:
+        raise DoctorError(
+            "delivery database is not writable: " + _safe_detail(exc)
+        ) from exc
+    return "delivery write path ready"
+
+
 def _check_runtime(config: Any) -> str:
     path = Path(config.state_dir) / ".runtime.lock"
     try:
@@ -508,6 +520,20 @@ def _check_whatsapp_bridge(config: Any) -> str:
         raise DoctorError("WhatsApp bridge pid does not match its owner record")
     if payload.get("connected") is not True:
         raise DoctorError("WhatsApp bridge is running but not connected")
+    queue = payload.get("queue")
+    if payload.get("status") == "unhealthy":
+        if isinstance(queue, dict) and queue.get("overflowed"):
+            raise DoctorError(
+                "WhatsApp durable inbound queue exceeded its safe high-water mark"
+            )
+        raise DoctorError("WhatsApp durable inbound queue is unhealthy")
+    if isinstance(queue, dict):
+        if queue.get("storageHealthy") is False:
+            raise DoctorError("WhatsApp durable inbound queue storage is unhealthy")
+        if queue.get("overflowed"):
+            raise DoctorError(
+                "WhatsApp durable inbound queue exceeded its safe high-water mark"
+            )
     return "connected"
 
 
@@ -719,6 +745,11 @@ async def collect_report(config: Any, profile_name: str) -> DoctorReport:
         report,
         "Profile state",
         lambda: _check_profile_state(config),
+    )
+    await _probe(
+        report,
+        "Delivery database",
+        lambda: _check_delivery_store(config),
     )
     await _probe(report, "Codex OAuth", lambda: _check_auth(config))
     await _probe_async(report, "Codex model", lambda: _check_model(config))

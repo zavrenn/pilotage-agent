@@ -79,6 +79,41 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.agent.respond("chat", "hello"), "No tools needed.")
         self.assertEqual(len(self.requests), 1)
 
+    async def test_persisted_turn_exposes_positive_terminal_proof(self):
+        self.replies = [
+            codex_stream.StreamResult(
+                text="Finished.", terminal_completed=True
+            )
+        ]
+
+        result = await self.agent.respond_result("chat", "finish")
+
+        self.assertTrue(result.terminal_completed)
+        self.assertEqual(
+            self.agent._store.load("chat", 2)[-1],
+            ("assistant", "Finished."),
+        )
+
+    async def test_nonterminal_tool_call_is_not_executed(self):
+        self.replies = [
+            codex_stream.StreamResult(
+                text="partial",
+                tool_calls=[
+                    _call(
+                        "call_1",
+                        todos=[{"id": "1", "content": "must not run"}],
+                    )
+                ],
+                terminal_completed=False,
+            )
+        ]
+
+        result = await self.agent.respond_result("chat", "do it")
+
+        self.assertFalse(result.terminal_completed)
+        self.assertNotIn("todo", self.agent._tool_state["chat"])
+        self.assertEqual(len(self.requests), 1)
+
     async def test_native_compaction_clears_stale_skill_view_dedup(self):
         self.agent._tool_state["chat"] = {
             "skill_views": {("report", ""): (1, 1)}

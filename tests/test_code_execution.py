@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -181,6 +184,106 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result["status"], "timeout")
         self.assertIn("timed out after 1s", result["error"])
 
+    def test_cancellation_kills_the_script_and_reports_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            context = _context(workspace)
+            cancel = threading.Event()
+            timer = threading.Timer(0.1, cancel.set)
+            timer.start()
+            self.addCleanup(timer.cancel)
+            with mock.patch.object(
+                code_execution,
+                "interpreter_path",
+                return_value=Path(sys.executable),
+            ):
+                result = json.loads(
+                    code_execution._execute(
+                        "import time\ntime.sleep(30)\n",
+                        "chart",
+                        context,
+                        workspace=workspace,
+                        cancel_event=cancel,
+                    )
+                )
+
+        self.assertEqual(result["status"], "cancelled")
+        self.assertIn("process tree was killed", result["error"])
+
+    @unittest.skipUnless(os.name == "posix", "setsid is a POSIX boundary")
+    def test_timeout_kills_a_setsid_grandchild(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            marker = workspace / "setsid-grandchild-survived"
+            result = self._run(
+                "import os, pathlib, time\n"
+                "if os.fork() == 0:\n"
+                "    os.setsid()\n"
+                "    if os.fork() == 0:\n"
+                "        time.sleep(2)\n"
+                f"        pathlib.Path({str(marker)!r}).touch()\n"
+                "        os._exit(0)\n"
+                "    time.sleep(30)\n"
+                "    os._exit(0)\n"
+                "time.sleep(30)\n",
+                workspace,
+                settings={"code_execution": {"timeout": 1}},
+            )
+            time.sleep(3.0)
+            self.assertEqual(result["status"], "timeout")
+            self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(os.name == "posix", "setsid is a POSIX boundary")
+    def test_cancellation_kills_a_setsid_grandchild(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            marker = workspace / "cancelled-grandchild-survived"
+            ready = workspace / "cancel-tree-ready"
+            context = _context(workspace)
+            cancel = threading.Event()
+
+            def cancel_after_tree_starts():
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and not ready.exists():
+                    time.sleep(0.01)
+                cancel.set()
+
+            trigger = threading.Thread(
+                target=cancel_after_tree_starts,
+                daemon=True,
+            )
+            trigger.start()
+            with mock.patch.object(
+                code_execution,
+                "interpreter_path",
+                return_value=Path(sys.executable),
+            ):
+                result = json.loads(
+                    code_execution._execute(
+                        "import os, pathlib, time\n"
+                        "if os.fork() == 0:\n"
+                        "    os.setsid()\n"
+                        "    if os.fork() == 0:\n"
+                        "        time.sleep(2)\n"
+                        f"        pathlib.Path({str(marker)!r}).touch()\n"
+                        "        os._exit(0)\n"
+                        f"    pathlib.Path({str(ready)!r}).touch()\n"
+                        "    time.sleep(30)\n"
+                        "    os._exit(0)\n"
+                        "time.sleep(30)\n",
+                        "chart",
+                        context,
+                        workspace=workspace,
+                        cancel_event=cancel,
+                    )
+                )
+            trigger.join(timeout=1)
+            time.sleep(3.0)
+
+            self.assertTrue(ready.exists(), "the escaped tree never started")
+            self.assertEqual(result["status"], "cancelled")
+            self.assertFalse(marker.exists())
+
     def test_missing_prepared_environment_fails_loudly(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -238,6 +341,40 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("terminal", command["error"])
         self.assertIn("chart, docs, excel, pdf", unknown["error"])
+
+    async def test_cancelling_the_tool_stops_its_worker_before_returning(self):
+        started = threading.Event()
+        cancelled = threading.Event()
+
+        def fake_execute(*args, cancel_event, **kwargs):
+            started.set()
+            cancel_event.wait(timeout=1)
+            if cancel_event.is_set():
+                cancelled.set()
+            return json.dumps({"status": "cancelled"})
+
+        with tempfile.TemporaryDirectory() as directory:
+            context = _context(Path(directory))
+            with mock.patch.object(
+                code_execution,
+                "_execute",
+                side_effect=fake_execute,
+            ):
+                task = asyncio.create_task(
+                    code_execution.handle(
+                        {"code": "print(1)", "environment": "chart"},
+                        context,
+                    )
+                )
+                for _ in range(100):
+                    if started.is_set():
+                        break
+                    await asyncio.sleep(0.005)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=1)
+
+        self.assertTrue(cancelled.is_set())
 
 
 if __name__ == "__main__":

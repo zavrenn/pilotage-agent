@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -161,13 +162,26 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
                 Shell, cwd=cwd, timeout=default_timeout, env=shell_env(context)
             )
 
-        result = await asyncio.to_thread(
-            session.shell.execute,
-            command,
-            workdir,
-            timeout=timeout,
-            capture_limit=_capture_limit(context),
+        cancel_event = threading.Event()
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                session.shell.execute,
+                command,
+                workdir,
+                timeout=timeout,
+                capture_limit=_capture_limit(context),
+                cancel_event=cancel_event,
+            )
         )
+        try:
+            result = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancel_event.set()
+            try:
+                await asyncio.shield(worker)
+            except Exception:
+                pass
+            raise
 
         response: Dict[str, Any] = {
             "output": redact_terminal_output(result.get("output") or "", command),

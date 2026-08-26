@@ -15,7 +15,9 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -25,14 +27,23 @@ import httpx
 from .. import media
 from ..commands import CommandInvocation, parse_command
 from ..config import Config
-from ..delivery import SendResult
+from ..delivery import (
+    DeliveryUnitLedger,
+    SendResult,
+    delivery_fingerprint,
+    file_delivery_fingerprint,
+)
+from ..redact import identity_key_path, identity_pseudonym
 from .dedup import MessageDeduplicator
 from .formatting import to_whatsapp
 
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 1.0
+ACTIVE_BATCH_POLL_INTERVAL_SECONDS = 0.05
 POLL_ERROR_BACKOFF_SECONDS = 5.0
+MEDIA_DOWNLOAD_GRACE_SECONDS = 1.0
+MAX_MEDIA_FENCES = 100
 # WhatsApp clears the "typing…" indicator by itself after a few seconds, so it
 # has to be renewed for as long as the model is still thinking.
 TYPING_REFRESH_SECONDS = 8.0
@@ -42,6 +53,9 @@ BRIDGE_READY_TIMEOUT_SECONDS = 120.0
 BRIDGE_RESTART_ATTEMPTS = 3
 BRIDGE_RESTART_DELAY_SECONDS = 5.0
 BRIDGE_TOKEN_HEADER = "X-Pilotage-Bridge-Token"
+CLAIM_SETTLE_ATTEMPTS = 6
+CLAIM_SETTLE_BACKOFF_SECONDS = 1.0
+COMPLETED_CLAIM_MAX_ENTRIES = 100_000
 # The Node bridge needs process basics, not the agent's model, database,
 # transcription, search, Telegram, or profile credentials.
 BRIDGE_INHERITED_ENV = frozenset(
@@ -92,14 +106,104 @@ BRIDGE_INHERITED_ENV = frozenset(
 # A single message this long is almost certainly one chunk of a longer paste, so
 # we wait longer for the rest of it.
 SPLIT_THRESHOLD = 6000
+MAX_OUTBOUND_MESSAGE_LENGTH = 4096
+OUTBOUND_CHUNK_DELAY_SECONDS = 0.3
 # How much of a quoted message is shown back to the agent. (Hermes)
 QUOTE_SNIPPET_LIMIT = 500
 # Start the conversation over. Typed by a person on a phone keyboard, so case
 # and a trailing space are not mistakes worth punishing.
 RESET_COMMAND = "/new"
 _BARE_PHONE_RE = re.compile(r"^\+?[\d \t().-]+$")
+_CLAIM_ID_RE = re.compile(r"^[a-f0-9]{64}$")
 _DIRECT_JID_DOMAINS = frozenset({"s.whatsapp.net", "lid", "c.us"})
 _HOME_JID_DOMAINS = _DIRECT_JID_DOMAINS | {"g.us"}
+
+
+class _CompletedClaimStore:
+    """Small durable idempotency ledger for completed bridge claims."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        max_entries: int = COMPLETED_CLAIM_MAX_ENTRIES,
+    ):
+        self.path = Path(path)
+        self.max_entries = max(1, int(max_entries))
+        self._initialized = False
+        self._lock = threading.RLock()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=10.0)
+        connection.execute("PRAGMA synchronous = FULL")
+        return connection
+
+    def _ensure_initialized_locked(self) -> None:
+        if self._initialized:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with contextlib.closing(self._connect()) as connection:
+            connection.execute("PRAGMA journal_mode = DELETE")
+            with connection:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS completed_claims ("
+                    "sequence INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "claim_id TEXT NOT NULL UNIQUE)"
+                )
+                self._prune_locked(connection)
+        with contextlib.suppress(OSError):
+            os.chmod(self.path, 0o600)
+        self._initialized = True
+
+    def initialize(self) -> None:
+        with self._lock:
+            self._ensure_initialized_locked()
+
+    def contains(self, claim_id: str) -> bool:
+        if not _CLAIM_ID_RE.fullmatch(claim_id or ""):
+            return False
+        with self._lock:
+            self._ensure_initialized_locked()
+            with contextlib.closing(self._connect()) as connection:
+                row = connection.execute(
+                    "SELECT 1 FROM completed_claims WHERE claim_id = ?",
+                    (claim_id,),
+                ).fetchone()
+        return row is not None
+
+    def mark(self, claim_ids: List[str]) -> None:
+        claims = list(dict.fromkeys(value for value in claim_ids if value))
+        if not claims:
+            return
+        if any(not _CLAIM_ID_RE.fullmatch(value) for value in claims):
+            raise ValueError("invalid durable WhatsApp claim identity")
+        with self._lock:
+            self._ensure_initialized_locked()
+            with contextlib.closing(self._connect()) as connection:
+                with connection:
+                    connection.executemany(
+                        "DELETE FROM completed_claims WHERE claim_id = ?",
+                        ((claim_id,) for claim_id in claims),
+                    )
+                    connection.executemany(
+                        "INSERT INTO completed_claims(claim_id) VALUES (?)",
+                        ((claim_id,) for claim_id in claims),
+                    )
+                    self._prune_locked(connection)
+
+    def _prune_locked(self, connection: sqlite3.Connection) -> None:
+        count = int(
+            connection.execute("SELECT COUNT(*) FROM completed_claims").fetchone()[0]
+        )
+        excess = count - self.max_entries
+        if excess <= 0:
+            return
+        connection.execute(
+            "DELETE FROM completed_claims WHERE claim_id IN ("
+            "SELECT claim_id FROM completed_claims "
+            "ORDER BY sequence ASC LIMIT ?)",
+            (excess,),
+        )
 
 
 class WhatsAppSessionError(ValueError):
@@ -127,6 +231,12 @@ def validate_whatsapp_session(session_dir: Path) -> None:
         and isinstance(me.get("id"), str)
         and bool(me["id"].strip())
     )
+    has_identity_keys = (
+        isinstance(credentials.get("noiseKey"), dict)
+        and bool(credentials["noiseKey"])
+        and isinstance(credentials.get("signedIdentityKey"), dict)
+        and bool(credentials["signedIdentityKey"])
+    )
     # Baileys 7 QR pairing persists the signed account and signal identity but
     # leaves `registered` false. Pairing by phone-number code sets that flag.
     qr_pairing_complete = (
@@ -136,7 +246,7 @@ def validate_whatsapp_session(session_dir: Path) -> None:
         and bool(credentials["signalIdentities"])
     )
     pairing_code_complete = credentials.get("registered") is True
-    if not has_linked_identity or not (
+    if not has_identity_keys or not has_linked_identity or not (
         qr_pairing_complete or pairing_code_complete
     ):
         raise WhatsAppSessionError(
@@ -177,12 +287,46 @@ def normalize_whatsapp_chat_id(value: str) -> str:
     )
 
 
+def normalize_whatsapp_allowed_senders(value: str) -> tuple[str, ...]:
+    """Return explicit, deduplicated WhatsApp person identities."""
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in str(value or "").replace(";", ",").split(","):
+        written = item.strip()
+        if not written:
+            continue
+        if written == "*":
+            raise ValueError(
+                "PILOTAGE_ALLOWED_SENDERS must name explicit senders; "
+                "'*' is not allowed"
+            )
+        domain = ""
+        if "@" in written:
+            _, _, domain = written.partition("@")
+            domain = domain.lower()
+            if domain not in {"s.whatsapp.net", "lid", "c.us"}:
+                raise ValueError(f"Invalid WhatsApp sender ID: {written!r}")
+        local = written.split("@", 1)[0].split(":", 1)[0]
+        digits = re.sub(r"[ \t().-]+", "", local).removeprefix("+")
+        if not digits.isascii() or not digits.isdigit():
+            raise ValueError(
+                f"Invalid WhatsApp number {written!r}; use the country code "
+                "and digits"
+            )
+        if digits not in seen:
+            normalized.append(f"{digits}@lid" if domain == "lid" else digits)
+            seen.add(digits)
+    if not normalized:
+        raise ValueError("At least one allowed WhatsApp number is required")
+    return tuple(normalized)
+
+
 def build_bridge_environment(
     *,
     base: Optional[Dict[str, str]] = None,
     token: str = "",
     allowed_senders: Optional[List[str]] = None,
-    allowed_groups: Optional[List[str]] = None,
 ) -> Dict[str, str]:
     """Build the bridge's complete, intentionally small child environment."""
 
@@ -194,9 +338,6 @@ def build_bridge_environment(
     }
     child["PILOTAGE_ALLOWED_SENDERS"] = ",".join(
         sorted(str(value) for value in (allowed_senders or ()))
-    )
-    child["PILOTAGE_ALLOWED_GROUPS"] = ",".join(
-        sorted(str(value) for value in (allowed_groups or ()))
     )
     if token:
         child["PILOTAGE_BRIDGE_TOKEN"] = token
@@ -301,6 +442,46 @@ def _clean_bot_mention_text(text: str, data: Dict[str, Any]) -> str:
     return cleaned.strip() or text
 
 
+def split_whatsapp_message(
+    text: str,
+    max_length: int = MAX_OUTBOUND_MESSAGE_LENGTH,
+) -> List[str]:
+    """Match the bridge's newline/space split using WhatsApp's UTF-16 units."""
+
+    if not text or max_length < 1:
+        return [text] if text else []
+
+    def units(value: str) -> int:
+        return len(value.encode("utf-16-le")) // 2
+
+    chunks: List[str] = []
+    remaining = text
+    while units(remaining) > max_length:
+        used = 0
+        boundary = 0
+        for index, character in enumerate(remaining):
+            width = 2 if ord(character) > 0xFFFF else 1
+            if used + width > max_length:
+                break
+            used += width
+            boundary = index + 1
+        if boundary == 0:
+            boundary = 1
+        prefix = remaining[:boundary]
+        split_at = prefix.rfind("\n")
+        if split_at < 0 or units(prefix[:split_at]) < max_length // 2:
+            split_at = prefix.rfind(" ")
+        if split_at < 1:
+            split_at = boundary
+        chunk = remaining[:split_at].rstrip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].lstrip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
 class ChannelError(RuntimeError):
     """The channel cannot start, or cannot keep running."""
 
@@ -317,6 +498,13 @@ class InboundMessage:
     text: str
     is_group: bool
     message_ids: List[str] = field(default_factory=list)
+    # The bridge's durable identity is chat+sender+message, while message_ids
+    # remain the platform IDs needed for quoting.  Keep those concerns separate
+    # so an ID collision in two chats cannot suppress or strand valid work.
+    dedup_ids: List[str] = field(default_factory=list)
+    # Opaque bridge spool identities. They are acknowledged only after the
+    # complete command/turn handoff returns.
+    claim_ids: List[str] = field(default_factory=list)
     # Files the bridge downloaded for this turn, already checked against the
     # media cache roots.
     attachments: List[media.Attachment] = field(default_factory=list)
@@ -345,6 +533,13 @@ class WhatsAppChannel:
         # The bridge replays its queue on reconnect, and a restart can overlap
         # with messages already answered.
         self._seen = MessageDeduplicator()
+        self._completed_claims = MessageDeduplicator(
+            max_size=2000,
+            ttl_seconds=3600,
+        )
+        self._completed_claim_store = _CompletedClaimStore(
+            config.whatsapp_completed_claims_path
+        )
         self._pending_started: Dict[str, float] = {}
         # One active model turn and at most one merged follow-up per isolated
         # session. This bounds work even when messages arrive faster than replies.
@@ -359,6 +554,10 @@ class WhatsAppChannel:
         # this, so a dead bridge stops the agent instead of leaving it idle.
         self.stopped = asyncio.Event()
         self.failure: Optional[str] = None
+        self._queue_overflow_reported = False
+        self._media_fence_sessions: Dict[str, str] = {}
+        self._media_fence_spent: set[str] = set()
+        self._media_fence_changed: Dict[str, asyncio.Event] = {}
 
     # -- lifetime -----------------------------------------------------------
 
@@ -393,11 +592,6 @@ class WhatsAppChannel:
             logger.warning(
                 "No allowed senders configured — every message will be ignored. "
                 "Message the agent once, then add the number it logs to PILOTAGE_ALLOWED_SENDERS."
-            )
-        if self._config.answer_groups and not self._config.group_allow_from:
-            logger.warning(
-                "WhatsApp group policy is allowlist but group_allow_from is empty — "
-                "every group message will be ignored."
             )
         logger.info("WhatsApp channel ready")
 
@@ -455,6 +649,11 @@ class WhatsAppChannel:
         self._pending.clear()
         self._pending_started.clear()
         self._queued.clear()
+        for changed in self._media_fence_changed.values():
+            changed.set()
+        self._media_fence_sessions.clear()
+        self._media_fence_spent.clear()
+        self._media_fence_changed.clear()
         try:
             if self._http is not None:
                 await self._http.aclose()
@@ -477,7 +676,23 @@ class WhatsAppChannel:
                 f"The bridge dependencies are not installed. Run `npm install` in {self._config.bridge_dir}."
             )
         self._config.session_dir.mkdir(parents=True, exist_ok=True)
+        credentials_path = self._config.session_dir / "creds.json"
+        if credentials_path.exists():
+            try:
+                validate_whatsapp_session(self._config.session_dir)
+            except WhatsAppSessionError as exc:
+                raise ChannelError(
+                    f"{exc}. Run `pilotage whatsapp` to re-pair this profile."
+                ) from exc
+        # A missing file is deliberate: the resident bridge must surface the
+        # first-connection QR flow required by the product contract.
         self._config.media_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._completed_claim_store.initialize()
+        except (OSError, sqlite3.Error) as exc:
+            raise ChannelError(
+                "The WhatsApp completed-message ledger is unavailable."
+            ) from exc
 
     @property
     def _pidfile(self) -> Path:
@@ -536,16 +751,17 @@ class WhatsAppChannel:
             str(self._config.session_dir),
             "--media",
             str(self._config.media_dir),
+            "--log-key",
+            str(identity_key_path(self._config.state_dir)),
+            "--inbound-queue",
+            str(self._config.whatsapp_inbound_queue_dir),
             "--read-receipts",
             "1" if self._config.send_read_receipts else "0",
-            "--answer-groups",
-            "1" if self._config.answer_groups else "0",
         ]
         # stdout is inherited on purpose: the pairing QR code is printed there.
         child_env = build_bridge_environment(
             token=self._bridge_token,
             allowed_senders=list(self._config.allowed_senders),
-            allowed_groups=list(self._config.group_allow_from),
         )
         self._process = subprocess.Popen(
             command,
@@ -599,6 +815,10 @@ class WhatsAppChannel:
                 raise ChannelError(f"The bridge exited with code {self._process.returncode} before connecting.")
             try:
                 response = await self._http.get(f"{self._base_url}/health", timeout=5.0)
+                if response.status_code == 503:
+                    raise ChannelError(
+                        "The WhatsApp durable inbound queue is unavailable."
+                    )
                 if response.status_code == 200 and response.json().get("connected"):
                     return
                 if not announced:
@@ -623,8 +843,40 @@ class WhatsAppChannel:
                         break
                     continue
                 response = await self._http.get(f"{self._base_url}/messages")
+                if response.status_code == 503:
+                    self._fail(
+                        "The WhatsApp durable inbound queue is unavailable."
+                    )
+                    break
                 response.raise_for_status()
-                for event in response.json() or []:
+                payload = response.json()
+                if isinstance(payload, dict):
+                    events = payload.get("messages") or []
+                    self._reconcile_media_fences(payload.get("mediaFences") or [])
+                    queue_status = payload.get("queue") or {}
+                    if queue_status.get("storageHealthy") is False:
+                        self._fail(
+                            "The WhatsApp durable inbound queue is unhealthy."
+                        )
+                        break
+                    overflowed = bool(queue_status.get("overflowed"))
+                    if overflowed and not self._queue_overflow_reported:
+                        logger.error(
+                            "WhatsApp durable inbound backlog exceeded its safe "
+                            "high-water mark; intake remains durable while it drains."
+                        )
+                    elif not overflowed and self._queue_overflow_reported:
+                        logger.info(
+                            "WhatsApp durable inbound backlog recovered below its "
+                            "high-water mark."
+                        )
+                    self._queue_overflow_reported = overflowed
+                else:
+                    # Compatibility with a bridge from the previous release;
+                    # it is useful only during a rolling local restart.
+                    events = payload or []
+                    self._reconcile_media_fences([])
+                for event in events:
                     self._accept(event)
             except asyncio.CancelledError:
                 raise
@@ -632,7 +884,108 @@ class WhatsAppChannel:
                 logger.warning("Polling the bridge failed: %s", exc)
                 await asyncio.sleep(POLL_ERROR_BACKOFF_SECONDS)
                 continue
-            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            await asyncio.sleep(self._next_poll_interval())
+
+    def _next_poll_interval(self) -> float:
+        """Discover a following media upsert before a text batch can flush."""
+
+        if self._pending or self._media_fence_sessions:
+            return ACTIVE_BATCH_POLL_INTERVAL_SECONDS
+        return POLL_INTERVAL_SECONDS
+
+    def _reconcile_media_fences(self, values: Any) -> None:
+        """Mirror only authorized, concrete bridge download signals."""
+
+        next_sessions: Dict[str, str] = {}
+        if isinstance(values, list):
+            for value in values[:MAX_MEDIA_FENCES]:
+                if not isinstance(value, dict):
+                    continue
+                fence_id = str(value.get("fenceId") or "")
+                chat_id = str(value.get("chatId") or "")
+                sender_id = str(value.get("senderId") or "")
+                sender_number = str(value.get("senderNumber") or "")
+                raw_identities = value.get("identities")
+                identities = (
+                    [str(item) for item in raw_identities[:20]]
+                    if isinstance(raw_identities, list)
+                    else []
+                )
+                is_group = bool(value.get("isGroup"))
+                if not fence_id or not chat_id:
+                    continue
+                if not self._is_allowed(sender_id, sender_number, identities):
+                    continue
+                next_sessions[fence_id] = _session_id(
+                    chat_id,
+                    is_group,
+                    sender_id,
+                    sender_number,
+                    identities,
+                )
+
+        previous = self._media_fence_sessions
+        affected = set(previous.values()) | set(next_sessions.values())
+        for session_id in affected:
+            old_ids = {
+                fence_id
+                for fence_id, owner in previous.items()
+                if owner == session_id
+            }
+            new_ids = {
+                fence_id
+                for fence_id, owner in next_sessions.items()
+                if owner == session_id
+            }
+            if old_ids == new_ids:
+                continue
+            changed = self._media_fence_changed.pop(session_id, None)
+            if changed is not None:
+                changed.set()
+            if new_ids:
+                self._media_fence_changed[session_id] = asyncio.Event()
+
+        self._media_fence_sessions = next_sessions
+        self._media_fence_spent.intersection_update(next_sessions)
+
+    def _unspent_media_fences(self, session_id: str) -> set[str]:
+        return {
+            fence_id
+            for fence_id, owner in self._media_fence_sessions.items()
+            if owner == session_id and fence_id not in self._media_fence_spent
+        }
+
+    async def _wait_for_media_downloads(
+        self, session_id: str, hard_remaining: float
+    ) -> None:
+        if hard_remaining <= 0 or not self._unspent_media_fences(session_id):
+            return
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + min(
+            MEDIA_DOWNLOAD_GRACE_SECONDS,
+            hard_remaining,
+        )
+        try:
+            while self._unspent_media_fences(session_id):
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                changed = self._media_fence_changed.setdefault(
+                    session_id, asyncio.Event()
+                )
+                try:
+                    await asyncio.wait_for(changed.wait(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    break
+        finally:
+            # A hung bridge download can delay this batch once, not every
+            # later turn in the session.
+            self._media_fence_spent.update(
+                fence_id
+                for fence_id, owner in self._media_fence_sessions.items()
+                if owner == session_id
+            )
 
     async def _restart_bridge(self) -> bool:
         """Bring the bridge back after it died. Give up loudly rather than idle.
@@ -672,17 +1025,30 @@ class WhatsAppChannel:
             self._startup_events.append(dict(event))
             return
         chat_id = str(event.get("chatId") or "")
+        claim_id = str(event.get("_pilotageClaimId") or "")
         if not chat_id:
+            self._ack_later([claim_id])
             return
         is_group = bool(event.get("isGroup"))
-        if is_group and (
-            not self._is_group_allowed(chat_id)
-            or not self._group_message_is_triggered(event)
-        ):
+        if is_group and not self._group_message_is_triggered(event):
+            self._ack_later([claim_id])
             return
 
         message_id = str(event.get("messageId") or "")
-        if message_id and self._seen.is_duplicate(message_id):
+        dedup_id = claim_id or message_id
+        if claim_id:
+            try:
+                completed = self._completed_claims.contains(
+                    claim_id
+                ) or self._completed_claim_store.contains(claim_id)
+            except (OSError, sqlite3.Error):
+                logger.exception("Reading the WhatsApp completion ledger failed")
+                self._fail("The WhatsApp completed-message ledger failed.")
+                return
+            if completed:
+                self._ack_later([claim_id])
+                return
+        if dedup_id and self._seen.is_duplicate(dedup_id):
             return
 
         sender_id = str(event.get("senderId") or "")
@@ -695,11 +1061,13 @@ class WhatsAppChannel:
         )
         if not self._is_allowed(sender_id, sender_number, identities):
             self._report_blocked(sender_id, sender_number)
+            self._ack_later([claim_id])
             return
 
         attachments = media.collect(event, self._config.media_roots)
         text = self._compose_text(event, attachments)
         if not text and not attachments:
+            self._ack_later([claim_id])
             return
 
         session_id = _session_id(chat_id, is_group, sender_id, sender_number, identities)
@@ -717,13 +1085,21 @@ class WhatsAppChannel:
                 waiting = self._pending_tasks.pop(session_id, None)
                 if waiting is not None:
                     waiting.cancel()
-                self._pending.pop(session_id, None)
+                dropped = self._pending.pop(session_id, None)
                 self._pending_started.pop(session_id, None)
-                self._queued.pop(session_id, None)
+                queued = self._queued.pop(session_id, None)
+                for superseded in (dropped, queued):
+                    if superseded is not None:
+                        self._ack_later(superseded.claim_ids)
             self._pending_tasks_background.add(
                 asyncio.create_task(
                     self._run_command(
-                        chat_id, session_id, message_id, invocation
+                        chat_id,
+                        session_id,
+                        message_id,
+                        dedup_id,
+                        invocation,
+                        [claim_id] if claim_id else [],
                     )
                 )
             )
@@ -738,6 +1114,8 @@ class WhatsAppChannel:
             text=text,
             is_group=is_group,
             message_ids=[message_id],
+            dedup_ids=[dedup_id] if dedup_id else [],
+            claim_ids=[claim_id] if claim_id else [],
             attachments=attachments,
         )
         self._enqueue(message)
@@ -818,18 +1196,6 @@ class WhatsAppChannel:
         # Keep this independent check at the Python trust boundary.
         return bool(allowed.intersection(candidates))
 
-    def _is_group_allowed(self, chat_id: str) -> bool:
-        """Apply the group-chat location gate after the global sender gate."""
-        if self._config.group_policy != "allowlist":
-            return False
-        allowed = {
-            normalized
-            for value in self._config.group_allow_from
-            if (normalized := _bare_whatsapp_id(value))
-        }
-        candidate = _bare_whatsapp_id(chat_id)
-        return bool(candidate and ("*" in allowed or candidate in allowed))
-
     def _group_message_is_triggered(self, event: Dict[str, Any]) -> bool:
         """Require a direct trigger when configured, matching Hermes."""
         if not self._config.require_mention:
@@ -852,20 +1218,44 @@ class WhatsAppChannel:
         if identity in self._reported_blocked:
             return
         self._reported_blocked.add(identity)
-        logger.warning("Ignored a message from %s.", identity)
+        logger.warning(
+            "Ignored a message from %s.",
+            identity_pseudonym(identity, "wa"),
+        )
 
     async def _run_command(
         self,
         chat_id: str,
         session_id: str,
         message_id: str,
+        dedup_id: str,
         invocation: CommandInvocation,
+        claim_ids: List[str],
     ) -> None:
         """Dispatch one recognized command without involving the model."""
         try:
             await self._on_command(chat_id, session_id, message_id, invocation)
+            try:
+                self._mark_claims_completed(claim_ids)
+            except (OSError, sqlite3.Error, ValueError):
+                logger.exception(
+                    "Persisting completed WhatsApp command claims failed"
+                )
+                self._fail("The WhatsApp completed-message ledger failed.")
+                return
+            await self._settle_claims("ack", claim_ids)
+        except asyncio.CancelledError:
+            self._seen.discard(dedup_id)
+            await asyncio.shield(self._settle_claims("release", claim_ids))
+            raise
         except Exception:  # noqa: BLE001 - one bad command must not stop the channel
-            logger.exception("Command /%s failed for %s", invocation.command.name, chat_id)
+            logger.exception(
+                "Command /%s failed for %s",
+                invocation.command.name,
+                identity_pseudonym(chat_id, "wa"),
+            )
+            self._seen.discard(dedup_id)
+            await self._settle_claims("release", claim_ids)
         finally:
             self._pending_tasks_background.discard(asyncio.current_task())
 
@@ -876,6 +1266,8 @@ class WhatsAppChannel:
                 f"{pending.text}\n{message.text}" if pending.text else message.text
             )
         pending.message_ids.extend(message.message_ids)
+        pending.dedup_ids.extend(message.dedup_ids)
+        pending.claim_ids.extend(message.claim_ids)
         # A picture and the question about it can arrive separately. (Hermes)
         pending.attachments.extend(message.attachments)
         # Replies and quotes belong to the newest delivery address and sender
@@ -946,6 +1338,16 @@ class WhatsAppChannel:
 
         if self._pending_tasks.get(key) is not asyncio.current_task():
             return
+        hard_remaining = max(
+            0.0,
+            started + self._config.text_batch_hard_cap_seconds - loop.time(),
+        )
+        try:
+            await self._wait_for_media_downloads(key, hard_remaining)
+        except asyncio.CancelledError:
+            return
+        if self._pending_tasks.get(key) is not asyncio.current_task():
+            return
         self._flush_pending_now(key)
 
     def _queue_turn(self, message: InboundMessage) -> None:
@@ -968,10 +1370,31 @@ class WhatsAppChannel:
             while message is not None:
                 try:
                     await self._handler(message)
+                    try:
+                        self._mark_claims_completed(message.claim_ids)
+                    except (OSError, sqlite3.Error, ValueError):
+                        logger.exception(
+                            "Persisting completed WhatsApp claims failed"
+                        )
+                        self._fail(
+                            "The WhatsApp completed-message ledger failed."
+                        )
+                        self._queued.pop(key, None)
+                        break
+                    await self._settle_claims("ack", message.claim_ids)
                 except asyncio.CancelledError:
+                    self._release_seen(message.dedup_ids)
+                    await asyncio.shield(
+                        self._settle_claims("release", message.claim_ids)
+                    )
                     raise
                 except Exception:  # noqa: BLE001 - one turn must not stop the channel
-                    logger.exception("Handling a message from %s failed", message.chat_id)
+                    logger.exception(
+                        "Handling a message from %s failed",
+                        identity_pseudonym(message.chat_id, "wa"),
+                    )
+                    self._release_seen(message.dedup_ids)
+                    await self._settle_claims("release", message.claim_ids)
                 if self.failure:
                     self._queued.pop(key, None)
                     break
@@ -979,6 +1402,60 @@ class WhatsAppChannel:
         finally:
             if self._turn_tasks.get(key) is current:
                 self._turn_tasks.pop(key, None)
+
+    def _mark_claims_completed(self, claim_ids: List[str]) -> None:
+        self._completed_claim_store.mark(claim_ids)
+        for claim_id in claim_ids:
+            self._completed_claims.is_duplicate(claim_id)
+
+    def _cache_claims_completed(self, claim_ids: List[str]) -> None:
+        for claim_id in claim_ids:
+            self._completed_claims.is_duplicate(claim_id)
+
+    def _release_seen(self, message_ids: List[str]) -> None:
+        for message_id in message_ids:
+            self._seen.discard(message_id)
+
+    def _ack_later(self, claim_ids: List[str]) -> None:
+        claims = [value for value in claim_ids if value]
+        if not claims:
+            return
+        # If the HTTP acknowledgement itself is interrupted, a bridge replay
+        # must retry the acknowledgement rather than execute discarded or
+        # already-completed work again.
+        # Ignored/unauthorized work has no external side effect to protect
+        # across restart; only cache it while the acknowledgement is retried.
+        self._cache_claims_completed(claims)
+        task = asyncio.create_task(self._settle_claims("ack", claims))
+        self._pending_tasks_background.add(task)
+        task.add_done_callback(self._pending_tasks_background.discard)
+
+    async def _settle_claims(self, action: str, claim_ids: List[str]) -> bool:
+        claims = list(dict.fromkeys(value for value in claim_ids if value))
+        if not claims:
+            return True
+        endpoint = "ack" if action == "ack" else "release"
+        for attempt in range(1, CLAIM_SETTLE_ATTEMPTS + 1):
+            client = self._http
+            if client is None:
+                return False
+            try:
+                response = await client.post(
+                    f"{self._base_url}/messages/{endpoint}",
+                    json={"claims": claims},
+                    timeout=5.0,
+                )
+                response.raise_for_status()
+                return True
+            except (httpx.HTTPError, ValueError, TypeError):
+                if attempt < CLAIM_SETTLE_ATTEMPTS:
+                    await asyncio.sleep(CLAIM_SETTLE_BACKOFF_SECONDS)
+        logger.error(
+            "WhatsApp durable inbound %s remains pending for %d event(s)",
+            "acknowledgement" if action == "ack" else "release",
+            len(claims),
+        )
+        return False
 
     # -- outbound -----------------------------------------------------------
 
@@ -1020,6 +1497,7 @@ class WhatsAppChannel:
         reply_to: str = "",
         *,
         deliver_media: bool = True,
+        delivery_ledger: Optional[DeliveryUnitLedger] = None,
     ) -> SendResult:
         if self._http is None:
             return SendResult(False, "WhatsApp transport is not connected")
@@ -1038,51 +1516,119 @@ class WhatsAppChannel:
         # extracted attachment. System echoes opt out because user-derived text
         # must never turn a spoken MEDIA phrase into a file delivery.
         body = to_whatsapp(cleaned).strip()
-        if not body and not attachments:
+        chunks = split_whatsapp_message(body)
+        if not chunks and not attachments:
             return SendResult(False, "response had no deliverable content")
 
-        sent_any = False
-        try:
-            if body:
-                payload: Dict[str, Any] = {
-                    "chatId": target_chat_id,
-                    "message": body,
-                }
-                if reply_to:
-                    # Quote the message being answered. One agent can be talking
-                    # to several people at once, and an answer that arrives a
-                    # minute after the question is otherwise guesswork.
-                    payload["replyTo"] = reply_to
-                response = await self._http.post(
-                    f"{self._base_url}/send", json=payload
+        units = []
+        if delivery_ledger is not None:
+            descriptors = [
+                (
+                    "text",
+                    delivery_fingerprint(
+                        "whatsapp-text-v2",
+                        chunk,
+                        reply_to if index == 0 else "",
+                    ),
                 )
-                response.raise_for_status()
-                sent_any = True
-
+                for index, chunk in enumerate(chunks)
+            ]
             for attachment in attachments:
-                payload = {
-                    "chatId": target_chat_id,
-                    "filePath": str(attachment.path),
-                    "mediaType": attachment.media_type,
-                }
-                if attachment.media_type == "document":
-                    payload["fileName"] = attachment.file_name
-                response = await self._http.post(
-                    f"{self._base_url}/send-media",
-                    json=payload,
-                    timeout=MEDIA_HTTP_TIMEOUT_SECONDS,
+                fingerprint = await asyncio.to_thread(
+                    file_delivery_fingerprint,
+                    attachment.path,
+                    "whatsapp-file-v1",
+                    attachment.media_type,
+                    attachment.file_name,
                 )
-                response.raise_for_status()
-                sent_any = True
+                descriptors.append(("file", fingerprint))
+            units = await delivery_ledger.prepare(descriptors)
+
+        delivery_index = 0
+        for chunk_index, chunk in enumerate(chunks):
+            payload: Dict[str, Any] = {
+                "chatId": target_chat_id,
+                "message": chunk,
+            }
+            if reply_to and delivery_index == 0:
+                # Only the first text chunk quotes the inbound message.
+                payload["replyTo"] = reply_to
+            send = lambda payload=payload: self._send_http_unit("send", payload)
+            result = (
+                await delivery_ledger.run(units[delivery_index], send)
+                if delivery_ledger is not None
+                else await send()
+            )
+            if not result:
+                if delivery_ledger is None and delivery_index:
+                    return SendResult(False, result.error)
+                return result
+            delivery_index += 1
+            if chunk_index < len(chunks) - 1:
+                await asyncio.sleep(OUTBOUND_CHUNK_DELAY_SECONDS)
+
+        for attachment in attachments:
+            payload = {
+                "chatId": target_chat_id,
+                "filePath": str(attachment.path),
+                "mediaType": attachment.media_type,
+            }
+            if attachment.media_type == "document":
+                payload["fileName"] = attachment.file_name
+            send = lambda payload=payload: self._send_http_unit(
+                "send-media",
+                payload,
+                timeout=MEDIA_HTTP_TIMEOUT_SECONDS,
+            )
+            result = (
+                await delivery_ledger.run(units[delivery_index], send)
+                if delivery_ledger is not None
+                else await send()
+            )
+            if not result:
+                if delivery_ledger is None and delivery_index:
+                    return SendResult(False, result.error)
+                return result
+            delivery_index += 1
+        return SendResult(True)
+
+    async def _send_http_unit(
+        self,
+        endpoint: str,
+        payload: Dict[str, Any],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SendResult:
+        client = self._http
+        if client is None:
+            return SendResult(False, "WhatsApp transport is not connected")
+        try:
+            kwargs: Dict[str, Any] = {"json": payload}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            response = await client.post(f"{self._base_url}/{endpoint}", **kwargs)
+            response.raise_for_status()
+            try:
+                response_payload = response.json()
+            except (ValueError, TypeError, AttributeError):
+                response_payload = {}
+            message_id = (
+                str(response_payload.get("messageId") or "")
+                if isinstance(response_payload, dict)
+                else ""
+            )
+            return SendResult(True, message_id=message_id)
         except httpx.HTTPError as exc:
-            logger.error("Sending to %s failed: %s", target_chat_id, exc)
+            logger.error(
+                "Sending to %s failed: %s",
+                identity_pseudonym(str(payload.get("chatId") or ""), "wa"),
+                exc,
+            )
             retryable = False
             retry_after = None
             if isinstance(exc, httpx.HTTPStatusError):
                 status = exc.response.status_code
-                # The bridge can surface 500 after earlier internal chunks were
-                # already delivered, so only the explicit backpressure and
-                # pre-send not-connected guard are safe to retry.
+                # These responses are emitted before the bridge calls Baileys.
                 retryable = status in {429, 503}
                 if status == 429:
                     written = exc.response.headers.get("retry-after", "")
@@ -1090,21 +1636,13 @@ class WhatsAppChannel:
                         retry_after = float(written)
                     except (TypeError, ValueError):
                         retry_after = None
-            elif isinstance(exc, httpx.ConnectTimeout):
+            elif isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
                 retryable = True
-            elif isinstance(exc, httpx.TimeoutException):
-                # The bridge may have accepted a timed-out request.
-                retryable = False
-            elif isinstance(exc, httpx.TransportError):
-                retryable = True
-            if sent_any:
-                # Retrying the whole response would duplicate the already
-                # delivered text or an earlier attachment.
-                retryable = False
+            # Read/write/pool timeouts and other transport failures can happen
+            # after bridge acceptance, so their unit stays unsafe to retry.
             return SendResult(
                 False,
                 str(exc),
                 retryable=retryable,
                 retry_after=retry_after,
             )
-        return SendResult(True)

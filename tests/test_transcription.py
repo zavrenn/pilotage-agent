@@ -15,6 +15,7 @@ import httpx
 from openai import BadRequestError
 
 from pilotage import media, transcription
+from pilotage.delivery import DeliveryUnitLedger
 from pilotage.settings import ConfigError, Settings
 
 
@@ -529,7 +530,10 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
                 {"deliver_media": False},
             ),
         )
-        self.assertEqual(sent[1], (("123@c.us", "answer", "m1"), {}))
+        self.assertEqual(sent[1][0], ("123@c.us", "answer", "m1"))
+        self.assertIsInstance(
+            sent[1][1]["delivery_ledger"], DeliveryUnitLedger
+        )
 
 
 if __name__ == "__main__":

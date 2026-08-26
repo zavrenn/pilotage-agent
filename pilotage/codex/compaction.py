@@ -14,6 +14,7 @@ DEFAULT_COMPACT_THRESHOLD = 200_000
 RETAINED_USER_MESSAGE_TOKEN_BUDGET = 64_000
 
 _ELIGIBLE_MODEL_MARKER = "gpt-5.6"
+_OPAQUE_REPLAY_TYPES = frozenset({"reasoning", "compaction"})
 
 
 def is_native_compaction_model(model: Optional[str]) -> bool:
@@ -41,6 +42,33 @@ def has_compaction_checkpoint(items: Any) -> bool:
         and bool(item["encrypted_content"])
         for item in (items if isinstance(items, list) else ())
     )
+
+
+def has_opaque_replay(items: Any) -> bool:
+    """Return whether a request contains backend-issued encrypted replay."""
+
+    return any(
+        isinstance(item, dict)
+        and item.get("type") in _OPAQUE_REPLAY_TYPES
+        and isinstance(item.get("encrypted_content"), str)
+        and bool(item["encrypted_content"])
+        for item in (items if isinstance(items, list) else ())
+    )
+
+
+def strip_opaque_replay(items: Any) -> List[Dict[str, Any]]:
+    """Remove only encrypted reasoning/compaction items for one safe retry."""
+
+    return [
+        item
+        for item in (items if isinstance(items, list) else ())
+        if not (
+            isinstance(item, dict)
+            and item.get("type") in _OPAQUE_REPLAY_TYPES
+            and isinstance(item.get("encrypted_content"), str)
+            and bool(item["encrypted_content"])
+        )
+    ]
 
 
 def persistent_compaction_items(items: Any) -> List[Dict[str, str]]:

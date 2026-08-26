@@ -349,9 +349,8 @@ def _search_stdout_and_limit(result: ExecuteResult) -> tuple[str, Optional[str]]
 def _split_tool_diagnostics(output: str) -> tuple[str, str]:
     """Separate rg/grep diagnostic lines from real match output.
 
-    ``_exec`` runs commands with ``stderr=subprocess.STDOUT``, so error and
-    warning text from ``rg``/``grep`` is interleaved with match lines in a
-    single stream. Diagnostics must not be parsed as matches, and on a hard
+    ``_exec`` keeps stderr separate on success and appends bounded stderr on a
+    failed command. Diagnostics must not be parsed as matches, and on a hard
     failure they are the error message to surface.
 
     Returns ``(diagnostics, payload)`` where ``payload`` contains only lines
@@ -929,7 +928,15 @@ class ShellFileOperations(FileOperations):
         # Resolve cwd from the live env so `cd` commands are picked up.
         # Fall through to init-time self.cwd only if the env doesn't track cwd.
         effective_cwd = cwd or getattr(self.env, 'cwd', None) or self.cwd
-        result = self.env.execute(command, cwd=effective_cwd, **kwargs)
+        # Internal reads, patches, and searches consume stdout as data. Shell
+        # hooks may write legitimate diagnostics to stderr, so keep it off the
+        # successful data channel. This flag never changes command policy.
+        result = self.env.execute(
+            command,
+            cwd=effective_cwd,
+            merge_stderr=False,
+            **kwargs,
+        )
         exit_code = result.get("returncode", 0)
         # A stdin write failure with an otherwise-clean child exit is still
         # a failure: the child never received the intended input. write_file
@@ -2896,7 +2903,7 @@ class ShellFileOperations(FileOperations):
         glob_expr = f" --glob {self._escape_shell_arg(file_glob)}" if file_glob else ""
         probe = self._exec(
             f"rg -i --count-matches{glob_expr} "
-            f"{self._escape_shell_arg(pattern)} {self._escape_native_tool_arg(path)} "
+            f"-- {self._escape_shell_arg(pattern)} {self._escape_native_tool_arg(path)} "
             f"2>/dev/null | head -50",
             timeout=30,
         )
@@ -2913,7 +2920,7 @@ class ShellFileOperations(FileOperations):
         # missing from results).
         hidden = self._exec(
             f"rg --hidden --no-ignore --count-matches{glob_expr} "
-            f"{self._escape_shell_arg(pattern)} {self._escape_native_tool_arg(path)} "
+            f"-- {self._escape_shell_arg(pattern)} {self._escape_native_tool_arg(path)} "
             f"2>/dev/null | head -50",
             timeout=30,
         )
@@ -2927,7 +2934,7 @@ class ShellFileOperations(FileOperations):
         if re.search(r"[.\[\](){}?*+^$\\|]", pattern):
             fixed = self._exec(
                 f"rg -F --count-matches{glob_expr} "
-                f"{self._escape_shell_arg(pattern)} {self._escape_native_tool_arg(path)} "
+                f"-- {self._escape_shell_arg(pattern)} {self._escape_native_tool_arg(path)} "
                 f"2>/dev/null | head -50",
                 timeout=30,
             )
@@ -3140,6 +3147,7 @@ class ShellFileOperations(FileOperations):
             cmd_parts.append("-c")  # Count per file
         
         # Add pattern and path
+        cmd_parts.append("--")
         cmd_parts.append(self._escape_shell_arg(pattern))
         # rg is a native Windows binary when installed via winget/cargo/choco:
         # it needs the C:/... path form, not the MSYS /c/... form (which
@@ -3161,9 +3169,8 @@ class ShellFileOperations(FileOperations):
         result = self._exec(cmd, timeout=60)
         stdout, limit_reason = _search_stdout_and_limit(result)
 
-        # _exec merges stderr into stdout (stderr=subprocess.STDOUT), so rg's
-        # diagnostic lines ("rg: <file>: <error>", "rg: regex parse error:")
-        # are interleaved with match output. Split them out: diagnostics must
+        # _exec appends bounded stderr when rg fails. Split diagnostic lines
+        # ("rg: <file>: <error>", "rg: regex parse error:") out: they must
         # not be parsed as matches, and on a hard error they ARE the message.
         diagnostics, payload = _split_tool_diagnostics(stdout)
 
@@ -3288,6 +3295,7 @@ class ShellFileOperations(FileOperations):
         # ``.*`` to exclude the entire search. Anchor relative paths at the
         # shell's live cwd; quoting $PWD separately keeps user paths escaped
         # while working across local, container, and remote backends.
+        cmd_parts.append("--")
         cmd_parts.append(self._escape_shell_arg(pattern))
         is_absolute = path.startswith(("/", "\\\\")) or bool(
             re.match(r"^[A-Za-z]:[\\/]", path)
@@ -3314,8 +3322,8 @@ class ShellFileOperations(FileOperations):
         result = self._exec(cmd, timeout=60)
         stdout, limit_reason = _search_stdout_and_limit(result)
 
-        # _exec merges stderr into stdout, so grep's diagnostic lines
-        # ("grep: <file>: <error>") are interleaved with matches. Split them
+        # _exec appends bounded stderr when grep fails. Split its diagnostic
+        # lines ("grep: <file>: <error>") out
         # out so they're never parsed as matches and so a hard error has a
         # clean message.
         diagnostics, payload = _split_tool_diagnostics(stdout)

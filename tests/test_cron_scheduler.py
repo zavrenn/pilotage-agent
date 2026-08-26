@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from pilotage.agent import TurnResult
 from pilotage.cron.jobs import CronStore
 from pilotage.cron.scheduler import (
     CronExecutionError,
@@ -30,9 +31,12 @@ class Factory:
         factory.configs.append(config)
 
         class FakeAgent:
-            async def respond(self, session_id, prompt):
+            async def respond_result(self, session_id, prompt):
                 factory.instances.append((session_id, prompt))
-                return await factory.responder(session_id, prompt)
+                result = await factory.responder(session_id, prompt)
+                if isinstance(result, TurnResult):
+                    return result
+                return TurnResult(text=result, terminal_completed=True)
 
         return FakeAgent()
 
@@ -84,8 +88,8 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             values["origin"] = origin
         return self.store.create_job(**values)
 
-    async def deliver(self, origin, text):
-        self.deliveries.append((origin, text))
+    async def deliver(self, origin, text, message_ref):
+        self.deliveries.append((origin, text, message_ref))
 
     async def scheduler(self, responder, deliver=None, channel_configs=None):
         factory = Factory(responder)
@@ -181,8 +185,10 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             [(
                 {"channel": "telegram", "chat_id": "-10042", "thread_id": "7"},
                 "Home result",
+                self.deliveries[0][2],
             )],
         )
+        self.assertTrue(self.deliveries[0][2].startswith(f"{job['id']}:"))
 
     async def test_missing_explicit_home_is_a_visible_delivery_error(self):
         job = self.create(origin=False, deliver="telegram")
@@ -238,6 +244,71 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Cron run failed", self.store.latest_output(job["id"]))
         self.assertIn("failed", self.deliveries[0][1])
 
+    async def test_partial_response_is_not_saved_or_marked_successful(self):
+        job = self.create()
+
+        async def partial(_session, _prompt):
+            return TurnResult(text="plausible partial", terminal_completed=False)
+
+        await self.scheduler(partial)
+        finished = await wait_until(
+            lambda: (
+                value
+                if (value := self.store.resolve_job(job["id"]))["state"] == "error"
+                else None
+            )
+        )
+
+        self.assertIn("terminal completion proof", finished["last_error"])
+        self.assertNotIn("plausible partial", self.store.latest_output(job["id"]))
+        self.assertNotIn("plausible partial", self.deliveries[0][1])
+
+    async def test_silent_response_requires_terminal_completion_proof(self):
+        job = self.create()
+
+        async def unproved_silence(_session, _prompt):
+            return TurnResult(text="[SILENT]", terminal_completed=False)
+
+        await self.scheduler(unproved_silence)
+        finished = await wait_until(
+            lambda: (
+                value
+                if (value := self.store.resolve_job(job["id"]))["state"] == "error"
+                else None
+            )
+        )
+
+        self.assertEqual(finished["last_status"], "error")
+        self.assertIn("terminal completion proof", finished["last_error"])
+
+    async def test_output_verification_failure_is_not_marked_successful(self):
+        job = self.create()
+        real_save = self.store.save_output
+        calls = 0
+
+        def corrupt_save(*args, **kwargs):
+            nonlocal calls
+            path = real_save(*args, **kwargs)
+            calls += 1
+            if calls == 1 and path is not None:
+                path.write_text("corrupt", encoding="utf-8")
+            return path
+
+        async def answer(_session, _prompt):
+            return "verified answer"
+
+        with mock.patch.object(self.store, "save_output", side_effect=corrupt_save):
+            await self.scheduler(answer)
+            finished = await wait_until(
+                lambda: (
+                    value
+                    if (value := self.store.resolve_job(job["id"]))["state"] == "error"
+                    else None
+                )
+            )
+
+        self.assertIn("failed verification", finished["last_error"])
+
     async def test_missing_configured_workdir_fails_closed(self):
         workdir = self.root / "temporary-project"
         workdir.mkdir()
@@ -290,7 +361,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         async def answer(_session, _prompt):
             return "result"
 
-        async def broken_delivery(_origin, _text):
+        async def broken_delivery(_origin, _text, _message_ref):
             raise OSError("bridge down")
 
         await self.scheduler(answer, deliver=broken_delivery)
@@ -370,7 +441,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         async def answer(_session, _prompt):
             return "saved result"
 
-        async def blocked_delivery(_origin, _text):
+        async def blocked_delivery(_origin, _text, _message_ref):
             delivery_started.set()
             await asyncio.Event().wait()
 

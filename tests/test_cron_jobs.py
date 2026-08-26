@@ -6,9 +6,11 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from pilotage.cron.jobs import (
     AmbiguousJobReference,
@@ -246,6 +248,39 @@ class CrudTests(StoreCase):
         self.assertEqual(errors, [])
         self.assertEqual(len(self.store.load_jobs()), 20)
 
+    def test_in_process_store_lock_wait_is_bounded(self):
+        acquired = threading.Event()
+        release = threading.Event()
+
+        def hold_lock():
+            self.store._thread_lock.acquire()
+            acquired.set()
+            release.wait(timeout=2)
+            self.store._thread_lock.release()
+
+        thread = threading.Thread(target=hold_lock)
+        thread.start()
+        self.assertTrue(acquired.wait(timeout=1))
+        started = time.monotonic()
+        try:
+            with (
+                mock.patch("pilotage.cron.jobs._LOCK_TIMEOUT_SECONDS", 0.05),
+                self.assertRaisesRegex(CronError, "Timed out waiting"),
+            ):
+                self.store.load_jobs()
+        finally:
+            release.set()
+            thread.join(timeout=1)
+
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertFalse(thread.is_alive())
+
+    def test_store_lock_is_reentrant_in_the_same_thread(self):
+        with mock.patch("pilotage.cron.jobs._LOCK_TIMEOUT_SECONDS", 0.05):
+            with self.store._locked():
+                with self.store._locked():
+                    self.assertEqual(self.store._load_unlocked(), [])
+
 
 class ClaimTests(StoreCase):
     def test_one_shot_is_claimed_once_and_retained(self):
@@ -269,7 +304,40 @@ class ClaimTests(StoreCase):
         self.assertEqual(recovered["state"], "error")
         self.assertIn("without completion", recovered["last_error"])
 
-    def test_recurring_claim_advances_and_reanchors(self):
+    def test_never_started_one_shot_past_grace_is_retired_visibly(self):
+        job = self.create()
+        self.clock.advance(seconds=121)
+
+        self.assertEqual(self.store.claim_due_jobs(), [])
+        missed = self.store.resolve_job(job["id"])
+
+        self.assertFalse(missed["enabled"])
+        self.assertEqual(missed["state"], "error")
+        self.assertEqual(missed["last_status"], "error")
+        self.assertIsNone(missed["next_run_at"])
+        self.assertIsNotNone(missed["missed_at"])
+        self.assertIn("missed its 120s grace", missed["last_error"])
+
+    def test_one_shot_within_grace_still_runs(self):
+        job = self.create()
+        self.clock.advance(seconds=119)
+
+        claimed = self.store.claim_due_jobs()
+
+        self.assertEqual([item["id"] for item in claimed], [job["id"]])
+
+    def test_operator_can_explicitly_retrigger_a_missed_one_shot(self):
+        job = self.create()
+        self.clock.advance(seconds=121)
+        self.store.claim_due_jobs()
+
+        retriggered = self.store.trigger_job(job["id"])
+        claimed = self.store.claim_due_jobs()
+
+        self.assertTrue(retriggered["enabled"])
+        self.assertEqual([item["id"] for item in claimed], [job["id"]])
+
+    def test_recurring_claim_and_quick_completion_preserve_phase(self):
         job = self.create(schedule="every 1m")
         self.assertEqual(self.store.claim_due_jobs(), [])
         self.clock.advance(minutes=1)
@@ -280,7 +348,40 @@ class ClaimTests(StoreCase):
         self.store.finish_job(job["id"], owner=claimed["claim"]["by"], success=True)
         finished = self.store.resolve_job(job["id"])
         self.assertEqual(
-            finished["next_run_at"], (self.clock() + timedelta(minutes=1)).isoformat()
+            finished["next_run_at"],
+            (self.clock() + timedelta(seconds=40)).isoformat(),
+        )
+
+    def test_recurring_run_reanchors_only_after_reserved_slot_passes(self):
+        job = self.create(schedule="every 1m")
+        self.clock.advance(minutes=1)
+        claimed = self.store.claim_due_jobs()[0]
+        self.clock.advance(minutes=2)
+
+        self.store.finish_job(
+            job["id"], owner=claimed["claim"]["by"], success=True
+        )
+
+        finished = self.store.resolve_job(job["id"])
+        self.assertEqual(
+            finished["next_run_at"],
+            (self.clock() + timedelta(minutes=1)).isoformat(),
+        )
+
+    def test_cron_expression_keeps_its_wall_clock_slot(self):
+        job = self.create(schedule="*/5 * * * *")
+        self.clock.advance(minutes=5, seconds=20)
+
+        claimed = self.store.claim_due_jobs()[0]
+        expected = self.clock().replace(minute=40, second=0, microsecond=0)
+        self.clock.advance(seconds=20)
+        self.store.finish_job(
+            job["id"], owner=claimed["claim"]["by"], success=True
+        )
+
+        self.assertEqual(
+            self.store.resolve_job(job["id"])["next_run_at"],
+            expected.isoformat(),
         )
 
     def test_stale_recurring_claim_recovers_to_one_run(self):

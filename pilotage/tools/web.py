@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
+from ..redact import redact_sensitive_text
 from ..settings import ConfigError, Settings
 from .registry import Tool, ToolContext, tool_error
 from .spill_safety import ensure_spill_dir, write_text_exclusive
@@ -54,11 +55,42 @@ _MAX_EXTRACT_URLS = 5
 _EXTRACT_TIMEOUT_SECONDS = 60.0
 _DEFAULT_WEB_RESULT_CHAR_LIMIT = 100_000
 
+_SEARCH_FAILURE_MESSAGE = (
+    "DuckDuckGo search failed. The backend may be unavailable or "
+    "rate-limiting; try again later."
+)
+_URL_EXTRACT_FAILURE_MESSAGE = (
+    "Page extraction failed for this URL; try again later."
+)
+_EXTRACT_FAILURE_MESSAGE = (
+    "Web extraction failed before results were available; try again later."
+)
+
 # Test-only hook forwarded to the isolated worker. Production never sets it.
 _test_hook: Optional[str] = None
 _last_worker_proc: Optional[subprocess.Popen] = None
 _firecrawl_client: Any = None
 _firecrawl_client_config: Optional[tuple[str, Optional[str], Optional[str]]] = None
+
+
+class WebConfigurationError(ValueError):
+    """A code-owned setup failure whose message is safe for tool output."""
+
+
+def _redacted_exception_detail(exc: BaseException) -> str:
+    return redact_sensitive_text(f"{type(exc).__name__}: {exc}")
+
+
+def _web_log_target(url: str) -> str:
+    """Keep request paths, queries, and credentials out of routine logs."""
+
+    try:
+        parsed = urlparse(str(url or ""))
+        if parsed.scheme in {"http", "https"} and parsed.hostname:
+            return f"{parsed.scheme}://{parsed.hostname}"
+    except ValueError:
+        pass
+    return "<invalid-url>"
 
 
 def _run_ddgs_search(query: str, safe_limit: int) -> list[dict[str, Any]]:
@@ -203,9 +235,8 @@ def _search(query: str, limit: Any = 5) -> Dict[str, Any]:
         results = _run_ddgs_search_bounded(query, safe_limit)
     except TimeoutError:
         logger.warning(
-            "DDGS search timed out after %gs for query: %r",
+            "DDGS search timed out after %gs",
             _SEARCH_TIMEOUT_SECONDS,
-            query,
         )
         return {
             "success": False,
@@ -215,10 +246,12 @@ def _search(query: str, limit: Any = 5) -> Dict[str, Any]:
             ),
         }
     except Exception as exc:  # noqa: BLE001 - DDGS owns its exception types
-        logger.warning("DDGS search failed for %r: %s", query, exc)
-        return {"success": False, "error": f"DuckDuckGo search failed: {exc}"}
+        logger.warning(
+            "DDGS search failed: %s", _redacted_exception_detail(exc)
+        )
+        return {"success": False, "error": _SEARCH_FAILURE_MESSAGE}
 
-    logger.info("DDGS search %r returned %d results", query, len(results))
+    logger.info("DDGS search returned %d results", len(results))
     return {"success": True, "data": {"web": results}}
 
 
@@ -262,7 +295,7 @@ def _get_direct_firecrawl_config(
     api_key = os.environ.get("FIRECRAWL_API_KEY", "").strip()
     api_url = os.environ.get("FIRECRAWL_API_URL", "").strip().rstrip("/")
     if not api_key and not api_url:
-        raise ValueError(
+        raise WebConfigurationError(
             "Web extraction is not configured. Set FIRECRAWL_API_KEY in the "
             "profile .env for cloud Firecrawl, or FIRECRAWL_API_URL for a "
             "self-hosted Firecrawl instance."
@@ -286,7 +319,7 @@ def _get_firecrawl_client() -> Any:
     try:
         from firecrawl import Firecrawl  # type: ignore
     except ImportError as exc:
-        raise ValueError(
+        raise WebConfigurationError(
             "The firecrawl-py dependency is not installed. Run "
             "scripts/install.sh again before using web extraction."
         ) from exc
@@ -342,7 +375,7 @@ async def _extract_firecrawl(
     results: list[Dict[str, Any]] = []
     for url in urls:
         try:
-            logger.info("Firecrawl scraping: %s", url)
+            logger.info("Firecrawl scraping: %s", _web_log_target(url))
             try:
                 scrape_result = await asyncio.wait_for(
                     asyncio.to_thread(
@@ -353,7 +386,9 @@ async def _extract_firecrawl(
                     timeout=_EXTRACT_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:
-                logger.warning("Firecrawl scrape timed out for %s", url)
+                logger.warning(
+                    "Firecrawl scrape timed out for %s", _web_log_target(url)
+                )
                 results.append(
                     {
                         "url": url,
@@ -408,7 +443,7 @@ async def _extract_firecrawl(
             if not await async_is_safe_url(final_url):
                 logger.info(
                     "Blocked redirected web_extract for unsafe final URL: %s",
-                    final_url,
+                    _web_log_target(final_url),
                 )
                 results.append(
                     {
@@ -440,14 +475,18 @@ async def _extract_firecrawl(
                 }
             )
         except Exception as exc:  # noqa: BLE001 - one URL must not lose the rest
-            logger.debug("Firecrawl scrape failed for %s: %s", url, exc)
+            logger.warning(
+                "Firecrawl scrape failed for %s: %s",
+                _web_log_target(url),
+                _redacted_exception_detail(exc),
+            )
             results.append(
                 {
                     "url": url,
                     "title": "",
                     "content": "",
                     "raw_content": "",
-                    "error": str(exc),
+                    "error": _URL_EXTRACT_FAILURE_MESSAGE,
                 }
             )
     return results
@@ -496,7 +535,11 @@ def _store_full_text(context: ToolContext, url: str, content: str) -> Optional[s
         write_text_exclusive(path, content, private=True, overwrite=True)
         return str(path.resolve())
     except Exception as exc:  # noqa: BLE001 - storage is best effort
-        logger.debug("Failed to store full web_extract text for %s: %s", url, exc)
+        logger.debug(
+            "Failed to store full web_extract text for %s: %s",
+            _web_log_target(url),
+            _redacted_exception_detail(exc),
+        )
         return None
 
 
@@ -766,9 +809,14 @@ async def handle_web_extract(args: Dict[str, Any], context: ToolContext) -> str:
                 raw_content = str(raw_content)
             clean_contents.append(convert_base64_images_to_links(raw_content))
         return _fit_extract_payload(context, results, clean_contents, char_limit)
-    except Exception as exc:  # noqa: BLE001 - the model needs a recoverable error
-        logger.debug("Error extracting content: %s", exc)
-        return tool_error(f"Error extracting content: {exc}", success=False)
+    except WebConfigurationError as exc:
+        logger.info("Web extraction is unavailable: %s", exc)
+        return tool_error(str(exc), success=False)
+    except Exception as exc:  # noqa: BLE001 - normalize external failures
+        logger.warning(
+            "Web extraction failed: %s", _redacted_exception_detail(exc)
+        )
+        return tool_error(_EXTRACT_FAILURE_MESSAGE, success=False)
 
 
 WEB_SEARCH_SCHEMA = {

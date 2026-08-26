@@ -11,8 +11,10 @@ from unittest import mock
 
 from pilotage import main
 from pilotage.channels.telegram import InboundMessage
+from pilotage.channels.whatsapp import ChannelError
 from pilotage.config import Config, TELEGRAM_FORMATTING_NOTE
 from pilotage.cron.jobs import _normalize_origin
+from pilotage.delivery import DeliveryUnitLedger
 
 
 class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -158,12 +160,10 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 {"thread_id": "9", "deliver_media": False},
             ),
         )
-        self.assertEqual(
-            sent[1],
-            (
-                ("42", "answer", "99"),
-                {"thread_id": "9"},
-            ),
+        self.assertEqual(sent[1][0], ("42", "answer", "99"))
+        self.assertEqual(sent[1][1]["thread_id"], "9")
+        self.assertIsInstance(
+            sent[1][1]["delivery_ledger"], DeliveryUnitLedger
         )
         with contextlib.closing(
             sqlite3.connect(self.root / "delivery.db")
@@ -174,10 +174,11 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     " FROM delivery_obligations"
                 ).fetchall(),
                 [("telegram", "42", "9", "delivered")],
-            )
+        )
         delivery["accepted"] = False
-        with self.assertRaisesRegex(main.TelegramChannelError, "approval request"):
+        self.assertFalse(
             await seen["approval_notify"]("Approve this change")
+        )
 
     async def test_dual_channel_cron_receives_both_channel_configs(self):
         (self.root / "config.yaml").write_text(
@@ -261,6 +262,57 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
             seen["channel_configs"]["telegram"].settings.channel,
             "telegram",
         )
+
+    async def test_whatsapp_failure_cannot_consume_telegram_startup_updates(self):
+        (self.root / "config.yaml").write_text(
+            "whatsapp:\n"
+            "  enabled: true\n"
+            "telegram:\n"
+            "  enabled: true\n"
+            "cron:\n"
+            "  enabled: false\n",
+            encoding="utf-8",
+        )
+        config = Config.load(channel="whatsapp")
+        starts = []
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+        class BaseChannel:
+            def __init__(self, _config, _handler, _manage):
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                pass
+
+        class FailingWhatsApp(BaseChannel):
+            async def start(self):
+                starts.append("whatsapp")
+                raise ChannelError("WhatsApp unavailable")
+
+        class ObservingTelegram(BaseChannel):
+            async def start(self):
+                starts.append("telegram")
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FailingWhatsApp),
+            mock.patch.object(main, "TelegramChannel", ObservingTelegram),
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            result = await main.command_run(config)
+
+        self.assertEqual(result, 1)
+        self.assertEqual(starts, ["whatsapp"])
 
     def test_cron_origin_keeps_telegram_topic_id(self):
         self.assertEqual(

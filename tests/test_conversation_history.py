@@ -14,13 +14,12 @@ import sqlite3
 import tempfile
 import time
 import unittest
-from contextlib import closing, redirect_stdout
+from contextlib import closing
 from datetime import datetime, timezone
-from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from pilotage import main, media
+from pilotage import media
 from pilotage.agent import Agent
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
@@ -589,46 +588,13 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(called)
 
 
-class OneShotTests(unittest.IsolatedAsyncioTestCase):
-    """`pilotage ask` has to stay a one-shot.
-
-    It is the check you run when the agent has gone quiet: does the login still
-    work, does the model still answer. A check that remembers its own past
-    questions answers differently every time it is run, and writes into the
-    conversations of the agent it was meant to diagnose.
-    """
+class EphemeralStoreTests(unittest.TestCase):
 
     def test_a_store_without_a_path_keeps_nothing(self):
         store = ConversationStore(path=None)
         store.append("cli", [("user", "still there?"), ("assistant", "Yes.")])
         store.new_session("cli")
         self.assertEqual(store.load("cli", 10), [])
-
-    async def test_the_ask_command_is_given_nowhere_to_write(self):
-        stores = []
-
-        class FakeAgent:
-            def __init__(self, config, store=None):
-                stores.append(store)
-
-            async def respond(self, chat_id, question, on_notice=None):
-                return "Answered."
-
-            async def close(self):
-                pass
-
-        real = main.Agent
-        main.Agent = FakeAgent
-        self.addCleanup(setattr, main, "Agent", real)
-        with redirect_stdout(StringIO()):
-            self.assertEqual(await main.command_ask(Config.load(), "still there?"), 0)
-
-        self.assertEqual(len(stores), 1)
-        self.assertIsNotNone(stores[0], "ask fell back to the agent's own conversations")
-        # Asked behaviourally: the store it was handed forgets what it is told.
-        stores[0].append("cli", [("user", "still there?")])
-        self.assertEqual(stores[0].load("cli", 10), [])
-
 
 if __name__ == "__main__":
     unittest.main()

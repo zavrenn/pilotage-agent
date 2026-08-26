@@ -88,6 +88,23 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(PATCH_SCHEMA["parameters"]["required"], ["mode"])
         self.assertEqual(SEARCH_FILES_SCHEMA["parameters"]["required"], ["pattern"])
 
+    def test_internal_file_commands_request_an_exact_stdout_channel(self):
+        class Environment:
+            cwd = "/workspace"
+
+            def __init__(self):
+                self.kwargs = None
+
+            def execute(self, _command, **kwargs):
+                self.kwargs = kwargs
+                return {"output": "payload", "returncode": 0}
+
+        environment = Environment()
+        result = ShellFileOperations(environment)._exec("printf payload")
+
+        self.assertEqual(result.stdout, "payload")
+        self.assertIs(environment.kwargs["merge_stderr"], False)
+
     def test_whatsapp_auth_state_is_read_blocked(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
@@ -386,6 +403,57 @@ class SchemaTests(unittest.TestCase):
             )
             operations.write_file.assert_not_called()
             operations.patch_replace.assert_not_called()
+
+
+class SearchPatternBoundaryTests(unittest.TestCase):
+    class Environment:
+        cwd = "/workspace"
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **_kwargs):
+            self.commands.append(command)
+            return {"output": "", "returncode": 1}
+
+    def setUp(self):
+        self.environment = self.Environment()
+        self.operations = ShellFileOperations(self.environment)
+
+    def _assert_pattern_boundary(self, command: str, pattern: str):
+        escaped = self.operations._escape_shell_arg(pattern)
+        self.assertIn(f" -- {escaped} ", command)
+
+    def test_leading_dash_patterns_are_operands_for_rg_and_grep(self):
+        for pattern in ("-77", "--pdf-engine", "->"):
+            with self.subTest(engine="rg", pattern=pattern):
+                self.environment.commands.clear()
+                self.operations._search_with_rg(
+                    pattern, ".", None, 20, 0, "matches", 0
+                )
+                self.assertEqual(len(self.environment.commands), 1)
+                self._assert_pattern_boundary(
+                    self.environment.commands[0], pattern
+                )
+
+            with self.subTest(engine="grep", pattern=pattern):
+                self.environment.commands.clear()
+                self.operations._search_with_grep(
+                    pattern, ".", None, 20, 0, "matches", 0
+                )
+                self.assertEqual(len(self.environment.commands), 1)
+                self._assert_pattern_boundary(
+                    self.environment.commands[0], pattern
+                )
+
+    def test_every_zero_match_probe_uses_the_operand_boundary(self):
+        pattern = "-[x]"
+        self.operations._command_cache["rg"] = True
+        self.operations._zero_match_probe(pattern, ".", None)
+
+        self.assertEqual(len(self.environment.commands), 3)
+        for command in self.environment.commands:
+            self._assert_pattern_boundary(command, pattern)
 
 
 class OutputBoundTests(unittest.TestCase):
@@ -766,6 +834,34 @@ class ReplacePatchTests(FileToolCase):
         )
         self.assertTrue(result["success"])
         self.assertEqual(path.read_text(), "def run():\n  new()\n")
+
+    async def test_approximate_block_match_fails_closed_without_touching_bytes(self):
+        path = self.workspace / "danger.py"
+        original = (
+            b"def target():\n"
+            b"    debit_account()\n"
+            b"    send_invoice()\n"
+            b"    return True\n"
+        )
+        path.write_bytes(original)
+
+        result = await self.call(
+            handle_patch,
+            {
+                "mode": "replace",
+                "path": "danger.py",
+                "old_string": (
+                    "def target():\n"
+                    "    credit_account()\n"
+                    "    archive_invoice()\n"
+                    "    return True"
+                ),
+                "new_string": "def target():\n    return False",
+            },
+        )
+
+        self.assertIn("Could not find a match", result["error"])
+        self.assertEqual(path.read_bytes(), original)
 
     async def test_repeating_an_applied_patch_is_a_successful_noop(self):
         (self.workspace / "done.txt").write_text("new value")

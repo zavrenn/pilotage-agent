@@ -46,39 +46,13 @@ test('matchesAllowedUser accepts mapped lid sender when allowlist only contains 
   }
 });
 
-test('matchesAllowedUser treats * as allow-all wildcard', () => {
+test('matchesAllowedUser never treats * as an allowed person', () => {
   const sessionDir = mkdtempSync(path.join(os.tmpdir(), 'hermes-wa-allowlist-'));
 
   try {
     const allowedUsers = parseAllowedUsers('*');
-    assert.equal(matchesAllowedUser('19175395595@s.whatsapp.net', allowedUsers, sessionDir), true);
-    assert.equal(matchesAllowedUser('267383306489914@lid', allowedUsers, sessionDir), true);
-  } finally {
-    rmSync(sessionDir, { recursive: true, force: true });
-  }
-});
-
-test('the same proven matcher accepts an allowlisted group jid', () => {
-  const sessionDir = mkdtempSync(path.join(os.tmpdir(), 'hermes-wa-allowlist-'));
-
-  try {
-    const allowedGroups = parseAllowedUsers('120363001234567890@g.us');
-    assert.equal(
-      matchesAllowedUser(
-        '120363001234567890@g.us',
-        allowedGroups,
-        sessionDir,
-      ),
-      true,
-    );
-    assert.equal(
-      matchesAllowedUser(
-        '120363999999999999@g.us',
-        allowedGroups,
-        sessionDir,
-      ),
-      false,
-    );
+    assert.equal(matchesAllowedUser('19175395595@s.whatsapp.net', allowedUsers, sessionDir), false);
+    assert.equal(matchesAllowedUser('267383306489914@lid', allowedUsers, sessionDir), false);
   } finally {
     rmSync(sessionDir, { recursive: true, force: true });
   }
@@ -88,7 +62,7 @@ test('matchesAllowedUser rejects everyone when allowlist is empty (#8389)', () =
   // Regression guard: empty allowlist used to return true (allow-everyone),
   // which let any stranger DM the bridge and trigger a Python-side
   // pairing-code reply. Secure default is now "reject unless explicitly
-  // configured"; operators who want an open bot must set `*`.
+  // configured"; there is deliberately no open-bot wildcard.
   const sessionDir = mkdtempSync(path.join(os.tmpdir(), 'hermes-wa-allowlist-'));
 
   try {

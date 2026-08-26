@@ -1,4 +1,4 @@
-"""One live runtime per isolated profile.
+"""One live runtime per agent profile.
 
 This is Hermes' gateway runtime-lock mechanism reduced to Pilotage's one-process,
 one-profile contract. The operating system owns the advisory lock, so a crash

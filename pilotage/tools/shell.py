@@ -36,7 +36,6 @@ import os
 import select
 import shlex
 import shutil
-import signal
 import subprocess
 import tempfile
 import threading
@@ -45,6 +44,7 @@ import uuid
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..process_tree import terminate_process_tree
 from .subprocess_env import build_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ SNAPSHOT_TIMEOUT_SECONDS = 30
 # feeding a patch engine or a code-execution reply — must keep every byte,
 # because truncating them corrupts data rather than shortening a display.
 UNBOUNDED_CAPTURE_CHARS = 2**63 - 1
+INTERNAL_STDERR_CAPTURE_CHARS = 16_000
 
 
 # ---------------------------------------------------------------------------
@@ -650,7 +651,8 @@ class Shell:
 
     def _run_bash(self, cmd_string: str, *, login: bool = False,
                   timeout: int = DEFAULT_TIMEOUT_SECONDS,
-                  stdin_data: Optional[str] = None) -> subprocess.Popen:
+                  stdin_data: Optional[str] = None,
+                  merge_stderr: bool = True) -> subprocess.Popen:
         bash = find_bash()
         if login:
             cmd_string = _prepend_shell_init(cmd_string, _shell_init_files())
@@ -671,7 +673,7 @@ class Shell:
             encoding="utf-8",
             errors="replace",
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
             stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
             start_new_session=True,
             cwd=self.cwd,
@@ -688,21 +690,25 @@ class Shell:
 
     # -- waiting ------------------------------------------------------------
 
-    def _wait_for_process(self, proc: subprocess.Popen, timeout: int,
-                          capture_limit: Optional[int] = None) -> Dict[str, Any]:
+    def _wait_for_process(
+        self,
+        proc: subprocess.Popen,
+        timeout: int,
+        capture_limit: Optional[int] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
         """Wait for the command, draining its output as it arrives."""
         output = BoundedOutput(capture_limit or UNBOUNDED_CAPTURE_CHARS)
+        stderr_output = BoundedOutput(INTERNAL_STDERR_CAPTURE_CHARS)
 
         # Bytes are read in fixed chunks, so a multi-byte character can be split
         # across two reads. An incremental decoder holds the partial sequence;
         # `replace` matches how the pipe itself was opened, so binary output is
         # marked rather than lost.
-        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-
-        def _drain():
-            stream = proc.stdout
+        def _drain(stream: Any, collector: BoundedOutput) -> None:
             if stream is None:
                 return
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
             try:
                 fd = stream.fileno()
             except Exception:  # noqa: BLE001
@@ -721,7 +727,7 @@ class Shell:
                             break
                         if not chunk:
                             break  # real end of file: every writer is gone
-                        output.append(decoder.decode(chunk))
+                        collector.append(decoder.decode(chunk))
                         idle_after_exit = 0
                     elif proc.poll() is not None:
                         # Bash has exited and the pipe has been quiet for
@@ -735,12 +741,40 @@ class Shell:
                 try:
                     tail = decoder.decode(b"", final=True)
                     if tail:
-                        output.append(tail)
+                        collector.append(tail)
                 except Exception:  # noqa: BLE001
                     pass
 
-        drain_thread = threading.Thread(target=_drain, daemon=True)
+        drain_thread = threading.Thread(
+            target=_drain,
+            args=(proc.stdout, output),
+            daemon=True,
+        )
         drain_thread.start()
+        stderr_thread: Optional[threading.Thread] = None
+        if proc.stderr is not None:
+            stderr_thread = threading.Thread(
+                target=_drain,
+                args=(proc.stderr, stderr_output),
+                daemon=True,
+            )
+            stderr_thread.start()
+
+        def _join_drains() -> None:
+            drain_thread.join(timeout=2)
+            if stderr_thread is not None:
+                stderr_thread.join(timeout=2)
+
+        def _close_drains() -> None:
+            _close_quietly(proc.stdout)
+            _close_quietly(proc.stderr)
+
+        def _with_stderr(result: Dict[str, Any]) -> Dict[str, Any]:
+            stderr = stderr_output.render()
+            if stderr:
+                result["stderr"] = stderr
+            return result
+
         deadline = time.monotonic() + timeout
 
         try:
@@ -748,15 +782,28 @@ class Shell:
             # off so a half-hour build is not paid for in wakeups.
             poll_sleep = 0.005
             while proc.poll() is None:
+                if cancel_event is not None and cancel_event.is_set():
+                    self._kill_process(proc)
+                    _join_drains()
+                    _close_drains()
+                    suffix = "\n[Command cancelled]"
+                    rendered = output.render(suffix=suffix)
+                    if output.total_chars == 0:
+                        rendered = rendered.lstrip()
+                    return _with_stderr(
+                        {"output": rendered, "returncode": 130}
+                    )
                 if time.monotonic() > deadline:
                     self._kill_process(proc)
-                    drain_thread.join(timeout=2)
-                    _close_quietly(proc.stdout)
+                    _join_drains()
+                    _close_drains()
                     suffix = f"\n[Command timed out after {timeout}s]"
                     rendered = output.render(suffix=suffix)
                     if output.total_chars == 0:
                         rendered = rendered.lstrip()
-                    return {"output": rendered, "returncode": 124}
+                    return _with_stderr(
+                        {"output": rendered, "returncode": 124}
+                    )
                 time.sleep(poll_sleep)
                 if poll_sleep < 0.2:
                     poll_sleep = min(poll_sleep * 1.5, 0.2)
@@ -765,14 +812,14 @@ class Shell:
             # leave the command running with PPID=1 after the agent is gone.
             try:
                 self._kill_process(proc)
-                drain_thread.join(timeout=2)
-                _close_quietly(proc.stdout)
+                _join_drains()
+                _close_drains()
             except Exception:  # noqa: BLE001
                 pass
             raise
 
-        drain_thread.join(timeout=2)
-        _close_quietly(proc.stdout)
+        _join_drains()
+        _close_drains()
 
         # Join the writer before reading its errors: a child that exits without
         # reading stdin can otherwise finish first and take a recorded failure
@@ -788,70 +835,15 @@ class Shell:
             err = str(stdin_errors[0])
             result["stdin_error"] = err
             result["output"] = rendered + f"\n[stdin write failed: {err}]"
-        return result
+        return _with_stderr(result)
 
     def _kill_process(self, proc: subprocess.Popen) -> None:
-        """Kill the whole process group, then make sure it is really gone."""
+        """Kill the process group and any descendants that escaped it."""
 
-        def _group_alive(pgid: int) -> bool:
-            try:
-                os.killpg(pgid, 0)
-                return True
-            except ProcessLookupError:
-                return False
-            except PermissionError:
-                return True  # it exists; we simply may not signal it
-
-        def _wait_for_group_exit(pgid: int, seconds: float) -> bool:
-            deadline = time.monotonic() + seconds
-            while time.monotonic() < deadline:
-                # Reap the leader as we go: a dead but unreaped leader still
-                # makes the group look alive.
-                try:
-                    proc.poll()
-                except Exception:  # noqa: BLE001
-                    pass
-                if not _group_alive(pgid):
-                    return True
-                time.sleep(0.05)
-            try:
-                proc.poll()
-            except Exception:  # noqa: BLE001
-                pass
-            return not _group_alive(pgid)
-
-        try:
-            try:
-                pgid = os.getpgid(proc.pid)
-            except ProcessLookupError:
-                pgid = getattr(proc, "_pilotage_pgid", None)
-                if pgid is None:
-                    raise
-
-            try:
-                os.killpg(pgid, signal.SIGTERM)
-            except ProcessLookupError:
-                return
-
-            # Wait on the group, not the wrapper. Under load bash can exit
-            # before its children do, and returning then leaves them behind.
-            if _wait_for_group_exit(pgid, 1.0):
-                return
-
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                return
-            _wait_for_group_exit(pgid, 2.0)
-            try:
-                proc.wait(timeout=0.2)
-            except (subprocess.TimeoutExpired, OSError):
-                pass
-        except (ProcessLookupError, PermissionError, OSError):
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001
-                pass
+        terminate_process_tree(
+            proc,
+            pgid=getattr(proc, "_pilotage_pgid", None),
+        )
 
     # -- working directory --------------------------------------------------
 
@@ -921,12 +913,17 @@ class Shell:
                 timeout: Optional[int] = None,
                 stdin_data: Optional[str] = None,
                 rewrite_background: bool = True,
-                capture_limit: Optional[int] = None) -> Dict[str, Any]:
+                capture_limit: Optional[int] = None,
+                merge_stderr: bool = True,
+                cancel_event: Optional[threading.Event] = None) -> Dict[str, Any]:
         """Run *command* and return ``{"output", "returncode"}``.
 
         ``capture_limit`` bounds what is kept while the output is drained, and
         must be left unset by anything whose result is parsed rather than read:
         a truncated ``cat`` is not a shorter file, it is a corrupted one.
+
+        ``merge_stderr=False`` gives internal file operations exact stdout.
+        Interactive terminal calls keep the default merged diagnostics.
         """
         exec_command = rewrite_compound_background(command) if rewrite_background else command
         effective_timeout = timeout or self.timeout
@@ -941,11 +938,21 @@ class Shell:
             login=not self._snapshot_ready,
             timeout=effective_timeout,
             stdin_data=stdin_data,
+            merge_stderr=merge_stderr,
         )
         result = self._wait_for_process(
-            proc, timeout=effective_timeout, capture_limit=capture_limit
+            proc,
+            timeout=effective_timeout,
+            capture_limit=capture_limit,
+            cancel_event=cancel_event,
         )
         self._update_cwd(result, track=not cwd)
+        if not merge_stderr:
+            stderr = str(result.pop("stderr", "") or "")
+            if result.get("returncode") != 0 and stderr:
+                output = str(result.get("output", "") or "")
+                separator = "" if not output or output.endswith("\n") else "\n"
+                result["output"] = output + separator + stderr
         return result
 
     def close(self) -> None:
@@ -978,6 +985,7 @@ class Shell:
 __all__ = [
     "BoundedOutput",
     "DEFAULT_TIMEOUT_SECONDS",
+    "INTERNAL_STDERR_CAPTURE_CHARS",
     "Shell",
     "UNBOUNDED_CAPTURE_CHARS",
     "find_bash",

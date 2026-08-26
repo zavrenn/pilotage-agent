@@ -37,6 +37,7 @@ class _FakeShell:
     active = 0
     max_active = 0
     active_lock = threading.Lock()
+    cancel_seen = threading.Event()
 
     def __init__(self, cwd="", timeout=0, env=None):
         self.cwd = cwd or "/default"
@@ -53,6 +54,11 @@ class _FakeShell:
         try:
             if command == "slow":
                 time.sleep(0.03)
+            if command == "cancel":
+                cancel_event = kwargs["cancel_event"]
+                cancel_event.wait(timeout=1)
+                if cancel_event.is_set():
+                    type(self).cancel_seen.set()
             if command.startswith("cd ") and not cwd:
                 self.cwd = command[3:]
                 return {"output": "", "returncode": 0, "cwd_observed": True}
@@ -87,6 +93,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         _FakeShell.instances = []
         _FakeShell.active = 0
         _FakeShell.max_active = 0
+        _FakeShell.cancel_seen = threading.Event()
         patch = mock.patch("pilotage.tools.terminal.Shell", _FakeShell)
         patch.start()
         self.addCleanup(patch.stop)
@@ -192,6 +199,20 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(_FakeShell.max_active, 1)
         self.assertEqual(len(_FakeShell.instances), 1)
+
+    async def test_cancelling_the_tool_stops_its_worker_before_returning(self):
+        task = asyncio.create_task(handle({"command": "cancel"}, _context()))
+        for _ in range(100):
+            if _FakeShell.active:
+                break
+            await asyncio.sleep(0.005)
+
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+
+        self.assertTrue(_FakeShell.cancel_seen.is_set())
+        self.assertEqual(_FakeShell.active, 0)
 
 
 posix_only = unittest.skipUnless(os.name == "posix", "the terminal is POSIX-only")

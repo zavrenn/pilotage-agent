@@ -1,6 +1,544 @@
 import path from 'path';
-import { mkdirSync, writeFileSync } from 'fs';
-import { randomBytes } from 'crypto';
+import {
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  unlink,
+} from 'fs/promises';
+import { createHash, createHmac, randomBytes } from 'crypto';
+
+const WHATSAPP_JID_RE = /(?:\d[\d:+-]{4,})@(?:s\.whatsapp\.net|g\.us|lid)(?![a-z0-9.])/gi;
+const MEBIBYTE = 1024 * 1024;
+
+// Fixed production ceilings. Metadata is checked before the CDN download and
+// the decrypted stream is bounded again while it is written to disk.
+export const INBOUND_MEDIA_LIMIT_BYTES = Object.freeze({
+  image: 20 * MEBIBYTE,
+  sticker: 20 * MEBIBYTE,
+  audio: 25 * MEBIBYTE,
+  ptt: 25 * MEBIBYTE,
+  document: 50 * MEBIBYTE,
+  video: 100 * MEBIBYTE,
+  gif: 100 * MEBIBYTE,
+});
+
+export function mediaLengthBytes(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+  }
+  let written;
+  if (typeof value === 'bigint' || typeof value === 'string') {
+    written = String(value).trim();
+  } else if (value && typeof value.toString === 'function') {
+    written = String(value.toString()).trim();
+  } else {
+    return null;
+  }
+  if (!/^\d+$/.test(written)) return null;
+  try {
+    const parsed = BigInt(written);
+    if (parsed <= 0n) return null;
+    if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) return Number.POSITIVE_INFINITY;
+    return Number(parsed);
+  } catch {
+    return null;
+  }
+}
+
+export function createIdentityRedactor(key) {
+  const secret = Buffer.from(key || []);
+  if (secret.length !== 32) {
+    throw new Error('identity-log key must contain exactly 32 bytes');
+  }
+
+  function alias(value, namespace = 'wa') {
+    const safeNamespace = String(namespace).toLowerCase().replace(/[^a-z0-9_-]/g, '-') || 'id';
+    const digest = createHmac('sha256', secret)
+      .update(`${safeNamespace}\0${String(value || '')}`)
+      .digest('hex')
+      .slice(0, 12);
+    return `[${safeNamespace}:${digest}]`;
+  }
+
+  function redact(value) {
+    return String(value || '').replace(WHATSAPP_JID_RE, (identity) => alias(identity));
+  }
+
+  return { alias, redact };
+}
+
+const atomicPathLocks = new Map();
+const DEFAULT_ATOMIC_FILE_OPS = {
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  unlink,
+};
+
+async function withAtomicPathLock(filePath, work) {
+  const normalized = path.resolve(filePath);
+  const previous = atomicPathLocks.get(normalized) || Promise.resolve();
+  let release;
+  const tail = new Promise((resolve) => { release = resolve; });
+  atomicPathLocks.set(normalized, tail);
+  await previous.catch(() => {});
+  try {
+    return await work();
+  } finally {
+    release();
+    if (atomicPathLocks.get(normalized) === tail) atomicPathLocks.delete(normalized);
+  }
+}
+
+async function syncDirectory(directory, fileOps) {
+  let handle;
+  try {
+    handle = await fileOps.open(directory, 'r');
+    await handle.sync();
+  } catch (error) {
+    // Linux is the production contract and supports directory fsync. Some
+    // development hosts do not; only those hosts may degrade this barrier.
+    if (process.platform === 'linux') throw error;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+export function createAtomicJsonFileStore(folder, { fileOps: overrides = {} } = {}) {
+  const fileOps = { ...DEFAULT_ATOMIC_FILE_OPS, ...overrides };
+
+  async function initialize() {
+    const info = await fileOps.stat(folder).catch((error) => {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (info && !info.isDirectory()) {
+      throw new Error(`WhatsApp authentication path is not a directory: ${folder}`);
+    }
+    if (!info) await fileOps.mkdir(folder, { recursive: true, mode: 0o700 });
+    await fileOps.chmod(folder, 0o700).catch((error) => {
+      if (process.platform !== 'win32') throw error;
+    });
+  }
+
+  function safeName(file) {
+    return String(file || '').replace(/\//g, '__').replace(/:/g, '-');
+  }
+
+  async function writeData(data, file, replacer) {
+    const name = safeName(file);
+    const target = path.join(folder, name);
+    return withAtomicPathLock(target, async () => {
+      const serialized = JSON.stringify(data, replacer);
+      const temporary = path.join(
+        folder,
+        `.${name}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`,
+      );
+      let handle;
+      try {
+        handle = await fileOps.open(temporary, 'wx', 0o600);
+        await handle.writeFile(serialized, { encoding: 'utf8' });
+        await handle.sync();
+        await handle.close();
+        handle = null;
+        await fileOps.rename(temporary, target);
+        await fileOps.chmod(target, 0o600).catch((error) => {
+          if (process.platform !== 'win32') throw error;
+        });
+        await syncDirectory(folder, fileOps);
+      } finally {
+        await handle?.close().catch(() => {});
+        await fileOps.unlink(temporary).catch((error) => {
+          if (error?.code !== 'ENOENT') throw error;
+        });
+      }
+    });
+  }
+
+  async function readData(file, reviver) {
+    const name = safeName(file);
+    const target = path.join(folder, name);
+    return withAtomicPathLock(target, async () => {
+      let serialized;
+      try {
+        serialized = await fileOps.readFile(target, { encoding: 'utf8' });
+      } catch (error) {
+        if (error?.code === 'ENOENT') return null;
+        throw error;
+      }
+      try {
+        return JSON.parse(serialized, reviver);
+      } catch (error) {
+        throw new Error(`Corrupt WhatsApp authentication file: ${name}`, { cause: error });
+      }
+    });
+  }
+
+  async function removeData(file) {
+    const name = safeName(file);
+    const target = path.join(folder, name);
+    return withAtomicPathLock(target, async () => {
+      try {
+        await fileOps.unlink(target);
+      } catch (error) {
+        if (error?.code === 'ENOENT') return;
+        throw error;
+      }
+      await syncDirectory(folder, fileOps);
+    });
+  }
+
+  return { initialize, readData, removeData, writeData };
+}
+
+export async function useAtomicMultiFileAuthState(
+  folder,
+  { BufferJSON, initAuthCreds, proto, fileOps } = {},
+) {
+  if (!BufferJSON?.replacer || !BufferJSON?.reviver || typeof initAuthCreds !== 'function') {
+    throw new TypeError('Baileys auth serialization dependencies are required');
+  }
+  const files = createAtomicJsonFileStore(folder, { fileOps });
+  await files.initialize();
+  const creds = (await files.readData('creds.json', BufferJSON.reviver)) || initAuthCreds();
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const data = {};
+          await Promise.all(ids.map(async (id) => {
+            let value = await files.readData(`${type}-${id}.json`, BufferJSON.reviver);
+            if (type === 'app-state-sync-key' && value) {
+              value = proto.Message.AppStateSyncKeyData.fromObject(value);
+            }
+            data[id] = value;
+          }));
+          return data;
+        },
+        set: async (data) => {
+          const tasks = [];
+          for (const category of Object.keys(data || {})) {
+            for (const [id, value] of Object.entries(data[category] || {})) {
+              const file = `${category}-${id}.json`;
+              tasks.push(
+                value
+                  ? files.writeData(value, file, BufferJSON.replacer)
+                  : files.removeData(file),
+              );
+            }
+          }
+          await Promise.all(tasks);
+        },
+      },
+    },
+    saveCreds: () => files.writeData(creds, 'creds.json', BufferJSON.replacer),
+  };
+}
+
+export function createDurableInboundQueue(
+  root,
+  {
+    fileOps: overrides = {},
+    highWaterMark = 100,
+    claimBatchSize = 25,
+    doneMaxEntries = 10_000,
+    now = () => Date.now(),
+    log = () => {},
+  } = {},
+) {
+  const fileOps = { ...DEFAULT_ATOMIC_FILE_OPS, ...overrides };
+  const pendingDir = path.join(root, 'pending');
+  const claimedDir = path.join(root, 'claimed');
+  const doneDir = path.join(root, 'done');
+  const pending = createAtomicJsonFileStore(pendingDir, { fileOps });
+  const claimed = createAtomicJsonFileStore(claimedDir, { fileOps });
+  const done = createAtomicJsonFileStore(doneDir, { fileOps });
+  let tail = Promise.resolve();
+  let storageFailed = false;
+  let overflowed = false;
+  let doneCount = 0;
+  const parsedDoneMaxEntries = Number(doneMaxEntries);
+  const boundedDoneMaxEntries = (
+    Number.isFinite(parsedDoneMaxEntries) && parsedDoneMaxEntries >= 1
+      ? Math.floor(parsedDoneMaxEntries)
+      : 10_000
+  );
+
+  function serialized(work) {
+    const current = tail.catch(() => {}).then(work);
+    tail = current;
+    return current;
+  }
+
+  function fileName(claimId) {
+    return `${claimId}.json`;
+  }
+
+  function claimIdFor(event) {
+    const messageId = String(event?.messageId || '').trim();
+    const chatId = String(event?.chatId || '').trim();
+    const senderId = String(event?.senderId || '').trim();
+    if (!messageId || !chatId) {
+      throw new Error('Inbound WhatsApp event has no stable message identity');
+    }
+    return createHash('sha256')
+      .update(`${chatId}\0${senderId}\0${messageId}`)
+      .digest('hex');
+  }
+
+  async function exists(directory, name) {
+    try {
+      await fileOps.stat(path.join(directory, name));
+      return true;
+    } catch (error) {
+      if (error?.code === 'ENOENT') return false;
+      throw error;
+    }
+  }
+
+  async function names(directory) {
+    return (await fileOps.readdir(directory))
+      .filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
+  }
+
+  async function pruneDoneUnlocked() {
+    const completedNames = await names(doneDir);
+    doneCount = completedNames.length;
+    if (doneCount <= boundedDoneMaxEntries) return;
+
+    const lowWaterMark = Math.max(
+      1,
+      Math.floor(boundedDoneMaxEntries * 0.9),
+    );
+    const completed = await Promise.all(completedNames.map(async (name) => {
+      const record = await done.readData(name);
+      const completedAt = Number(record?.completedAt);
+      if (!Number.isFinite(completedAt)) {
+        throw new Error(`Corrupt durable inbound completion: ${name}`);
+      }
+      return { name, completedAt };
+    }));
+    completed.sort((left, right) => (
+      left.completedAt - right.completedAt
+      || left.name.localeCompare(right.name)
+    ));
+    const remove = completed.slice(0, doneCount - lowWaterMark);
+    for (let offset = 0; offset < remove.length; offset += 50) {
+      await Promise.all(remove.slice(offset, offset + 50).map(async ({ name }) => {
+        try {
+          await fileOps.unlink(path.join(doneDir, name));
+        } catch (error) {
+          if (error?.code !== 'ENOENT') throw error;
+        }
+      }));
+    }
+    if (remove.length) await syncDirectory(doneDir, fileOps);
+    doneCount -= remove.length;
+    log(`compacted durable inbound completions to ${doneCount} entries`);
+  }
+
+  async function depthUnlocked() {
+    const [waiting, inFlight] = await Promise.all([
+      names(pendingDir),
+      names(claimedDir),
+    ]);
+    return { pending: waiting.length, claimed: inFlight.length };
+  }
+
+  async function updateOverflowUnlocked() {
+    const counts = await depthUnlocked();
+    const overloaded = counts.pending + counts.claimed > highWaterMark;
+    if (overloaded && !overflowed) {
+      log(`durable inbound queue exceeded its ${highWaterMark}-message high-water mark`);
+    } else if (!overloaded && overflowed) {
+      log('durable inbound queue recovered below its high-water mark');
+    }
+    overflowed = overloaded;
+    return counts;
+  }
+
+  async function initialize() {
+    await fileOps.mkdir(root, { recursive: true, mode: 0o700 });
+    await fileOps.chmod(root, 0o700).catch((error) => {
+      if (process.platform !== 'win32') throw error;
+    });
+    await Promise.all([pending.initialize(), claimed.initialize(), done.initialize()]);
+
+    await serialized(async () => {
+      for (const name of await names(claimedDir)) {
+        if (await exists(doneDir, name)) {
+          await claimed.removeData(name);
+          continue;
+        }
+        if (await exists(pendingDir, name)) {
+          throw new Error(`Duplicate durable inbound claim: ${name}`);
+        }
+        await fileOps.rename(path.join(claimedDir, name), path.join(pendingDir, name));
+      }
+      await syncDirectory(claimedDir, fileOps);
+      await syncDirectory(pendingDir, fileOps);
+      await pruneDoneUnlocked();
+      await updateOverflowUnlocked();
+    });
+  }
+
+  async function enqueue(event) {
+    try {
+      return await serialized(async () => {
+        const claimId = claimIdFor(event);
+        const name = fileName(claimId);
+        if (
+          await exists(doneDir, name)
+          || await exists(pendingDir, name)
+          || await exists(claimedDir, name)
+        ) {
+          return { status: 'duplicate', claimId };
+        }
+        await pending.writeData(
+          {
+            version: 1,
+            identity: claimId,
+            acceptedAt: now(),
+            event,
+          },
+          name,
+        );
+        await updateOverflowUnlocked();
+        return { status: 'accepted', claimId };
+      });
+    } catch (error) {
+      storageFailed = true;
+      throw error;
+    }
+  }
+
+  async function claim(limit = claimBatchSize) {
+    try {
+      return await serialized(async () => {
+        const records = [];
+        for (const name of await names(pendingDir)) {
+          if (await exists(doneDir, name)) {
+            await pending.removeData(name);
+            continue;
+          }
+          const record = await pending.readData(name);
+          if (!record || record.identity !== name.slice(0, -5) || !record.event) {
+            throw new Error(`Corrupt durable inbound event: ${name}`);
+          }
+          records.push({ name, record });
+        }
+        records.sort((left, right) => (
+          Number(left.record.acceptedAt) - Number(right.record.acceptedAt)
+          || left.name.localeCompare(right.name)
+        ));
+
+        const output = [];
+        for (const { name, record } of records.slice(0, Math.max(0, Number(limit) || 0))) {
+          await fileOps.rename(path.join(pendingDir, name), path.join(claimedDir, name));
+          output.push({
+            ...record.event,
+            _pilotageClaimId: record.identity,
+          });
+        }
+        if (output.length) {
+          await syncDirectory(pendingDir, fileOps);
+          await syncDirectory(claimedDir, fileOps);
+        }
+        return output;
+      });
+    } catch (error) {
+      storageFailed = true;
+      throw error;
+    }
+  }
+
+  function validClaimIds(values) {
+    return Array.from(new Set((values || []).map(String)))
+      .filter((value) => /^[a-f0-9]{64}$/.test(value));
+  }
+
+  async function ack(values) {
+    try {
+      return await serialized(async () => {
+        let settled = 0;
+        for (const claimId of validClaimIds(values)) {
+          const name = fileName(claimId);
+          if (await exists(doneDir, name)) {
+            settled += 1;
+            continue;
+          }
+          const known = await exists(claimedDir, name) || await exists(pendingDir, name);
+          if (!known) continue;
+          await done.writeData({ completedAt: now() }, name);
+          doneCount += 1;
+          await claimed.removeData(name);
+          await pending.removeData(name);
+          settled += 1;
+        }
+        if (doneCount > boundedDoneMaxEntries) await pruneDoneUnlocked();
+        await updateOverflowUnlocked();
+        return settled;
+      });
+    } catch (error) {
+      storageFailed = true;
+      throw error;
+    }
+  }
+
+  async function release(values) {
+    try {
+      return await serialized(async () => {
+        let released = 0;
+        for (const claimId of validClaimIds(values)) {
+          const name = fileName(claimId);
+          if (await exists(doneDir, name) || await exists(pendingDir, name)) {
+            released += 1;
+            continue;
+          }
+          if (!await exists(claimedDir, name)) continue;
+          await fileOps.rename(path.join(claimedDir, name), path.join(pendingDir, name));
+          released += 1;
+        }
+        if (released) {
+          await syncDirectory(claimedDir, fileOps);
+          await syncDirectory(pendingDir, fileOps);
+        }
+        return released;
+      });
+    } catch (error) {
+      storageFailed = true;
+      throw error;
+    }
+  }
+
+  async function status() {
+    return serialized(async () => {
+      const counts = await updateOverflowUnlocked();
+      return {
+        ...counts,
+        depth: counts.pending + counts.claimed,
+        healthy: !storageFailed && !overflowed,
+        storageHealthy: !storageFailed,
+        overflowed,
+        highWaterMark,
+        completed: doneCount,
+        completedMaxEntries: boundedDoneMaxEntries,
+      };
+    });
+  }
+
+  return { ack, claim, enqueue, initialize, release, status };
+}
 
 /**
  * Track Baileys credential writes and provide a real completion barrier.
@@ -83,6 +621,18 @@ export function getMessageContent(msg) {
   if (content.buttonsMessage) return content.buttonsMessage;
   if (content.listMessage) return content.listMessage;
   return content;
+}
+
+export function hasDownloadableMedia(msg) {
+  const content = getMessageContent(msg);
+  return Boolean(
+    content.imageMessage
+    || content.videoMessage
+    || content.audioMessage
+    || content.pttMessage
+    || content.documentMessage
+    || content.stickerMessage
+  );
 }
 
 export function getContextInfo(messageContent) {
@@ -276,15 +826,66 @@ function mediaExtForMime(mime, fallback) {
   return extMap[normalized] || fallback;
 }
 
-function defaultWriteMediaFile({ buffer, dir, prefix, ext, fileName }) {
-  mkdirSync(dir, { recursive: true });
+class InboundMediaLimitError extends Error {
+  constructor() {
+    super('inbound media exceeds its configured limit');
+    this.code = 'PILOTAGE_INBOUND_MEDIA_LIMIT';
+  }
+}
+
+function isAsyncIterable(value) {
+  return !!value && typeof value[Symbol.asyncIterator] === 'function';
+}
+
+async function writeWholeChunk(handle, chunk, position) {
+  const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const result = await handle.write(
+      bytes,
+      offset,
+      bytes.byteLength - offset,
+      position + offset,
+    );
+    if (!result.bytesWritten) throw new Error('inbound media write made no progress');
+    offset += result.bytesWritten;
+  }
+  return position + bytes.byteLength;
+}
+
+async function defaultWriteMediaFile({ buffer, stream, dir, prefix, ext, fileName, limit }) {
+  await mkdir(dir, { recursive: true });
   let safeName = fileName ? `_${path.basename(fileName).replace(/[^a-zA-Z0-9._-]/g, '_')}` : '';
   if (safeName && ext && !path.extname(safeName)) {
     safeName = `${safeName}${ext}`;
   }
   const filePath = path.join(dir, `${prefix}_${randomBytes(6).toString('hex')}${safeName || ext}`);
-  writeFileSync(filePath, buffer);
-  return filePath;
+  let handle;
+  try {
+    handle = await open(filePath, 'wx', 0o600);
+    let written = 0;
+    if (isAsyncIterable(stream)) {
+      for await (const chunk of stream) {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        if (limit > 0 && written + bytes.byteLength > limit) {
+          if (typeof stream.destroy === 'function') stream.destroy();
+          throw new InboundMediaLimitError();
+        }
+        written = await writeWholeChunk(handle, bytes, written);
+      }
+    } else {
+      const length = Number(buffer?.byteLength ?? buffer?.length ?? 0);
+      if (limit > 0 && length > limit) throw new InboundMediaLimitError();
+      written = await writeWholeChunk(handle, buffer || Buffer.alloc(0), written);
+    }
+    await handle.close();
+    handle = null;
+    return filePath;
+  } catch (error) {
+    await handle?.close().catch(() => {});
+    await unlink(filePath).catch(() => {});
+    throw error;
+  }
 }
 
 function formatLocationText(location, isLive) {
@@ -351,6 +952,15 @@ export function appendMediaFailureNote(content, failures) {
   return content ? `${content}\n${note}` : note;
 }
 
+export function appendMediaLimitNote(content, rejections) {
+  if (!rejections || rejections.length === 0) return content;
+  const note = rejections.map(({ type, limit }) => {
+    const megabytes = Math.floor(limit / MEBIBYTE);
+    return `[The ${type} was rejected because it exceeds the ${megabytes} MB limit.]`;
+  }).join(' ');
+  return content ? `${content}\n${note}` : note;
+}
+
 export async function extractBridgeEvent({
   msg,
   chatId,
@@ -361,6 +971,8 @@ export async function extractBridgeEvent({
   downloadMedia,
   writeMediaFile,
   cacheDirs = {},
+  mediaLimits = INBOUND_MEDIA_LIMIT_BYTES,
+  log = () => {},
 }) {
   const messageContent = getMessageContent(msg);
   const contextInfo = getContextInfo(messageContent);
@@ -381,16 +993,46 @@ export async function extractBridgeEvent({
   const nativeMetadata = {};
 
   const mediaFailures = [];
+  const mediaRejections = [];
 
   const saveMedia = async ({ mediaMessage, dir, prefix, fallbackExt, fileName: name, type }) => {
     if (!downloadMedia) return;
+    const limit = Number(mediaLimits?.[type] || 0);
+    const advertisedSize = mediaLengthBytes(mediaMessage?.fileLength);
+    if (limit > 0 && advertisedSize !== null && advertisedSize > limit) {
+      mediaRejections.push({ type, limit });
+      log(`rejected inbound ${type}: advertised size exceeds ${Math.floor(limit / MEBIBYTE)} MB`);
+      return;
+    }
     try {
-      const buf = await downloadMedia(msg);
+      const downloaded = await downloadMedia(msg);
+      const streamed = isAsyncIterable(downloaded);
+      const downloadedSize = streamed
+        ? null
+        : Number(downloaded?.byteLength ?? downloaded?.length ?? 0);
+      if (limit > 0 && downloadedSize !== null && downloadedSize > limit) {
+        mediaRejections.push({ type, limit });
+        log(`rejected inbound ${type}: downloaded size exceeds ${Math.floor(limit / MEBIBYTE)} MB`);
+        return;
+      }
       const ext = mediaExtForMime(mediaMessage?.mimetype, fallbackExt);
       const writer = writeMediaFile || defaultWriteMediaFile;
-      const saved = await writer({ buffer: buf, dir, prefix, ext, fileName: name });
+      const saved = await writer({
+        buffer: streamed ? undefined : downloaded,
+        stream: streamed ? downloaded : undefined,
+        dir,
+        prefix,
+        ext,
+        fileName: name,
+        limit,
+      });
       if (saved) mediaUrls.push(saved);
     } catch (err) {
+      if (err?.code === 'PILOTAGE_INBOUND_MEDIA_LIMIT') {
+        mediaRejections.push({ type, limit });
+        log(`rejected inbound ${type}: streamed size exceeds ${Math.floor(limit / MEBIBYTE)} MB`);
+        return;
+      }
       // A failed CDN fetch (expired media URL, transient network error) must
       // never reject out of extractBridgeEvent — that would drop this message
       // AND every remaining message in the same upsert batch. Record the
@@ -399,7 +1041,7 @@ export async function extractBridgeEvent({
       // reuploadRequest recovery half is already wired in bridge.js.)
       mediaFailures.push(type || 'media');
       try {
-        console.warn(`[bridge] failed to download inbound ${type || 'media'}:`, err?.message || err);
+        log(`failed to download inbound ${type || 'media'}: ${err?.message || err}`);
       } catch {}
     }
   };
@@ -511,6 +1153,7 @@ export async function extractBridgeEvent({
   // uncaptioned message whose download failed reads "[image could not be
   // downloaded]" rather than claiming the media arrived.
   body = appendMediaFailureNote(body, mediaFailures);
+  body = appendMediaLimitNote(body, mediaRejections);
 
   if (hasMedia && !body) {
     body = `[${mediaType} received]`;
@@ -541,7 +1184,9 @@ export async function extractBridgeEvent({
     readReceiptKey: {
       remoteJid: msg.key.remoteJid || chatId,
       id: msg.key.id,
-      participant: msg.key.participant || senderId,
+      // Baileys 7.0.0-rc13 silently ignores DM receipts that carry the
+      // group-only participant field. Groups need the original participant.
+      ...(isGroup ? { participant: msg.key.participant || senderId } : {}),
       fromMe: Boolean(msg.key.fromMe),
     },
     timestamp: msg.messageTimestamp,
@@ -557,8 +1202,11 @@ export function inferMediaType(ext) {
 
 export function inboundReadReceiptKeys({ key, enabled }) {
   if (!enabled || !key || key.fromMe || !key.id || !key.remoteJid) return [];
-  // Preserve participant for group messages: Baileys needs the original key.
-  return [key];
+  // Repair durable events created by older bridge code too: a DM key must not
+  // look group-shaped, while a real group keeps its original participant.
+  if (String(key.remoteJid).endsWith('@g.us')) return [key];
+  const { participant: _ignored, ...directKey } = key;
+  return [directKey];
 }
 
 export function mediaPayloadForFile({ buffer, filePath, mediaType, caption, fileName }) {

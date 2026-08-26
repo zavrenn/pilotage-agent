@@ -45,6 +45,7 @@ _CRON_THREATS = (
 )
 _STORE_LOCKS: dict[str, threading.RLock] = {}
 _STORE_LOCKS_GUARD = threading.Lock()
+_STORE_LOCK_STATE = threading.local()
 
 
 class CronError(RuntimeError):
@@ -197,6 +198,44 @@ def compute_next_run(
         next_run = _croniter(expression, base).get_next(datetime)
         return _aware(next_run, current.tzinfo).isoformat()
     return None
+
+
+def _advance_recurring_run(job: Dict[str, Any], now: datetime) -> Optional[str]:
+    """Reserve the first future slot without scheduler-observation drift."""
+
+    schedule = job.get("schedule") or {}
+    current = _aware(now, now.tzinfo or timezone.utc)
+    kind = schedule.get("kind")
+    if kind not in {"interval", "cron"}:
+        return None
+
+    if kind == "interval":
+        try:
+            interval = timedelta(minutes=int(schedule["minutes"]))
+            scheduled = _aware(
+                datetime.fromisoformat(str(job["next_run_at"])),
+                current.tzinfo,
+            )
+            if interval.total_seconds() <= 0:
+                return None
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return compute_next_run(
+                schedule,
+                now=current,
+                last_run_at=current.isoformat(),
+            )
+        if scheduled > current:
+            return scheduled.isoformat()
+        periods = (current - scheduled) // interval + 1
+        return (scheduled + periods * interval).isoformat()
+
+    # Cron slots are wall-clock aligned by croniter, so computing from now
+    # skips missed slots without introducing observation-time phase drift.
+    return compute_next_run(
+        schedule,
+        now=current,
+        last_run_at=current.isoformat(),
+    )
 
 
 def validate_prompt(prompt: str, *, current_profile: str = "default") -> str:
@@ -426,8 +465,28 @@ class CronStore:
     @contextlib.contextmanager
     def _locked(self):
         """Bounded Hermes advisory locking, but fail closed instead of racing."""
+        deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
         self.ensure_dirs()
-        with self._thread_lock:
+        remaining = max(0.0, deadline - time.monotonic())
+        if not self._thread_lock.acquire(timeout=remaining):
+            raise CronError(
+                f"Timed out waiting for cron store lock {self.lock_path}"
+            )
+
+        lock_key = str(self.cron_dir)
+        held = getattr(_STORE_LOCK_STATE, "held", None)
+        if held is None:
+            held = set()
+            _STORE_LOCK_STATE.held = held
+        if lock_key in held:
+            try:
+                yield
+            finally:
+                self._thread_lock.release()
+            return
+
+        lock_file = None
+        try:
             lock_file = open(self.lock_path, "a+b")
             acquired = False
             try:
@@ -435,7 +494,6 @@ class CronStore:
                 if lock_file.tell() == 0:
                     lock_file.write(b"\0")
                     lock_file.flush()
-                deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
                 while not acquired:
                     try:
                         lock_file.seek(0)
@@ -445,12 +503,17 @@ class CronStore:
                             msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
                         acquired = True
                     except (OSError, IOError) as exc:
-                        if time.monotonic() >= deadline:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
                             raise CronError(
                                 f"Timed out waiting for cron store lock {self.lock_path}"
                             ) from exc
-                        time.sleep(0.05)
-                yield
+                        time.sleep(min(0.05, remaining))
+                held.add(lock_key)
+                try:
+                    yield
+                finally:
+                    held.discard(lock_key)
             finally:
                 if acquired:
                     try:
@@ -462,6 +525,8 @@ class CronStore:
                     except (OSError, IOError):
                         logger.warning("Could not release cron lock %s", self.lock_path)
                 lock_file.close()
+        finally:
+            self._thread_lock.release()
 
     def _load_unlocked(self) -> List[Dict[str, Any]]:
         if not self.jobs_path.exists():
@@ -606,6 +671,7 @@ class CronStore:
             "last_status": None,
             "last_error": None,
             "last_delivery_error": None,
+            "missed_at": None,
             "claim": None,
             "deliver": normalized_delivery,
             "origin": normalized_origin,
@@ -696,6 +762,7 @@ class CronStore:
                     repeat_state["times"] = None
                 if parsed["kind"] != previous_kind or was_terminal:
                     repeat_state["completed"] = 0
+                    job["missed_at"] = None
                 if job.get("state") != "paused":
                     next_run = compute_next_run(parsed, now=self.now())
                     if parsed["kind"] == "once" and next_run is None:
@@ -752,7 +819,13 @@ class CronStore:
             if index is None:
                 return None
             job = jobs[index]
-            if not job.get("enabled", True) or job.get("state") == "paused":
+            missed_oneshot = bool(job.get("missed_at")) and (
+                job.get("schedule", {}).get("kind") == "once"
+                and job.get("state") == "error"
+            )
+            if (
+                not job.get("enabled", True) or job.get("state") == "paused"
+            ) and not missed_oneshot:
                 raise CronError(
                     "The job is paused or disabled; resume it before running."
                 )
@@ -760,8 +833,10 @@ class CronStore:
                 raise CronError("The job is already running.")
             if job.get("state") == "completed":
                 raise CronError("A completed one-shot cannot run again; recreate it.")
+            job["enabled"] = True
             job["state"] = "scheduled"
             job["next_run_at"] = self.now().isoformat()
+            job["missed_at"] = None
             self._save_unlocked(jobs)
             return copy.deepcopy(job)
 
@@ -860,6 +935,21 @@ class CronStore:
                         last_run_at=job.get("last_run_at"),
                     )
                     if not next_run_text:
+                        if job.get("schedule", {}).get("kind") == "once":
+                            job["enabled"] = False
+                            job["state"] = "error"
+                            job["next_run_at"] = None
+                            job["last_status"] = "error"
+                            job["last_error"] = (
+                                f"One-shot missed its {ONESHOT_GRACE_SECONDS}s "
+                                "grace window without running."
+                            )
+                            job["missed_at"] = now.isoformat()
+                            logger.warning(
+                                "Cron one-shot %s missed its grace window",
+                                job.get("id"),
+                            )
+                            changed = True
                         continue
                     job["next_run_at"] = next_run_text
                     changed = True
@@ -877,12 +967,26 @@ class CronStore:
                     continue
 
                 kind = job.get("schedule", {}).get("kind")
-                if kind in {"interval", "cron"}:
-                    job["next_run_at"] = compute_next_run(
-                        job["schedule"],
-                        now=now,
-                        last_run_at=now.isoformat(),
+                if kind == "once" and (
+                    now - next_run
+                ).total_seconds() > ONESHOT_GRACE_SECONDS:
+                    job["enabled"] = False
+                    job["state"] = "error"
+                    job["next_run_at"] = None
+                    job["last_status"] = "error"
+                    job["last_error"] = (
+                        f"One-shot missed its {ONESHOT_GRACE_SECONDS}s grace "
+                        f"window (scheduled for {next_run.isoformat()})."
                     )
+                    job["missed_at"] = now.isoformat()
+                    logger.warning(
+                        "Cron one-shot %s missed its grace window",
+                        job.get("id"),
+                    )
+                    changed = True
+                    continue
+                if kind in {"interval", "cron"}:
+                    job["next_run_at"] = _advance_recurring_run(job, now)
                 elif kind == "once":
                     repeat["completed"] = completed + 1
                     job["repeat"] = repeat
@@ -952,6 +1056,7 @@ class CronStore:
                 job["enabled"] = False
                 job["state"] = "completed" if success else "error"
                 job["next_run_at"] = None
+                job["missed_at"] = None
             else:
                 repeat = job.setdefault("repeat", {"times": None, "completed": 0})
                 repeat["completed"] = int(repeat.get("completed") or 0) + 1
@@ -965,11 +1070,20 @@ class CronStore:
                     job["state"] = "paused"
                 else:
                     job["state"] = "scheduled"
-                    job["next_run_at"] = compute_next_run(
-                        job["schedule"],
-                        now=now,
-                        last_run_at=now.isoformat(),
-                    )
+                    reserved = job.get("next_run_at")
+                    try:
+                        reserved_is_future = _aware(
+                            datetime.fromisoformat(str(reserved)),
+                            now.tzinfo,
+                        ) > now
+                    except (TypeError, ValueError):
+                        reserved_is_future = False
+                    if not reserved_is_future:
+                        job["next_run_at"] = compute_next_run(
+                            job["schedule"],
+                            now=now,
+                            last_run_at=now.isoformat(),
+                        )
             self._save_unlocked(jobs)
             return True
 

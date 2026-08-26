@@ -12,14 +12,17 @@ Windows development machine the whole module skips; run it under WSL to see it.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 
 from pilotage.tools.shell import (
     BoundedOutput,
+    INTERNAL_STDERR_CAPTURE_CHARS,
     Shell,
     read_shell_token,
     rewrite_compound_background,
@@ -159,6 +162,28 @@ class SessionTests(unittest.TestCase):
         result = self.shell.execute("echo oops >&2")
         self.assertIn("oops", result["output"])
 
+    def test_internal_success_returns_exact_stdout(self):
+        result = self.shell.execute(
+            "printf 'PAYLOAD\\n'; printf 'HOOK_WARNING\\n' >&2",
+            merge_stderr=False,
+        )
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(result["output"], "PAYLOAD\n")
+
+    def test_internal_failure_appends_bounded_stderr(self):
+        result = self.shell.execute(
+            "printf 'PAYLOAD\\n'; python3 -c \"import sys; "
+            f"sys.stderr.write('E' * {INTERNAL_STDERR_CAPTURE_CHARS * 4})\"; exit 3",
+            merge_stderr=False,
+        )
+        self.assertEqual(result["returncode"], 3)
+        self.assertTrue(result["output"].startswith("PAYLOAD\n"))
+        self.assertIn("OUTPUT TRUNCATED", result["output"])
+        self.assertLess(
+            len(result["output"]),
+            INTERNAL_STDERR_CAPTURE_CHARS + 1000,
+        )
+
     def test_the_marker_never_reaches_the_reader(self):
         """It is bookkeeping; the model must not see it, or it will copy it."""
         result = self.shell.execute("echo hello")
@@ -277,6 +302,21 @@ class TerminationTests(unittest.TestCase):
         self.assertEqual(result["returncode"], 124)
         self.assertIn("timed out", result["output"])
 
+    def test_cancelling_a_command_stops_it_and_reports_cancellation(self):
+        cancel = threading.Event()
+        timer = threading.Timer(0.1, cancel.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+
+        result = self.shell.execute(
+            "sleep 30",
+            timeout=10,
+            cancel_event=cancel,
+        )
+
+        self.assertEqual(result["returncode"], 130)
+        self.assertIn("cancelled", result["output"])
+
     def test_the_output_so_far_survives_the_timeout(self):
         result = self.shell.execute("echo partial; sleep 30", timeout=2)
         self.assertIn("partial", result["output"])
@@ -287,6 +327,58 @@ class TerminationTests(unittest.TestCase):
         self.shell.execute(f"( sleep 2; touch {marker} ) & sleep 30", timeout=1)
         time.sleep(3.5)
         self.assertFalse(marker.exists(), "a child outlived the command that started it")
+
+    def test_timeout_stops_a_descendant_that_created_its_own_session(self):
+        marker = self.tmp / "setsid-grandchild-survived"
+        grandchild = (
+            "import time,pathlib; time.sleep(2); "
+            f"pathlib.Path({str(marker)!r}).touch()"
+        )
+        child = (
+            "import os,subprocess,sys,time; os.setsid(); "
+            f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); "
+            "time.sleep(30)"
+        )
+        self.shell.execute(
+            f"python3 -c {shlex.quote(child)} & sleep 30",
+            timeout=1,
+        )
+        time.sleep(3.5)
+        self.assertFalse(marker.exists(), "a setsid grandchild escaped timeout cleanup")
+
+    def test_cancellation_stops_a_setsid_descendant_and_its_grandchild(self):
+        marker = self.tmp / "cancelled-grandchild-survived"
+        ready = self.tmp / "cancel-tree-ready"
+        grandchild = (
+            "import time,pathlib; time.sleep(2); "
+            f"pathlib.Path({str(marker)!r}).touch()"
+        )
+        child = (
+            "import os,pathlib,subprocess,sys,time; os.setsid(); "
+            f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); "
+            f"pathlib.Path({str(ready)!r}).touch(); time.sleep(30)"
+        )
+        cancel = threading.Event()
+
+        def cancel_after_tree_starts():
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not ready.exists():
+                time.sleep(0.01)
+            cancel.set()
+
+        trigger = threading.Thread(target=cancel_after_tree_starts, daemon=True)
+        trigger.start()
+        result = self.shell.execute(
+            f"python3 -c {shlex.quote(child)} & sleep 30",
+            timeout=10,
+            cancel_event=cancel,
+        )
+        trigger.join(timeout=1)
+        time.sleep(3.0)
+
+        self.assertTrue(ready.exists(), "the escaped tree never started")
+        self.assertEqual(result["returncode"], 130)
+        self.assertFalse(marker.exists(), "a setsid grandchild escaped cancellation")
 
     def test_the_session_still_works_after_a_timeout(self):
         self.shell.execute("sleep 30", timeout=1)

@@ -34,10 +34,10 @@ completeness.
 The Genesis core currently provides ChatGPT subscription authentication,
 allowlisted WhatsApp and Telegram messaging, persistent conversations with
 native context compaction, full-text conversation recall, curated memory,
-profile-local tools and skills, isolated profiles, management commands, DDGS
+profile-local tools and skills, profile-separated state, management commands, DDGS
 web search, Firecrawl page extraction, native image analysis, OpenAI
 voice-message transcription,
-Codex-backed image generation and editing, allowlisted messaging groups, and
+Codex-backed image generation and editing, user-authorized DMs and groups, and
 durable cron jobs. Memory, skill, and cron changes use configurable per-profile
 approval gates over both messaging channels. This Genesis slice is not
 production-complete, and there is no stable public API.
@@ -68,13 +68,19 @@ effective profile environment file, then pairs and enables the channel.
 `pilotage telegram` securely collects and verifies the bot token, allowed user
 IDs, and home destination, then enables Telegram. Run either or both setup
 commands; a fresh install enables neither channel.
+An allowed WhatsApp number or Telegram user ID may use the agent in a DM or any
+group; `require_mention` can require that person to address the agent directly
+inside groups.
 Webhook delivery also requires TELEGRAM_WEBHOOK_URL and a long random
 TELEGRAM_WEBHOOK_SECRET; leaving the URL blank uses long polling.
 After testing the enabled channels, install the resident user service:
 
 ```bash
 bash scripts/install-service.sh
+./.venv/bin/pilotage doctor
 ```
+
+The deployment is ready only when Doctor reports every required check as ready.
 
 Useful operator commands:
 

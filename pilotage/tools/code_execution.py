@@ -13,7 +13,6 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import subprocess
 import tempfile
 import threading
@@ -21,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ..process_tree import terminate_process_tree
 from ..redact import redact_sensitive_text
 from ..settings import ConfigError
 from .ansi_strip import strip_ansi
@@ -245,40 +245,12 @@ def _drain(pipe: Any, capture: Any) -> None:
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    if os.name != "nt":
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except (OSError, ProcessLookupError):
-            pass
-    else:
-        try:
-            process.terminate()
-        except OSError:
-            pass
-    try:
-        process.wait(timeout=2)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    if os.name != "nt":
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
-            pass
-    else:
-        try:
-            process.kill()
-        except OSError:
-            pass
-    try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        logger.error(
-            "Code-execution process %s did not exit after termination",
-            process.pid,
-        )
+    terminate_process_tree(
+        process,
+        pgid=process.pid if os.name != "nt" else None,
+        term_grace_seconds=2.0,
+        kill_grace_seconds=2.0,
+    )
 
 
 def _execute(
@@ -287,6 +259,7 @@ def _execute(
     context: ToolContext,
     *,
     workspace: Optional[Path] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> str:
     working_dir = workspace or _workspace(context)
     finding = find_blocked_python_source(
@@ -373,14 +346,33 @@ def _execute(
         )
         stdout_reader.start()
         stderr_reader.start()
+        deadline = time.monotonic() + timeout
+        while process.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                status = "cancelled"
+                _stop_process(process)
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                status = "timeout"
+                _stop_process(process)
+                break
+            try:
+                process.wait(timeout=min(0.1, remaining))
+            except subprocess.TimeoutExpired:
+                continue
         try:
-            process.wait(timeout=timeout)
+            process.wait(timeout=0.2)
         except subprocess.TimeoutExpired:
-            status = "timeout"
             _stop_process(process)
         finally:
             stdout_reader.join(timeout=3)
             stderr_reader.join(timeout=3)
+            for stream in (process.stdout, process.stderr):
+                try:
+                    stream.close()
+                except (AttributeError, OSError, ValueError):
+                    pass
 
     output, metadata = stdout_capture.result()
     stderr, stderr_truncated = stderr_capture.result()
@@ -407,6 +399,8 @@ def _execute(
         result["stderr_truncated"] = True
     if status == "timeout":
         result["error"] = f"Script timed out after {timeout}s and was killed."
+    elif status == "cancelled":
+        result["error"] = "Script was cancelled and its process tree was killed."
     elif exit_code != 0:
         result["status"] = "error"
         result["error"] = f"Script exited with code {exit_code}."
@@ -443,13 +437,26 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
     session = get_terminal_session(context)
     async with session.lock:
         workspace = _workspace(context)
-        return await asyncio.to_thread(
-            _execute,
-            code,
-            environment,
-            context,
-            workspace=workspace,
+        cancel_event = threading.Event()
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                _execute,
+                code,
+                environment,
+                context,
+                workspace=workspace,
+                cancel_event=cancel_event,
+            )
         )
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancel_event.set()
+            try:
+                await asyncio.shield(worker)
+            except Exception:
+                pass
+            raise
 
 
 EXECUTE_CODE_SCHEMA = {

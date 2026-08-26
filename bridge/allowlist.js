@@ -83,10 +83,6 @@ export function matchesAllowedUser(senderId, allowedUsers, sessionDir) {
     return false;
   }
 
-  if (allowedUsers.has('*')) {
-    return true;
-  }
-
   const aliases = expandWhatsAppIdentifiers(senderId, sessionDir);
   for (const alias of aliases) {
     if (allowedUsers.has(alias)) {

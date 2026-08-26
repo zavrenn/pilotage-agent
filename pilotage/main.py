@@ -1,7 +1,6 @@
 """Command line entry point.
 
     pilotage login          authenticate against ChatGPT (device code)
-    pilotage ask "..."      one question straight to the model, no messaging
     pilotage whatsapp       configure, pair, and enable WhatsApp
     pilotage telegram       configure, verify, and enable Telegram
     pilotage run            answer enabled messaging channels until stopped
@@ -19,11 +18,12 @@ import os
 import re
 import signal
 import shutil
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import httpx
 
@@ -36,6 +36,7 @@ from .channels.whatsapp import (
     WhatsAppSessionError,
     WhatsAppChannel,
     build_bridge_environment,
+    normalize_whatsapp_allowed_senders,
     normalize_whatsapp_chat_id,
     validate_whatsapp_session,
 )
@@ -57,12 +58,18 @@ from .delivery import (
     DeliveryStore,
     claim_deliveries,
     deliver_final,
+    recover_live_deliveries,
     redeliver_claimed_deliveries,
 )
 from .env import candidate_env_files, load_env_files, update_env_values
 from .history import ConversationError, ConversationStore
 from .i18n import t
-from .redact import RedactingFormatter
+from .redact import (
+    RedactingFormatter,
+    configure_identity_pseudonyms,
+    identity_key_path,
+    identity_pseudonym,
+)
 from .runtime_lock import ProfileRuntimeLock, RuntimeLockError
 from .service import run_service_command
 from .settings import config_path, set_channel_enabled
@@ -74,6 +81,7 @@ SESSION_MAINTENANCE_INTERVAL_SECONDS = 3600
 # to 30 seconds.
 STARTUP_RECOVERY_DRAIN_SECONDS = 30.0
 SHUTDOWN_DRAIN_SECONDS = 30.0
+DELIVERY_RECOVERY_INTERVAL_SECONDS = 60.0
 WHATSAPP_SETUP_ENV_KEYS = frozenset(
     {"PILOTAGE_ALLOWED_SENDERS", "WHATSAPP_HOME_CHANNEL"}
 )
@@ -89,15 +97,69 @@ CHANNEL_SETUP_ENV_KEYS = WHATSAPP_SETUP_ENV_KEYS | TELEGRAM_SETUP_ENV_KEYS
 
 
 async def _deliver_scheduled(
-    channel: WhatsAppChannel,
+    store: DeliveryStore,
+    channel: Any,
     origin: dict[str, str],
     text: str,
+    message_ref: str,
 ) -> None:
+    channel_name = str(origin.get("channel") or "").lower()
     chat_id = str(origin.get("chat_id") or "")
     if not chat_id:
-        raise ChannelError("Cron delivery origin has no WhatsApp chat ID.")
-    if not await channel.send(chat_id, text):
-        raise ChannelError("WhatsApp rejected the scheduled delivery.")
+        raise ChannelError("Cron delivery origin has no chat ID.")
+    thread_id = str(origin.get("thread_id") or "")
+    session_key = f"cron:{channel_name}:{chat_id}:{thread_id}"
+    if channel_name == "telegram":
+        send = lambda: channel.send(chat_id, text, thread_id=thread_id)
+        ledger_send = lambda ledger: channel.send(
+            chat_id,
+            text,
+            thread_id=thread_id,
+            delivery_ledger=ledger,
+        )
+    else:
+        send = lambda: channel.send(chat_id, text)
+        ledger_send = lambda ledger: channel.send(
+            chat_id, text, delivery_ledger=ledger
+        )
+    delivered = await deliver_final(
+        store,
+        session_key=session_key,
+        message_ref=message_ref,
+        platform=channel_name,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        content=text,
+        send=send,
+        ledger_send=ledger_send,
+    )
+    if not delivered:
+        raise ChannelError(
+            delivered.error
+            or f"{channel_name.title()} rejected the scheduled delivery."
+        )
+
+
+async def _recover_live_final_responses(
+    store: DeliveryStore,
+    channels: dict[str, Any],
+    *,
+    interval_seconds: float = DELIVERY_RECOVERY_INTERVAL_SECONDS,
+) -> None:
+    """Keep the resident safe-delivery sweep alive after unexpected failures."""
+
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            recovered = await recover_live_deliveries(store, channels)
+        except Exception:
+            logger.exception("Live final-response recovery sweep failed")
+            continue
+        if recovered:
+            logger.info(
+                "Redelivered %d live recovered final response(s)",
+                recovered,
+            )
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -143,26 +205,6 @@ def command_status(config: Config, profile_name: str) -> int:
     return 0
 
 
-async def command_ask(config: Config, question: str) -> int:
-    # Nowhere to write. This is the one-shot you run to find out whether the
-    # login and the model still work, so it has to answer the same way today as
-    # it did yesterday, and it must not add to a running agent's conversations.
-    agent = Agent(config, ConversationStore(path=None))
-
-    async def notice(text: str) -> None:
-        print(text, file=sys.stderr)
-
-    try:
-        answer = await agent.respond("cli", question, on_notice=notice)
-    except auth.AuthError as exc:
-        print(f"{exc}", file=sys.stderr)
-        return 1
-    finally:
-        await agent.close()
-    print(answer)
-    return 0
-
-
 async def command_run(config: Config, profile_name: str = "default") -> int:
     runtime_lock = ProfileRuntimeLock(config.state_dir)
     try:
@@ -171,6 +213,11 @@ async def command_run(config: Config, profile_name: str = "default") -> int:
         print(exc, file=sys.stderr)
         return 1
     try:
+        try:
+            configure_identity_pseudonyms(config.state_dir)
+        except (OSError, ValueError) as exc:
+            print(f"Could not initialize private log identities: {exc}", file=sys.stderr)
+            return 1
         return await _command_run_locked(config, profile_name)
     finally:
         runtime_lock.release()
@@ -215,6 +262,11 @@ def command_whatsapp_pair(
         print(exc, file=sys.stderr)
         return 1
     try:
+        try:
+            configure_identity_pseudonyms(config.state_dir)
+        except (OSError, ValueError) as exc:
+            print(f"Could not initialize private log identities: {exc}", file=sys.stderr)
+            return 1
         selected_settings_path = settings_path or config_path(config.state_dir)
         try:
             allowed_senders, updates = _prompt_whatsapp_configuration(config)
@@ -297,13 +349,12 @@ def command_whatsapp_pair(
                     "--pair-only",
                     "--session",
                     str(config.session_dir),
+                    "--log-key",
+                    str(identity_key_path(config.state_dir)),
                 ],
                 cwd=str(config.bridge_dir),
                 env=build_bridge_environment(
                     allowed_senders=list(allowed_senders),
-                    allowed_groups=list(
-                        getattr(config, "group_allow_from", ())
-                    ),
                 ),
                 check=False,
             )
@@ -594,33 +645,6 @@ def _prompt_yes_no(prompt: str) -> bool:
         raise _SetupCancelled from exc
 
 
-def _normalize_allowed_senders(value: str) -> tuple[str, ...]:
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for item in value.replace(";", ",").split(","):
-        written = item.strip()
-        if not written:
-            continue
-        domain = ""
-        if "@" in written:
-            _, _, domain = written.partition("@")
-            domain = domain.lower()
-            if domain not in {"s.whatsapp.net", "lid", "c.us"}:
-                raise ValueError(f"Invalid WhatsApp sender ID: {written!r}")
-        local = written.split("@", 1)[0].split(":", 1)[0]
-        digits = re.sub(r"[ \t().-]+", "", local).removeprefix("+")
-        if not digits.isascii() or not digits.isdigit():
-            raise ValueError(
-                f"Invalid WhatsApp number {written!r}; use the country code and digits"
-            )
-        if digits not in seen:
-            normalized.append(f"{digits}@lid" if domain == "lid" else digits)
-            seen.add(digits)
-    if not normalized:
-        raise ValueError("At least one allowed WhatsApp number is required")
-    return tuple(normalized)
-
-
 _WhatsAppValue = TypeVar("_WhatsAppValue")
 
 
@@ -653,7 +677,7 @@ def _prompt_whatsapp_configuration(
     senders_valid = bool(current_senders)
     if current_senders:
         try:
-            _normalize_allowed_senders(",".join(current_senders))
+            normalize_whatsapp_allowed_senders(",".join(current_senders))
         except ValueError as exc:
             print(f"Existing WhatsApp allowlist is invalid: {exc}", file=sys.stderr)
             senders_valid = False
@@ -663,7 +687,7 @@ def _prompt_whatsapp_configuration(
         if _prompt_yes_no("Update allowed numbers? [y/N] "):
             allowed_senders, changed = _prompt_required_whatsapp_value(
                 "Allowed numbers, comma-separated (blank keeps existing): ",
-                _normalize_allowed_senders,
+                normalize_whatsapp_allowed_senders,
                 existing=current_senders,
             )
             if changed:
@@ -673,7 +697,7 @@ def _prompt_whatsapp_configuration(
     else:
         allowed_senders, _ = _prompt_required_whatsapp_value(
             "Allowed WhatsApp numbers, comma-separated: ",
-            _normalize_allowed_senders,
+            normalize_whatsapp_allowed_senders,
         )
         updates["PILOTAGE_ALLOWED_SENDERS"] = ",".join(allowed_senders)
 
@@ -736,11 +760,16 @@ async def _run_enabled_channels(
     )
     conversation_store = ConversationStore(cron_config.conversations_path)
     delivery_store = DeliveryStore(cron_config.state_dir / "delivery.db")
+    try:
+        await asyncio.to_thread(delivery_store.verify_writable)
+    except (OSError, sqlite3.Error) as exc:
+        print(f"Delivery database is not writable: {exc}", file=sys.stderr)
+        return 1
     channels = {}
     agents: list[Agent] = []
 
     async def scheduled_delivery(
-        origin: dict[str, str], text: str
+        origin: dict[str, str], text: str, message_ref: str
     ) -> None:
         channel_name = str(origin.get("channel") or "").lower()
         delivery_channel = channels.get(channel_name)
@@ -751,18 +780,13 @@ async def _run_enabled_channels(
             )
         if not chat_id:
             raise ChannelError("Cron delivery origin has no chat ID.")
-        if channel_name == "telegram":
-            delivered = await delivery_channel.send(
-                chat_id,
-                text,
-                thread_id=str(origin.get("thread_id") or ""),
-            )
-        else:
-            delivered = await delivery_channel.send(chat_id, text)
-        if not delivered:
-            raise ChannelError(
-                f"{channel_name.title()} rejected the scheduled delivery."
-            )
+        await _deliver_scheduled(
+            delivery_store,
+            delivery_channel,
+            origin,
+            text,
+            message_ref,
+        )
 
     scheduler = (
         CronScheduler(
@@ -793,14 +817,10 @@ async def _run_enabled_channels(
             async def notice(text: str) -> None:
                 await whatsapp_channel.send(message.chat_id, text, quoted)
 
-            async def approval_notice(text: str) -> None:
-                delivered = await whatsapp_channel.send(
+            async def approval_notice(text: str):
+                return await whatsapp_channel.send(
                     message.chat_id, text, quoted
                 )
-                if not delivered:
-                    raise ChannelError(
-                        "WhatsApp rejected the approval request delivery."
-                    )
 
             try:
                 async with whatsapp_channel.typing(message.chat_id):
@@ -850,16 +870,23 @@ async def _run_enabled_channels(
                 chat_id=message.chat_id,
                 thread_id="",
                 content=final_text,
+                reply_to=quoted,
                 send=lambda: whatsapp_channel.send(
                     message.chat_id,
                     final_text,
                     quoted,
                 ),
+                ledger_send=lambda ledger: whatsapp_channel.send(
+                    message.chat_id,
+                    final_text,
+                    quoted,
+                    delivery_ledger=ledger,
+                ),
             )
             if not delivered:
                 logger.error(
                     "WhatsApp final response remains pending for %s",
-                    message.chat_id,
+                    identity_pseudonym(message.chat_id, "wa"),
                 )
 
         async def manage_whatsapp(
@@ -916,17 +943,13 @@ async def _run_enabled_channels(
                     thread_id=message.thread_id,
                 )
 
-            async def approval_notice(text: str) -> None:
-                delivered = await telegram_channel.send(
+            async def approval_notice(text: str):
+                return await telegram_channel.send(
                     message.chat_id,
                     text,
                     quoted,
                     thread_id=message.thread_id,
                 )
-                if not delivered:
-                    raise TelegramChannelError(
-                        "Telegram rejected the approval request delivery."
-                    )
 
             try:
                 async with telegram_channel.typing(
@@ -985,17 +1008,25 @@ async def _run_enabled_channels(
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 content=final_text,
+                reply_to=quoted,
                 send=lambda: telegram_channel.send(
                     message.chat_id,
                     final_text,
                     quoted,
                     thread_id=message.thread_id,
                 ),
+                ledger_send=lambda ledger: telegram_channel.send(
+                    message.chat_id,
+                    final_text,
+                    quoted,
+                    thread_id=message.thread_id,
+                    delivery_ledger=ledger,
+                ),
             )
             if not delivered:
                 logger.error(
                     "Telegram final response remains pending for %s",
-                    message.chat_id,
+                    identity_pseudonym(message.chat_id, "tg"),
                 )
 
         async def manage_telegram(
@@ -1048,7 +1079,10 @@ async def _run_enabled_channels(
 
     start_order = [
         channel
-        for name in ("telegram", "whatsapp")
+        # WhatsApp has a durable local inbox; Telegram's server offset can
+        # advance as soon as polling starts. Start the durable channel first so
+        # a WhatsApp startup failure cannot consume Telegram updates.
+        for name in ("whatsapp", "telegram")
         if (channel := channels.get(name)) is not None
     ]
     started = []
@@ -1062,8 +1096,14 @@ async def _run_enabled_channels(
             await running_channel.start()
             started.append(running_channel)
     except (ChannelError, TelegramChannelError) as exc:
+        deadline = asyncio.get_running_loop().time() + SHUTDOWN_DRAIN_SECONDS
         for running_channel in reversed(started):
-            await running_channel.stop()
+            await running_channel.stop(
+                drain_timeout_seconds=max(
+                    0.0,
+                    deadline - asyncio.get_running_loop().time(),
+                )
+            )
         await asyncio.gather(
             *(agent.close() for agent in agents),
             return_exceptions=True,
@@ -1119,8 +1159,14 @@ async def _run_enabled_channels(
                     recovery_task,
                     return_exceptions=True,
                 )
+            deadline = asyncio.get_running_loop().time() + SHUTDOWN_DRAIN_SECONDS
             for running_channel in reversed(started):
-                await running_channel.stop()
+                await running_channel.stop(
+                    drain_timeout_seconds=max(
+                        0.0,
+                        deadline - asyncio.get_running_loop().time(),
+                    )
+                )
             await asyncio.gather(
                 *(agent.close() for agent in agents),
                 return_exceptions=True,
@@ -1169,6 +1215,11 @@ async def _run_enabled_channels(
         name="pilotage-profile-maintenance",
     )
 
+    live_recovery_task = asyncio.create_task(
+        _recover_live_final_responses(delivery_store, channels),
+        name="pilotage-live-delivery-recovery",
+    )
+
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -1200,6 +1251,8 @@ async def _run_enabled_channels(
         if maintenance_task is not None:
             maintenance_task.cancel()
             await asyncio.gather(maintenance_task, return_exceptions=True)
+        live_recovery_task.cancel()
+        await asyncio.gather(live_recovery_task, return_exceptions=True)
         if recovery_task is not None:
             recovery_task.cancel()
             await asyncio.gather(recovery_task, return_exceptions=True)
@@ -1248,12 +1301,10 @@ async def _run_enabled_channels(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pilotage", description="Pilotage Agent")
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("-p", "--profile", help="run one named isolated agent profile")
+    parser.add_argument("-p", "--profile", help="run one named agent profile")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("login", help="authenticate against ChatGPT")
-    ask = subparsers.add_parser("ask", help="ask one question, print the answer")
-    ask.add_argument("question", nargs="+")
     subparsers.add_parser("run", help="answer enabled messaging channels until stopped")
     subparsers.add_parser(
         "whatsapp", help="configure allowed numbers, home chat, and QR pairing"
@@ -1270,7 +1321,7 @@ def main(argv: list[str] | None = None) -> int:
     service.add_argument("service_action", choices=("start", "stop", "status"))
     add_cron_parser(subparsers)
 
-    profile = subparsers.add_parser("profile", help="manage isolated agent profiles")
+    profile = subparsers.add_parser("profile", help="manage agent profiles")
     profile_commands = profile.add_subparsers(dest="profile_command", required=True)
     profile_commands.add_parser("list", help="list profiles")
     profile_commands.add_parser("show", help="show the active profile")
@@ -1346,8 +1397,6 @@ def main(argv: list[str] | None = None) -> int:
             settings_path=selected_settings_path,
             external_env=external_setup_env,
         )
-    if args.command == "ask":
-        return asyncio.run(command_ask(config, " ".join(args.question)))
     if args.command == "status":
         return command_status(config, profile_name)
     if args.command == "doctor":

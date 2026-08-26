@@ -22,7 +22,14 @@ from urllib.parse import urlparse
 
 from .. import media
 from ..commands import CommandInvocation, parse_command
-from ..delivery import SendResult, as_send_result
+from ..delivery import (
+    DeliveryUnitLedger,
+    SendResult,
+    as_send_result,
+    delivery_fingerprint,
+    file_delivery_fingerprint,
+)
+from ..redact import identity_pseudonym, redact_channel_identities
 from ..settings import ConfigError, Settings
 from .dedup import MessageDeduplicator
 from .telegram_formatting import (
@@ -64,6 +71,9 @@ SPLIT_THRESHOLD = 4000
 QUOTE_SNIPPET_LIMIT = 500
 TYPING_REFRESH_SECONDS = 5.0
 SHUTDOWN_STEP_SECONDS = 10.0
+STARTUP_FAILURE_DRAIN_SECONDS = 30.0
+MEDIA_REGISTRATION_GRACE_SECONDS = 0.01
+MEDIA_DOWNLOAD_GRACE_SECONDS = 1.0
 
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif"})
 _VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"})
@@ -214,21 +224,16 @@ def validate_settings(settings: Settings) -> None:
                 "TELEGRAM_WEBHOOK_PORT must be between 1 and 65535"
             )
 
-    policy = settings.text("telegram.group_policy", "disabled").lower()
-    if policy not in {"disabled", "allowlist"}:
-        raise ConfigError(
-            "telegram.group_policy must be 'disabled' or 'allowlist', "
-            f"not {policy!r}"
-        )
-    group_allow_from = settings.names("telegram.group_allow_from")
-    if any(
-        chat_id != "*"
-        and re.fullmatch(r"-?[1-9][0-9]*", chat_id) is None
-        for chat_id in group_allow_from
+    for retired_group_setting in (
+        "telegram.group_policy",
+        "telegram.group_allow_from",
     ):
-        raise ConfigError(
-            "telegram.group_allow_from must contain numeric Telegram chat IDs or '*'"
-        )
+        if settings.get(retired_group_setting) is not None:
+            raise ConfigError(
+                f"{retired_group_setting} is no longer supported; "
+                "TELEGRAM_ALLOWED_USERS now authorizes each person in both "
+                "DMs and groups"
+            )
     settings.flag("telegram.require_mention", True)
     settings.flag("telegram.disable_link_previews", False)
 
@@ -259,6 +264,14 @@ class InboundMessage:
     thread_id: str = ""
     message_ids: List[str] = field(default_factory=list)
     attachments: List[media.Attachment] = field(default_factory=list)
+
+
+@dataclass
+class _MediaDownloadFence:
+    count: int = 0
+    generation: int = 0
+    spent_generation: int = 0
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 Handler = Callable[[InboundMessage], Awaitable[None]]
@@ -323,7 +336,8 @@ def _redact_error(exc: BaseException, token: str) -> str:
     text = str(exc)
     if token:
         text = text.replace(token, "<redacted Telegram token>")
-    return re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot<redacted>", text)
+    text = re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot<redacted>", text)
+    return redact_channel_identities(text)
 
 
 def _send_failure(exc: BaseException, token: str) -> SendResult:
@@ -365,12 +379,6 @@ class TelegramChannel:
         self._webhook_mode = False
         self._allowed_users = frozenset(_split_env("TELEGRAM_ALLOWED_USERS"))
         settings = config.settings
-        self._group_policy = settings.text(
-            "telegram.group_policy", "disabled"
-        ).lower()
-        self._group_allow_from = frozenset(
-            settings.names("telegram.group_allow_from")
-        )
         self._require_mention = settings.flag(
             "telegram.require_mention", True
         )
@@ -415,6 +423,7 @@ class TelegramChannel:
         self._intake_tasks: set[asyncio.Task] = set()
         self._startup_updates: List[tuple[str, Any, Any]] = []
         self._held_inbound: Dict[str, InboundMessage] = {}
+        self._media_downloads: Dict[str, _MediaDownloadFence] = {}
 
     # -- lifetime -------------------------------------------------------
 
@@ -445,11 +454,6 @@ class TelegramChannel:
             logger.warning(
                 "TELEGRAM_ALLOWED_USERS is empty - every Telegram message "
                 "will be ignored."
-            )
-        if self._group_policy == "allowlist" and not self._group_allow_from:
-            logger.warning(
-                "Telegram group policy is allowlist but group_allow_from is "
-                "empty - every group message will be ignored."
             )
 
     def _build_application(self) -> Any:
@@ -532,26 +536,37 @@ class TelegramChannel:
                         webhook_url=self._webhook_url,
                         secret_token=self._webhook_secret,
                         allowed_updates=Update.ALL_TYPES,
-                        drop_pending_updates=True,
+                        # A message accepted by Telegram while Pilotage is
+                        # stopped is still work owed to the user.  Startup must
+                        # never erase that server-side backlog implicitly.
+                        drop_pending_updates=False,
                     ),
                     timeout=30.0,
                 )
                 self._webhook_mode = True
             else:
-                await app.bot.delete_webhook(drop_pending_updates=True)
+                await app.bot.delete_webhook(drop_pending_updates=False)
                 await asyncio.wait_for(
                     app.updater.start_polling(
-                        drop_pending_updates=True,
+                        drop_pending_updates=False,
                         error_callback=self._polling_error_callback,
                     ),
                     timeout=30.0,
                 )
                 self._webhook_mode = False
         except asyncio.CancelledError:
-            await asyncio.shield(self.stop())
+            await asyncio.shield(
+                self.stop(
+                    drain_timeout_seconds=STARTUP_FAILURE_DRAIN_SECONDS
+                )
+            )
             raise
         except BaseException as exc:
-            await asyncio.shield(self.stop())
+            await asyncio.shield(
+                self.stop(
+                    drain_timeout_seconds=STARTUP_FAILURE_DRAIN_SECONDS
+                )
+            )
             if isinstance(exc, InvalidToken):
                 raise ChannelError("Telegram rejected TELEGRAM_BOT_TOKEN.") from exc
             if isinstance(exc, ChannelError):
@@ -563,8 +578,8 @@ class TelegramChannel:
         self._running = True
         self._release_held_inbound()
         logger.info(
-            "Telegram channel ready as @%s (%s)",
-            self._bot_username or "unknown",
+            "Telegram channel ready as %s (%s)",
+            identity_pseudonym(self._bot_username or "unknown", "tg-bot"),
             "webhook" if self._webhook_mode else "polling",
         )
 
@@ -621,11 +636,10 @@ class TelegramChannel:
         await self.stop_intake()
 
         loop = asyncio.get_running_loop()
-        timeout = (
-            0.0
-            if self.failure
-            else max(0.0, float(drain_timeout_seconds))
-        )
+        # Telegram may already have advanced its server offset when a channel
+        # error is reported. Accepted work therefore keeps the caller's bounded
+        # drain even on failure.
+        timeout = max(0.0, float(drain_timeout_seconds))
         deadline = loop.time() + timeout
         current = asyncio.current_task()
 
@@ -681,6 +695,9 @@ class TelegramChannel:
         self._intake_tasks.clear()
         self._startup_updates.clear()
         self._startup_hold_closed = False
+        for fence in self._media_downloads.values():
+            fence.changed.set()
+        self._media_downloads.clear()
 
         app = self._app
         self._app = None
@@ -732,23 +749,16 @@ class TelegramChannel:
         user_id = str(getattr(user, "id", "") or "").strip()
         return bool(user_id and user_id in self._allowed_users)
 
-    def _is_group_allowed(self, chat_id: str) -> bool:
-        return bool(
-            self._group_policy == "allowlist"
-            and chat_id
-            and (
-                "*" in self._group_allow_from
-                or chat_id in self._group_allow_from
-            )
-        )
-
     def _report_blocked(self, message: Any) -> None:
         user = getattr(message, "from_user", None)
         identity = str(getattr(user, "id", "") or "unknown")
         if identity in self._reported_blocked:
             return
         self._reported_blocked.add(identity)
-        logger.warning("Ignored a Telegram message from %s.", identity)
+        logger.warning(
+            "Ignored a Telegram message from %s.",
+            identity_pseudonym(identity, "tg"),
+        )
 
     @staticmethod
     def _iter_text_sources(message: Any):
@@ -862,8 +872,6 @@ class TelegramChannel:
             self._report_blocked(message)
             return False
         if _is_group(message):
-            if not self._is_group_allowed(chat_id):
-                return False
             if not self._group_message_is_triggered(message):
                 return False
             return True
@@ -998,21 +1006,57 @@ class TelegramChannel:
                 "media", update, context
             ):
                 return
+            session_id = self._message_session_id(message)
+            self._begin_media_download(session_id)
             try:
-                attachments, notes = await self._download_attachments(message)
-            except Exception as exc:
-                logger.warning(
-                    "Telegram media download failed: %s",
-                    _redact_error(exc, self._token),
-                )
-                attachments = []
-                notes = ["[A Telegram attachment could not be downloaded.]"]
-            await self._accept_message(message, attachments, notes=notes)
+                try:
+                    attachments, notes = await self._download_attachments(message)
+                except Exception as exc:
+                    logger.warning(
+                        "Telegram media download failed: %s",
+                        _redact_error(exc, self._token),
+                    )
+                    attachments = []
+                    notes = ["[A Telegram attachment could not be downloaded.]"]
+                await self._accept_message(message, attachments, notes=notes)
+            finally:
+                self._end_media_download(session_id)
 
     def _message_key(self, message: Any) -> str:
         chat_id = str(getattr(getattr(message, "chat", None), "id", "") or "")
         message_id = str(getattr(message, "message_id", "") or "")
         return f"{chat_id}:{message_id}" if message_id else ""
+
+    @staticmethod
+    def _message_session_id(message: Any) -> str:
+        chat = getattr(message, "chat", None)
+        user = getattr(message, "from_user", None)
+        return _session_id(
+            str(getattr(chat, "id", "") or ""),
+            str(getattr(user, "id", "") or ""),
+            _is_group(message),
+            _effective_thread_id(message),
+        )
+
+    def _begin_media_download(self, session_id: str) -> None:
+        fence = self._media_downloads.get(session_id)
+        if fence is None:
+            fence = _MediaDownloadFence()
+            self._media_downloads[session_id] = fence
+        if fence.count == 0:
+            fence.changed = asyncio.Event()
+        fence.count += 1
+        fence.generation += 1
+
+    def _end_media_download(self, session_id: str) -> None:
+        fence = self._media_downloads.get(session_id)
+        if fence is None:
+            return
+        fence.count = max(0, fence.count - 1)
+        if fence.count == 0:
+            fence.changed.set()
+            if session_id not in self._pending:
+                self._media_downloads.pop(session_id, None)
 
     def _hold_startup_update(
         self, kind: str, update: Any, context: Any
@@ -1073,7 +1117,7 @@ class TelegramChannel:
         )
 
         invocation = parse_command(clean_text) if not attachments else None
-        session_id = _session_id(chat_id, user_id, is_group, thread_id)
+        session_id = self._message_session_id(message)
         message_id = str(getattr(message, "message_id", "") or "")
         if invocation is not None:
             if invocation.command.name == "new":
@@ -1183,7 +1227,7 @@ class TelegramChannel:
             logger.exception(
                 "Telegram command /%s failed for %s",
                 invocation.command.name,
-                chat_id,
+                identity_pseudonym(chat_id, "tg"),
             )
 
     def _drop_pending_session(self, session_id: str) -> None:
@@ -1193,6 +1237,9 @@ class TelegramChannel:
         self._pending.pop(session_id, None)
         self._pending_started.pop(session_id, None)
         self._queued.pop(session_id, None)
+        fence = self._media_downloads.get(session_id)
+        if fence is not None and fence.count == 0:
+            self._media_downloads.pop(session_id, None)
 
     async def _download_attachments(
         self, message: Any
@@ -1345,7 +1392,7 @@ class TelegramChannel:
             / "telegram"
             / f"{unique}_{safe_name}"
         )
-        target.write_bytes(payload)
+        await asyncio.to_thread(target.write_bytes, payload)
         return media.Attachment(
             path=target.resolve(),
             mime=mime,
@@ -1432,6 +1479,41 @@ class TelegramChannel:
                 self._hold_inbound(message)
             else:
                 self._queue_turn(message)
+        fence = self._media_downloads.get(key)
+        if fence is not None and fence.count == 0:
+            self._media_downloads.pop(key, None)
+
+    async def _wait_for_media_download(
+        self, key: str, hard_remaining: float
+    ) -> None:
+        fence = self._media_downloads.get(key)
+        if (
+            fence is None
+            or fence.count == 0
+            or fence.generation <= fence.spent_generation
+            or hard_remaining <= 0
+        ):
+            return
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + min(
+            MEDIA_DOWNLOAD_GRACE_SECONDS,
+            hard_remaining,
+        )
+        try:
+            while fence.count > 0:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                changed = fence.changed
+                try:
+                    await asyncio.wait_for(changed.wait(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    break
+        finally:
+            # One stuck download may delay one batch once, never every later
+            # text turn in the same session.
+            fence.spent_generation = fence.generation
 
     async def _flush_after_quiet(
         self, key: str, last_text_length: int, has_media: bool
@@ -1450,6 +1532,29 @@ class TelegramChannel:
         )
         try:
             await asyncio.sleep(min(quiet_delay, hard_remaining))
+        except asyncio.CancelledError:
+            return
+        if self._pending_tasks.get(key) is not asyncio.current_task():
+            return
+        if not has_media:
+            hard_remaining = max(
+                0.0,
+                started + self._batch_hard_cap - loop.time(),
+            )
+            try:
+                await asyncio.sleep(
+                    min(MEDIA_REGISTRATION_GRACE_SECONDS, hard_remaining)
+                )
+            except asyncio.CancelledError:
+                return
+            if self._pending_tasks.get(key) is not asyncio.current_task():
+                return
+        hard_remaining = max(
+            0.0,
+            started + self._batch_hard_cap - loop.time(),
+        )
+        try:
+            await self._wait_for_media_download(key, hard_remaining)
         except asyncio.CancelledError:
             return
         if self._pending_tasks.get(key) is not asyncio.current_task():
@@ -1482,7 +1587,7 @@ class TelegramChannel:
                 except Exception:
                     logger.exception(
                         "Handling a Telegram message from %s failed",
-                        message.chat_id,
+                        identity_pseudonym(message.chat_id, "tg"),
                     )
                 if self.failure:
                     self._queued.pop(key, None)
@@ -1562,6 +1667,7 @@ class TelegramChannel:
         *,
         thread_id: str = "",
         deliver_media: bool = True,
+        delivery_ledger: Optional[DeliveryUnitLedger] = None,
     ) -> SendResult:
         if self._bot is None:
             return SendResult(False, "Telegram transport is not connected")
@@ -1588,6 +1694,38 @@ class TelegramChannel:
         if not chunks and not attachments:
             return SendResult(False, "response had no deliverable content")
 
+        units = []
+        if delivery_ledger is not None:
+            descriptors = [
+                (
+                    "text",
+                    delivery_fingerprint(
+                        "telegram-text-v2",
+                        chunk,
+                        thread_id,
+                        reply_to
+                        if self._reply_kwargs(reply_to, index)
+                        else "",
+                        "no-preview" if self._disable_link_previews else "preview",
+                    ),
+                )
+                for index, chunk in enumerate(chunks)
+            ]
+            for attachment in attachments:
+                fingerprint = await asyncio.to_thread(
+                    file_delivery_fingerprint,
+                    attachment.path,
+                    "telegram-file-v1",
+                    attachment.media_type,
+                    attachment.file_name,
+                    thread_id,
+                    reply_to
+                    if self._reply_kwargs(reply_to, len(descriptors))
+                    else "",
+                )
+                descriptors.append(("file", fingerprint))
+            units = await delivery_ledger.prepare(descriptors)
+
         delivery_index = 0
         for chunk in chunks:
             kwargs = {
@@ -1595,11 +1733,16 @@ class TelegramChannel:
                 **self._reply_kwargs(reply_to, delivery_index),
                 **self._preview_kwargs(),
             }
-            result = as_send_result(
-                await self._send_text_chunk(chat_id, chunk, kwargs)
+            send = lambda chunk=chunk, kwargs=kwargs: self._send_text_chunk(
+                chat_id, chunk, kwargs
+            )
+            result = (
+                await delivery_ledger.run(units[delivery_index], send)
+                if delivery_ledger is not None
+                else as_send_result(await send())
             )
             if not result:
-                if delivery_index:
+                if delivery_ledger is None and delivery_index:
                     return SendResult(False, result.error)
                 return result
             delivery_index += 1
@@ -1609,28 +1752,38 @@ class TelegramChannel:
                 **self._thread_kwargs(thread_id),
                 **self._reply_kwargs(reply_to, delivery_index),
             }
-            result = as_send_result(
-                await self._send_attachment(chat_id, attachment.path, kwargs)
+            send = lambda attachment=attachment, kwargs=kwargs: self._send_attachment(
+                chat_id, attachment.path, kwargs
+            )
+            result = (
+                await delivery_ledger.run(units[delivery_index], send)
+                if delivery_ledger is not None
+                else as_send_result(await send())
             )
             if not result:
-                if delivery_index:
+                if delivery_ledger is None and delivery_index:
                     return SendResult(False, result.error)
                 return result
             delivery_index += 1
         return SendResult(True)
+
+    @staticmethod
+    def _sent_message_id(value: Any) -> str:
+        message_id = getattr(value, "message_id", "")
+        return str(message_id) if isinstance(message_id, (str, int)) else ""
 
     async def _send_text_chunk(
         self, chat_id: str, chunk: str, kwargs: Dict[str, Any]
     ) -> SendResult:
         target = normalize_telegram_chat_id(chat_id)
         try:
-            await self._bot.send_message(
+            sent = await self._bot.send_message(
                 chat_id=target,
                 text=chunk,
                 parse_mode=ParseMode.MARKDOWN_V2,
                 **kwargs,
             )
-            return SendResult(True)
+            return SendResult(True, message_id=self._sent_message_id(sent))
         except BadRequest as exc:
             written = str(exc).lower()
             retry_kwargs = dict(kwargs)
@@ -1664,14 +1817,14 @@ class TelegramChannel:
                 )
             logger.error(
                 "Telegram rejected a message to %s: %s",
-                chat_id,
+                identity_pseudonym(chat_id, "tg"),
                 _redact_error(exc, self._token),
             )
             return SendResult(False, _redact_error(exc, self._token))
         except Exception as exc:
             logger.error(
                 "Sending to Telegram chat %s failed: %s",
-                chat_id,
+                identity_pseudonym(chat_id, "tg"),
                 _redact_error(exc, self._token),
             )
             return _send_failure(exc, self._token)
@@ -1684,13 +1837,13 @@ class TelegramChannel:
         kwargs: Dict[str, Any],
     ) -> SendResult:
         try:
-            await self._bot.send_message(
+            sent = await self._bot.send_message(
                 chat_id=chat_id,
                 text=text,
                 parse_mode=parse_mode,
                 **kwargs,
             )
-            return SendResult(True)
+            return SendResult(True, message_id=self._sent_message_id(sent))
         except Exception as exc:
             logger.error(
                 "Telegram fallback delivery failed: %s",
@@ -1728,28 +1881,27 @@ class TelegramChannel:
 
             try:
                 with path.open("rb") as stream:
-                    await method(
+                    sent = await method(
                         chat_id=target,
                         **{argument: stream},
                         **kwargs,
                     )
-                return SendResult(True)
+                return SendResult(True, message_id=self._sent_message_id(sent))
             except BadRequest:
                 if argument not in {"photo", "animation", "video"}:
                     raise
                 # Hermes falls back to a document when Telegram cannot render
                 # a valid workspace file in its native media endpoint.
                 with path.open("rb") as stream:
-                    await self._bot.send_document(
+                    sent = await self._bot.send_document(
                         chat_id=target,
                         document=stream,
                         **kwargs,
                     )
-                return SendResult(True)
+                return SendResult(True, message_id=self._sent_message_id(sent))
         except Exception as exc:
             logger.error(
-                "Sending Telegram attachment %s failed: %s",
-                path.name,
+                "Sending Telegram attachment failed: %s",
                 _redact_error(exc, self._token),
             )
             return _send_failure(exc, self._token)

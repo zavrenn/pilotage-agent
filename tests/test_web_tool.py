@@ -117,19 +117,24 @@ class SearchContractTests(unittest.TestCase):
         self.assertTrue(result["success"])
         search.assert_called_once_with("q", 100)
 
-    def test_provider_failure_is_returned_as_data(self):
+    def test_provider_failure_is_normalized_before_model_context(self):
         module, _ = _fake_ddgs()
+        secret = "sk-searchprovidersecret123456789"
         with (
             mock.patch.dict(sys.modules, {"ddgs": module}),
             mock.patch.object(
                 web,
                 "_run_ddgs_search_bounded",
-                side_effect=RuntimeError("rate limited"),
+                side_effect=RuntimeError(f"rate limited with {secret}"),
             ),
+            self.assertLogs(web.logger, level="WARNING") as captured,
         ):
             result = web._search("q")
         self.assertFalse(result["success"])
-        self.assertIn("rate limited", result["error"])
+        self.assertEqual(result["error"], web._SEARCH_FAILURE_MESSAGE)
+        self.assertLess(len(result["error"]), 200)
+        self.assertNotIn(secret, json.dumps(result))
+        self.assertNotIn(secret, "\n".join(captured.output))
 
     def test_timeout_has_a_specific_recovery_message(self):
         module, _ = _fake_ddgs()
@@ -279,8 +284,11 @@ class WebExtractSettingsTests(unittest.TestCase):
         web._firecrawl_client_config = None
         with mock.patch.dict(
             os.environ,
-            {"FIRECRAWL_API_KEY": "fc-test-placeholder"},
-            clear=True,
+            {
+                "FIRECRAWL_API_KEY": "fc-test-placeholder",
+                "FIRECRAWL_API_URL": "",
+            },
+            clear=False,
         ):
             client = web._get_firecrawl_client()
         self.assertTrue(callable(client.scrape))
@@ -346,6 +354,26 @@ class FirecrawlExtractionTests(unittest.IsolatedAsyncioTestCase):
             results = await web._extract_firecrawl(["https://example.com"])
 
         self.assertIn("timed out", results[0]["error"])
+
+    async def test_per_url_provider_exception_is_normalized_and_log_redacted(self):
+        secret = "sk-firecrawlsecret1234567890"
+
+        class Client:
+            def scrape(self, **_kwargs):
+                raise RuntimeError(f"Authorization: Bearer {secret}")
+
+        with (
+            mock.patch.object(web, "_get_firecrawl_client", return_value=Client()),
+            self.assertLogs(web.logger, level="WARNING") as captured,
+        ):
+            results = await web._extract_firecrawl(["https://example.com/private"])
+
+        self.assertEqual(
+            results[0]["error"], web._URL_EXTRACT_FAILURE_MESSAGE
+        )
+        self.assertLess(len(results[0]["error"]), 200)
+        self.assertNotIn(secret, json.dumps(results))
+        self.assertNotIn(secret, "\n".join(captured.output))
 
     async def test_unsafe_reported_redirect_is_blocked(self):
         class Client:
@@ -585,6 +613,36 @@ class WebExtractHandlerTests(unittest.IsolatedAsyncioTestCase):
             "returned no result",
             json.loads(result)["results"][0]["error"],
         )
+
+    async def test_outer_extraction_exception_is_normalized_and_log_redacted(self):
+        secret = "sk-extractsecret123456789012"
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as raw_root:
+            context = _tool_context(Path(raw_root))
+            with (
+                mock.patch.object(
+                    web,
+                    "async_is_safe_url",
+                    new=mock.AsyncMock(return_value=True),
+                ),
+                mock.patch.object(
+                    web,
+                    "_extract_firecrawl",
+                    new=mock.AsyncMock(
+                        side_effect=RuntimeError(f"token={secret}")
+                    ),
+                ),
+                self.assertLogs(web.logger, level="WARNING") as captured,
+            ):
+                result = await web.handle_web_extract(
+                    {"urls": ["https://example.com"]}, context
+                )
+
+        payload = json.loads(result)
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"], web._EXTRACT_FAILURE_MESSAGE)
+        self.assertLess(len(payload["error"]), 200)
+        self.assertNotIn(secret, result)
+        self.assertNotIn(secret, "\n".join(captured.output))
 
     async def test_combined_previews_fit_runtime_cap_and_keep_cache_footers(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as raw_root:

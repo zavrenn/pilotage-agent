@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -94,6 +95,29 @@ class SecretRenderingTests(unittest.TestCase):
         self.assertNotIn(token, rendered)
         self.assertNotIn(password, rendered)
         self.assertIn("[REDACTED]", rendered)
+
+
+class DeliveryReadinessTests(unittest.TestCase):
+    def test_delivery_probe_uses_the_profile_database(self):
+        root = Path("/profile/state")
+        store = mock.Mock()
+        with mock.patch.object(doctor, "DeliveryStore", return_value=store) as cls:
+            detail = doctor._check_delivery_store(SimpleNamespace(state_dir=root))
+
+        cls.assert_called_once_with(root / "delivery.db")
+        store.verify_writable.assert_called_once_with()
+        self.assertEqual(detail, "delivery write path ready")
+
+    def test_delivery_probe_reports_an_unwritable_database(self):
+        store = mock.Mock()
+        store.verify_writable.side_effect = sqlite3.OperationalError(
+            "attempt to write a readonly database"
+        )
+        with (
+            mock.patch.object(doctor, "DeliveryStore", return_value=store),
+            self.assertRaisesRegex(doctor.DoctorError, "not writable"),
+        ):
+            doctor._check_delivery_store(SimpleNamespace(state_dir=Path("/state")))
 
 
 class SqlReadinessTests(unittest.TestCase):
@@ -189,11 +213,9 @@ class PreparedEnvironmentTests(unittest.TestCase):
 
 
 class WhatsAppReadinessTests(unittest.TestCase):
-    def test_group_access_never_replaces_the_sender_allowlist(self):
+    def test_access_requires_an_explicit_person_allowlist(self):
         config = SimpleNamespace(
             allowed_senders=frozenset(),
-            answer_groups=True,
-            group_allow_from=frozenset({"*"}),
         )
 
         with self.assertRaisesRegex(
@@ -239,6 +261,8 @@ class WhatsAppReadinessTests(unittest.TestCase):
             path.write_text(
                 json.dumps({
                     "registered": False,
+                    "noiseKey": {"private": "x", "public": "y"},
+                    "signedIdentityKey": {"private": "a", "public": "b"},
                     "me": {"id": "212600000000:1@s.whatsapp.net"},
                     "account": {"details": "signed-device-identity"},
                     "signalIdentities": [{"identifier": "linked-device"}],
@@ -280,6 +304,32 @@ class WhatsAppReadinessTests(unittest.TestCase):
             {"x-pilotage-bridge-token": "owner-secret"},
         )
         response.raise_for_status.assert_called_once_with()
+
+    def test_bridge_health_rejects_a_durable_queue_overflow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "bridge.pid").write_text(
+                json.dumps({
+                    "pid": 42,
+                    "port": 8765,
+                    "token": "owner-secret",
+                }),
+                encoding="utf-8",
+            )
+            config = SimpleNamespace(state_dir=root)
+            response = mock.Mock()
+            response.json.return_value = {
+                "pid": 42,
+                "connected": True,
+                "status": "unhealthy",
+                "queue": {
+                    "storageHealthy": True,
+                    "overflowed": True,
+                },
+            }
+            with mock.patch.object(doctor.httpx, "get", return_value=response):
+                with self.assertRaisesRegex(doctor.DoctorError, "high-water"):
+                    doctor._check_whatsapp_bridge(config)
 
 
 class HomeChannelReadinessTests(unittest.TestCase):

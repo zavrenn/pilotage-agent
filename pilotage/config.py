@@ -210,10 +210,8 @@ class Config:
     # number must never answer whoever finds it. Entries are phone numbers in
     # digits, or full jids.
     allowed_senders: frozenset[str]
-    # Additional location gate for allowed senders. "*" means any group,
-    # never any sender.
-    group_policy: str
-    group_allow_from: frozenset[str]
+    # In groups, the same sender allowlist applies; this only controls whether
+    # an allowed sender must address the agent directly.
     require_mention: bool
     bridge_port: int
     bridge_dir: Path
@@ -289,14 +287,21 @@ class Config:
         return self.state_dir / "media"
 
     @property
+    def whatsapp_inbound_queue_dir(self) -> Path:
+        """Durable bridge inbox; deliberately survives WhatsApp re-pairing."""
+
+        return self.state_dir / "whatsapp-inbound"
+
+    @property
+    def whatsapp_completed_claims_path(self) -> Path:
+        """Bounded restart-safe record of WhatsApp work already completed."""
+
+        return self.state_dir / "whatsapp-completed.db"
+
+    @property
     def media_roots(self) -> tuple[Path, ...]:
         """The only directories a bridge-reported file path may live under."""
         return (self.media_dir,)
-
-    @property
-    def answer_groups(self) -> bool:
-        """Whether the bridge should surface any group traffic."""
-        return self.group_policy != "disabled"
 
     @property
     def conversations_path(self) -> Path:
@@ -389,15 +394,14 @@ class Config:
                 "set PILOTAGE_ALLOWED_SENDERS in ~/.pilotage-agent/.env instead"
             )
         env_senders = _env_str("PILOTAGE_ALLOWED_SENDERS", "")
-        senders = [
-            part.strip()
-            for part in env_senders.replace(";", ",").split(",")
-            if part.strip()
-        ]
-        if "*" in senders:
-            raise ConfigError(
-                "PILOTAGE_ALLOWED_SENDERS must name explicit senders; '*' is not allowed"
-            )
+        senders: tuple[str, ...] = ()
+        if env_senders.strip():
+            from .channels.whatsapp import normalize_whatsapp_allowed_senders
+
+            try:
+                senders = normalize_whatsapp_allowed_senders(env_senders)
+            except ValueError as exc:
+                raise ConfigError(str(exc)) from exc
 
         # Validate tool-owned settings at startup as well. Waiting until a
         # model first calls the tool would turn an operator typo into a partial
@@ -478,26 +482,18 @@ class Config:
                     "gateway.media_delivery_allow_dirs path when "
                     "sessions.isolated_workspaces is enabled"
                 )
-        legacy_answer_groups = settings.get("whatsapp.answer_groups")
-        if legacy_answer_groups is not None and settings.flag(
-            "whatsapp.answer_groups", False
+        for retired_group_setting in (
+            "whatsapp.answer_groups",
+            "whatsapp.group_policy",
+            "whatsapp.group_allow_from",
         ):
-            raise ConfigError(
-                "whatsapp.answer_groups has been replaced by "
-                "whatsapp.group_policy and whatsapp.group_allow_from"
-            )
-        group_policy = settings.text(
-            "whatsapp.group_policy", "disabled"
-        ).lower()
-        if group_policy not in {"disabled", "allowlist"}:
-            raise ConfigError(
-                "whatsapp.group_policy must be 'disabled' or 'allowlist', "
-                f"not {group_policy!r}"
-            )
-        group_allow_from = frozenset(
-            settings.names("whatsapp.group_allow_from")
-        )
-        require_mention = settings.flag("whatsapp.require_mention", False)
+            if settings.get(retired_group_setting) is not None:
+                raise ConfigError(
+                    f"{retired_group_setting} is no longer supported; "
+                    "PILOTAGE_ALLOWED_SENDERS now authorizes each person in "
+                    "both DMs and groups"
+                )
+        require_mention = settings.flag("whatsapp.require_mention", True)
         session_reset_mode = settings.text(
             "session_reset.mode", "none"
         ).strip().lower()
@@ -543,8 +539,6 @@ class Config:
             language=language,
             timezone=timezone_name,
             allowed_senders=frozenset(senders),
-            group_policy=group_policy,
-            group_allow_from=group_allow_from,
             require_mention=require_mention,
             bridge_port=_count_in_range(
                 "whatsapp.bridge_port",

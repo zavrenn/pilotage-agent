@@ -197,17 +197,27 @@ class ProfileTests(unittest.TestCase):
         (path / "config.yaml").write_text("agent:\n  model: profile-model\n", encoding="utf-8")
         seen = {}
 
-        async def fake_ask(config, question):
+        def fake_status(config, profile_name):
             seen["config"] = config
-            seen["question"] = question
+            seen["profile_name"] = profile_name
             return 0
 
-        with mock.patch.object(main, "command_ask", fake_ask):
-            self.assertEqual(main.main(["-p", "team", "ask", "hello"]), 0)
+        with mock.patch.object(main, "command_status", fake_status):
+            self.assertEqual(main.main(["-p", "team", "status"]), 0)
 
         self.assertEqual(seen["config"].state_dir, path)
         self.assertEqual(seen["config"].model, "profile-model")
-        self.assertEqual(seen["question"], "hello")
+        self.assertEqual(seen["profile_name"], "team")
+
+    def test_interactive_terminal_conversation_is_not_a_command(self):
+        from pilotage import main
+
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            main.main(["ask", "hello"])
+        self.assertEqual(raised.exception.code, 2)
 
 
 class ProfileAuthenticationTests(unittest.TestCase):

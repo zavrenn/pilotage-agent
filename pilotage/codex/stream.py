@@ -309,6 +309,10 @@ class StreamResult:
     # is byte-identical to the one the cache already holds.
     tool_calls: List[Dict[str, str]] = field(default_factory=list)
     status: str = ""
+    # True only when the wire supplied both the successful terminal event and
+    # its matching completed status. Text at EOF or from an incomplete/failed
+    # response is not completion proof.
+    terminal_completed: Optional[bool] = None
     usage: Any = None
     response_id: str = ""
     # A commentary/analysis-only response is the model pausing mid-turn, not an
@@ -366,7 +370,9 @@ async def consume_stream(
     output_sequences: List[int] = []
     pending_function_calls: Dict[str, Dict[str, Any]] = {}
     announced_output_order: Dict[str, Tuple[int, Any]] = {}
-    result = StreamResult()
+    # A real stream starts unproved. Directly constructed StreamResult values
+    # are used by test/integration doubles and intentionally remain ``None``.
+    result = StreamResult(terminal_completed=False)
     terminal_seen = False
     saw_response_completed = False
     first_event_seen = False
@@ -488,6 +494,9 @@ async def consume_stream(
                     _raise_stream_error(error)
             terminal_seen = True
             saw_response_completed = event_type == "response.completed"
+            result.terminal_completed = bool(
+                saw_response_completed and result.status == "completed"
+            )
             break
 
     # Compatible Responses backends can omit output_item.done for calls they

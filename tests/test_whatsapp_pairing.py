@@ -13,6 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from pilotage.channels.whatsapp import (
+    WhatsAppSessionError,
+    validate_whatsapp_session,
+)
 from pilotage.main import command_whatsapp_pair
 from pilotage.runtime_lock import ProfileRuntimeLock
 
@@ -22,10 +26,53 @@ def _qr_credentials() -> dict[str, object]:
 
     return {
         "registered": False,
+        "noiseKey": {"private": "noise-private", "public": "noise-public"},
+        "signedIdentityKey": {
+            "private": "identity-private",
+            "public": "identity-public",
+        },
         "me": {"id": "212600000000:1@s.whatsapp.net"},
         "account": {"details": "signed-device-identity"},
         "signalIdentities": [{"identifier": "linked-device"}],
     }
+
+
+class WhatsAppSessionValidationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.session = Path(temporary.name)
+        self.path = self.session / "creds.json"
+
+    def test_missing_empty_truncated_and_non_object_credentials_fail(self):
+        with self.assertRaisesRegex(WhatsAppSessionError, "missing or unreadable"):
+            validate_whatsapp_session(self.session)
+
+        for raw in ("", '{"noiseKey":', "[]", "{}"):
+            with self.subTest(raw=raw):
+                self.path.write_text(raw, encoding="utf-8")
+                with self.assertRaises(WhatsAppSessionError):
+                    validate_whatsapp_session(self.session)
+
+    def test_identity_keys_are_required_even_with_pairing_metadata(self):
+        credentials = _qr_credentials()
+        credentials.pop("noiseKey")
+        self.path.write_text(json.dumps(credentials), encoding="utf-8")
+
+        with self.assertRaisesRegex(WhatsAppSessionError, "incomplete"):
+            validate_whatsapp_session(self.session)
+
+    def test_completed_qr_and_pairing_code_shapes_are_accepted(self):
+        qr = _qr_credentials()
+        code = dict(qr)
+        code["registered"] = True
+        code.pop("account")
+        code.pop("signalIdentities")
+
+        for credentials in (qr, code):
+            with self.subTest(registered=credentials["registered"]):
+                self.path.write_text(json.dumps(credentials), encoding="utf-8")
+                validate_whatsapp_session(self.session)
 
 
 class WhatsAppPairingTests(unittest.TestCase):
@@ -45,7 +92,6 @@ class WhatsAppPairingTests(unittest.TestCase):
             state_dir=self.root / "state",
             allowed_senders=frozenset(),
             home_chat_id="",
-            group_allow_from=frozenset(),
         )
 
     def test_pair_only_bridge_saves_credentials_and_releases_profile(self):
@@ -87,7 +133,13 @@ class WhatsAppPairingTests(unittest.TestCase):
                 "--pair-only",
                 "--session",
                 str(self.session),
+                "--log-key",
+                str(self.config.state_dir / "log-identity.key"),
             ],
+        )
+        self.assertEqual(
+            (self.config.state_dir / "log-identity.key").stat().st_size,
+            32,
         )
         self.assertNotIn("PILOTAGE_CODEX_BASE_URL", commands[0][1]["env"])
         self.assertNotIn("VOICE_TOOLS_OPENAI_KEY", commands[0][1]["env"])

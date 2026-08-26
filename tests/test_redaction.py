@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import ast
+import concurrent.futures
 import logging
+import tempfile
 import unittest
+from pathlib import Path
 
 from pilotage.redact import (
     RedactingFormatter,
+    configure_identity_pseudonyms,
+    identity_pseudonym,
     is_env_dump_command,
     redact_sensitive_text,
     redact_terminal_output,
@@ -85,6 +91,108 @@ class SensitiveTextTests(unittest.TestCase):
 
         self.assertNotIn(secret, rendered)
         self.assertIn("ERROR Firecrawl failed", rendered)
+
+    def test_channel_identities_become_stable_profile_keyed_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            configure_identity_pseudonyms(Path(directory))
+            first = identity_pseudonym("212600123456@s.whatsapp.net", "wa")
+            second = identity_pseudonym("212600123456@s.whatsapp.net", "wa")
+            telegram = identity_pseudonym("987654321", "tg")
+
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, telegram)
+        self.assertNotIn("212600123456", first)
+        self.assertNotIn("987654321", telegram)
+
+    def test_concurrent_key_initialization_cannot_rotate_the_profile_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                paths = list(
+                    pool.map(
+                        configure_identity_pseudonyms,
+                        [state, state, state, state],
+                    )
+                )
+            key = paths[0].read_bytes()
+
+        self.assertTrue(all(path == paths[0] for path in paths))
+        self.assertEqual(len(key), 32)
+
+    def test_formatter_pseudonymizes_jids_and_labeled_telegram_ids(self):
+        jid = "212600123456@s.whatsapp.net"
+        telegram_id = "987654321"
+        record = logging.LogRecord(
+            "pilotage.test",
+            logging.ERROR,
+            __file__,
+            1,
+            "failed for %s with chat_id=%s",
+            (jid, telegram_id),
+            None,
+        )
+
+        rendered = RedactingFormatter("%(message)s").format(record)
+
+        self.assertNotIn(jid, rendered)
+        self.assertNotIn(telegram_id, rendered)
+        self.assertIn("[wa:", rendered)
+        self.assertIn("[tg:", rendered)
+
+    def test_routine_log_calls_never_receive_raw_channel_identity_variables(self):
+        root = Path(__file__).resolve().parent.parent / "pilotage"
+        paths = [
+            root / "agent.py",
+            root / "delivery.py",
+            root / "history.py",
+            root / "main.py",
+            *sorted((root / "channels").glob("*.py")),
+            *sorted((root / "cron").glob("*.py")),
+        ]
+        sensitive = {
+            "chat_id",
+            "sender_id",
+            "sender_number",
+            "session_id",
+            "thread_id",
+        }
+        failures = []
+
+        def raw_references(node):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "identity_pseudonym"
+            ):
+                return []
+            found = []
+            if isinstance(node, ast.Name) and node.id in sensitive:
+                found.append(node.id)
+            elif isinstance(node, ast.Attribute) and node.attr in sensitive:
+                found.append(node.attr)
+            for child in ast.iter_child_nodes(node):
+                found.extend(raw_references(child))
+            return found
+
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "logger"
+                ):
+                    continue
+                raw = []
+                for argument in [*node.args, *[item.value for item in node.keywords]]:
+                    raw.extend(raw_references(argument))
+                if raw:
+                    failures.append(
+                        f"{path.relative_to(root.parent)}:{node.lineno}: {sorted(set(raw))}"
+                    )
+
+        self.assertEqual(failures, [])
 
 
 class TerminalRedactionTests(unittest.TestCase):

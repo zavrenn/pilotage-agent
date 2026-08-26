@@ -12,8 +12,10 @@ from unittest import mock
 import httpx
 
 from pilotage import media
+from pilotage.channels import whatsapp
 from pilotage.channels.whatsapp import InboundMessage, WhatsAppChannel
 from pilotage.config import Config, WHATSAPP_MEDIA_NOTE
+from pilotage.delivery import DeliveryStore, DeliveryUnitLedger, compute_obligation_id
 
 
 CHAT_ID = "212600000000@s.whatsapp.net"
@@ -24,6 +26,9 @@ class FakeResponse:
 
     def raise_for_status(self) -> None:
         pass
+
+    def json(self):
+        return {"success": True, "messageId": "accepted-message"}
 
 
 class FakeHttp:
@@ -263,6 +268,107 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
                 "fileName": "report.xlsx",
             },
         )
+
+    async def test_unit_ledger_retries_only_missing_media(self):
+        report = self.config.workspace_dir / "report.pdf"
+        report.write_bytes(b"pdf")
+        content = f"ready\nMEDIA:{report}"
+        obligation_id = compute_obligation_id("session", "message", content)
+        store = DeliveryStore(self.root / "delivery-ledger.db")
+        store.record(
+            obligation_id=obligation_id,
+            session_key="session",
+            platform="whatsapp",
+            chat_id=CHAT_ID,
+            thread_id="",
+            content=content,
+        )
+        self.assertTrue(store.mark_attempting(obligation_id))
+        ledger = DeliveryUnitLedger(store, obligation_id)
+        posts = []
+
+        async def post(url, **kwargs):
+            posts.append((url, kwargs))
+            if url.endswith("/send-media") and sum(
+                item[0].endswith("/send-media") for item in posts
+            ) == 1:
+                request = httpx.Request("POST", url)
+                response = httpx.Response(503, request=request)
+                raise httpx.HTTPStatusError(
+                    "not connected",
+                    request=request,
+                    response=response,
+                )
+            return FakeResponse()
+
+        self.channel._http = mock.Mock(post=mock.AsyncMock(side_effect=post))
+
+        first = await self.channel.send(
+            CHAT_ID, content, delivery_ledger=ledger
+        )
+        second = await self.channel.send(
+            CHAT_ID, content, delivery_ledger=ledger
+        )
+
+        self.assertFalse(first)
+        self.assertTrue(first.retryable)
+        self.assertTrue(second)
+        self.assertEqual(
+            ["send-media" if url.endswith("/send-media") else "send" for url, _ in posts],
+            ["send", "send-media", "send-media"],
+        )
+        self.assertTrue(store.mark_delivered(obligation_id))
+
+    async def test_unit_ledger_retries_only_failed_long_text_chunk(self):
+        content = "a" * 4096 + " " + "b" * 100
+        chunks = whatsapp.split_whatsapp_message(content)
+        self.assertEqual(len(chunks), 2)
+        self.assertLessEqual(
+            len(chunks[0].encode("utf-16-le")) // 2,
+            whatsapp.MAX_OUTBOUND_MESSAGE_LENGTH,
+        )
+        obligation_id = compute_obligation_id("session", "message", content)
+        store = DeliveryStore(self.root / "chunk-ledger.db")
+        store.record(
+            obligation_id=obligation_id,
+            session_key="session",
+            platform="whatsapp",
+            chat_id=CHAT_ID,
+            thread_id="",
+            content=content,
+        )
+        self.assertTrue(store.mark_attempting(obligation_id))
+        ledger = DeliveryUnitLedger(store, obligation_id)
+        sent_chunks = []
+
+        async def post(url, **kwargs):
+            chunk = kwargs["json"]["message"]
+            sent_chunks.append(chunk)
+            if len(sent_chunks) == 2:
+                request = httpx.Request("POST", url)
+                response = httpx.Response(503, request=request)
+                raise httpx.HTTPStatusError(
+                    "not connected",
+                    request=request,
+                    response=response,
+                )
+            return FakeResponse()
+
+        self.channel._http = mock.Mock(post=mock.AsyncMock(side_effect=post))
+        with mock.patch.object(
+            whatsapp.asyncio, "sleep", new=mock.AsyncMock()
+        ):
+            first = await self.channel.send(
+                CHAT_ID, content, delivery_ledger=ledger
+            )
+            second = await self.channel.send(
+                CHAT_ID, content, delivery_ledger=ledger
+            )
+
+        self.assertFalse(first)
+        self.assertTrue(second)
+        self.assertEqual(sent_chunks, [chunks[0], chunks[1], chunks[1]])
+        self.assertTrue(store.mark_delivered(obligation_id))
 
     async def test_operator_declared_directory_is_deliverable(self):
         reports = self.root / "reports"

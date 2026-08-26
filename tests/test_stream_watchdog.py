@@ -69,6 +69,45 @@ class ConsumeStreamTests(unittest.IsolatedAsyncioTestCase):
         result = await codex_stream.consume_stream(stream, ttfb_timeout=1.0, idle_timeout=1.0)
         self.assertEqual(result.text, "Hello there.")
         self.assertEqual(result.status, "completed")
+        self.assertTrue(result.terminal_completed)
+
+    async def test_partial_text_without_a_terminal_event_is_not_completion_proof(self):
+        result = await codex_stream.consume_stream(
+            FakeStream([_delta("plausible partial")]),
+            ttfb_timeout=1.0,
+            idle_timeout=1.0,
+        )
+
+        self.assertEqual(result.text, "plausible partial")
+        self.assertIs(result.terminal_completed, False)
+
+    async def test_incomplete_terminal_status_is_not_completion_proof(self):
+        incomplete = SimpleNamespace(
+            type="response.incomplete",
+            response=SimpleNamespace(
+                status="incomplete", usage=None, id="resp_1", error=None
+            ),
+        )
+        result = await codex_stream.consume_stream(
+            FakeStream([_delta("partial"), incomplete]),
+            ttfb_timeout=1.0,
+            idle_timeout=1.0,
+        )
+
+        self.assertFalse(result.terminal_completed)
+
+    async def test_completed_event_without_completed_status_is_not_proof(self):
+        terminal = SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(status=None, usage=None, id="resp_1", error=None),
+        )
+        result = await codex_stream.consume_stream(
+            FakeStream([_delta("unknown"), terminal]),
+            ttfb_timeout=1.0,
+            idle_timeout=1.0,
+        )
+
+        self.assertFalse(result.terminal_completed)
 
     async def test_a_stream_that_never_speaks_is_dropped(self):
         stream = FakeStream([HANG])
@@ -168,6 +207,18 @@ def _unauthorized() -> APIStatusError:
     return APIStatusError("unauthorized", response=response, body=None)
 
 
+def _bad_request(*, code: str, message: str) -> APIStatusError:
+    response = httpx.Response(
+        400,
+        request=httpx.Request("POST", "https://chatgpt.com/backend-api/codex/responses"),
+    )
+    return APIStatusError(
+        message,
+        response=response,
+        body={"code": code, "message": message},
+    )
+
+
 class ReconnectTests(unittest.IsolatedAsyncioTestCase):
     """One quiet connection is retried; a second one is the backend, not the socket."""
 
@@ -232,6 +283,113 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         self.agent._stream_once = self._answer_after([quiet])
         result = await self.agent._run_turn("chat", "hi", [], explode)
         self.assertEqual(result.text, "Answered.")
+
+    async def test_exact_masked_replay_rejection_strips_opaque_items_once(self):
+        requests = []
+        rejection = _bad_request(
+            code="invalid_prompt",
+            message="Request blocked.",
+        )
+
+        async def stream_once(
+            request, *, force_refresh, ttfb_timeout, idle_timeout
+        ):
+            requests.append(request)
+            if len(requests) == 1:
+                raise rejection
+            return codex_stream.StreamResult(text="Recovered.")
+
+        self.agent._stream_once = stream_once
+        result = await self.agent._call_model(
+            "chat",
+            [
+                {"type": "reasoning", "encrypted_content": "reasoning"},
+                {"type": "compaction", "encrypted_content": "checkpoint"},
+                {"role": "user", "content": "continue"},
+            ],
+            None,
+        )
+
+        self.assertEqual(result.text, "Recovered.")
+        self.assertTrue(
+            any(item.get("encrypted_content") for item in requests[0]["input"])
+        )
+        self.assertFalse(
+            any(item.get("encrypted_content") for item in requests[1]["input"])
+        )
+        self.assertIn(
+            {"role": "user", "content": "continue"},
+            requests[1]["input"],
+        )
+
+    async def test_masked_rejection_without_opaque_replay_is_not_retried(self):
+        calls = 0
+
+        async def reject(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise _bad_request(
+                code="invalid_prompt",
+                message="Request blocked.",
+            )
+
+        self.agent._stream_once = reject
+        with self.assertRaises(APIStatusError):
+            await self.agent._call_model(
+                "chat",
+                [{"role": "user", "content": "ordinary prompt"}],
+                None,
+            )
+        self.assertEqual(calls, 1)
+
+    async def test_ordinary_content_block_is_not_reclassified_as_stale_replay(self):
+        calls = 0
+
+        async def reject(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise _bad_request(
+                code="content_policy_violation",
+                message="Request blocked.",
+            )
+
+        self.agent._stream_once = reject
+        with self.assertRaises(APIStatusError):
+            await self.agent._call_model(
+                "chat",
+                [
+                    {"type": "reasoning", "encrypted_content": "opaque"},
+                    {"role": "user", "content": "request"},
+                ],
+                None,
+            )
+        self.assertEqual(calls, 1)
+
+    async def test_masked_replay_repair_never_loops(self):
+        requests = []
+
+        async def reject(request, **_kwargs):
+            requests.append(request)
+            raise _bad_request(
+                code="invalid_prompt",
+                message="Request blocked.",
+            )
+
+        self.agent._stream_once = reject
+        with self.assertRaises(APIStatusError):
+            await self.agent._call_model(
+                "chat",
+                [
+                    {"type": "reasoning", "encrypted_content": "opaque"},
+                    {"role": "user", "content": "request"},
+                ],
+                None,
+            )
+
+        self.assertEqual(len(requests), 2)
+        self.assertFalse(
+            any(item.get("encrypted_content") for item in requests[-1]["input"])
+        )
 
 
 class ClientLifecycleTests(unittest.IsolatedAsyncioTestCase):

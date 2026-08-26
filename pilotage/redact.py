@@ -7,9 +7,14 @@ ordinary source code and web-navigation URLs remain usable.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
+import os
 import re
+import secrets
 import shlex
+from pathlib import Path
 from typing import Optional
 
 
@@ -106,6 +111,21 @@ _JWT_RE = re.compile(
     r"eyJ[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_=-]{4,}){0,2}"
 )
 _PHONE_RE = re.compile(r"(\+[1-9]\d{6,14})(?![A-Za-z0-9])")
+_WHATSAPP_JID_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:\d[\d:+-]{4,})@(?:s\.whatsapp\.net|g\.us|lid)"
+    r"(?![A-Za-z0-9.])",
+    re.IGNORECASE,
+)
+_CHANNEL_ID_FIELD_RE = re.compile(
+    r"(?P<prefix>\b(?:chat|user|sender|thread)_id\b\s*['\"]?\s*[:=]\s*['\"]?)"
+    r"(?P<identity>-?\d{5,})",
+    re.IGNORECASE,
+)
+_TELEGRAM_CHAT_RE = re.compile(
+    r"(?P<prefix>\bTelegram\s+(?:chat|user)\s+)"
+    r"(?P<identity>-?\d{5,})",
+    re.IGNORECASE,
+)
 _FORM_BODY_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_.-]*=[^&\s]*"
     r"(?:&[A-Za-z_][A-Za-z0-9_.-]*=[^&\s]*)+$"
@@ -145,6 +165,99 @@ _ENV_DUMP_COMMANDS = frozenset({"env", "printenv", "set", "export", "declare"})
 _FILE_READ_COMMANDS = frozenset(
     {"cat", "head", "tail", "type", "bat", "less", "more", "nl", "zcat", "tac", "view", "batcat"}
 )
+
+_IDENTITY_KEY_BYTES = 32
+_identity_key = secrets.token_bytes(_IDENTITY_KEY_BYTES)
+
+
+def identity_key_path(state_dir: Path) -> Path:
+    return Path(state_dir) / "log-identity.key"
+
+
+def configure_identity_pseudonyms(state_dir: Path) -> Path:
+    """Load or create the profile-local key used for stable log aliases."""
+
+    global _identity_key
+    target = identity_key_path(state_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        key = target.read_bytes()
+    except FileNotFoundError:
+        key = secrets.token_bytes(_IDENTITY_KEY_BYTES)
+        temporary = target.with_name(
+            f".{target.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp"
+        )
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(key)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                # A hard-link is an atomic create-if-absent.  Unlike replace,
+                # two guarded startup paths can never rotate an already-used
+                # pseudonym key underneath each other.
+                os.link(temporary, target)
+            except FileExistsError:
+                pass
+            try:
+                directory = os.open(target.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            except OSError:
+                pass
+        finally:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+        # Another guarded process may have won a creation race.
+        key = target.read_bytes()
+    if len(key) != _IDENTITY_KEY_BYTES:
+        raise ValueError(f"Identity-log key at {target} is corrupt.")
+    try:
+        os.chmod(target, 0o600)
+    except OSError:
+        pass
+    _identity_key = key
+    return target
+
+
+def identity_pseudonym(value: object, namespace: str = "id") -> str:
+    """Return one stable, non-reversible alias for a channel identity."""
+
+    written = str(value or "")
+    safe_namespace = re.sub(r"[^a-z0-9_-]", "-", namespace.lower()) or "id"
+    digest = hmac.new(
+        _identity_key,
+        f"{safe_namespace}\0{written}".encode("utf-8", errors="replace"),
+        hashlib.sha256,
+    ).hexdigest()[:12]
+    return f"[{safe_namespace}:{digest}]"
+
+
+def redact_channel_identities(text: object) -> str:
+    """Pseudonymize recognizable channel identities in rendered log text."""
+
+    written = str(text or "")
+    written = _WHATSAPP_JID_RE.sub(
+        lambda match: identity_pseudonym(match.group(0), "wa"), written
+    )
+    for pattern in (_CHANNEL_ID_FIELD_RE, _TELEGRAM_CHAT_RE):
+        written = pattern.sub(
+            lambda match: (
+                match.group("prefix")
+                + identity_pseudonym(match.group("identity"), "tg")
+            ),
+            written,
+        )
+    return written
 
 
 def mask_secret(
@@ -385,13 +498,19 @@ class RedactingFormatter(logging.Formatter):
     """Logging formatter that masks secrets after exceptions are rendered."""
 
     def format(self, record: logging.LogRecord) -> str:
-        return redact_sensitive_text(super().format(record))
+        return redact_channel_identities(
+            redact_sensitive_text(super().format(record))
+        )
 
 
 __all__ = [
     "RedactingFormatter",
+    "configure_identity_pseudonyms",
+    "identity_key_path",
+    "identity_pseudonym",
     "is_env_dump_command",
     "mask_secret",
+    "redact_channel_identities",
     "redact_sensitive_text",
     "redact_terminal_output",
 ]

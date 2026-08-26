@@ -31,6 +31,8 @@ PROTECTED_ENV_VARS = frozenset(
         "FIRECRAWL_API_URL",
         # WhatsApp identities and bridge authentication.
         "PILOTAGE_ALLOWED_SENDERS",
+        # Retired group-routing identities are still scrubbed from an upgraded
+        # deployment's environment even though the runtime no longer reads them.
         "PILOTAGE_ALLOWED_GROUPS",
         "PILOTAGE_BRIDGE_TOKEN",
         # Telegram authentication, identities, and webhook routing.
