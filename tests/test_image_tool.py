@@ -14,6 +14,7 @@ from unittest import mock
 
 import httpx
 
+from pilotage import media
 from pilotage.codex import auth
 from pilotage.settings import ConfigError, Settings
 from pilotage.tools import ToolContext, build_registry
@@ -373,6 +374,43 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(saved.read_bytes(), _PNG_BYTES)
         self.assertEqual(saved.parent, self.context.config.workspace_dir / "generated-images")
         self.assertEqual(captured["quality"], "high")
+
+    def test_external_working_directory_uses_its_declared_exports_root(self):
+        working = self.root / "operator-workspace"
+        exports = working / "exports"
+        exports.mkdir(parents=True)
+        profile_workspace = self.context.config.workspace_dir
+        profile_workspace.mkdir(parents=True)
+        self.context.working_directory = working
+        self.context.config.session_isolated_workspaces = False
+        self.context.config.outbound_media_roots = (
+            profile_workspace.resolve(),
+            exports.resolve(),
+        )
+
+        with (
+            mock.patch.object(
+                image, "_resolve_credentials", return_value=_credentials()
+            ),
+            mock.patch.object(
+                image,
+                "_collect_image_b64",
+                return_value={"b64": _b64_png(), "source": "final"},
+            ),
+        ):
+            result = image._generate(
+                {"prompt": "a warehouse worker checking stock"},
+                self.context,
+            )
+
+        self.assertTrue(result["success"])
+        saved = Path(result["image"])
+        self.assertEqual(saved.parent, exports.resolve() / "generated-images")
+        attachments, _ = media.extract_outbound(
+            f"MEDIA:{saved}",
+            self.context.config.outbound_media_roots,
+        )
+        self.assertEqual([attachment.path for attachment in attachments], [saved])
 
     def test_redirected_output_directory_is_refused(self):
         with mock.patch.object(

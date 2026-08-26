@@ -7,9 +7,9 @@ contract are kept.  Its provider registry and unrelated image backends are
 not.
 
 The blocking image request runs off the asyncio loop, and at most four run at
-once — Hermes' conservative default.  Generated files are saved inside the
-profile workspace so Genesis' existing ``MEDIA:`` confinement can deliver
-them without widening that boundary.
+once — Hermes' conservative default.  Generated files are saved inside a
+declared outbound-media root so Genesis' existing ``MEDIA:`` confinement can
+deliver them without widening that boundary.
 """
 
 from __future__ import annotations
@@ -420,6 +420,51 @@ def _save_b64_image(b64_data: str, workspace: Path, model: str) -> Path:
     return path.resolve()
 
 
+def _output_root(context: ToolContext) -> Path:
+    """Choose a workspace root that outbound-media confinement will accept.
+
+    ``terminal.cwd`` may be broader than the directory the operator declared
+    deliverable (for example ``/workspace`` with only ``/workspace/exports``
+    allowed).  Saving directly below that cwd produces a valid image that is
+    then silently rejected at delivery.  Prefer a declared root nested inside
+    the active cwd, and fall back to the profile workspace, which is always a
+    delivery root.
+    """
+
+    config = context.config
+    working = Path(
+        context.working_directory or config.workspace_dir
+    ).expanduser().resolve(strict=False)
+    if getattr(config, "session_isolated_workspaces", False):
+        return (working / "exports").resolve(strict=False)
+
+    profile_workspace = Path(config.workspace_dir).expanduser().resolve(
+        strict=False
+    )
+    raw_roots = getattr(config, "outbound_media_roots", ()) or ()
+    declared_roots = tuple(
+        Path(root).expanduser().resolve(strict=False) for root in raw_roots
+    ) or (profile_workspace,)
+
+    # The active cwd is already deliverable in full.
+    for root in declared_roots:
+        try:
+            working.relative_to(root)
+            return working
+        except ValueError:
+            continue
+
+    # Only a child such as <cwd>/exports is deliverable.
+    for root in declared_roots:
+        try:
+            root.relative_to(working)
+            return root
+        except ValueError:
+            continue
+
+    return profile_workspace
+
+
 def _error_response(
     *,
     error: str,
@@ -617,13 +662,7 @@ def _generate(args: Dict[str, Any], context: ToolContext) -> Dict[str, Any]:
 
     try:
         pixel_size = _png_pixel_size(base64.b64decode(image_b64))
-        output_root = Path(
-            context.working_directory or context.config.workspace_dir
-        )
-        if getattr(
-            context.config, "session_isolated_workspaces", False
-        ):
-            output_root = output_root / "exports"
+        output_root = _output_root(context)
         saved_path = _save_b64_image(
             image_b64,
             output_root,
