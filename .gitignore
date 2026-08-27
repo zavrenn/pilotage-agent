@@ -190,3 +190,5 @@ native/fts5_cjk/*.so
 /CONTEXT.local.md
 /docs
 /.claude
+/AGENTS.md
+/CLAUDE.md
