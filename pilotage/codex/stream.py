@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -52,6 +53,17 @@ DEFAULT_TTFB_TIMEOUT_SECONDS = 120.0
 DEFAULT_IDLE_TIMEOUT_SECONDS = 12.0
 
 
+@dataclass(frozen=True)
+class StreamTiming:
+    """Non-sensitive timing evidence for one streamed model request."""
+
+    elapsed_seconds: float
+    first_event_seconds: Optional[float]
+    event_count: int
+    max_event_gap_seconds: float
+    last_event_gap_seconds: float
+
+
 class CodexStreamError(RuntimeError):
     """The API sent an error event, or the stream ended without a response."""
 
@@ -63,6 +75,17 @@ class CodexStreamError(RuntimeError):
 
 class CodexStreamTimeout(CodexStreamError):
     """The stream went quiet. Nothing is wrong with the request — reconnect."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "",
+        param: str = "",
+        timing: Optional[StreamTiming] = None,
+    ):
+        super().__init__(message, code=code, param=param)
+        self.timing = timing
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +374,7 @@ class StreamResult:
     terminal_completed: Optional[bool] = None
     usage: Any = None
     response_id: str = ""
+    timing: Optional[StreamTiming] = None
     # A commentary/analysis-only response is the model pausing mid-turn, not an
     # empty final answer. The agent replays it and asks the model to continue.
     needs_continuation: bool = False
@@ -394,12 +418,19 @@ async def consume_stream(
     on_text_delta: Optional[Callable[[str], None]] = None,
     ttfb_timeout: float = DEFAULT_TTFB_TIMEOUT_SECONDS,
     idle_timeout: float = DEFAULT_IDLE_TIMEOUT_SECONDS,
+    started_at: Optional[float] = None,
 ) -> StreamResult:
     """Drain a Responses stream into text plus the reasoning we replay next turn.
 
     Raises ``CodexStreamTimeout`` if the stream stops speaking for longer than
     the caller allows. Either cutoff can be set to zero to wait forever.
     """
+    stream_started_at = time.monotonic() if started_at is None else started_at
+    first_event_at: Optional[float] = None
+    last_event_at: Optional[float] = None
+    event_count = 0
+    max_event_gap_seconds = 0.0
+
     text_deltas: List[str] = []
     output_items: List[Dict[str, Any]] = []
     output_indexes: List[Any] = []
@@ -428,7 +459,24 @@ async def consume_stream(
         except StopAsyncIteration:
             break
         except asyncio.TimeoutError:
-            raise _silence_error(first_event_seen, cutoff) from None
+            timing = _stream_timing(
+                stream_started_at,
+                first_event_at,
+                last_event_at,
+                event_count,
+                max_event_gap_seconds,
+            )
+            raise _silence_error(first_event_seen, cutoff, timing) from None
+        event_at = time.monotonic()
+        if first_event_at is None:
+            first_event_at = event_at
+        if last_event_at is not None:
+            max_event_gap_seconds = max(
+                max_event_gap_seconds,
+                event_at - last_event_at,
+            )
+        last_event_at = event_at
+        event_count += 1
         first_event_seen = True
 
         event_type = str(_field(event, "type", "") or "")
@@ -535,6 +583,14 @@ async def consume_stream(
             )
             break
 
+    result.timing = _stream_timing(
+        stream_started_at,
+        first_event_at,
+        last_event_at,
+        event_count,
+        max_event_gap_seconds,
+    )
+
     # Compatible Responses backends can omit output_item.done for calls they
     # announced and then successfully complete. Settle only after an observed
     # response.completed; done items remain authoritative.
@@ -601,15 +657,45 @@ async def consume_stream(
     return result
 
 
-def _silence_error(first_event_seen: bool, cutoff: float) -> CodexStreamTimeout:
+def _stream_timing(
+    started_at: float,
+    first_event_at: Optional[float],
+    last_event_at: Optional[float],
+    event_count: int,
+    max_event_gap_seconds: float,
+) -> StreamTiming:
+    now = time.monotonic()
+    return StreamTiming(
+        elapsed_seconds=max(0.0, now - started_at),
+        first_event_seconds=(
+            max(0.0, first_event_at - started_at)
+            if first_event_at is not None
+            else None
+        ),
+        event_count=max(0, int(event_count)),
+        max_event_gap_seconds=max(0.0, max_event_gap_seconds),
+        last_event_gap_seconds=max(
+            0.0,
+            now - (last_event_at if last_event_at is not None else started_at),
+        ),
+    )
+
+
+def _silence_error(
+    first_event_seen: bool,
+    cutoff: float,
+    timing: Optional[StreamTiming] = None,
+) -> CodexStreamTimeout:
     if first_event_seen:
         return CodexStreamTimeout(
             f"The Codex stream sent nothing for {cutoff:g}s after starting.",
             code="codex_stream_stalled",
+            timing=timing,
         )
     return CodexStreamTimeout(
         f"The Codex stream sent nothing at all within {cutoff:g}s.",
         code="codex_stream_no_first_byte",
+        timing=timing,
     )
 
 

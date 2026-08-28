@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
@@ -74,6 +75,12 @@ MAX_CODEX_INCOMPLETE_RESPONSES = 3
 CODEX_INCOMPLETE_RESPONSE = (
     "Codex response remained incomplete after 3 continuation attempts"
 )
+
+
+def _seconds(value: Optional[float]) -> str:
+    """Format optional timing evidence without leaking request content."""
+
+    return "-" if value is None else f"{max(0.0, float(value)):.2f}s"
 
 
 def _is_masked_codex_replay_rejection(exc: APIStatusError) -> bool:
@@ -1240,6 +1247,7 @@ class Agent:
                 identity_pseudonym(chat_id, "session"),
                 names,
             )
+            step_started_at = time.monotonic()
             await asyncio.to_thread(
                 self._store.checkpoint_turn,
                 chat_id,
@@ -1276,6 +1284,13 @@ class Agent:
                 items,
                 phase="tool_completed",
                 iteration=step + 1,
+            )
+            logger.info(
+                "Step %d completed for %s in %.3fs: %s",
+                step + 1,
+                identity_pseudonym(chat_id, "session"),
+                time.monotonic() - step_started_at,
+                names,
             )
 
         # Out of steps. Ask for what it has rather than sending nothing: the
@@ -1323,14 +1338,49 @@ class Agent:
         refreshed = False
         reconnects = 0
         replay_retried = False
+        stream_attempt = 0
+        session_label = identity_pseudonym(chat_id, "session")
         while True:
+            stream_attempt += 1
+            logger.info(
+                "Model stream starting for %s "
+                "(attempt=%d, model=%s, estimated_context_tokens=%d, "
+                "input_items=%d, tools=%d, first_event_timeout=%.1fs, "
+                "quiet_timeout=%.1fs)",
+                session_label,
+                stream_attempt,
+                self._config.model,
+                codex_stream.estimate_context_tokens(request),
+                len(request.get("input") or []),
+                len(request.get("tools") or []),
+                ttfb_timeout,
+                idle_timeout,
+            )
             try:
-                return await self._stream_once(
+                result = await self._stream_once(
                     request,
                     force_refresh=force_refresh,
                     ttfb_timeout=ttfb_timeout,
                     idle_timeout=idle_timeout,
                 )
+                timing = result.timing
+                logger.info(
+                    "Model stream completed for %s "
+                    "(attempt=%d, elapsed=%s, first_event=%s, events=%s, "
+                    "max_event_gap=%s, status=%s, terminal=%s, "
+                    "tool_calls=%d, text_chars=%d)",
+                    session_label,
+                    stream_attempt,
+                    _seconds(timing.elapsed_seconds if timing else None),
+                    _seconds(timing.first_event_seconds if timing else None),
+                    timing.event_count if timing else "-",
+                    _seconds(timing.max_event_gap_seconds if timing else None),
+                    result.status or "-",
+                    result.terminal_completed,
+                    len(result.tool_calls),
+                    len(result.text),
+                )
+                return result
             except APIStatusError as exc:
                 request_input = request.get("input")
                 if (
@@ -1362,6 +1412,21 @@ class Agent:
                 APIConnectionError,
                 httpx.TransportError,
             ) as exc:
+                if isinstance(exc, codex_stream.CodexStreamTimeout):
+                    timing = exc.timing
+                    logger.warning(
+                        "Model stream timed out for %s "
+                        "(attempt=%d, code=%s, elapsed=%s, first_event=%s, "
+                        "events=%s, max_event_gap=%s, silence=%s)",
+                        session_label,
+                        stream_attempt,
+                        exc.code or "-",
+                        _seconds(timing.elapsed_seconds if timing else None),
+                        _seconds(timing.first_event_seconds if timing else None),
+                        timing.event_count if timing else "-",
+                        _seconds(timing.max_event_gap_seconds if timing else None),
+                        _seconds(timing.last_event_gap_seconds if timing else None),
+                    )
                 if reconnects >= MAX_STREAM_RECONNECTS:
                     raise
                 reconnects += 1
@@ -1385,6 +1450,7 @@ class Agent:
         ttfb_timeout: float,
         idle_timeout: float,
     ) -> codex_stream.StreamResult:
+        request_started_at = time.monotonic()
         client = await self._ensure_client(force_refresh=force_refresh)
         try:
             wire_request = codex_stream._bypass_sdk_request_transform(request)
@@ -1395,13 +1461,24 @@ class Agent:
                 else:
                     stream = await create_stream
             except asyncio.TimeoutError:
+                elapsed = max(0.0, time.monotonic() - request_started_at)
                 raise codex_stream.CodexStreamTimeout(
                     f"Codex stream produced no bytes within {ttfb_timeout:g}s.",
                     code="codex_stream_no_first_byte",
+                    timing=codex_stream.StreamTiming(
+                        elapsed_seconds=elapsed,
+                        first_event_seconds=None,
+                        event_count=0,
+                        max_event_gap_seconds=0.0,
+                        last_event_gap_seconds=elapsed,
+                    ),
                 ) from None
             try:
                 return await codex_stream.consume_stream(
-                    stream, ttfb_timeout=ttfb_timeout, idle_timeout=idle_timeout
+                    stream,
+                    ttfb_timeout=ttfb_timeout,
+                    idle_timeout=idle_timeout,
+                    started_at=request_started_at,
                 )
             finally:
                 # Closing the response is what actually lets go of a wedged

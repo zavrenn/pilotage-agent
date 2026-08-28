@@ -136,8 +136,12 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
             ),
             codex_stream.StreamResult(text="Planned."),
         ]
-        self.assertEqual(await self.agent.respond("chat", "make a plan"), "Planned.")
+        with self.assertLogs("pilotage.agent", level="INFO") as captured:
+            self.assertEqual(await self.agent.respond("chat", "make a plan"), "Planned.")
         self.assertEqual(len(self.requests), 2)
+        self.assertTrue(
+            any("Step 1 completed" in entry for entry in captured.output)
+        )
 
     async def test_tool_work_does_not_run_if_its_call_cannot_be_persisted(self):
         self.replies = [

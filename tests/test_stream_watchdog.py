@@ -70,6 +70,11 @@ class ConsumeStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.text, "Hello there.")
         self.assertEqual(result.status, "completed")
         self.assertTrue(result.terminal_completed)
+        self.assertIsNotNone(result.timing)
+        self.assertEqual(result.timing.event_count, 3)
+        self.assertIsNotNone(result.timing.first_event_seconds)
+        self.assertGreaterEqual(result.timing.elapsed_seconds, 0.0)
+        self.assertGreaterEqual(result.timing.max_event_gap_seconds, 0.0)
 
     async def test_partial_text_without_a_terminal_event_is_not_completion_proof(self):
         result = await codex_stream.consume_stream(
@@ -114,12 +119,20 @@ class ConsumeStreamTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(codex_stream.CodexStreamTimeout) as caught:
             await codex_stream.consume_stream(stream, ttfb_timeout=0.05, idle_timeout=0.05)
         self.assertEqual(caught.exception.code, "codex_stream_no_first_byte")
+        self.assertIsNotNone(caught.exception.timing)
+        self.assertEqual(caught.exception.timing.event_count, 0)
+        self.assertIsNone(caught.exception.timing.first_event_seconds)
+        self.assertGreaterEqual(caught.exception.timing.last_event_gap_seconds, 0.04)
 
     async def test_a_stream_that_stops_mid_answer_is_dropped(self):
         stream = FakeStream([_delta("Half an ans"), HANG])
         with self.assertRaises(codex_stream.CodexStreamTimeout) as caught:
             await codex_stream.consume_stream(stream, ttfb_timeout=5.0, idle_timeout=0.05)
         self.assertEqual(caught.exception.code, "codex_stream_stalled")
+        self.assertIsNotNone(caught.exception.timing)
+        self.assertEqual(caught.exception.timing.event_count, 1)
+        self.assertIsNotNone(caught.exception.timing.first_event_seconds)
+        self.assertGreaterEqual(caught.exception.timing.last_event_gap_seconds, 0.04)
 
     async def test_the_two_cutoffs_are_told_apart(self):
         """A slow start is not a stall: the long wait applies before the first event."""
@@ -281,6 +294,37 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.text, "Answered.")
         self.assertEqual(len(self.attempts), 2)
         self.assertEqual(self.notices, [])
+
+    async def test_successful_stream_logs_non_sensitive_timing(self):
+        async def stream_once(_request, **_kwargs):
+            return codex_stream.StreamResult(
+                text="private answer",
+                status="completed",
+                terminal_completed=True,
+                timing=codex_stream.StreamTiming(
+                    elapsed_seconds=3.25,
+                    first_event_seconds=0.5,
+                    event_count=7,
+                    max_event_gap_seconds=1.25,
+                    last_event_gap_seconds=0.0,
+                ),
+            )
+
+        self.agent._stream_once = stream_once
+        with self.assertLogs("pilotage.agent", level="INFO") as captured:
+            await self.agent._call_model(
+                "chat",
+                [{"role": "user", "content": "private prompt"}],
+                None,
+            )
+
+        written = "\n".join(captured.output)
+        self.assertIn("elapsed=3.25s", written)
+        self.assertIn("first_event=0.50s", written)
+        self.assertIn("events=7", written)
+        self.assertIn("max_event_gap=1.25s", written)
+        self.assertNotIn("private prompt", written)
+        self.assertNotIn("private answer", written)
 
     async def test_a_second_quiet_connection_gives_up(self):
         quiet = [
