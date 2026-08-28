@@ -262,10 +262,13 @@ MAX_FIRST_EVENT_TIMEOUT_SECONDS = 180.0
 def estimate_context_tokens(request: Dict[str, Any]) -> int:
     """Roughly how much this request asks the backend to read, in tokens.
 
-    Four characters to the token over the text, a flat cost per picture. It
-    only has to be right enough to pick a bracket below.
+    Four characters to the token over instructions, input, and tool schemas,
+    plus a flat cost per picture. It only has to be right enough to pick a
+    bracket below.
     """
-    chars = len(str(request.get("instructions") or ""))
+    chars = len(str(request.get("instructions") or "")) + len(
+        str(request.get("tools") or "")
+    )
     images = 0
 
     for item in request.get("input") or []:

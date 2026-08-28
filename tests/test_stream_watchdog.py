@@ -184,6 +184,35 @@ class ContextSizingTests(unittest.TestCase):
         estimate = codex_stream.estimate_context_tokens(request)
         self.assertAlmostEqual(estimate, 20_000, delta=100)
 
+    def test_tool_schemas_count_toward_request_patience(self):
+        request = {
+            "instructions": "Be brief.",
+            "input": [{"role": "user", "content": "Use the available tool."}],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "large_tool",
+                    "description": "x" * 40_000,
+                    "strict": False,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                }
+            ],
+        }
+
+        estimate = codex_stream.estimate_context_tokens(request)
+        ttfb, idle = codex_stream.stream_timeouts(
+            request,
+            ttfb_timeout=120.0,
+            idle_timeout=12.0,
+        )
+
+        self.assertGreater(estimate, 10_000)
+        self.assertEqual(idle, 60.0)
+        self.assertGreater(ttfb, 120.0)
+
     def test_the_first_event_wait_is_capped(self):
         """Nobody waits out nine minutes of silence, however big the request."""
         request = {"instructions": "", "input": [{"role": "user", "content": "x" * 8_000_000}]}
