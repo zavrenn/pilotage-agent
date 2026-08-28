@@ -35,6 +35,7 @@ from .registry import (
     tool_error,
     tool_result,
 )
+from .result_safety import frame_untrusted_tool_result
 from .code_execution import EXECUTE_CODE_TOOL
 from .cron import CRONJOB_TOOL
 from .files import FILE_TOOLS
@@ -55,6 +56,7 @@ __all__ = [
     "build_skills_prompt",
     "cap_result",
     "enabled_groups",
+    "frame_untrusted_tool_result",
     "is_multimodal_tool_result",
     "multimodal_text_summary",
     "responses_tool_output",

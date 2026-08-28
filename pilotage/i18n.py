@@ -28,6 +28,10 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "Check storage first. If an earlier request may have acted, verify "
             "it before using /new."
         ),
+        "runtime.interrupted_unknown": (
+            "The previous request was interrupted and may have acted. "
+            "Verify it, then use /new to continue."
+        ),
         "runtime.reset": "Starting fresh. I forgot our conversation.",
         "runtime.reconnect": "Still nothing back from the model. Reconnecting…",
         "runtime.working": "Still working.",
@@ -65,6 +69,10 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "enregistré en toute sécurité. Vérifiez d'abord le stockage. Si une "
             "demande précédente a pu agir, vérifiez-la avant d'utiliser /new."
         ),
+        "runtime.interrupted_unknown": (
+            "La demande précédente a été interrompue et a peut-être agi. "
+            "Vérifiez-la, puis utilisez /new pour continuer."
+        ),
         "runtime.reset": "On repart de zéro. J'ai oublié notre conversation.",
         "runtime.reconnect": "Toujours aucune réponse du modèle. Je me reconnecte…",
         "runtime.working": "Je continue.",
@@ -100,6 +108,10 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
         "runtime.storage_failure": (
             "توقفت لأن حالة المحادثة لم تُحفظ بأمان. تحقّق من التخزين أولاً. "
             "إذا كان الطلب السابق ربما نفّذ إجراءً، فتحقّق منه قبل استخدام /new."
+        ),
+        "runtime.interrupted_unknown": (
+            "توقّف الطلب السابق وقد يكون نفّذ إجراءً. تحقّق منه، ثم استخدم "
+            "/new للمتابعة."
         ),
         "runtime.reset": "سنبدأ من جديد. لقد نسيت محادثتنا السابقة.",
         "runtime.reconnect": "لم يصل رد من النموذج بعد. أعيد الاتصال…",

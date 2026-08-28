@@ -26,6 +26,7 @@ validated path to its transport as a native attachment.
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import re
 import shutil
@@ -443,6 +444,104 @@ def image_parts_with_paths(
         )
         paths.append(attachment.path.resolve())
     return parts, paths
+
+
+def image_parts_with_manifest(
+    attachments: Sequence[Attachment],
+    input_directory: Path,
+) -> tuple[List[Dict[str, Any]], List[Path], List[Dict[str, Any]]]:
+    """Build image input plus a confined, integrity-checked crash manifest."""
+
+    root = Path(input_directory).resolve(strict=True)
+    parts: List[Dict[str, Any]] = []
+    paths: List[Path] = []
+    manifest: List[Dict[str, Any]] = []
+    for attachment in attachments:
+        if not attachment.is_image:
+            continue
+        try:
+            path = attachment.path.resolve(strict=True)
+            relative = path.relative_to(root)
+            data = path.read_bytes()
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not stage recoverable image %s: %s", attachment.path, exc)
+            continue
+        if len(data) > MAX_IMAGE_BYTES:
+            logger.warning("Skipping %s: %s bytes is too large to send", path, len(data))
+            continue
+        parts.append(
+            {
+                "type": "input_image",
+                "image_url": (
+                    f"data:{attachment.mime};base64,"
+                    + base64.b64encode(data).decode("ascii")
+                ),
+            }
+        )
+        paths.append(path)
+        manifest.append(
+            {
+                "path": relative.as_posix(),
+                "mime": attachment.mime,
+                "media_type": attachment.media_type,
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+    return parts, paths, manifest
+
+
+def restore_image_parts(
+    manifest: Any,
+    input_directory: Path,
+) -> List[Dict[str, Any]]:
+    """Restore exactly the staged pixels recorded before an interrupted turn."""
+
+    if not isinstance(manifest, list):
+        raise ValueError("image manifest must be a list")
+    if not manifest:
+        return []
+    root = Path(input_directory).resolve(strict=True)
+    parts: List[Dict[str, Any]] = []
+    for item in manifest:
+        if not isinstance(item, dict):
+            raise ValueError("image manifest entries must be objects")
+        relative = item.get("path")
+        mime = item.get("mime")
+        media_type = item.get("media_type")
+        digest = item.get("sha256")
+        size = item.get("size")
+        if (
+            not isinstance(relative, str)
+            or not relative
+            or not isinstance(mime, str)
+            or mime not in IMAGE_MIME_TYPES
+            or media_type not in {"image", "sticker"}
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or size < 0
+            or size > MAX_IMAGE_BYTES
+        ):
+            raise ValueError("image manifest entry is malformed")
+        candidate = (root / relative).resolve(strict=True)
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("image manifest escaped the staged input directory") from exc
+        if not candidate.is_file():
+            raise ValueError("staged image is not a regular file")
+        data = candidate.read_bytes()
+        if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+            raise ValueError("staged image changed after the turn was accepted")
+        parts.append(
+            {
+                "type": "input_image",
+                "image_url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}",
+            }
+        )
+    return parts
 
 
 def image_parts(attachments: Sequence[Attachment]) -> List[Dict[str, Any]]:

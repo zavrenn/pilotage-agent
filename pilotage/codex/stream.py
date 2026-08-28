@@ -22,6 +22,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -35,6 +36,11 @@ _TERMINAL_EVENT_TYPES = frozenset(
 _RESPONSE_MESSAGE_STATUSES = frozenset({"completed", "incomplete", "in_progress"})
 _INTERMEDIATE_MESSAGE_PHASES = frozenset({"commentary", "analysis"})
 _FINAL_MESSAGE_PHASES = frozenset({"final_answer", "final"})
+
+# Responses validates replayed function-call names even though tool/result
+# pairing itself uses ``call_id``.  A malformed name emitted by an earlier
+# response must not make every later request in that session fail with 400.
+_VALID_REPLAYED_FUNCTION_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 # Waiting for the first event. Long on purpose: a subscription-backed request
 # can spend a minute in backend admission and prompt prefill before it says
@@ -119,6 +125,33 @@ def _bypass_sdk_request_transform(request: Dict[str, Any]) -> Dict[str, Any]:
     return bypassed
 
 
+def sanitize_replayed_function_name(name: Any) -> str:
+    """Coerce only a replayed call name to the Responses wire contract."""
+
+    if isinstance(name, str) and _VALID_REPLAYED_FUNCTION_NAME.fullmatch(name):
+        return name
+    raw = name.strip() if isinstance(name, str) else ""
+    coerced = re.sub(r"[^A-Za-z0-9_-]", "_", raw)
+    coerced = re.sub(r"_+", "_", coerced).strip("_")
+    return coerced[:64] or "fn"
+
+
+def _sanitize_replayed_function_calls(
+    input_items: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Sanitize function-call input items without touching live tool schemas."""
+
+    prepared: List[Dict[str, Any]] = []
+    for item in input_items:
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            name = sanitize_replayed_function_name(item.get("name"))
+            if name != item.get("name"):
+                item = dict(item)
+                item["name"] = name
+        prepared.append(item)
+    return prepared
+
+
 def content_cache_key(instructions: str, tools: Optional[List[Dict[str, Any]]], scope_id: str = "") -> Optional[str]:
     """A key that changes only when the cacheable prefix changes.
 
@@ -165,7 +198,7 @@ def build_request(
         compact_threshold=compact_threshold,
     )
     prepared_input = compaction.prepare_input_items(
-        input_items,
+        _sanitize_replayed_function_calls(input_items),
         native_compaction_active=bool(context_management),
     )
 

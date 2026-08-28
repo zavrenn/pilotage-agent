@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -336,6 +336,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
 
         class FakeAgent:
             def __init__(self, *args, **kwargs):
+                captured["args"] = args
                 captured.update(kwargs)
 
         workdir = self.root / "project"
@@ -354,6 +355,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["enabled_skills"], ["reporting"])
         self.assertEqual(captured["working_directory"], workdir)
         self.assertEqual(captured["disabled_tool_groups"], ("cron",))
+        self.assertIsNone(captured["args"][1]._path)
 
     async def test_delivery_failure_does_not_reclassify_model_success(self):
         job = self.create()
@@ -453,6 +455,60 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finished["state"], "error")
         self.assertEqual(finished["last_status"], "error")
         self.assertIn("shutdown", finished["last_error"])
+
+    async def test_failed_finalization_does_not_leave_a_permanent_live_claim(self):
+        job = self.create()
+
+        async def answer(_session, _prompt):
+            return "delivered once"
+
+        with mock.patch.object(
+            self.store,
+            "finish_job",
+            side_effect=OSError("temporary write failure"),
+        ):
+            scheduler, factory = await self.scheduler(answer)
+            await wait_until(lambda: factory.instances and not scheduler._active)
+
+        self.assertEqual(self.store.resolve_job(job["id"])["state"], "running")
+        self.now += timedelta(seconds=2)
+        recovered = await wait_until(
+            lambda: (
+                value
+                if (value := self.store.resolve_job(job["id"]))["state"] == "error"
+                else None
+            )
+        )
+
+        self.assertEqual(recovered["last_status"], "unknown")
+        self.assertIn("side effects ran is unknown", recovered["last_error"])
+        self.assertEqual(len(factory.instances), 1)
+        self.assertEqual(len(self.deliveries), 1)
+
+    async def test_rejected_finalization_does_not_leave_a_permanent_live_claim(self):
+        job = self.create()
+
+        async def answer(_session, _prompt):
+            return "delivered once"
+
+        with mock.patch.object(self.store, "finish_job", return_value=False):
+            scheduler, factory = await self.scheduler(answer)
+            await wait_until(lambda: factory.instances and not scheduler._active)
+
+        self.assertEqual(self.store.resolve_job(job["id"])["state"], "running")
+        self.now += timedelta(seconds=2)
+        recovered = await wait_until(
+            lambda: (
+                value
+                if (value := self.store.resolve_job(job["id"]))["state"] == "error"
+                else None
+            )
+        )
+
+        self.assertEqual(recovered["last_status"], "unknown")
+        self.assertIn("side effects ran is unknown", recovered["last_error"])
+        self.assertEqual(len(factory.instances), 1)
+        self.assertEqual(len(self.deliveries), 1)
 
 
 class PromptAssemblyTests(unittest.TestCase):

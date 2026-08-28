@@ -24,6 +24,7 @@ from ..redact import redact_sensitive_text, redact_terminal_output
 from .command_guard import find_blocked_command, profile_name_for_state_dir
 from .registry import Tool, ToolContext, tool_error
 from .shell import DEFAULT_TIMEOUT_SECONDS, Shell
+from .terminal_hints import masked_success_advisory
 
 STATE_KEY = "terminal"
 
@@ -193,6 +194,10 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
             response["cwd"] = session.shell.cwd
         if result.get("stdin_error"):
             response["stdin_error"] = redact_sensitive_text(result["stdin_error"])
+        if response["exit_code"] == 0:
+            hint = masked_success_advisory(command, response["output"])
+            if hint:
+                response["hint"] = hint
         return json.dumps(response, ensure_ascii=False)
 
 
@@ -204,6 +209,8 @@ TERMINAL_SCHEMA = {
         "between calls in this chat. Commands run in the foreground and return "
         "as soon as they finish. Use workdir for one command without moving the "
         "session; when a command itself changes directory, the result reports cwd. "
+        "Run builds/tests bare: piping them through tail/head/cat or adding an `||` "
+        "fallback can mask their real exit status; terminal output is already bounded. "
         "Use write_file/patch for file edits and the memory/cronjob tools for their "
         "stores; those paths carry the profile's required approval workflow."
     ),

@@ -25,6 +25,9 @@ from .profiles import default_state_root
 from .settings import ConfigError, Settings, config_path
 
 DEFAULT_MODEL = "gpt-5.6-sol"
+SUPPORTED_MODELS = frozenset(
+    {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+)
 DEFAULT_REASONING_EFFORT = "medium"
 
 # Hermes's conservative context-file floor; profile identities should normally
@@ -106,6 +109,7 @@ DEFAULT_CRON_OUTPUT_RETENTION = 50
 DEFAULT_BATCH_HARD_CAP_SECONDS = 20.0
 DEFAULT_SESSION_RETENTION_DAYS = 90
 DEFAULT_WORKING_NOTICE_INTERVAL_SECONDS = 180.0
+MAX_APPROVAL_TIMEOUT_SECONDS = 365 * 24 * 3600.0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -429,7 +433,15 @@ class Config:
 
         settings.names("skills.disabled")
         settings.flag("skills.template_vars", True)
-        settings.flag("skills.inline_shell", False)
+        for retired_skill_setting in (
+            "skills.inline_shell",
+            "skills.inline_shell_timeout",
+        ):
+            if settings.get(retired_skill_setting) is not None:
+                raise ConfigError(
+                    f"{retired_skill_setting} is no longer supported; inline "
+                    "shell syntax in skills is always inert"
+                )
         for written in settings.names("gateway.media_delivery_allow_dirs"):
             root = Path(written).expanduser()
             if not root.is_absolute():
@@ -442,11 +454,6 @@ class Config:
                     "gateway.media_delivery_allow_dirs path is not an existing "
                     f"directory: {root}"
                 )
-        _count_in_range(
-            "skills.inline_shell_timeout",
-            settings.count("skills.inline_shell_timeout", 10),
-            minimum=1,
-        )
         terminal_cwd = settings.text("terminal.cwd", "")
         if terminal_cwd:
             expanded_cwd = Path(terminal_cwd).expanduser()
@@ -531,9 +538,35 @@ class Config:
             settings.count("terminal.timeout", 120),
             minimum=1,
         )
+        model = settings.text("agent.model", DEFAULT_MODEL)
+        if model not in SUPPORTED_MODELS:
+            raise ConfigError(
+                "agent.model must be one of "
+                f"{', '.join(sorted(SUPPORTED_MODELS))}, not {model!r}"
+            )
+        native_compaction = settings.flag(
+            "compression.codex_responses_native", True
+        )
+        if not native_compaction:
+            raise ConfigError(
+                "compression.codex_responses_native must remain enabled for the "
+                "supported Codex models"
+            )
+        approval_timeout = _number_in_range(
+            "approvals.timeout",
+            settings.number("approvals.timeout", DEFAULT_APPROVAL_TIMEOUT_SECONDS),
+            minimum=0,
+            inclusive=False,
+        )
+        if approval_timeout > MAX_APPROVAL_TIMEOUT_SECONDS:
+            raise ConfigError(
+                "approvals.timeout must be at most "
+                f"{int(MAX_APPROVAL_TIMEOUT_SECONDS)} seconds, not "
+                f"{approval_timeout:g}"
+            )
 
         return cls(
-            model=settings.text("agent.model", DEFAULT_MODEL),
+            model=model,
             reasoning_effort=settings.text("agent.reasoning_effort", DEFAULT_REASONING_EFFORT),
             instructions=_instructions(settings, home, channel),
             language=language,
@@ -595,9 +628,7 @@ class Config:
                 minimum=1,
             ),
             session_isolated_workspaces=isolated_workspaces,
-            codex_native_compaction=settings.flag(
-                "compression.codex_responses_native", True
-            ),
+            codex_native_compaction=native_compaction,
             codex_compact_threshold=_count_in_range(
                 "compression.codex_responses_compact_threshold",
                 settings.count(
@@ -619,14 +650,7 @@ class Config:
             approval_memory=settings.flag("approvals.memory", True),
             approval_skills=settings.flag("approvals.skills", True),
             approval_cron=settings.flag("approvals.cron", True),
-            approval_timeout_seconds=_number_in_range(
-                "approvals.timeout",
-                settings.number(
-                    "approvals.timeout", DEFAULT_APPROVAL_TIMEOUT_SECONDS
-                ),
-                minimum=0,
-                inclusive=False,
-            ),
+            approval_timeout_seconds=approval_timeout,
             cron_enabled=settings.flag("cron.enabled", True),
             cron_timezone=cron_timezone,
             cron_tick_seconds=_number_in_range(

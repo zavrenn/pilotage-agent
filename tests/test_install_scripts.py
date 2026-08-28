@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tomllib
@@ -111,7 +112,7 @@ class InstallScriptTests(unittest.TestCase):
             "realpath -m",
             "Restart=always",
             "KillMode=mixed",
-            "TimeoutStopSec=60",
+            "TimeoutStopSec=$timeout_stop_sec",
             "systemctl --user enable --now",
         ):
             with self.subTest(expected=expected):
@@ -120,6 +121,26 @@ class InstallScriptTests(unittest.TestCase):
         self.assertNotIn("\nsudo loginctl enable-linger", source)
         self.assertIn("WorkingDirectory=$escaped_repo", source)
         self.assertNotIn('WorkingDirectory="$escaped_repo"', source)
+
+        budgets = {
+            name: int(value)
+            for name, value in re.findall(
+                r"^(stop_intake_budget|shutdown_drain_budget|"
+                r"channel_cleanup_budget|shutdown_headroom)=([0-9]+)$",
+                source,
+                flags=re.MULTILINE,
+            )
+        }
+        self.assertEqual(
+            set(budgets),
+            {
+                "stop_intake_budget",
+                "shutdown_drain_budget",
+                "channel_cleanup_budget",
+                "shutdown_headroom",
+            },
+        )
+        self.assertGreaterEqual(sum(budgets.values()), 90)
 
     @unittest.skipIf(os.name == "nt", "Windows bash does not consume Windows paths")
     def test_shell_scripts_parse(self):

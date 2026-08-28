@@ -79,6 +79,21 @@ class Credentials:
     last_refresh: str
 
 
+def validated_codex_base_url(value: object) -> str:
+    """Return the one production route, refusing stored or injected routing."""
+
+    written = str(value or DEFAULT_CODEX_BASE_URL).strip().rstrip("/")
+    if written != DEFAULT_CODEX_BASE_URL:
+        raise AuthError(
+            "Codex credentials contain an unsupported backend URL. Pilotage only "
+            f"sends ChatGPT OAuth tokens to {DEFAULT_CODEX_BASE_URL}; run "
+            "`pilotage login` to replace the legacy credentials.",
+            code="codex_auth_base_url_mismatch",
+            relogin_required=True,
+        )
+    return DEFAULT_CODEX_BASE_URL
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -199,19 +214,20 @@ def read_credentials(path: Path, *, fallback_path: Path | None = None) -> Creden
     return Credentials(
         access_token=access_token,
         refresh_token=refresh_token,
-        base_url=str(data.get("base_url") or DEFAULT_CODEX_BASE_URL),
+        base_url=validated_codex_base_url(data.get("base_url")),
         last_refresh=str(data.get("last_refresh") or ""),
     )
 
 
 def write_credentials(path: Path, credentials: Credentials) -> None:
+    base_url = validated_codex_base_url(credentials.base_url)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "tokens": {
             "access_token": credentials.access_token,
             "refresh_token": credentials.refresh_token,
         },
-        "base_url": credentials.base_url,
+        "base_url": base_url,
         "last_refresh": credentials.last_refresh,
         "auth_mode": "chatgpt",
     }
@@ -271,6 +287,7 @@ def refresh_credentials(credentials: Credentials) -> Credentials:
     The refresh token rotates: whatever comes back replaces the stored one, and
     the old one is dead the moment this succeeds.
     """
+    base_url = validated_codex_base_url(credentials.base_url)
     try:
         with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
             response = client.post(
@@ -312,7 +329,7 @@ def refresh_credentials(credentials: Credentials) -> Credentials:
     return Credentials(
         access_token=access_token,
         refresh_token=str(body.get("refresh_token") or credentials.refresh_token),
-        base_url=credentials.base_url,
+        base_url=base_url,
         last_refresh=_now_iso(),
     )
 
@@ -512,10 +529,9 @@ def _exchange_authorization_code(client: httpx.Client, authorization: Dict[str, 
     if not access_token:
         raise AuthError("Token exchange returned no access token.", code="token_exchange_no_access_token")
 
-    base_url = os.environ.get("PILOTAGE_CODEX_BASE_URL", "").strip().rstrip("/") or DEFAULT_CODEX_BASE_URL
     return Credentials(
         access_token=access_token,
         refresh_token=str(tokens.get("refresh_token") or ""),
-        base_url=base_url,
+        base_url=DEFAULT_CODEX_BASE_URL,
         last_refresh=_now_iso(),
     )

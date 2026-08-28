@@ -55,12 +55,15 @@ import {
   createIdentityRedactor,
   createReconnectScheduler,
   createVersionResolver,
+  drainTasksForShutdown,
   extractBridgeEvent,
+  flushCredentialSavesForShutdown,
   hasDownloadableMedia,
   INBOUND_MEDIA_LIMIT_BYTES,
   inboundReadReceiptKeys,
   mediaPayloadForFile,
   normalizeWhatsAppId,
+  resolveInboundClaimIdentities,
   useAtomicMultiFileAuthState,
 } from './bridge_helpers.js';
 
@@ -133,6 +136,8 @@ const VERSION_FETCH_TIMEOUT_MS = 15_000;
 const RECONNECT_DELAY_MS = 3_000;
 const RESTART_DELAY_MS = 1_000;
 const PAIR_SETTLE_MS = 2_000;
+const SHUTDOWN_CREDENTIAL_FLUSH_MS = 5_000;
+const SHUTDOWN_INBOUND_DRAIN_MS = 4_000;
 
 const logger = pino({ level: 'silent' });
 
@@ -146,6 +151,11 @@ for (const dir of Object.values(CACHE_DIRS)) mkdirSync(dir, { recursive: true })
 let sock = null;
 let connected = false;
 let meId = null;
+let activeSaveCreds = null;
+let shuttingDown = false;
+let inboundIntakeClosed = false;
+let shutdownExitCode = 0;
+const activeInboundTasks = new Set();
 
 function log(...args) {
   console.log(`[bridge] ${identityRedactor.redact(args.join(' '))}`);
@@ -199,7 +209,10 @@ async function finishPairOnly(saveCreds, pairingSocket) {
 // Both guards exist because Baileys can hang rather than fail: startSocket()
 // awaits network I/O before it registers any handler, and the version fetch
 // has no AbortSignal. See bridge_helpers.js for the full reasoning.
-const scheduleReconnect = createReconnectScheduler(() => startSocket(), { log });
+const scheduleReconnect = createReconnectScheduler(() => startSocket(), {
+  log,
+  shouldReconnect: () => !shuttingDown,
+});
 const getWAVersion = createVersionResolver(fetchLatestBaileysVersion, {
   timeoutMs: VERSION_FETCH_TIMEOUT_MS,
   log,
@@ -305,6 +318,11 @@ function describeInbound(msg) {
   }
   return {
     chatId,
+    claimIdentities: resolveInboundClaimIdentities({
+      senderId,
+      senderPn,
+      identities: Array.from(identities),
+    }),
     identities: Array.from(identities),
     isGroup,
     senderId,
@@ -344,10 +362,12 @@ async function buildEvent(msg, description = describeInbound(msg)) {
   if (!description) return null;
   const {
     chatId,
+    claimIdentities,
     identities,
     isGroup,
     senderId,
     senderNumber,
+    senderPn,
   } = description;
 
   const event = await extractBridgeEvent({
@@ -375,11 +395,118 @@ async function buildEvent(msg, description = describeInbound(msg)) {
 
   return {
     ...event,
+    _pilotageClaimIdentities: claimIdentities,
     senderNumber,
+    senderPn,
     identities,
     pushName: msg.pushName || '',
     timestamp: Number(msg.messageTimestamp) || 0,
   };
+}
+
+function requestFatalShutdown(message) {
+  log(message);
+  shuttingDown = true;
+  inboundIntakeClosed = true;
+  shutdownExitCode = 1;
+  setImmediate(() => { void shutdown(1); });
+}
+
+async function handleMessagesUpsert({ messages, type }) {
+  if (type !== 'notify' && type !== 'append') return;
+
+  const accepted = [];
+  for (const msg of messages || []) {
+    try {
+      if (!msg.message) continue;
+      // The agent runs on its own number. Anything this account sent is
+      // either our own reply echoing back or a message the operator typed on
+      // the linked device — never something to answer.
+      if (msg.key?.fromMe) continue;
+
+      // Reject before extractBridgeEvent can download or cache media. Python
+      // repeats this gate before dispatch, but unauthorized content should
+      // never cross the bridge boundary in the first place.
+      const description = describeInbound(msg);
+      if (!description) continue;
+      const {
+        senderId,
+        senderPn,
+      } = description;
+      const senderAllowed = (
+        matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)
+        || matchesAllowedUser(senderPn, ALLOWED_USERS, SESSION_DIR)
+      );
+      if (!senderAllowed) continue;
+      // The person allowlist is the complete access policy: an authorized
+      // person may use DMs or any group. Python repeats the sender gate and
+      // applies the optional direct-mention rule.
+
+      accepted.push({ description, fenceId: null, msg });
+    } catch (error) {
+      log(`failed to inspect an inbound message: ${error.message}`);
+    }
+  }
+
+  // Register the entire accepted media burst before the first fsync or
+  // download can yield back to the HTTP poller. Python can then hold an
+  // already-durable text sibling for one bounded grace window.
+  for (const item of accepted) {
+    item.fenceId = registerMediaFence(item.msg, item.description);
+  }
+
+  try {
+    for (const { description, fenceId, msg } of accepted) {
+      try {
+        messageStore.remember(msg);
+        // eslint-disable-next-line no-await-in-loop
+        const event = await buildEvent(msg, description);
+        if (!event) continue;
+        // Nothing to answer and nothing attached: a receipt, an empty
+        // protocol message, or a form we do not read. (Hermes)
+        if (!event.body && !event.hasMedia) continue;
+
+        if (inboundQueue) {
+          try {
+            // The event is accepted only after its fsync+atomic-rename barrier.
+            // Duplicate Baileys replays resolve to the same durable identity.
+            // eslint-disable-next-line no-await-in-loop
+            await inboundQueue.enqueue(event);
+          } catch (error) {
+            requestFatalShutdown(
+              `durable inbound enqueue failed; stopping the bridge: ${error.message}`,
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        log(`failed to read an inbound message: ${error.message}`);
+      } finally {
+        if (fenceId) pendingMediaFences.delete(fenceId);
+      }
+    }
+  } finally {
+    // A fatal queue write returns early; no unprocessed media fence may remain
+    // visible while shutdown drains the other already-started upserts.
+    for (const { fenceId } of accepted) {
+      if (fenceId) pendingMediaFences.delete(fenceId);
+    }
+  }
+}
+
+function trackMessagesUpsert(update) {
+  if (inboundIntakeClosed) return;
+  const task = handleMessagesUpsert(update);
+  activeInboundTasks.add(task);
+  void task.then(
+    () => activeInboundTasks.delete(task),
+    (error) => {
+      activeInboundTasks.delete(task);
+      requestFatalShutdown(
+        `inbound processing failed; stopping the bridge: ${error.message}`,
+      );
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -387,12 +514,17 @@ async function buildEvent(msg, description = describeInbound(msg)) {
 // ---------------------------------------------------------------------------
 
 async function startSocket() {
+  if (shuttingDown) return;
   await inboundQueueReady;
+  if (shuttingDown) return;
   const { state, saveCreds } = await useAtomicMultiFileAuthState(
     SESSION_DIR,
     { BufferJSON, initAuthCreds, proto },
   );
+  if (shuttingDown) return;
+  activeSaveCreds = saveCreds;
   const version = await getWAVersion();
+  if (shuttingDown) return;
 
   const socket = makeWASocket({
     ...(version ? { version } : {}),
@@ -413,6 +545,10 @@ async function startSocket() {
       // The atomic writer preserved the last good state, but continuing with
       // credentials that are known not to be durable makes reconnect unsafe.
       log('credential persistence failed; stopping the bridge');
+      if (shuttingDown) {
+        process.exitCode = 1;
+        return;
+      }
       process.exit(1);
     });
   });
@@ -437,7 +573,7 @@ async function startSocket() {
 
     if (connection === 'close') {
       connected = false;
-      if (pairingFinalizing) return;
+      if (shuttingDown || pairingFinalizing) return;
       // Hermes wraps this in Boom; a plain read reaches the same two branches,
       // since an unwrapped or missing error falls through to the reconnect.
       const reason = lastDisconnect?.error?.output?.statusCode;
@@ -452,72 +588,7 @@ async function startSocket() {
     }
   });
 
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify' && type !== 'append') return;
-
-    const accepted = [];
-    for (const msg of messages || []) {
-      try {
-        if (!msg.message) continue;
-        // The agent runs on its own number. Anything this account sent is
-        // either our own reply echoing back or a message the operator typed on
-        // the linked device — never something to answer.
-        if (msg.key?.fromMe) continue;
-
-        // Reject before extractBridgeEvent can download or cache media. Python
-        // repeats this gate before dispatch, but unauthorized content should
-        // never cross the bridge boundary in the first place.
-        const description = describeInbound(msg);
-        if (!description) continue;
-        const {
-          senderId,
-          senderPn,
-        } = description;
-        const senderAllowed = (
-          matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)
-          || matchesAllowedUser(senderPn, ALLOWED_USERS, SESSION_DIR)
-        );
-        if (!senderAllowed) continue;
-        // The person allowlist is the complete access policy: an authorized
-        // person may use DMs or any group. Python repeats the sender gate and
-        // applies the optional direct-mention rule.
-
-        accepted.push({ description, fenceId: null, msg });
-      } catch (error) {
-        log(`failed to inspect an inbound message: ${error.message}`);
-      }
-    }
-
-    // Register the entire accepted media burst before the first fsync or
-    // download can yield back to the HTTP poller. Python can then hold an
-    // already-durable text sibling for one bounded grace window.
-    for (const item of accepted) {
-      item.fenceId = registerMediaFence(item.msg, item.description);
-    }
-
-    for (const { description, fenceId, msg } of accepted) {
-      try {
-        messageStore.remember(msg);
-        // eslint-disable-next-line no-await-in-loop
-        const event = await buildEvent(msg, description);
-        if (!event) continue;
-        // Nothing to answer and nothing attached: a receipt, an empty
-        // protocol message, or a form we do not read. (Hermes)
-        if (!event.body && !event.hasMedia) continue;
-
-        if (inboundQueue) {
-          // The event is accepted only after its fsync+atomic-rename barrier.
-          // Duplicate Baileys replays resolve to the same durable identity.
-          // eslint-disable-next-line no-await-in-loop
-          await inboundQueue.enqueue(event);
-        }
-      } catch (error) {
-        log(`failed to read an inbound message: ${error.message}`);
-      } finally {
-        if (fenceId) pendingMediaFences.delete(fenceId);
-      }
-    }
-  });
+  sock.ev.on('messages.upsert', trackMessagesUpsert);
 }
 
 // ---------------------------------------------------------------------------
@@ -765,16 +836,64 @@ if (PAIR_ONLY) {
   });
 }
 
-function shutdown() {
-  try { server?.close(); } catch { /* already down */ }
-  try { sock?.end?.(undefined); } catch { /* already down */ }
-  process.exit(0);
+let shutdownPromise = null;
+
+async function shutdown(requestedExitCode = 0) {
+  shutdownExitCode = Math.max(shutdownExitCode, Number(requestedExitCode) || 0);
+  if (shutdownPromise) return shutdownPromise;
+  shuttingDown = true;
+  const closingSocket = sock;
+  const closingSaveCreds = activeSaveCreds;
+  // Freeze the accepted-work set synchronously. Once shutdown starts, no
+  // event may enter between the task snapshot and the transport close.
+  inboundIntakeClosed = true;
+  try {
+    closingSocket?.ev?.off?.('messages.upsert', trackMessagesUpsert);
+  } catch (error) {
+    log(`inbound event-source fence failed during shutdown: ${error.message}`);
+    shutdownExitCode = 1;
+  }
+  shutdownPromise = (async () => {
+    try { server?.close(); } catch { /* already down */ }
+    const inboundDrained = await drainTasksForShutdown(activeInboundTasks, {
+      timeoutMs: SHUTDOWN_INBOUND_DRAIN_MS,
+    });
+    if (!inboundDrained) {
+      log(
+        `shutdown inbound drain timed out with ${activeInboundTasks.size} task(s)`,
+      );
+      shutdownExitCode = 1;
+    }
+    try {
+      await flushCredentialSavesForShutdown(
+        credentialSaves,
+        closingSaveCreds,
+        {
+          timeoutMs: SHUTDOWN_CREDENTIAL_FLUSH_MS,
+          closeSocket: async () => {
+            try {
+              await closingSocket?.end?.(undefined);
+            } catch (error) {
+              log(`socket close failed during shutdown: ${error.message}`);
+              shutdownExitCode = 1;
+            }
+          },
+        },
+      );
+    } catch (error) {
+      log(`credential flush failed during shutdown: ${error.message}`);
+      shutdownExitCode = 1;
+    }
+    process.exit(shutdownExitCode);
+  })();
+  return shutdownPromise;
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => { void shutdown(); });
+process.on('SIGTERM', () => { void shutdown(); });
 
 startSocket().catch((error) => {
+  if (shuttingDown) return;
   log(`failed to start: ${error.message}`);
   process.exit(1);
 });

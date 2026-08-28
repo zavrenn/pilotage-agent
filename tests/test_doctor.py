@@ -120,6 +120,75 @@ class DeliveryReadinessTests(unittest.TestCase):
             doctor._check_delivery_store(SimpleNamespace(state_dir=Path("/state")))
 
 
+class ConversationReadinessTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / "conversations.db"
+        self.config = SimpleNamespace(conversations_path=self.path)
+
+    def test_probe_verifies_writes_and_fts_without_leaving_a_turn(self):
+        detail = doctor._check_conversation_store(self.config)
+
+        self.assertEqual(detail, "write/FTS ready; 0 active turn(s)")
+        with contextlib.closing(sqlite3.connect(self.path)) as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM turns WHERE chat_id = '__doctor__'"
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
+    def test_probe_reports_unreadable_canonical_history(self):
+        self.path.write_bytes(b"not a sqlite database")
+
+        with self.assertRaisesRegex(doctor.DoctorError, "not healthy"):
+            doctor._check_conversation_store(self.config)
+
+    def test_probe_reports_unknown_interrupted_tool_work(self):
+        store = doctor.ConversationStore(self.path)
+        store.begin_turn("chat", "run it")
+        active = store.list_active_turns()[0]
+        store.mark_turn_unknown(active)
+
+        with self.assertRaisesRegex(doctor.DoctorError, "unresolved interrupted"):
+            doctor._check_conversation_store(self.config)
+
+
+class CronReadinessTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.config = SimpleNamespace(
+            state_dir=self.root,
+            cron_timezone="UTC",
+            cron_claim_ttl_seconds=60,
+            cron_output_retention=2,
+        )
+
+    def test_probe_reports_schema_and_active_claims(self):
+        store = doctor.CronStore(
+            self.root,
+            timezone_name="UTC",
+            claim_ttl_seconds=60,
+            output_retention=2,
+        )
+        store.create_job(prompt="status", schedule="0m")
+        store.claim_due_jobs()
+
+        self.assertEqual(
+            doctor._check_cron_store(self.config),
+            "1 job(s), 1 active claim(s)",
+        )
+
+    def test_probe_reports_invalid_durable_state(self):
+        cron_dir = self.root / "cron"
+        cron_dir.mkdir()
+        (cron_dir / "jobs.json").write_text("{broken", encoding="utf-8")
+
+        with self.assertRaisesRegex(doctor.DoctorError, "cron state is invalid"):
+            doctor._check_cron_store(self.config)
+
+
 class SqlReadinessTests(unittest.TestCase):
     def test_sql_probe_uses_the_production_connection_contract(self):
         completed = SimpleNamespace(

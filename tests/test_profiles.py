@@ -20,7 +20,7 @@ def _credentials(access: str = "access", refresh: str = "refresh") -> auth.Crede
     return auth.Credentials(
         access_token=access,
         refresh_token=refresh,
-        base_url="https://example.invalid/codex",
+        base_url=auth.DEFAULT_CODEX_BASE_URL,
         last_refresh="now",
     )
 
@@ -194,7 +194,10 @@ class ProfileTests(unittest.TestCase):
         from pilotage import main
 
         path = profiles.create_profile("team")
-        (path / "config.yaml").write_text("agent:\n  model: profile-model\n", encoding="utf-8")
+        (path / "config.yaml").write_text(
+            "agent:\n  model: gpt-5.6-luna\n",
+            encoding="utf-8",
+        )
         seen = {}
 
         def fake_status(config, profile_name):
@@ -206,7 +209,7 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(main.main(["-p", "team", "status"]), 0)
 
         self.assertEqual(seen["config"].state_dir, path)
-        self.assertEqual(seen["config"].model, "profile-model")
+        self.assertEqual(seen["config"].model, "gpt-5.6-luna")
         self.assertEqual(seen["profile_name"], "team")
 
     def test_interactive_terminal_conversation_is_not_a_command(self):

@@ -146,6 +146,59 @@ class CallIdTests(unittest.TestCase):
         self.assertEqual(clamp_call_id("call_abc"), "call_abc")
 
 
+class ReplayedFunctionNameTests(unittest.TestCase):
+    def _request(self, name, *, tool_name="live_tool"):
+        return codex_stream.build_request(
+            model="gpt-5.6-sol",
+            instructions="test",
+            input_items=[
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": name,
+                    "arguments": "{}",
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "ok",
+                },
+            ],
+            session_id="chat",
+            reasoning_effort="medium",
+            tools=[
+                {
+                    "type": "function",
+                    "name": tool_name,
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        )
+
+    def test_valid_replayed_names_pass_through_unchanged(self):
+        for name in ("web_search", "exec-command", "x" * 64):
+            self.assertEqual(self._request(name)["input"][0]["name"], name)
+
+    def test_invalid_replayed_names_are_coerced_without_breaking_pairing(self):
+        request = self._request("run weird.tool!")
+
+        self.assertEqual(request["input"][0]["name"], "run_weird_tool")
+        self.assertEqual(request["input"][0]["call_id"], "call_1")
+        self.assertEqual(request["input"][1]["call_id"], "call_1")
+
+    def test_degenerate_replayed_names_never_become_empty(self):
+        self.assertEqual(self._request("日本語")["input"][0]["name"], "fn")
+        self.assertLessEqual(
+            len(self._request("bad." * 100)["input"][0]["name"]),
+            64,
+        )
+
+    def test_live_tool_definition_names_are_not_rewritten(self):
+        request = self._request("bad.name", tool_name="schema.name")
+
+        self.assertEqual(request["tools"][0]["name"], "schema.name")
+
+
 class StreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_call_is_read_off_the_stream(self):
         result = await _consume(

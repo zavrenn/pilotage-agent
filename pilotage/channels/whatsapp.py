@@ -512,8 +512,10 @@ class InboundMessage:
 
 Handler = Callable[[InboundMessage], Awaitable[None]]
 # Called with the delivery chat, isolated session, requesting message id, and
-# the registry-resolved management command.
-CommandHandler = Callable[[str, str, str, CommandInvocation], Awaitable[None]]
+# the registry-resolved management command plus its durable inbound claim.
+CommandHandler = Callable[
+    [str, str, str, CommandInvocation, str], Awaitable[None]
+]
 
 
 class WhatsAppChannel:
@@ -526,7 +528,9 @@ class WhatsAppChannel:
         self._poll_task: Optional[asyncio.Task] = None
         self._running = False
         self._startup_hold_closed = False
+        self._startup_approvals_enabled = False
         self._startup_events: List[Dict[str, Any]] = []
+        self._startup_held_claims: set[str] = set()
         self._pending: Dict[str, InboundMessage] = {}
         self._pending_tasks: Dict[str, asyncio.Task] = {}
         self._reported_blocked: set[str] = set()
@@ -563,13 +567,23 @@ class WhatsAppChannel:
 
     def hold_inbound(self) -> None:
         self._startup_hold_closed = True
+        self._startup_approvals_enabled = False
+
+    def enable_startup_approvals(self) -> None:
+        """Allow only approval control through the still-closed startup gate."""
+
+        if not self._startup_hold_closed:
+            return
+        self._startup_approvals_enabled = True
 
     def release_inbound(self) -> None:
         if not self._startup_hold_closed and not self._startup_events:
             return
         held = list(self._startup_events)
         self._startup_hold_closed = False
+        self._startup_approvals_enabled = False
         self._startup_events.clear()
+        self._startup_held_claims.clear()
         for event in held:
             self._accept(event)
 
@@ -595,7 +609,7 @@ class WhatsAppChannel:
             )
         logger.info("WhatsApp channel ready")
 
-    async def stop_intake(self) -> None:
+    async def stop_intake(self, *, release_held_inbound: bool = True) -> None:
         """Stop accepting bridge events and dispatch every accepted batch."""
 
         self._running = False
@@ -605,7 +619,13 @@ class WhatsAppChannel:
                 await self._poll_task
             self._poll_task = None
 
-        self.release_inbound()
+        if release_held_inbound:
+            self.release_inbound()
+        else:
+            # The bridge owns the durable claim until ack/release.  On a
+            # startup durability failure, forget only this in-memory copy so
+            # the bridge can replay it after the process restarts.
+            self._startup_events.clear()
         timers = set(self._pending_tasks.values())
         for key in list(self._pending):
             self._flush_pending_now(key)
@@ -615,10 +635,15 @@ class WhatsAppChannel:
             await asyncio.gather(*timers, return_exceptions=True)
         self._pending_tasks.clear()
 
-    async def stop(self, *, drain_timeout_seconds: float = 0.0) -> None:
+    async def stop(
+        self,
+        *,
+        drain_timeout_seconds: float = 0.0,
+        release_held_inbound: bool = True,
+    ) -> None:
         """Stop intake, then give already accepted work a bounded drain."""
 
-        await self.stop_intake()
+        await self.stop_intake(release_held_inbound=release_held_inbound)
 
         owned = set(self._pending_tasks.values())
         owned.update(self._pending_tasks_background)
@@ -662,7 +687,19 @@ class WhatsAppChannel:
             try:
                 await asyncio.to_thread(self._terminate_bridge)
             finally:
+                self._startup_events.clear()
+                self._startup_held_claims.clear()
+                self._startup_hold_closed = False
+                self._startup_approvals_enabled = False
                 self.stopped.set()
+
+    async def abort_startup(self) -> None:
+        """Stop without dispatching or settling startup-held durable work."""
+
+        await self.stop(
+            drain_timeout_seconds=0.0,
+            release_held_inbound=False,
+        )
 
     def _preflight(self) -> None:
         if shutil.which("node") is None:
@@ -878,6 +915,8 @@ class WhatsAppChannel:
                     self._reconcile_media_fences([])
                 for event in events:
                     self._accept(event)
+                    if self.failure:
+                        break
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - the loop must survive anything
@@ -1021,11 +1060,27 @@ class WhatsAppChannel:
         self.stopped.set()
 
     def _accept(self, event: Dict[str, Any]) -> None:
-        if self._startup_hold_closed:
-            self._startup_events.append(dict(event))
+        claim_id = (
+            str(event.get("_pilotageClaimId") or "")
+            if isinstance(event, dict)
+            else ""
+        )
+        if not _CLAIM_ID_RE.fullmatch(claim_id):
+            self._fail(
+                "The WhatsApp bridge returned an invalid durable claim identity."
+            )
             return
+        if self._startup_hold_closed:
+            if claim_id in self._startup_held_claims:
+                return
+            if not (
+                self._startup_approvals_enabled
+                and self._startup_approval_command(event)
+            ):
+                self._startup_events.append(dict(event))
+                self._startup_held_claims.add(claim_id)
+                return
         chat_id = str(event.get("chatId") or "")
-        claim_id = str(event.get("_pilotageClaimId") or "")
         if not chat_id:
             self._ack_later([claim_id])
             return
@@ -1035,20 +1090,18 @@ class WhatsAppChannel:
             return
 
         message_id = str(event.get("messageId") or "")
-        dedup_id = claim_id or message_id
-        if claim_id:
-            try:
-                completed = self._completed_claims.contains(
-                    claim_id
-                ) or self._completed_claim_store.contains(claim_id)
-            except (OSError, sqlite3.Error):
-                logger.exception("Reading the WhatsApp completion ledger failed")
-                self._fail("The WhatsApp completed-message ledger failed.")
-                return
-            if completed:
-                self._ack_later([claim_id])
-                return
-        if dedup_id and self._seen.is_duplicate(dedup_id):
+        try:
+            completed = self._completed_claims.contains(
+                claim_id
+            ) or self._completed_claim_store.contains(claim_id)
+        except (OSError, sqlite3.Error):
+            logger.exception("Reading the WhatsApp completion ledger failed")
+            self._fail("The WhatsApp completed-message ledger failed.")
+            return
+        if completed:
+            self._ack_later([claim_id])
+            return
+        if self._seen.is_duplicate(claim_id):
             return
 
         sender_id = str(event.get("senderId") or "")
@@ -1079,7 +1132,7 @@ class WhatsAppChannel:
 
         invocation = parse_command(text)
         if invocation is not None:
-            if invocation.command.name == "new":
+            if invocation.command.name == "new" and not invocation.arguments:
                 # Drop a half-written batch on the spot. Sending it after /new
                 # would answer the conversation the person just ended.
                 waiting = self._pending_tasks.pop(session_id, None)
@@ -1088,18 +1141,29 @@ class WhatsAppChannel:
                 dropped = self._pending.pop(session_id, None)
                 self._pending_started.pop(session_id, None)
                 queued = self._queued.pop(session_id, None)
+                superseded_claims: List[str] = []
                 for superseded in (dropped, queued):
                     if superseded is not None:
-                        self._ack_later(superseded.claim_ids)
+                        superseded_claims.extend(superseded.claim_ids)
+                if superseded_claims:
+                    try:
+                        self._mark_claims_completed(superseded_claims)
+                    except (OSError, sqlite3.Error, ValueError):
+                        logger.exception(
+                            "Persisting superseded WhatsApp claims failed"
+                        )
+                        self._fail("The WhatsApp completed-message ledger failed.")
+                        return
+                    self._ack_later(superseded_claims)
             self._pending_tasks_background.add(
                 asyncio.create_task(
                     self._run_command(
                         chat_id,
                         session_id,
                         message_id,
-                        dedup_id,
+                        claim_id,
                         invocation,
-                        [claim_id] if claim_id else [],
+                        [claim_id],
                     )
                 )
             )
@@ -1114,11 +1178,36 @@ class WhatsAppChannel:
             text=text,
             is_group=is_group,
             message_ids=[message_id],
-            dedup_ids=[dedup_id] if dedup_id else [],
-            claim_ids=[claim_id] if claim_id else [],
+            dedup_ids=[claim_id],
+            claim_ids=[claim_id],
             attachments=attachments,
         )
         self._enqueue(message)
+
+    def _startup_approval_command(self, event: Dict[str, Any]) -> bool:
+        """Let only authorized approval control bypass crash-recovery intake."""
+
+        if event.get("mediaUrls"):
+            return False
+        chat_id = str(event.get("chatId") or "")
+        is_group = bool(event.get("isGroup"))
+        if not chat_id or (is_group and not self._group_message_is_triggered(event)):
+            return False
+        sender_id = str(event.get("senderId") or "")
+        sender_number = str(event.get("senderNumber") or "")
+        raw_identities = event.get("identities")
+        identities = (
+            [str(value) for value in raw_identities]
+            if isinstance(raw_identities, list)
+            else []
+        )
+        if not self._is_allowed(sender_id, sender_number, identities):
+            return False
+        invocation = parse_command(self._compose_text(event, []))
+        return bool(
+            invocation is not None
+            and invocation.command.name in {"approve", "deny"}
+        )
 
     def _compose_text(
         self, event: Dict[str, Any], attachments: List[media.Attachment]
@@ -1234,7 +1323,14 @@ class WhatsAppChannel:
     ) -> None:
         """Dispatch one recognized command without involving the model."""
         try:
-            await self._on_command(chat_id, session_id, message_id, invocation)
+            claim_id = claim_ids[-1] if claim_ids else ""
+            await self._on_command(
+                chat_id,
+                session_id,
+                message_id,
+                invocation,
+                claim_id,
+            )
             try:
                 self._mark_claims_completed(claim_ids)
             except (OSError, sqlite3.Error, ValueError):
@@ -1407,6 +1503,11 @@ class WhatsAppChannel:
         self._completed_claim_store.mark(claim_ids)
         for claim_id in claim_ids:
             self._completed_claims.is_duplicate(claim_id)
+
+    def persist_completed_claims(self, claim_ids: List[str]) -> None:
+        """Fence recovered/model-complete input before its handler returns."""
+
+        self._mark_claims_completed(list(claim_ids))
 
     def _cache_claims_completed(self, claim_ids: List[str]) -> None:
         for claim_id in claim_ids:

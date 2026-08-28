@@ -28,6 +28,10 @@ class I18nTests(unittest.TestCase):
                 "/new",
                 t("runtime.storage_failure", language),
             )
+            self.assertIn(
+                "/new",
+                t("runtime.interrupted_unknown", language),
+            )
         self.assertIn(
             "memory",
             t("approval.required", "ar", category="memory"),

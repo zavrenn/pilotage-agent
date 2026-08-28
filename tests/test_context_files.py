@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from pilotage.config import Config
-from pilotage.context_files import build_context_files_prompt
+from pilotage.context_files import ContextFileError, build_context_files_prompt
 from pilotage.history import ConversationStore
 
 
@@ -97,6 +97,45 @@ class ContextFileLoaderTests(unittest.TestCase):
         self.assertIn("-TAIL", prompt)
         self.assertIn("[...truncated AGENTS.md:", prompt)
         self.assertIn(str(path), prompt)
+
+    def test_declared_workspace_instructions_fail_closed_when_unreadable(self):
+        path = self.root / "AGENTS.md"
+        path.write_text("Must be loaded.", encoding="utf-8")
+        original = Path.read_text
+
+        def deny(candidate, *args, **kwargs):
+            if candidate == path:
+                raise PermissionError("denied")
+            return original(candidate, *args, **kwargs)
+
+        with (
+            mock.patch.object(Path, "read_text", new=deny),
+            self.assertRaisesRegex(ContextFileError, str(path).replace("\\", "\\\\")),
+        ):
+            build_context_files_prompt(self.root)
+
+    def test_truly_absent_workspace_instructions_remain_optional(self):
+        self.assertFalse(os.path.lexists(self.root / "AGENTS.md"))
+        self.assertFalse(os.path.lexists(self.root / "agents.md"))
+        self.assertEqual(build_context_files_prompt(self.root), "")
+
+    def test_dangling_workspace_instruction_symlinks_fail_closed(self):
+        missing = self.root / "missing-instructions.md"
+        for name in ("AGENTS.md", "agents.md"):
+            with self.subTest(name=name):
+                path = self.root / name
+                try:
+                    path.symlink_to(missing)
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(f"symbolic links are unavailable: {exc}")
+                self.assertTrue(os.path.lexists(path))
+                self.assertFalse(path.exists())
+                with self.assertRaisesRegex(
+                    ContextFileError,
+                    "(?i)" + str(path).replace("\\", "\\\\"),
+                ):
+                    build_context_files_prompt(self.root)
+                path.unlink()
 
 
 class AgentContextSnapshotTests(unittest.IsolatedAsyncioTestCase):

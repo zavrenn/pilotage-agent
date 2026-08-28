@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -183,6 +184,30 @@ class InboundLifecycleTests(unittest.TestCase):
             (self.root / "session" / "inputs").resolve(),
         )
 
+    def test_staged_image_manifest_restores_exact_pixels_and_detects_change(self):
+        inputs = self.root / "session" / "inputs"
+        inputs.mkdir(parents=True)
+        image = inputs / "photo.png"
+        image.write_bytes(b"exact-image-bytes")
+        attachment = media.Attachment(
+            path=image,
+            mime="image/png",
+            media_type="image",
+        )
+
+        parts, paths, manifest = media.image_parts_with_manifest(
+            [attachment],
+            inputs,
+        )
+
+        self.assertEqual(paths, [image.resolve()])
+        self.assertEqual(media.restore_image_parts(manifest, inputs), parts)
+        self.assertEqual(manifest[0]["path"], "photo.png")
+
+        image.write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "changed"):
+            media.restore_image_parts(manifest, inputs)
+
     def test_cache_cleanup_removes_only_files_older_than_one_day(self):
         cache = self.root / "media"
         cache.mkdir()
@@ -283,7 +308,6 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
             thread_id="",
             content=content,
         )
-        self.assertTrue(store.mark_attempting(obligation_id))
         ledger = DeliveryUnitLedger(store, obligation_id)
         posts = []
 
@@ -337,7 +361,6 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
             thread_id="",
             content=content,
         )
-        self.assertTrue(store.mark_attempting(obligation_id))
         ledger = DeliveryUnitLedger(store, obligation_id)
         sent_chunks = []
 
@@ -369,6 +392,37 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second)
         self.assertEqual(sent_chunks, [chunks[0], chunks[1], chunks[1]])
         self.assertTrue(store.mark_delivered(obligation_id))
+
+    async def test_unit_plan_failure_happens_before_first_http_post(self):
+        content = "planned reply"
+        obligation_id = compute_obligation_id("session", "message", content)
+        store = DeliveryStore(self.root / "plan-failure.db")
+        store.record(
+            obligation_id=obligation_id,
+            session_key="session",
+            platform="whatsapp",
+            chat_id=CHAT_ID,
+            thread_id="",
+            content=content,
+        )
+        ledger = DeliveryUnitLedger(store, obligation_id)
+
+        with (
+            mock.patch.object(
+                store,
+                "record_units",
+                side_effect=sqlite3.OperationalError("plan write failed"),
+            ),
+            self.assertRaisesRegex(sqlite3.OperationalError, "plan write failed"),
+        ):
+            await self.channel.send(
+                CHAT_ID,
+                content,
+                delivery_ledger=ledger,
+            )
+
+        self.assertEqual(self.http.posts, [])
+        self.assertFalse(store.has_unit_plan(obligation_id))
 
     async def test_operator_declared_directory_is_deliverable(self):
         reports = self.root / "reports"

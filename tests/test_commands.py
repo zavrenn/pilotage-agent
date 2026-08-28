@@ -204,5 +204,55 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("أوامر الإدارة", await self.execute("/help"))
 
 
+class DurableCommandTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.store = main.DeliveryStore(Path(temporary.name) / "delivery.db")
+        self.invocation = parse_command("/new")
+
+    async def test_completed_command_reuses_response_without_reexecution(self):
+        execute = mock.AsyncMock(return_value="reset done")
+        arguments = {
+            "platform": "whatsapp",
+            "claim_id": "claim-1",
+            "session_key": "session",
+            "invocation": self.invocation,
+            "uncertain_reply": "unknown",
+            "execute": execute,
+        }
+
+        first = await main._durable_command_result(self.store, **arguments)
+        second = await main._durable_command_result(self.store, **arguments)
+
+        self.assertEqual((first, second), ("reset done", "reset done"))
+        execute.assert_awaited_once()
+
+    async def test_interrupted_command_returns_warning_without_reexecution(self):
+        command_id = main.compute_command_id("telegram", "claim-2")
+        self.store.begin_command(
+            command_id=command_id,
+            platform="telegram",
+            claim_id="claim-2",
+            session_key="session",
+            command_name="new",
+            arguments="",
+        )
+        execute = mock.AsyncMock(return_value="must not run")
+
+        response = await main._durable_command_result(
+            self.store,
+            platform="telegram",
+            claim_id="claim-2",
+            session_key="session",
+            invocation=self.invocation,
+            uncertain_reply="verify the prior command",
+            execute=execute,
+        )
+
+        self.assertEqual(response, "verify the prior command")
+        execute.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()

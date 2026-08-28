@@ -37,6 +37,8 @@ MAX_PROMPT_CHARS = 50_000
 MAX_NAME_CHARS = 100
 _LOCK_TIMEOUT_SECONDS = 30.0
 _SAFE_JOB_ID = re.compile(r"^[0-9a-f]{12}$")
+_JOB_STATES = frozenset({"scheduled", "running", "paused", "completed", "error"})
+_LAST_STATUSES = frozenset({"ok", "error", "unknown"})
 _CRON_THREATS = (
     (re.compile(r"cat\s+[^\n]*(\.env|credentials|\.netrc|\.pgpass|id_rsa|id_ed25519)", re.I), "read_secrets"),
     (re.compile(r"authorized_keys", re.I), "ssh_backdoor"),
@@ -46,6 +48,9 @@ _CRON_THREATS = (
 _STORE_LOCKS: dict[str, threading.RLock] = {}
 _STORE_LOCKS_GUARD = threading.Lock()
 _STORE_LOCK_STATE = threading.local()
+_PROCESS_HOST = socket.gethostname()
+_ACTIVE_CLAIM_OWNERS: set[str] = set()
+_ACTIVE_CLAIM_OWNERS_GUARD = threading.Lock()
 
 
 class CronError(RuntimeError):
@@ -68,6 +73,84 @@ def timezone_for_name(name: str = ""):
         return ZoneInfo(written)
     except ZoneInfoNotFoundError as exc:
         raise ValueError(f"Unknown timezone: {written}") from exc
+
+
+def _process_start_marker(pid: int) -> Optional[str]:
+    """Linux process start tick, used with PID to detect PID reuse."""
+
+    if os.name != "posix":
+        return None
+    try:
+        raw = Path(f"/proc/{int(pid)}/stat").read_text(encoding="ascii")
+        # comm (field 2) may contain spaces and parentheses. Field 3 begins
+        # after its final closing parenthesis; starttime is field 22.
+        fields = raw[raw.rfind(")") + 2 :].split()
+        return fields[19]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+_PROCESS_STARTED_AT = _process_start_marker(os.getpid())
+
+
+def _register_active_claim_owner(owner: str) -> None:
+    """Record the exact cron worker currently coordinating this claim."""
+
+    written = str(owner or "").strip()
+    if not written:
+        raise ValueError("Cron claim owner cannot be empty.")
+    with _ACTIVE_CLAIM_OWNERS_GUARD:
+        _ACTIVE_CLAIM_OWNERS.add(written)
+
+
+def _unregister_active_claim_owner(owner: str) -> None:
+    with _ACTIVE_CLAIM_OWNERS_GUARD:
+        _ACTIVE_CLAIM_OWNERS.discard(str(owner or ""))
+
+
+def _current_process_worker_is_live(claim: Dict[str, Any]) -> bool:
+    owner = str(claim.get("by") or "")
+    with _ACTIVE_CLAIM_OWNERS_GUARD:
+        return owner in _ACTIVE_CLAIM_OWNERS
+
+
+def _claim_owner_is_live(claim: Any) -> Optional[bool]:
+    """True/False only when the exact local process and worker can be proved."""
+
+    if not isinstance(claim, dict):
+        return None
+    if str(claim.get("host") or "") != _PROCESS_HOST:
+        return None
+    try:
+        pid = int(claim["pid"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+    # Windows implements os.kill through TerminateProcess for ordinary signal
+    # values, so signal 0 is not a safe liveness probe there. For this process,
+    # the exact worker registry distinguishes a running task from an abandoned
+    # claim. All other Windows owners remain ambiguous and are retained.
+    if os.name != "posix":
+        return _current_process_worker_is_live(claim) if pid == os.getpid() else None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return None
+
+    expected_start = claim.get("process_started_at")
+    if expected_start is None:
+        return _current_process_worker_is_live(claim) if pid == os.getpid() else None
+    current_start = _process_start_marker(pid)
+    if current_start is None:
+        return None
+    if str(expected_start) != current_start:
+        return False
+    if pid == os.getpid():
+        return _current_process_worker_is_live(claim)
+    return True
 
 
 def _aware(value: datetime, tz) -> datetime:
@@ -346,21 +429,17 @@ def _normalize_stored_delivery(
     *,
     job_id: str,
 ) -> str:
-    """Read old or hand-edited delivery data without breaking startup."""
+    """Read old delivery data, but never silently change its destination."""
 
     if isinstance(value, (list, tuple)):
         parts = [str(part).strip() for part in value if str(part).strip()]
         value = parts[0] if len(parts) == 1 else value
     try:
         return _normalize_delivery(value, origin)
-    except (TypeError, ValueError):
-        # Delivery corruption must fail safe: keep the job readable but do not
-        # route its output to any external chat until an operator fixes it.
-        logger.warning(
-            "Cron job %s has invalid delivery data; using local delivery",
-            job_id,
-        )
-        return "local"
+    except (TypeError, ValueError) as exc:
+        raise CronError(
+            f"Cron job {job_id} has invalid delivery data: {exc}"
+        ) from exc
 
 
 def _normalize_repeat_count(value: Any) -> Optional[int]:
@@ -582,6 +661,77 @@ class CronStore:
     def load_jobs(self) -> List[Dict[str, Any]]:
         with self._locked():
             return copy.deepcopy(self._load_unlocked())
+
+    def verify_health(self) -> Dict[str, int]:
+        """Validate the durable job schema and claim identities for doctor."""
+
+        with self._locked():
+            jobs = self._load_unlocked()
+            active_claims = 0
+            for job in jobs:
+                job_id = str(job["id"])
+                schedule = job.get("schedule")
+                if not isinstance(schedule, dict) or schedule.get("kind") not in {
+                    "once",
+                    "interval",
+                    "cron",
+                }:
+                    raise CronError(f"Cron job {job_id} has an invalid schedule.")
+                state = str(job.get("state") or "")
+                if state not in _JOB_STATES:
+                    raise CronError(f"Cron job {job_id} has invalid state {state!r}.")
+                if not isinstance(job.get("enabled"), bool):
+                    raise CronError(f"Cron job {job_id} has invalid enabled state.")
+                status = job.get("last_status")
+                if status is not None and status not in _LAST_STATUSES:
+                    raise CronError(
+                        f"Cron job {job_id} has invalid last status {status!r}."
+                    )
+                for field in ("next_run_at", "last_run_at"):
+                    written = job.get(field)
+                    if written is None:
+                        continue
+                    try:
+                        datetime.fromisoformat(str(written))
+                    except ValueError as exc:
+                        raise CronError(
+                            f"Cron job {job_id} has invalid {field}."
+                        ) from exc
+
+                claim = job.get("claim")
+                if claim is None:
+                    if state == "running":
+                        raise CronError(
+                            f"Cron job {job_id} is running without a durable claim."
+                        )
+                    continue
+                if not isinstance(claim, dict):
+                    raise CronError(f"Cron job {job_id} has an invalid claim.")
+                required = {"at", "by", "host", "pid", "process_started_at"}
+                missing = sorted(required - set(claim))
+                if missing:
+                    raise CronError(
+                        f"Cron job {job_id} claim lacks process identity: "
+                        + ", ".join(missing)
+                    )
+                try:
+                    datetime.fromisoformat(str(claim["at"]))
+                    pid = int(claim["pid"])
+                except (TypeError, ValueError) as exc:
+                    raise CronError(
+                        f"Cron job {job_id} has malformed claim identity."
+                    ) from exc
+                if (
+                    not str(claim["by"]).strip()
+                    or not str(claim["host"]).strip()
+                    or pid <= 0
+                    or state != "running"
+                ):
+                    raise CronError(
+                        f"Cron job {job_id} has malformed claim identity."
+                    )
+                active_claims += 1
+            return {"jobs": len(jobs), "active_claims": active_claims}
 
     @staticmethod
     def _resolve_index(jobs: List[Dict[str, Any]], reference: str) -> Optional[int]:
@@ -885,7 +1035,7 @@ class CronStore:
             now = self.now()
             due: List[Dict[str, Any]] = []
             changed = False
-            owner_base = f"{socket.gethostname()}:{os.getpid()}"
+            owner_base = f"{_PROCESS_HOST}:{os.getpid()}"
 
             for job in jobs:
                 if maximum is not None and len(due) >= maximum:
@@ -894,20 +1044,51 @@ class CronStore:
                     age = self._claim_age(job, now)
                     if age is None or age < self.claim_ttl_seconds:
                         continue
+                    owner_live = _claim_owner_is_live(job.get("claim"))
+                    if owner_live is not False:
+                        if owner_live is None:
+                            logger.warning(
+                                "Cron job %s has a stale claim whose owner cannot be proved dead",
+                                job.get("id"),
+                            )
+                        continue
+
+                    claim = job.get("claim") or {}
+                    job["last_run_at"] = str(claim.get("at") or now.isoformat())
+                    job["last_status"] = "unknown"
+                    job["last_error"] = (
+                        "The previous claimed run lost its exact owner before a "
+                        "durable terminal state; whether side effects ran is unknown."
+                    )
+                    job["last_delivery_error"] = None
+                    job["claim"] = None
                     if job.get("schedule", {}).get("kind") == "once":
                         job["enabled"] = False
                         job["state"] = "error"
                         job["next_run_at"] = None
-                        job["last_status"] = "error"
-                        job["last_error"] = (
-                            "Previous claimed run ended without completion."
+                    else:
+                        repeat = job.setdefault(
+                            "repeat", {"times": None, "completed": 0}
                         )
-                        job["claim"] = None
-                        changed = True
-                        continue
-                    job["state"] = "scheduled"
-                    job["claim"] = None
+                        times = repeat.get("times")
+                        completed = int(repeat.get("completed") or 0)
+                        if times is not None:
+                            completed += 1
+                            repeat["completed"] = completed
+                        if times is not None and completed >= int(times):
+                            job["enabled"] = False
+                            job["state"] = "completed"
+                            job["next_run_at"] = None
+                        else:
+                            job["state"] = "scheduled"
+                            job["next_run_at"] = _advance_recurring_run(job, now)
+                            if job["next_run_at"] is None:
+                                job["enabled"] = False
+                                job["state"] = "error"
                     changed = True
+                    # This ambiguous occurrence is never retried. A recurring
+                    # job may claim only its newly reserved future slot.
+                    continue
 
                 if not job.get("enabled", True) or job.get("state") != "scheduled":
                     continue
@@ -998,7 +1179,13 @@ class CronStore:
                     continue
 
                 owner = f"{owner_base}:{uuid.uuid4().hex}"
-                job["claim"] = {"at": now.isoformat(), "by": owner}
+                job["claim"] = {
+                    "at": now.isoformat(),
+                    "by": owner,
+                    "host": _PROCESS_HOST,
+                    "pid": os.getpid(),
+                    "process_started_at": _PROCESS_STARTED_AT,
+                }
                 job["state"] = "running"
                 due.append(copy.deepcopy(job))
                 changed = True

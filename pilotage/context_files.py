@@ -22,6 +22,10 @@ CONTEXT_TRUNCATE_HEAD_RATIO = 0.7
 CONTEXT_TRUNCATE_TAIL_RATIO = 0.2
 
 
+class ContextFileError(RuntimeError):
+    """A declared workspace instruction file could not be read safely."""
+
+
 def _scan_context_content(content: str, filename: str) -> str:
     """Block promptware before a workspace file enters the system prompt."""
     # A leading UTF-8 BOM is an editor artifact. Hermes strips only the
@@ -106,13 +110,24 @@ def _load_agents_md(
         # spelling is Hermes's compatibility alias; the first match wins.
         for name in ("AGENTS.md", "agents.md"):
             candidate = directory / name
-            if not candidate.exists():
+            try:
+                # lstat distinguishes a truly absent optional file from a
+                # declared symlink whose target has disappeared. read_text
+                # below follows a healthy link and fails closed on a dangling
+                # one or on a remove/replace race after this inspection.
+                candidate.lstat()
+            except FileNotFoundError:
                 continue
+            except OSError as exc:
+                raise ContextFileError(
+                    f"Could not inspect workspace instructions at {candidate}: {exc}"
+                ) from exc
             try:
                 content = candidate.read_text(encoding="utf-8").strip()
-            except Exception as exc:  # noqa: BLE001 - Hermes skips unreadable hints
-                logger.debug("Could not read %s: %s", candidate, exc)
-                continue
+            except (OSError, UnicodeError) as exc:
+                raise ContextFileError(
+                    f"Could not read workspace instructions at {candidate}: {exc}"
+                ) from exc
             if not content:
                 continue
             if content in seen_content:
@@ -162,4 +177,8 @@ def build_context_files_prompt(
     )
 
 
-__all__ = ["CONTEXT_FILE_MAX_CHARS", "build_context_files_prompt"]
+__all__ = [
+    "CONTEXT_FILE_MAX_CHARS",
+    "ContextFileError",
+    "build_context_files_prompt",
+]

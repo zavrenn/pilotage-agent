@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..history import ConversationSearchError
+from .ansi_strip import strip_ansi
 from .registry import Tool, ToolContext, tool_error
 
 MAX_FTS5_QUERY_CHARS = 2_048
@@ -101,7 +102,10 @@ def _timestamp(value: Any) -> str:
 
 
 def _cap(text: Any, limit: int) -> str:
-    value = str(text or "")
+    # Stored history predates current input/output sanitizers and may contain
+    # terminal escapes. Strip before truncation so hidden bytes cannot consume
+    # the visible budget or re-enter model context through recall.
+    value = strip_ansi(str(text or ""))
     if len(value) <= limit:
         return value
     keep = max(0, limit - len(TRUNCATION_MARKER))

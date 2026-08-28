@@ -16,6 +16,8 @@ from pilotage.cron.jobs import (
     AmbiguousJobReference,
     CronError,
     CronStore,
+    _register_active_claim_owner,
+    _unregister_active_claim_owner,
     compute_next_run,
     parse_duration,
     parse_schedule,
@@ -206,7 +208,7 @@ class CrudTests(StoreCase):
         job = self.create(prompt="Run pilotage -p sibling service stop")
         self.assertEqual(job["prompt"], "Run pilotage -p sibling service stop")
 
-    def test_corrupt_delivery_data_is_read_safely_and_fails_local(self):
+    def test_corrupt_delivery_data_is_reported_instead_of_rerouted(self):
         job = self.create(origin={"channel": "telegram", "chat_id": "42"})
         payload = json.loads(self.store.jobs_path.read_text(encoding="utf-8"))
 
@@ -220,9 +222,22 @@ class CrudTests(StoreCase):
                 self.store.jobs_path.write_text(
                     json.dumps(payload), encoding="utf-8"
                 )
-                loaded = self.store.load_jobs()[0]
-                self.assertEqual(loaded["id"], job["id"])
-                self.assertEqual(loaded["deliver"], "local")
+                with self.assertRaisesRegex(CronError, job["id"]):
+                    self.store.load_jobs()
+
+    def test_health_probe_validates_claim_process_identity(self):
+        self.create()
+        self.store.claim_due_jobs()
+        self.assertEqual(
+            self.store.verify_health(),
+            {"jobs": 1, "active_claims": 1},
+        )
+
+        payload = json.loads(self.store.jobs_path.read_text(encoding="utf-8"))
+        del payload["jobs"][0]["claim"]["host"]
+        self.store.jobs_path.write_text(json.dumps(payload), encoding="utf-8")
+        with self.assertRaisesRegex(CronError, "lacks process identity"):
+            self.store.verify_health()
 
     def test_threaded_creates_do_not_lose_updates(self):
         errors = []
@@ -299,10 +314,43 @@ class ClaimTests(StoreCase):
         job = self.create()
         self.store.claim_due_jobs()
         self.clock.advance(seconds=61)
-        self.assertEqual(self.store.claim_due_jobs(), [])
+        with mock.patch(
+            "pilotage.cron.jobs._claim_owner_is_live",
+            return_value=False,
+        ):
+            self.assertEqual(self.store.claim_due_jobs(), [])
         recovered = self.store.resolve_job(job["id"])
         self.assertEqual(recovered["state"], "error")
-        self.assertIn("without completion", recovered["last_error"])
+        self.assertEqual(recovered["last_status"], "unknown")
+        self.assertIn("side effects ran is unknown", recovered["last_error"])
+
+    def test_stale_live_owner_is_not_reclaimed(self):
+        job = self.create()
+        claimed = self.store.claim_due_jobs()[0]
+        owner = claimed["claim"]["by"]
+        _register_active_claim_owner(owner)
+        try:
+            self.clock.advance(seconds=61)
+
+            self.assertEqual(self.store.claim_due_jobs(), [])
+
+            retained = self.store.resolve_job(job["id"])
+            self.assertEqual(retained["state"], "running")
+            self.assertEqual(retained["claim"]["by"], owner)
+        finally:
+            _unregister_active_claim_owner(owner)
+
+    def test_stale_claim_from_ended_worker_is_retired_in_live_process(self):
+        job = self.create()
+        self.store.claim_due_jobs()
+        self.clock.advance(seconds=61)
+
+        self.assertEqual(self.store.claim_due_jobs(), [])
+
+        recovered = self.store.resolve_job(job["id"])
+        self.assertEqual(recovered["state"], "error")
+        self.assertEqual(recovered["last_status"], "unknown")
+        self.assertIn("side effects ran is unknown", recovered["last_error"])
 
     def test_never_started_one_shot_past_grace_is_retired_visibly(self):
         job = self.create()
@@ -385,11 +433,78 @@ class ClaimTests(StoreCase):
         )
 
     def test_stale_recurring_claim_recovers_to_one_run(self):
-        self.create(schedule="every 1m")
+        job = self.create(schedule="every 1m")
         self.clock.advance(minutes=1)
         self.store.claim_due_jobs()
         self.clock.advance(minutes=10)
+        with mock.patch(
+            "pilotage.cron.jobs._claim_owner_is_live",
+            return_value=False,
+        ):
+            self.assertEqual(self.store.claim_due_jobs(), [])
+        recovered = self.store.resolve_job(job["id"])
+        self.assertEqual(recovered["last_status"], "unknown")
+        self.assertGreater(recovered["next_run_at"], self.clock().isoformat())
+
+        self.clock.advance(minutes=1)
         self.assertEqual(len(self.store.claim_due_jobs()), 1)
+        self.assertEqual(self.store.claim_due_jobs(), [])
+
+    def test_stale_finite_recurring_claim_consumes_its_only_repeat(self):
+        job = self.create(schedule="every 1m", repeat=1)
+        self.clock.advance(minutes=1)
+        self.store.claim_due_jobs()
+        self.clock.advance(seconds=61)
+
+        with mock.patch(
+            "pilotage.cron.jobs._claim_owner_is_live",
+            return_value=False,
+        ):
+            self.assertEqual(self.store.claim_due_jobs(), [])
+
+        recovered = self.store.resolve_job(job["id"])
+        self.assertEqual(recovered["last_status"], "unknown")
+        self.assertEqual(recovered["repeat"], {"times": 1, "completed": 1})
+        self.assertFalse(recovered["enabled"])
+        self.assertEqual(recovered["state"], "completed")
+        self.assertIsNone(recovered["next_run_at"])
+        self.clock.advance(days=1)
+        self.assertEqual(self.store.claim_due_jobs(), [])
+
+    def test_stale_finite_recurring_claim_leaves_only_remaining_repeats(self):
+        job = self.create(schedule="every 1m", repeat=3)
+        self.clock.advance(minutes=1)
+        self.store.claim_due_jobs()
+        self.clock.advance(seconds=61)
+
+        with mock.patch(
+            "pilotage.cron.jobs._claim_owner_is_live",
+            return_value=False,
+        ):
+            self.assertEqual(self.store.claim_due_jobs(), [])
+
+        recovered = self.store.resolve_job(job["id"])
+        self.assertEqual(recovered["last_status"], "unknown")
+        self.assertEqual(recovered["repeat"], {"times": 3, "completed": 1})
+        self.assertEqual(recovered["state"], "scheduled")
+
+        for expected_completed in (2, 3):
+            self.clock.advance(minutes=1)
+            claimed = self.store.claim_due_jobs()
+            self.assertEqual(len(claimed), 1)
+            self.assertTrue(
+                self.store.finish_job(
+                    job["id"],
+                    owner=claimed[0]["claim"]["by"],
+                    success=True,
+                )
+            )
+            self.assertEqual(
+                self.store.resolve_job(job["id"])["repeat"]["completed"],
+                expected_completed,
+            )
+
+        self.clock.advance(minutes=1)
         self.assertEqual(self.store.claim_due_jobs(), [])
 
     def test_pause_is_authoritative_during_recurring_run(self):
@@ -407,6 +522,12 @@ class ClaimTests(StoreCase):
         self.clock.advance(minutes=1)
         first = self.store.claim_due_jobs()[0]
         self.clock.advance(minutes=2)
+        with mock.patch(
+            "pilotage.cron.jobs._claim_owner_is_live",
+            return_value=False,
+        ):
+            self.assertEqual(self.store.claim_due_jobs(), [])
+        self.clock.advance(minutes=1)
         second = self.store.claim_due_jobs()[0]
         self.assertFalse(self.store.finish_job(
             job["id"], owner=first["claim"]["by"], success=True
@@ -420,6 +541,12 @@ class ClaimTests(StoreCase):
         self.clock.advance(minutes=1)
         first = self.store.claim_due_jobs()[0]
         self.clock.advance(seconds=61)
+        with mock.patch(
+            "pilotage.cron.jobs._claim_owner_is_live",
+            return_value=False,
+        ):
+            self.assertEqual(self.store.claim_due_jobs(), [])
+        self.clock.advance(minutes=1)
         second = self.store.claim_due_jobs()[0]
 
         self.assertIsNone(

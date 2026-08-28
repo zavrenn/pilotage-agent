@@ -15,7 +15,12 @@ from pilotage.agent import Agent
 from pilotage.config import Config
 from pilotage.history import ConversationStore
 
-from .jobs import CronStore, validate_prompt
+from .jobs import (
+    CronStore,
+    _register_active_claim_owner,
+    _unregister_active_claim_owner,
+    validate_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -300,12 +305,23 @@ class CronScheduler:
                         self.store.claim_due_jobs, limit=capacity
                     )
                 for job in due:
-                    task = asyncio.create_task(
-                        self._run_claimed(job),
-                        name=f"pilotage-cron-{job['id']}",
-                    )
+                    owner = str((job.get("claim") or {}).get("by") or "")
+                    _register_active_claim_owner(owner)
+                    try:
+                        task = asyncio.create_task(
+                            self._run_claimed(job),
+                            name=f"pilotage-cron-{job['id']}",
+                        )
+                    except BaseException:
+                        _unregister_active_claim_owner(owner)
+                        raise
                     self._active.add(task)
                     task.add_done_callback(self._job_done)
+                    task.add_done_callback(
+                        lambda _task, claim_owner=owner: (
+                            _unregister_active_claim_owner(claim_owner)
+                        )
+                    )
                 if due:
                     continue
                 try:

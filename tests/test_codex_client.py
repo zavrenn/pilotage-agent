@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from pilotage.codex.client import build_http_client
+from pilotage.codex import auth
+from pilotage.codex.client import build_client, build_http_client
 
 
 class CodexHttpClientTests(unittest.IsolatedAsyncioTestCase):
@@ -19,6 +20,17 @@ class CodexHttpClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(client.timeout.connect, 15.0)
         finally:
             await client.aclose()
+
+    async def test_client_rejects_an_in_memory_legacy_endpoint(self):
+        credentials = auth.Credentials(
+            access_token="access",
+            refresh_token="refresh",
+            base_url="https://legacy.example/codex",
+            last_refresh="",
+        )
+
+        with self.assertRaises(auth.AuthError):
+            build_client(credentials, timeout_seconds=300)
 
 
 if __name__ == "__main__":

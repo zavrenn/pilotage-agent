@@ -262,9 +262,65 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
             codex_stream.CodexStreamTimeout("quiet again", code="codex_stream_stalled"),
         ]
         self.agent._stream_once = self._answer_after(quiet)
-        with self.assertRaises(codex_stream.CodexStreamTimeout):
-            await self.agent._run_turn("chat", "hi", [], self._notice)
+        with self.assertLogs("pilotage.agent", level="WARNING"):
+            result = await self.agent._run_turn("chat", "hi", [], self._notice)
+        self.assertEqual(result.text, t("runtime.failure", self.agent._config.language))
+        self.assertFalse(result.terminal_completed)
         self.assertEqual(len(self.attempts), 2)
+
+    async def test_a_transport_interruption_is_retried_once(self):
+        broken = httpx.ReadError(
+            "connection reset",
+            request=httpx.Request("POST", "https://chatgpt.com/backend-api/codex/responses"),
+        )
+        self.agent._stream_once = self._answer_after([broken])
+
+        result = await self.agent._run_turn("chat", "hi", [], self._notice)
+
+        self.assertEqual(result.text, "Answered.")
+        self.assertEqual(len(self.attempts), 2)
+        self.assertEqual(
+            self.notices,
+            [t("runtime.reconnect", self.agent._config.language)],
+        )
+
+    async def test_transport_and_silence_share_one_reconnect_budget(self):
+        failures = [
+            codex_stream.CodexStreamTimeout(
+                "quiet", code="codex_stream_stalled"
+            ),
+            httpx.ReadError(
+                "connection reset",
+                request=httpx.Request(
+                    "POST", "https://chatgpt.com/backend-api/codex/responses"
+                ),
+            ),
+        ]
+        self.agent._stream_once = self._answer_after(failures)
+
+        with self.assertLogs("pilotage.agent", level="WARNING"):
+            result = await self.agent._run_turn("chat", "hi", [], self._notice)
+
+        self.assertEqual(result.text, t("runtime.failure", self.agent._config.language))
+        self.assertFalse(result.terminal_completed)
+        self.assertEqual(len(self.attempts), 2)
+
+    async def test_an_api_status_failure_becomes_a_local_failure_reply(self):
+        self.agent._stream_once = self._answer_after(
+            [
+                _bad_request(
+                    code="content_policy_violation",
+                    message="Request blocked.",
+                )
+            ]
+        )
+
+        with self.assertLogs("pilotage.agent", level="WARNING"):
+            result = await self.agent._run_turn("chat", "hi", [], self._notice)
+
+        self.assertEqual(result.text, t("runtime.failure", self.agent._config.language))
+        self.assertFalse(result.terminal_completed)
+        self.assertEqual(len(self.attempts), 1)
 
     async def test_a_reconnect_does_not_spend_a_refresh_token(self):
         """The credentials are not what went quiet; refreshing would rotate them for nothing."""

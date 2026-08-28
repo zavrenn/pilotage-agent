@@ -15,6 +15,7 @@ from pilotage.channels.whatsapp import ChannelError
 from pilotage.config import Config, TELEGRAM_FORMATTING_NOTE
 from pilotage.cron.jobs import _normalize_origin
 from pilotage.delivery import DeliveryUnitLedger
+from pilotage.history import ConversationError
 
 
 class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -69,13 +70,20 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 on_notice,
                 origin,
                 approval_notify,
+                claim_ids,
+                defer_completion,
             ):
                 seen["session_id"] = session_id
                 seen["text"] = text
                 seen["attachments"] = attachments
                 seen["origin"] = origin
                 seen["approval_notify"] = approval_notify
+                seen["claim_ids"] = claim_ids
+                seen["defer_completion"] = defer_completion
                 return "answer"
+
+            async def finalize_ready_turn(self, session_id):
+                seen["finalized"] = session_id
 
         class FakeTelegramChannel:
             def __init__(self, channel_config, handler, manage):
@@ -91,8 +99,17 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 yield
 
             async def send(self, *args, **kwargs):
-                sent.append((args, kwargs))
-                return delivery["accepted"]
+                ledger = kwargs.get("delivery_ledger")
+                if ledger is None:
+                    sent.append((args, kwargs))
+                    return delivery["accepted"]
+                units = await ledger.prepare([("text", "fake-telegram-unit")])
+
+                async def accepted():
+                    sent.append((args, kwargs))
+                    return delivery["accepted"]
+
+                return await ledger.run(units[0], accepted)
 
             async def start(self):
                 await self.handler(
@@ -105,9 +122,13 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                         is_group=False,
                         thread_id="9",
                         message_ids=["99"],
+                        claim_ids=["a" * 64],
                     )
                 )
                 self.stopped.set()
+
+            def persist_completed_claims(self, claim_ids):
+                seen["completed_claims"] = list(claim_ids)
 
             async def stop_intake(self):
                 seen["intake_stopped"] = True
@@ -147,9 +168,14 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 "channel": "telegram",
                 "chat_id": "42",
                 "thread_id": "9",
+                "reply_to": "99",
             },
         )
         self.assertEqual(seen["session_id"], "telegram:dm:42:9")
+        self.assertTrue(seen["defer_completion"])
+        self.assertEqual(seen["claim_ids"], ["a" * 64])
+        self.assertEqual(seen["completed_claims"], ["a" * 64])
+        self.assertEqual(seen["finalized"], "telegram:dm:42:9")
         self.assertEqual(seen["text"], '"spoken"')
         self.assertTrue(seen["intake_stopped"])
         self.assertTrue(seen["agent_closed"])
@@ -179,6 +205,189 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             await seen["approval_notify"]("Approve this change")
         )
+
+    async def test_telegram_plan_failure_does_not_complete_inbound_claim(self):
+        from pilotage.delivery import SendResult
+
+        config = Config.load(channel="whatsapp")
+        claim_id = "f" * 64
+        seen = {"completed": [], "finalized": [], "network": []}
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+            async def respond(self, *_args, **_kwargs):
+                return "answer"
+
+            async def finalize_ready_turn(self, session_id):
+                seen["finalized"].append(session_id)
+
+        class FakeTelegramChannel:
+            def __init__(self, _config, handler, _manage):
+                self.handler = handler
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                pass
+
+            def release_inbound(self):
+                pass
+
+            def _fail(self, message):
+                self.failure = message
+                seen["failure"] = message
+
+            @contextlib.asynccontextmanager
+            async def typing(self, _chat_id, _thread_id):
+                yield
+
+            async def send(self, *_args, **kwargs):
+                ledger = kwargs.get("delivery_ledger")
+                if ledger is None:
+                    return SendResult(True)
+                units = await ledger.prepare([("text", "tg-exact-plan")])
+
+                async def accepted():
+                    seen["network"].append(True)
+                    return SendResult(True)
+
+                return await ledger.run(units[0], accepted)
+
+            def persist_completed_claims(self, claims):
+                seen["completed"].extend(claims)
+
+            async def start(self):
+                try:
+                    await self.handler(
+                        InboundMessage(
+                            chat_id="42",
+                            session_id="telegram:dm:42",
+                            user_id="42",
+                            user_name="Owner",
+                            text="hello",
+                            is_group=False,
+                            thread_id="",
+                            message_ids=["101"],
+                            claim_ids=[claim_id],
+                        )
+                    )
+                except Exception:
+                    pass
+                self.stopped.set()
+
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                pass
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "TelegramChannel", FakeTelegramChannel),
+            mock.patch.object(main, "WhatsAppChannel") as whatsapp,
+            mock.patch.object(
+                main.DeliveryStore,
+                "record_units",
+                side_effect=sqlite3.OperationalError("plan write failed"),
+            ),
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            code = await main.command_run(config)
+
+        self.assertEqual(code, 1)
+        whatsapp.assert_not_called()
+        self.assertEqual(seen["network"], [])
+        self.assertEqual(seen["completed"], [])
+        self.assertEqual(seen["finalized"], [])
+
+    async def test_telegram_storage_failure_stops_without_fallback_delivery(self):
+        config = Config.load(channel="whatsapp")
+        seen = {"sent": [], "completed": [], "finalized": []}
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+            async def respond(self, *_args, **_kwargs):
+                raise ConversationError("history unavailable")
+
+            async def finalize_ready_turn(self, session_id):
+                seen["finalized"].append(session_id)
+
+        class FakeTelegramChannel:
+            def __init__(self, _config, handler, _manage):
+                self.handler = handler
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                pass
+
+            def release_inbound(self):
+                pass
+
+            def _fail(self, message):
+                self.failure = message
+                seen["failure"] = message
+
+            @contextlib.asynccontextmanager
+            async def typing(self, _chat_id, _thread_id):
+                yield
+
+            async def send(self, *args, **kwargs):
+                seen["sent"].append((args, kwargs))
+                return True
+
+            def persist_completed_claims(self, claims):
+                seen["completed"].extend(claims)
+
+            async def start(self):
+                try:
+                    await self.handler(
+                        InboundMessage(
+                            chat_id="42",
+                            session_id="telegram:dm:42",
+                            user_id="42",
+                            user_name="Owner",
+                            text="hello",
+                            is_group=False,
+                            thread_id="",
+                            message_ids=["102"],
+                            claim_ids=["e" * 64],
+                        )
+                    )
+                except Exception:
+                    pass
+                self.stopped.set()
+
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                pass
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "TelegramChannel", FakeTelegramChannel),
+            mock.patch.object(main, "WhatsAppChannel") as whatsapp,
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            code = await main.command_run(config)
+
+        self.assertEqual(code, 1)
+        whatsapp.assert_not_called()
+        self.assertEqual(seen["sent"], [])
+        self.assertEqual(seen["completed"], [])
+        self.assertEqual(seen["finalized"], [])
+        self.assertIn("before a durable reply was chosen", seen["failure"])
 
     async def test_dual_channel_cron_receives_both_channel_configs(self):
         (self.root / "config.yaml").write_text(
@@ -313,6 +522,136 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, 1)
         self.assertEqual(starts, ["whatsapp"])
+
+    async def test_later_channel_start_failure_aborts_already_started_channel(self):
+        (self.root / "config.yaml").write_text(
+            "whatsapp:\n"
+            "  enabled: true\n"
+            "telegram:\n"
+            "  enabled: true\n"
+            "cron:\n"
+            "  enabled: false\n",
+            encoding="utf-8",
+        )
+        config = Config.load(channel="whatsapp")
+        events = []
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                events.append("agent_close")
+
+        class BaseChannel:
+            name = ""
+
+            def __init__(self, _config, _handler, _manage):
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                events.append(f"{self.name}_hold")
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                raise AssertionError("startup-held work must not be released")
+
+        class StartedWhatsApp(BaseChannel):
+            name = "whatsapp"
+
+            async def start(self):
+                events.append("whatsapp_start")
+
+            async def abort_startup(self):
+                events.append("whatsapp_abort")
+
+        class FailingTelegram(BaseChannel):
+            name = "telegram"
+
+            async def start(self):
+                events.append("telegram_start")
+                raise ChannelError("Telegram unavailable")
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", StartedWhatsApp),
+            mock.patch.object(main, "TelegramChannel", FailingTelegram),
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            result = await main.command_run(config)
+
+        self.assertEqual(result, 1)
+        self.assertEqual(
+            events,
+            [
+                "whatsapp_hold",
+                "telegram_hold",
+                "whatsapp_start",
+                "telegram_start",
+                "whatsapp_abort",
+                "agent_close",
+                "agent_close",
+            ],
+        )
+
+    async def test_telegram_recovery_requires_its_durable_claim_identity(self):
+        from pilotage.history import ConversationStore
+
+        config = Config.load(channel="telegram")
+        store = ConversationStore(config.conversations_path)
+        store.begin_turn(
+            "telegram:dm:42",
+            "input",
+            origin={
+                "channel": "telegram",
+                "chat_id": "42",
+                "reply_to": "9",
+            },
+        )
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+        class FakeChannel:
+            def __init__(self, _config, _handler, _manage):
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                pass
+
+            async def start(self):
+                self.stopped.set()
+
+            def release_inbound(self):
+                pass
+
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                pass
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "TelegramChannel", FakeChannel),
+            mock.patch.object(main.auth, "read_credentials"),
+            mock.patch.object(
+                main,
+                "_recover_interrupted_turns",
+                new=mock.AsyncMock(),
+            ) as recover,
+        ):
+            self.assertEqual(await main.command_run(config), 0)
+
+        active = store.list_active_turns()
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0].phase, "unknown")
+        recover.assert_not_awaited()
 
     def test_cron_origin_keeps_telegram_topic_id(self):
         self.assertEqual(

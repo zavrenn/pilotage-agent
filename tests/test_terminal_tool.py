@@ -168,6 +168,19 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("opaque-value-1234567890", result["output"])
         self.assertIn("MY_SERVICE_TOKEN=", result["output"])
 
+    async def test_exit_zero_with_masked_build_failure_gets_an_advisory(self):
+        def _masked_failure(_shell, _command, _cwd="", **_kwargs):
+            return {
+                "output": "error: could not compile `pilotage` due to 2 errors\n",
+                "returncode": 0,
+            }
+
+        with mock.patch.object(_FakeShell, "execute", _masked_failure):
+            result = await self._run({"command": "cargo build | tail -20"})
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("Treat this run as failed", result["hint"])
+
     async def test_bad_arguments_are_errors_the_model_can_fix(self):
         for args in (
             {},

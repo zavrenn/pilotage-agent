@@ -245,6 +245,129 @@ export async function useAtomicMultiFileAuthState(
   };
 }
 
+function bareInboundIdentity(value) {
+  return String(value || '')
+    .trim()
+    .replace(/:.*@/, '@')
+    .replace(/@.*/, '')
+    .replace(/^\+/, '');
+}
+
+function typedInboundIdentity(value, assumedType = '') {
+  const written = String(value || '').trim().toLowerCase().replace(/:.*@/, '@');
+  const explicit = /^(pn|lid):(\d+)$/.exec(written);
+  if (explicit) return `${explicit[1]}:${explicit[2]}`;
+  const jid = /^(\d+)@(s\.whatsapp\.net|lid)$/.exec(written);
+  if (jid) return `${jid[2] === 'lid' ? 'lid' : 'pn'}:${jid[1]}`;
+  if (/^\d+$/.test(written) && ['pn', 'lid'].includes(assumedType)) {
+    return `${assumedType}:${written}`;
+  }
+  return '';
+}
+
+export function resolveInboundClaimIdentities({
+  senderId,
+  senderPn = null,
+  identities = [],
+} = {}) {
+  const resolved = new Set();
+  const sender = typedInboundIdentity(senderId);
+  if (sender) resolved.add(sender);
+  const phone = typedInboundIdentity(senderPn, 'pn');
+  if (phone) resolved.add(phone);
+
+  const senderType = sender.startsWith('pn:')
+    ? 'pn'
+    : (sender.startsWith('lid:') ? 'lid' : '');
+  const counterpartType = senderType === 'pn' ? 'lid' : 'pn';
+  const knownValues = new Set(
+    Array.from(resolved).map((value) => value.slice(value.indexOf(':') + 1)),
+  );
+  for (const value of Array.isArray(identities) ? identities : []) {
+    const bare = bareInboundIdentity(value);
+    if (!/^\d+$/.test(bare) || knownValues.has(bare) || !senderType) continue;
+    // expandWhatsAppIdentifiers only adds values read from Baileys' durable
+    // PN<->LID mapping files. That mapping is the evidence for this type link.
+    resolved.add(`${counterpartType}:${bare}`);
+  }
+  return Array.from(resolved).sort();
+}
+
+function inboundIdentityAliases(event) {
+  const aliases = new Set();
+  const sender = typedInboundIdentity(event?.senderId);
+  if (sender) aliases.add(sender);
+  const senderPn = typedInboundIdentity(event?.senderPn, 'pn');
+  if (senderPn) aliases.add(senderPn);
+  for (const value of Array.isArray(event?._pilotageClaimIdentities)
+    ? event._pilotageClaimIdentities
+    : []) {
+    const typed = typedInboundIdentity(value);
+    if (typed) aliases.add(typed);
+  }
+  return Array.from(aliases)
+    .sort((left, right) => {
+      const leftRank = left.startsWith('pn:') ? 0 : 1;
+      const rightRank = right.startsWith('pn:') ? 0 : 1;
+      return leftRank - rightRank || left.localeCompare(right);
+    })
+    .slice(0, 8);
+}
+
+function hashedInboundIdentity(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function claimIdsFor(event) {
+  const messageId = String(event?.messageId || '').trim();
+  const chatId = String(event?.chatId || '').trim();
+  if (!messageId || !chatId) {
+    throw new Error('Inbound WhatsApp event has no stable message identity');
+  }
+
+  const aliases = inboundIdentityAliases(event);
+  if (aliases.length === 0) {
+    throw new Error('Inbound WhatsApp event has no stable sender identity');
+  }
+  const isGroup = Boolean(event?.isGroup) || chatId.endsWith('@g.us');
+  const groupId = bareInboundIdentity(chatId);
+  if (isGroup && !groupId) {
+    throw new Error('Inbound WhatsApp group event has no stable chat identity');
+  }
+
+  const canonical = aliases[0];
+  const scopedId = (participant) => hashedInboundIdentity(
+    isGroup
+      ? `pilotage-wa-inbound-v2\0group\0${groupId}\0${participant}\0${messageId}`
+      : `pilotage-wa-inbound-v2\0direct\0${participant}\0${messageId}`,
+  );
+  const primary = scopedId(canonical);
+  const compatible = new Set([primary]);
+
+  // If a mapping file appears after an event was first accepted, either alias
+  // must still find the earlier v2 claim.
+  for (const alias of aliases) compatible.add(scopedId(alias));
+
+  // Before v2 the filename hashed raw chatId+senderId+messageId. Check the
+  // current representation plus only typed aliases backed by a WhatsApp
+  // mapping. Equal local parts in PN and LID namespaces are not proof that two
+  // identities belong to the same person.
+  const legacy = (legacyChat, legacySender) => hashedInboundIdentity(
+    `${legacyChat}\0${legacySender}\0${messageId}`,
+  );
+  compatible.add(legacy(chatId, String(event?.senderId || '').trim()));
+  for (const alias of aliases) {
+    const separator = alias.indexOf(':');
+    const type = alias.slice(0, separator);
+    const value = alias.slice(separator + 1);
+    const participant = `${value}@${type === 'lid' ? 'lid' : 's.whatsapp.net'}`;
+    compatible.add(
+      legacy(isGroup ? chatId : participant, participant),
+    );
+  }
+  return { primary, compatible: Array.from(compatible) };
+}
+
 export function createDurableInboundQueue(
   root,
   {
@@ -282,18 +405,6 @@ export function createDurableInboundQueue(
 
   function fileName(claimId) {
     return `${claimId}.json`;
-  }
-
-  function claimIdFor(event) {
-    const messageId = String(event?.messageId || '').trim();
-    const chatId = String(event?.chatId || '').trim();
-    const senderId = String(event?.senderId || '').trim();
-    if (!messageId || !chatId) {
-      throw new Error('Inbound WhatsApp event has no stable message identity');
-    }
-    return createHash('sha256')
-      .update(`${chatId}\0${senderId}\0${messageId}`)
-      .digest('hex');
   }
 
   async function exists(directory, name) {
@@ -395,14 +506,20 @@ export function createDurableInboundQueue(
   async function enqueue(event) {
     try {
       return await serialized(async () => {
-        const claimId = claimIdFor(event);
+        const { primary: claimId, compatible } = claimIdsFor(event);
         const name = fileName(claimId);
-        if (
-          await exists(doneDir, name)
-          || await exists(pendingDir, name)
-          || await exists(claimedDir, name)
-        ) {
-          return { status: 'duplicate', claimId };
+        const occupied = await Promise.all(compatible.map(async (compatibleId) => {
+          const compatibleName = fileName(compatibleId);
+          const locations = await Promise.all([
+            exists(doneDir, compatibleName),
+            exists(pendingDir, compatibleName),
+            exists(claimedDir, compatibleName),
+          ]);
+          return locations.some(Boolean) ? compatibleId : null;
+        }));
+        const duplicate = occupied.find(Boolean);
+        if (duplicate) {
+          return { status: 'duplicate', claimId: duplicate };
         }
         await pending.writeData(
           {
@@ -593,6 +710,65 @@ export function createCredentialSaveCoordinator({ log = () => {} } = {}) {
   }
 
   return { queue, flush };
+}
+
+export async function flushCredentialSavesForShutdown(
+  coordinator,
+  saveCreds,
+  { timeoutMs = 5_000, closeSocket = null } = {},
+) {
+  if (closeSocket !== null && typeof closeSocket !== 'function') {
+    throw new TypeError('closeSocket must be a function');
+  }
+  const hasSaveCreds = typeof saveCreds === 'function';
+  if (!hasSaveCreds && closeSocket === null) return;
+  if (hasSaveCreds && (!coordinator || typeof coordinator.flush !== 'function')) {
+    throw new TypeError('credential save coordinator is unavailable');
+  }
+  const boundedTimeout = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : 5_000;
+  let timer;
+  try {
+    await Promise.race([
+      (async () => {
+        if (closeSocket) await closeSocket();
+        if (hasSaveCreds) await coordinator.flush(saveCreds);
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('socket close or credential flush timed out during shutdown')),
+          boundedTimeout,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function drainTasksForShutdown(
+  tasks,
+  { timeoutMs = 4_000 } = {},
+) {
+  const active = Array.from(tasks || []).filter(
+    (task) => task && typeof task.then === 'function',
+  );
+  if (active.length === 0) return true;
+
+  const parsedTimeout = Number(timeoutMs);
+  const boundedTimeout = Number.isFinite(parsedTimeout)
+    ? Math.max(1, parsedTimeout)
+    : 4_000;
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.allSettled(active).then(() => true),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), boundedTimeout);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export const MIME_MAP = {
@@ -1283,12 +1459,16 @@ export function createReconnectScheduler(startFn, {
   retryDelayMs = 5000,
   log = console.log,
   setTimeoutFn = setTimeout,
+  shouldReconnect = () => true,
 } = {}) {
   function scheduleReconnect(delayMs) {
+    if (!shouldReconnect()) return;
     setTimeoutFn(() => {
+      if (!shouldReconnect()) return;
       Promise.resolve()
         .then(startFn)
         .catch((err) => {
+          if (!shouldReconnect()) return;
           log(`⚠️  Reconnect failed (${err?.message || err}). Retrying in ${Math.round(retryDelayMs / 1000)}s...`);
           scheduleReconnect(retryDelayMs);
         });

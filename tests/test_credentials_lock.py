@@ -64,6 +64,52 @@ class LockBudgetTests(unittest.TestCase):
         self.assertGreater(auth.CREDENTIALS_LOCK_TIMEOUT_SECONDS, worst_case)
 
 
+class EndpointValidationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / "codex-auth.json"
+
+    def test_legacy_stored_endpoint_is_rejected_before_use(self):
+        self.path.write_text(
+            json.dumps(
+                {
+                    "tokens": {
+                        "access_token": "access",
+                        "refresh_token": "refresh",
+                    },
+                    "base_url": "https://legacy.example/codex",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(auth.AuthError) as caught:
+            auth.read_credentials(self.path)
+
+        self.assertEqual(caught.exception.code, "codex_auth_base_url_mismatch")
+        self.assertTrue(caught.exception.relogin_required)
+
+    def test_credentials_can_only_be_written_for_the_chatgpt_codex_route(self):
+        credentials = auth.Credentials(
+            access_token="access",
+            refresh_token="refresh",
+            base_url="https://legacy.example/codex",
+            last_refresh="",
+        )
+
+        with self.assertRaises(auth.AuthError):
+            auth.write_credentials(self.path, credentials)
+
+        self.assertFalse(self.path.exists())
+
+    def test_trailing_slash_normalizes_to_the_exact_route(self):
+        self.assertEqual(
+            auth.validated_codex_base_url(auth.DEFAULT_CODEX_BASE_URL + "/"),
+            auth.DEFAULT_CODEX_BASE_URL,
+        )
+
+
 class CrossProcessLockTests(unittest.TestCase):
     def setUp(self):
         # Windows releases a terminated process's file handles a moment late.

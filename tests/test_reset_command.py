@@ -7,10 +7,12 @@ entirely, and clear history that a turn already running is about to write back.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Dict, List
+from unittest import mock
 
 from pilotage.agent import Agent
 from pilotage.channels.whatsapp import RESET_COMMAND, InboundMessage, WhatsAppChannel
@@ -23,6 +25,9 @@ def _event(text: str, chat_id: str = "chat", message_id: str = "m1") -> Dict[str
     return {
         "chatId": chat_id,
         "messageId": message_id,
+        "_pilotageClaimId": hashlib.sha256(
+            f"{chat_id}|{message_id}".encode("utf-8")
+        ).hexdigest(),
         "senderId": "212600000000@s.whatsapp.net",
         "senderNumber": "212600000000",
         "body": text,
@@ -31,7 +36,10 @@ def _event(text: str, chat_id: str = "chat", message_id: str = "m1") -> Dict[str
 
 class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
         config = Config.load()
+        object.__setattr__(config, "state_dir", Path(temporary.name))
         object.__setattr__(config, "allowed_senders", frozenset({"212600000000"}))
         object.__setattr__(config, "text_batch_delay_seconds", 30.0)
         self.answered: List[InboundMessage] = []
@@ -41,9 +49,14 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             self.answered.append(message)
 
         async def on_command(
-            chat_id: str, session_id: str, message_id: str, _invocation
+            chat_id: str,
+            session_id: str,
+            message_id: str,
+            _invocation,
+            claim_id: str,
         ) -> None:
             self.reset_for.append((chat_id, session_id, message_id))
+            self.assertRegex(claim_id, r"^[a-f0-9]{64}$")
 
         self.channel = WhatsAppChannel(config, handler, on_command)
 
@@ -77,14 +90,42 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_half_typed_question_is_dropped_with_it(self):
         """The batch is still waiting; sending it would answer the ended chat."""
-        self.channel._accept(_event("actually, about yesterday", message_id="m1"))
+        old_event = _event("actually, about yesterday", message_id="m1")
+        old_claim = old_event["_pilotageClaimId"]
+        self.channel._accept(old_event)
         self.assertEqual(len(self.channel._pending), 1)
-        self.channel._accept(_event(RESET_COMMAND, message_id="m2"))
+        with mock.patch.object(self.channel, "_ack_later") as acknowledge:
+            self.channel._accept(_event(RESET_COMMAND, message_id="m2"))
+            # The reset boundary is durable before the bridge is allowed to
+            # remove the superseded input from its own queue.
+            self.assertTrue(self.channel._completed_claim_store.contains(old_claim))
+            acknowledge.assert_called_once_with([old_claim])
         await self._settle()
         self.assertEqual(self.channel._pending, {})
         self.assertEqual(self.answered, [])
         # The confirmation quotes the command, not the abandoned question.
         self.assertEqual(self.reset_for, [("chat", "chat", "m2")])
+
+    async def test_failed_durable_reset_boundary_stops_before_ack_or_command(self):
+        self.channel._accept(_event("unfinished", message_id="m1"))
+
+        with (
+            mock.patch.object(
+                self.channel._completed_claim_store,
+                "mark",
+                side_effect=OSError("disk unavailable"),
+            ),
+            mock.patch.object(self.channel, "_ack_later") as acknowledge,
+        ):
+            self.channel._accept(_event(RESET_COMMAND, message_id="m2"))
+            await self._settle()
+
+        self.assertEqual(
+            self.channel.failure,
+            "The WhatsApp completed-message ledger failed.",
+        )
+        acknowledge.assert_not_called()
+        self.assertEqual(self.reset_for, [])
 
 
 class ForgetTests(unittest.IsolatedAsyncioTestCase):

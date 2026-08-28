@@ -28,7 +28,7 @@ from typing import Any, TypeVar
 import httpx
 
 from . import media, profiles, transcription
-from .agent import Agent
+from .agent import Agent, TurnRecoveryRejected
 from .commands import CommandInvocation, execute_command, status_text
 from .channels.whatsapp import (
     ChannelError,
@@ -57,12 +57,14 @@ from .cron.scheduler import CronScheduler
 from .delivery import (
     DeliveryStore,
     claim_deliveries,
+    compute_command_id,
+    compute_obligation_id,
     deliver_final,
     recover_live_deliveries,
     redeliver_claimed_deliveries,
 )
 from .env import candidate_env_files, load_env_files, update_env_values
-from .history import ConversationError, ConversationStore
+from .history import ActiveTurn, ConversationError, ConversationStore
 from .i18n import t
 from .redact import (
     RedactingFormatter,
@@ -138,6 +140,344 @@ async def _deliver_scheduled(
             delivered.error
             or f"{channel_name.title()} rejected the scheduled delivery."
         )
+
+
+async def _deliver_recovered_turn(
+    store: DeliveryStore,
+    channel: Any,
+    active: ActiveTurn,
+    text: str,
+) -> bool:
+    """Ensure a recovered answer belongs to the durable channel ledger."""
+
+    channel_name = active.origin["channel"]
+    chat_id = active.origin["chat_id"]
+    thread_id = active.origin.get("thread_id", "")
+    reply_to = active.origin.get("reply_to", "")
+    message_ref = reply_to
+    if await _exact_delivery_obligation_exists(
+        store,
+        session_key=active.chat_id,
+        message_ref=message_ref,
+        platform=channel_name,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        reply_to=reply_to,
+        content=text,
+    ):
+        return True
+    if channel_name == "telegram":
+        send = lambda: channel.send(
+            chat_id,
+            text,
+            reply_to,
+            thread_id=thread_id,
+        )
+        ledger_send = lambda ledger: channel.send(
+            chat_id,
+            text,
+            reply_to,
+            thread_id=thread_id,
+            delivery_ledger=ledger,
+        )
+    else:
+        send = lambda: channel.send(chat_id, text, reply_to)
+        ledger_send = lambda ledger: channel.send(
+            chat_id,
+            text,
+            reply_to,
+            delivery_ledger=ledger,
+        )
+    await deliver_final(
+        store,
+        session_key=active.chat_id,
+        message_ref=message_ref,
+        platform=channel_name,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        content=text,
+        reply_to=reply_to,
+        send=send,
+        ledger_send=ledger_send,
+    )
+    return await _exact_delivery_obligation_exists(
+        store,
+        session_key=active.chat_id,
+        message_ref=message_ref,
+        platform=channel_name,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        reply_to=reply_to,
+        content=text,
+    )
+
+
+async def _exact_delivery_obligation_exists(
+    store: DeliveryStore,
+    *,
+    session_key: str,
+    message_ref: str,
+    platform: str,
+    chat_id: str,
+    thread_id: str,
+    reply_to: str,
+    content: str,
+) -> bool:
+    obligation_id = compute_obligation_id(session_key, message_ref, content)
+    return bool(
+        await asyncio.to_thread(
+            store.exact_obligation_exists,
+            obligation_id,
+            session_key=session_key,
+            platform=platform,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to,
+            content=content,
+        )
+    )
+
+
+async def _durable_command_result(
+    store: DeliveryStore,
+    *,
+    platform: str,
+    claim_id: str,
+    session_key: str,
+    invocation: CommandInvocation,
+    uncertain_reply: str,
+    execute: Callable[[], Any],
+) -> str:
+    """Execute a claimed command at most once and persist its exact response."""
+
+    command_id = compute_command_id(platform, claim_id)
+    outcome = await asyncio.to_thread(
+        store.begin_command,
+        command_id=command_id,
+        platform=platform,
+        claim_id=claim_id,
+        session_key=session_key,
+        command_name=invocation.command.name,
+        arguments=invocation.arguments,
+    )
+    if outcome.completed:
+        return outcome.response
+    response = str(await execute()) if outcome.execute else uncertain_reply
+    await asyncio.to_thread(store.complete_command, command_id, response)
+    return response
+
+
+async def _turn_has_recoverable_checkpoint(
+    store: ConversationStore,
+    chat_id: str,
+) -> bool:
+    try:
+        active_turns = await asyncio.to_thread(store.list_active_turns)
+    except ConversationError:
+        # If persistence cannot prove that no recoverable answer remains, a
+        # temporary fallback must not be acknowledged as the final answer.
+        return True
+    return any(
+        active.chat_id == chat_id
+        and active.phase in {"started", "tool_completed", "answer_ready"}
+        for active in active_turns
+    )
+
+
+def _fail_channel(channel: Any, message: str) -> None:
+    """Stop intake when a delivery/turn durability fence cannot be proven."""
+
+    fail = getattr(channel, "_fail", None)
+    if callable(fail):
+        fail(message)
+
+
+async def _abort_startup_channels(channels: list[Any]) -> None:
+    """Stop startup-held transports without releasing accepted inbound work."""
+
+    for channel in reversed(channels):
+        try:
+            abort_startup = getattr(channel, "abort_startup", None)
+            if callable(abort_startup):
+                await abort_startup()
+            else:
+                await channel.stop(
+                    drain_timeout_seconds=0.0,
+                    release_held_inbound=False,
+                )
+        except Exception:
+            logger.exception("Aborting a channel after startup failure failed")
+
+
+async def _recover_interrupted_turns(
+    active_turns: list[ActiveTurn],
+    *,
+    agents: dict[str, Agent],
+    channels: dict[str, Any],
+    conversation_store: ConversationStore,
+    delivery_store: DeliveryStore,
+    fenced_turn_sessions: set[str],
+) -> int:
+    """Resume only checkpoints whose local side effects are already known."""
+
+    recovered = 0
+    for active in active_turns:
+        channel = None
+        try:
+            channel_name = active.origin["channel"]
+            channel = channels[channel_name]
+            agent = agents[channel_name]
+            chat_id = active.origin["chat_id"]
+            thread_id = active.origin.get("thread_id", "")
+            reply_to = active.origin.get("reply_to", "")
+
+            async def notice(text: str) -> None:
+                if channel_name == "telegram":
+                    await channel.send(
+                        chat_id,
+                        text,
+                        reply_to,
+                        thread_id=thread_id,
+                        deliver_media=False,
+                    )
+                else:
+                    await channel.send(
+                        chat_id,
+                        text,
+                        reply_to,
+                        deliver_media=False,
+                    )
+
+            async def approval_notice(text: str):
+                if channel_name == "telegram":
+                    return await channel.send(
+                        chat_id,
+                        text,
+                        reply_to,
+                        thread_id=thread_id,
+                        deliver_media=False,
+                    )
+                return await channel.send(
+                    chat_id,
+                    text,
+                    reply_to,
+                    deliver_media=False,
+                )
+
+            try:
+                result = await agent.recover_turn(
+                    active,
+                    on_notice=notice,
+                    approval_notify=approval_notice,
+                    defer_completion=True,
+                )
+            except TurnRecoveryRejected:
+                # The checkpoint is durable but cannot be interpreted safely.
+                # Fence only this session, retire its accepted input, and keep
+                # /new reachable. Persistence or delivery failures still escape
+                # to the channel-wide fail-closed boundary below.
+                await asyncio.to_thread(
+                    conversation_store.mark_turn_unknown,
+                    active,
+                )
+                fenced_turn_sessions.add(active.chat_id)
+                await _retire_unknown_turn_claims(
+                    [active],
+                    channels=channels,
+                    delivery_store=delivery_store,
+                    notices={
+                        channel_name: t(
+                            "runtime.interrupted_unknown",
+                            agent._config.language,
+                        )
+                    },
+                )
+                logger.warning(
+                    "Rejected interrupted turn for %s; fenced until /new",
+                    identity_pseudonym(active.chat_id, "session"),
+                    exc_info=True,
+                )
+                continue
+            text = result.text or t("runtime.failure", agent._config.language)
+            if not await _deliver_recovered_turn(
+                delivery_store,
+                channel,
+                active,
+                text,
+            ):
+                logger.error(
+                    "Recovered response remains pending for %s",
+                    identity_pseudonym(active.chat_id, "session"),
+                )
+                _fail_channel(
+                    channel,
+                    "The recovered-response delivery ledger failed.",
+                )
+                continue
+            if active.claim_ids:
+                await asyncio.to_thread(
+                    channel.persist_completed_claims,
+                    active.claim_ids,
+                )
+            await agent.finalize_ready_turn(active.chat_id)
+            recovered += 1
+        except Exception:
+            if channel is not None:
+                _fail_channel(
+                    channel,
+                    "Interrupted conversation recovery failed closed.",
+                )
+            # The checkpoint remains durable and the channel stays closed until
+            # a later restart can complete this recovery boundary safely.
+            logger.exception(
+                "Could not resume interrupted turn for %s",
+                identity_pseudonym(active.chat_id, "session"),
+            )
+    return recovered
+
+
+async def _retire_unknown_turn_claims(
+    active_turns: list[ActiveTurn],
+    *,
+    channels: dict[str, Any],
+    delivery_store: DeliveryStore,
+    notices: dict[str, str],
+) -> int:
+    """Warn durably, then retire replayable input without clearing its fence."""
+
+    retired = 0
+    for active in active_turns:
+        channel_name = active.origin["channel"]
+        channel = channels[channel_name]
+        notice = notices[channel_name]
+        try:
+            if not active.claim_ids:
+                raise ConversationError(
+                    "The interrupted tool turn has no durable inbound claim"
+                )
+            if not await _deliver_recovered_turn(
+                delivery_store,
+                channel,
+                active,
+                notice,
+            ):
+                raise ConversationError(
+                    "The interrupted-tool warning was not durably recorded"
+                )
+            await asyncio.to_thread(
+                channel.persist_completed_claims,
+                active.claim_ids,
+            )
+            # The active turn deliberately remains ``unknown``. Only /new may
+            # clear a tool outcome whose side effects cannot be proven.
+            retired += 1
+        except Exception:
+            _fail_channel(
+                channel,
+                "The interrupted-tool safety notice failed closed.",
+            )
+            raise
+    return retired
 
 
 async def _recover_live_final_responses(
@@ -762,11 +1102,94 @@ async def _run_enabled_channels(
     delivery_store = DeliveryStore(cron_config.state_dir / "delivery.db")
     try:
         await asyncio.to_thread(delivery_store.verify_writable)
+        active_turns = await asyncio.to_thread(
+            conversation_store.list_active_turns
+        )
     except (OSError, sqlite3.Error) as exc:
         print(f"Delivery database is not writable: {exc}", file=sys.stderr)
         return 1
+    except ConversationError as exc:
+        print(f"Conversation database is not recoverable: {exc}", file=sys.stderr)
+        return 1
+
+    recoverable_turns: list[ActiveTurn] = []
+    unknown_turns: list[ActiveTurn] = []
+    fenced_turn_sessions: set[str] = set()
+    for active in active_turns:
+        unknown_outcome = active.phase == "unknown"
+        if active.phase == "tool_requested":
+            try:
+                await asyncio.to_thread(
+                    conversation_store.mark_turn_unknown,
+                    active,
+                )
+            except ConversationError as exc:
+                print(f"Conversation recovery failed closed: {exc}", file=sys.stderr)
+                return 1
+            logger.error(
+                "Interrupted tool outcome is unknown for %s; /new is required after verification",
+                identity_pseudonym(active.chat_id, "session"),
+            )
+            unknown_outcome = True
+        elif active.phase == "unknown":
+            logger.error(
+                "Unresolved interrupted tool outcome remains for %s",
+                identity_pseudonym(active.chat_id, "session"),
+            )
+        if unknown_outcome:
+            fenced_turn_sessions.add(active.chat_id)
+        channel_name = active.origin.get("channel", "")
+        chat_id = active.origin.get("chat_id", "")
+        reply_to = active.origin.get("reply_to", "")
+        if (
+            channel_name not in {"whatsapp", "telegram"}
+            or not chat_id
+            or not reply_to
+            or not active.claim_ids
+        ):
+            if active.phase == "answer_ready":
+                fenced_turn_sessions.add(active.chat_id)
+                logger.error(
+                    "Completed interrupted conversation %s has no verified "
+                    "recovery identity; its exact answer remains fenced until /new",
+                    identity_pseudonym(active.chat_id, "session"),
+                )
+                continue
+            if not unknown_outcome:
+                try:
+                    await asyncio.to_thread(
+                        conversation_store.mark_turn_unknown,
+                        active,
+                    )
+                except ConversationError as exc:
+                    print(f"Conversation recovery failed closed: {exc}", file=sys.stderr)
+                    return 1
+                fenced_turn_sessions.add(active.chat_id)
+            logger.error(
+                "Interrupted conversation %s has no verified recovery identity; "
+                "it is fenced until /new",
+                identity_pseudonym(active.chat_id, "session"),
+            )
+            continue
+        if channel_name == "whatsapp" and not whatsapp_enabled:
+            logger.error(
+                "Interrupted WhatsApp conversation %s remains fenced while the channel is disabled",
+                identity_pseudonym(active.chat_id, "session"),
+            )
+            continue
+        if channel_name == "telegram" and not telegram_enabled:
+            logger.error(
+                "Interrupted Telegram conversation %s remains fenced while the channel is disabled",
+                identity_pseudonym(active.chat_id, "session"),
+            )
+            continue
+        if unknown_outcome:
+            unknown_turns.append(active)
+        else:
+            recoverable_turns.append(active)
     channels = {}
     agents: list[Agent] = []
+    agents_by_channel: dict[str, Agent] = {}
 
     async def scheduled_delivery(
         origin: dict[str, str], text: str, message_ref: str
@@ -803,6 +1226,9 @@ async def _run_enabled_channels(
     if whatsapp_enabled:
         whatsapp_failure_reply = t("runtime.failure", config.language)
         whatsapp_reset_reply = t("runtime.reset", config.language)
+        whatsapp_interrupted_reply = t(
+            "runtime.interrupted_unknown", config.language
+        )
         whatsapp_agent = Agent(
             config,
             store=conversation_store,
@@ -810,9 +1236,19 @@ async def _run_enabled_channels(
             cron_wake=cron_wake,
         )
         agents.append(whatsapp_agent)
+        agents_by_channel["whatsapp"] = whatsapp_agent
 
         async def handle_whatsapp(message: InboundMessage) -> None:
             quoted = message.message_ids[-1] if message.message_ids else ""
+            deferred_turn = False
+            if not quoted:
+                _fail_channel(
+                    whatsapp_channel,
+                    "WhatsApp accepted an inbound message without a stable identity.",
+                )
+                raise ChannelError(
+                    "WhatsApp inbound message has no stable delivery identity."
+                )
 
             async def notice(text: str) -> None:
                 await whatsapp_channel.send(message.chat_id, text, quoted)
@@ -822,45 +1258,77 @@ async def _run_enabled_channels(
                     message.chat_id, text, quoted
                 )
 
-            try:
-                async with whatsapp_channel.typing(message.chat_id):
-                    enriched_text, transcripts = await transcription.enrich_message(
-                        message.text,
-                        message.attachments,
-                        config.settings,
-                    )
-                    logger.info(
-                        "WhatsApp inbound (%d chars, %d attachments)",
-                        len(enriched_text),
-                        len(message.attachments),
-                    )
-                    if transcripts and transcription.transcript_echo_enabled(
-                        config.settings
-                    ):
-                        for transcript in transcripts:
-                            await whatsapp_channel.send(
-                                message.chat_id,
-                                f'\U0001f399\ufe0f "{transcript}"',
-                                quoted,
-                                deliver_media=False,
-                            )
-                    answer = await whatsapp_agent.respond(
+            if message.session_id in fenced_turn_sessions:
+                # Do not let ordinary FIFO input behind an unknown tool outcome
+                # become poison. It receives a durable reset instruction without
+                # touching the model; only /new may remove the conversation fence.
+                answer = whatsapp_interrupted_reply
+            else:
+                try:
+                    async with whatsapp_channel.typing(message.chat_id):
+                        enriched_text, transcripts = await transcription.enrich_message(
+                            message.text,
+                            message.attachments,
+                            config.settings,
+                        )
+                        logger.info(
+                            "WhatsApp inbound (%d chars, %d attachments)",
+                            len(enriched_text),
+                            len(message.attachments),
+                        )
+                        if transcripts and transcription.transcript_echo_enabled(
+                            config.settings
+                        ):
+                            for transcript in transcripts:
+                                await whatsapp_channel.send(
+                                    message.chat_id,
+                                    f'\U0001f399\ufe0f "{transcript}"',
+                                    quoted,
+                                    deliver_media=False,
+                                )
+                        answer = await whatsapp_agent.respond(
+                            message.session_id,
+                            enriched_text,
+                            message.attachments,
+                            on_notice=notice,
+                            origin={
+                                "channel": "whatsapp",
+                                "chat_id": message.chat_id,
+                                "reply_to": quoted,
+                            },
+                            approval_notify=approval_notice,
+                            claim_ids=message.claim_ids,
+                            defer_completion=True,
+                        )
+                        deferred_turn = True
+                except ConversationError:
+                    recoverable = await _turn_has_recoverable_checkpoint(
+                        conversation_store,
                         message.session_id,
-                        enriched_text,
-                        message.attachments,
-                        on_notice=notice,
-                        origin={
-                            "channel": "whatsapp",
-                            "chat_id": message.chat_id,
-                        },
-                        approval_notify=approval_notice,
                     )
-            except ConversationError:
-                logger.exception("WhatsApp conversation persistence failed")
-                answer = t("runtime.storage_failure", config.language)
-            except Exception:
-                logger.exception("The WhatsApp model call failed")
-                answer = whatsapp_failure_reply
+                    _fail_channel(
+                        whatsapp_channel,
+                        (
+                            "A recoverable WhatsApp turn failed before delivery."
+                            if recoverable
+                            else "A WhatsApp turn failed before a durable reply was chosen."
+                        ),
+                    )
+                    raise
+                except Exception:
+                    recoverable = await _turn_has_recoverable_checkpoint(
+                        conversation_store,
+                        message.session_id,
+                    )
+                    _fail_channel(
+                        whatsapp_channel,
+                        (
+                            "A recoverable WhatsApp turn failed before delivery."
+                            if recoverable
+                            else "A WhatsApp turn failed before a durable reply was chosen."
+                        ),
+                    )
+                    raise
             final_text = answer or whatsapp_failure_reply
             delivered = await deliver_final(
                 delivery_store,
@@ -888,29 +1356,113 @@ async def _run_enabled_channels(
                     "WhatsApp final response remains pending for %s",
                     identity_pseudonym(message.chat_id, "wa"),
                 )
+            try:
+                obligation_exists = await _exact_delivery_obligation_exists(
+                    delivery_store,
+                    session_key=message.session_id,
+                    message_ref=quoted,
+                    platform="whatsapp",
+                    chat_id=message.chat_id,
+                    thread_id="",
+                    reply_to=quoted,
+                    content=final_text,
+                )
+                if not obligation_exists:
+                    raise ConversationError(
+                        "The WhatsApp final-response durability fence failed"
+                    )
+                if deferred_turn:
+                    if message.claim_ids:
+                        await asyncio.to_thread(
+                            whatsapp_channel.persist_completed_claims,
+                            message.claim_ids,
+                        )
+                    await whatsapp_agent.finalize_ready_turn(message.session_id)
+            except Exception:
+                _fail_channel(
+                    whatsapp_channel,
+                    "The WhatsApp final-response durability fence failed.",
+                )
+                raise
 
         async def manage_whatsapp(
             chat_id: str,
             session_id: str,
             message_id: str,
             invocation: CommandInvocation,
+            claim_id: str,
         ) -> None:
+            async def execute_once() -> str:
+                try:
+                    answer = await execute_command(
+                        invocation,
+                        agent=whatsapp_agent,
+                        config=config,
+                        profile_name=profile_name,
+                        session_id=session_id,
+                        reset_reply=whatsapp_reset_reply,
+                    )
+                except ConversationError:
+                    logger.exception("WhatsApp conversation reset persistence failed")
+                    return t("runtime.storage_failure", config.language)
+                except Exception:
+                    logger.exception("WhatsApp management command failed")
+                    return whatsapp_failure_reply
+                if invocation.command.name == "new" and not invocation.arguments:
+                    fenced_turn_sessions.discard(session_id)
+                return answer
+
             try:
-                answer = await execute_command(
-                    invocation,
-                    agent=whatsapp_agent,
-                    config=config,
-                    profile_name=profile_name,
-                    session_id=session_id,
-                    reset_reply=whatsapp_reset_reply,
+                answer = await _durable_command_result(
+                    delivery_store,
+                    platform="whatsapp",
+                    claim_id=claim_id,
+                    session_key=session_id,
+                    invocation=invocation,
+                    uncertain_reply=t("runtime.storage_failure", config.language),
+                    execute=execute_once,
                 )
-            except ConversationError:
-                logger.exception("WhatsApp conversation reset persistence failed")
-                answer = t("runtime.storage_failure", config.language)
+                delivered = await deliver_final(
+                    delivery_store,
+                    session_key=session_id,
+                    message_ref=claim_id,
+                    platform="whatsapp",
+                    chat_id=chat_id,
+                    thread_id="",
+                    content=answer,
+                    reply_to=message_id,
+                    send=lambda: whatsapp_channel.send(chat_id, answer, message_id),
+                    ledger_send=lambda ledger: whatsapp_channel.send(
+                        chat_id,
+                        answer,
+                        message_id,
+                        delivery_ledger=ledger,
+                    ),
+                )
+                if not delivered:
+                    logger.error(
+                        "WhatsApp command response remains pending for %s",
+                        identity_pseudonym(chat_id, "wa"),
+                    )
+                if not await _exact_delivery_obligation_exists(
+                    delivery_store,
+                    session_key=session_id,
+                    message_ref=claim_id,
+                    platform="whatsapp",
+                    chat_id=chat_id,
+                    thread_id="",
+                    reply_to=message_id,
+                    content=answer,
+                ):
+                    raise ConversationError(
+                        "The WhatsApp command-response durability fence failed"
+                    )
             except Exception:
-                logger.exception("WhatsApp management command failed")
-                answer = whatsapp_failure_reply
-            await whatsapp_channel.send(chat_id, answer, message_id)
+                _fail_channel(
+                    whatsapp_channel,
+                    "The WhatsApp command-response durability fence failed.",
+                )
+                raise
 
         whatsapp_channel = WhatsAppChannel(
             config,
@@ -924,6 +1476,9 @@ async def _run_enabled_channels(
             "runtime.failure", telegram_config.language
         )
         telegram_reset_reply = t("runtime.reset", telegram_config.language)
+        telegram_interrupted_reply = t(
+            "runtime.interrupted_unknown", telegram_config.language
+        )
         telegram_agent = Agent(
             telegram_config,
             store=conversation_store,
@@ -931,9 +1486,19 @@ async def _run_enabled_channels(
             cron_wake=cron_wake,
         )
         agents.append(telegram_agent)
+        agents_by_channel["telegram"] = telegram_agent
 
         async def handle_telegram(message: TelegramInboundMessage) -> None:
             quoted = message.message_ids[-1] if message.message_ids else ""
+            deferred_turn = False
+            if not quoted or not message.claim_ids:
+                _fail_channel(
+                    telegram_channel,
+                    "Telegram accepted an inbound message without a durable identity.",
+                )
+                raise TelegramChannelError(
+                    "Telegram inbound message has no durable delivery identity."
+                )
 
             async def notice(text: str) -> None:
                 await telegram_channel.send(
@@ -951,54 +1516,81 @@ async def _run_enabled_channels(
                     thread_id=message.thread_id,
                 )
 
-            try:
-                async with telegram_channel.typing(
-                    message.chat_id, message.thread_id
-                ):
-                    enriched_text, transcripts = await transcription.enrich_message(
-                        message.text,
-                        message.attachments,
-                        telegram_config.settings,
-                    )
-                    logger.info(
-                        "Telegram inbound (%d chars, %d attachments)",
-                        len(enriched_text),
-                        len(message.attachments),
-                    )
-                    if transcripts and transcription.transcript_echo_enabled(
-                        telegram_config.settings
+            if message.session_id in fenced_turn_sessions:
+                answer = telegram_interrupted_reply
+            else:
+                try:
+                    async with telegram_channel.typing(
+                        message.chat_id, message.thread_id
                     ):
-                        for transcript in transcripts:
-                            await telegram_channel.send(
-                                message.chat_id,
-                                f'\U0001f399\ufe0f "{transcript}"',
-                                quoted,
-                                thread_id=message.thread_id,
-                                deliver_media=False,
-                            )
-                    origin = {
-                        "channel": "telegram",
-                        "chat_id": message.chat_id,
-                    }
-                    if message.thread_id:
-                        origin["thread_id"] = message.thread_id
-                    answer = await telegram_agent.respond(
+                        enriched_text, transcripts = await transcription.enrich_message(
+                            message.text,
+                            message.attachments,
+                            telegram_config.settings,
+                        )
+                        logger.info(
+                            "Telegram inbound (%d chars, %d attachments)",
+                            len(enriched_text),
+                            len(message.attachments),
+                        )
+                        if transcripts and transcription.transcript_echo_enabled(
+                            telegram_config.settings
+                        ):
+                            for transcript in transcripts:
+                                await telegram_channel.send(
+                                    message.chat_id,
+                                    f'\U0001f399\ufe0f "{transcript}"',
+                                    quoted,
+                                    thread_id=message.thread_id,
+                                    deliver_media=False,
+                                )
+                        origin = {
+                            "channel": "telegram",
+                            "chat_id": message.chat_id,
+                        }
+                        if message.thread_id:
+                            origin["thread_id"] = message.thread_id
+                        if quoted:
+                            origin["reply_to"] = quoted
+                        answer = await telegram_agent.respond(
+                            message.session_id,
+                            enriched_text,
+                            message.attachments,
+                            on_notice=notice,
+                            origin=origin,
+                            approval_notify=approval_notice,
+                            claim_ids=message.claim_ids,
+                            defer_completion=True,
+                        )
+                        deferred_turn = True
+                except ConversationError:
+                    recoverable = await _turn_has_recoverable_checkpoint(
+                        conversation_store,
                         message.session_id,
-                        enriched_text,
-                        message.attachments,
-                        on_notice=notice,
-                        origin=origin,
-                        approval_notify=approval_notice,
                     )
-            except ConversationError:
-                logger.exception("Telegram conversation persistence failed")
-                answer = t(
-                    "runtime.storage_failure",
-                    telegram_config.language,
-                )
-            except Exception:
-                logger.exception("The Telegram model call failed")
-                answer = telegram_failure_reply
+                    _fail_channel(
+                        telegram_channel,
+                        (
+                            "A recoverable Telegram turn failed before delivery."
+                            if recoverable
+                            else "A Telegram turn failed before a durable reply was chosen."
+                        ),
+                    )
+                    raise
+                except Exception:
+                    recoverable = await _turn_has_recoverable_checkpoint(
+                        conversation_store,
+                        message.session_id,
+                    )
+                    _fail_channel(
+                        telegram_channel,
+                        (
+                            "A recoverable Telegram turn failed before delivery."
+                            if recoverable
+                            else "A Telegram turn failed before a durable reply was chosen."
+                        ),
+                    )
+                    raise
             final_text = answer or telegram_failure_reply
             delivered = await deliver_final(
                 delivery_store,
@@ -1028,6 +1620,34 @@ async def _run_enabled_channels(
                     "Telegram final response remains pending for %s",
                     identity_pseudonym(message.chat_id, "tg"),
                 )
+            try:
+                obligation_exists = await _exact_delivery_obligation_exists(
+                    delivery_store,
+                    session_key=message.session_id,
+                    message_ref=quoted,
+                    platform="telegram",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to=quoted,
+                    content=final_text,
+                )
+                if not obligation_exists:
+                    raise ConversationError(
+                        "The Telegram final-response durability fence failed"
+                    )
+                if deferred_turn:
+                    if message.claim_ids:
+                        await asyncio.to_thread(
+                            telegram_channel.persist_completed_claims,
+                            message.claim_ids,
+                        )
+                    await telegram_agent.finalize_ready_turn(message.session_id)
+            except Exception:
+                _fail_channel(
+                    telegram_channel,
+                    "The Telegram final-response durability fence failed.",
+                )
+                raise
 
         async def manage_telegram(
             chat_id: str,
@@ -1035,31 +1655,91 @@ async def _run_enabled_channels(
             message_id: str,
             thread_id: str,
             invocation: CommandInvocation,
+            claim_id: str,
         ) -> None:
+            async def execute_once() -> str:
+                try:
+                    answer = await execute_command(
+                        invocation,
+                        agent=telegram_agent,
+                        config=telegram_config,
+                        profile_name=profile_name,
+                        session_id=session_id,
+                        reset_reply=telegram_reset_reply,
+                    )
+                except ConversationError:
+                    logger.exception("Telegram conversation reset persistence failed")
+                    return t(
+                        "runtime.storage_failure",
+                        telegram_config.language,
+                    )
+                except Exception:
+                    logger.exception("Telegram management command failed")
+                    return telegram_failure_reply
+                if invocation.command.name == "new" and not invocation.arguments:
+                    fenced_turn_sessions.discard(session_id)
+                return answer
+
             try:
-                answer = await execute_command(
-                    invocation,
-                    agent=telegram_agent,
-                    config=telegram_config,
-                    profile_name=profile_name,
-                    session_id=session_id,
-                    reset_reply=telegram_reset_reply,
+                answer = await _durable_command_result(
+                    delivery_store,
+                    platform="telegram",
+                    claim_id=claim_id,
+                    session_key=session_id,
+                    invocation=invocation,
+                    uncertain_reply=t(
+                        "runtime.storage_failure",
+                        telegram_config.language,
+                    ),
+                    execute=execute_once,
                 )
-            except ConversationError:
-                logger.exception("Telegram conversation reset persistence failed")
-                answer = t(
-                    "runtime.storage_failure",
-                    telegram_config.language,
+                delivered = await deliver_final(
+                    delivery_store,
+                    session_key=session_id,
+                    message_ref=claim_id,
+                    platform="telegram",
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    content=answer,
+                    reply_to=message_id,
+                    send=lambda: telegram_channel.send(
+                        chat_id,
+                        answer,
+                        message_id,
+                        thread_id=thread_id,
+                    ),
+                    ledger_send=lambda ledger: telegram_channel.send(
+                        chat_id,
+                        answer,
+                        message_id,
+                        thread_id=thread_id,
+                        delivery_ledger=ledger,
+                    ),
                 )
+                if not delivered:
+                    logger.error(
+                        "Telegram command response remains pending for %s",
+                        identity_pseudonym(chat_id, "tg"),
+                    )
+                if not await _exact_delivery_obligation_exists(
+                    delivery_store,
+                    session_key=session_id,
+                    message_ref=claim_id,
+                    platform="telegram",
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    reply_to=message_id,
+                    content=answer,
+                ):
+                    raise ConversationError(
+                        "The Telegram command-response durability fence failed"
+                    )
             except Exception:
-                logger.exception("Telegram management command failed")
-                answer = telegram_failure_reply
-            await telegram_channel.send(
-                chat_id,
-                answer,
-                message_id,
-                thread_id=thread_id,
-            )
+                _fail_channel(
+                    telegram_channel,
+                    "The Telegram command-response durability fence failed.",
+                )
+                raise
 
         telegram_channel = TelegramChannel(
             telegram_config,
@@ -1087,6 +1767,7 @@ async def _run_enabled_channels(
     ]
     started = []
     recovery_task: asyncio.Task[None] | None = None
+    active_recovery_task: asyncio.Task[int] | None = None
     try:
         for running_channel in start_order:
             hold_inbound = getattr(running_channel, "hold_inbound", None)
@@ -1095,15 +1776,17 @@ async def _run_enabled_channels(
         for running_channel in start_order:
             await running_channel.start()
             started.append(running_channel)
-    except (ChannelError, TelegramChannelError) as exc:
-        deadline = asyncio.get_running_loop().time() + SHUTDOWN_DRAIN_SECONDS
-        for running_channel in reversed(started):
-            await running_channel.stop(
-                drain_timeout_seconds=max(
-                    0.0,
-                    deadline - asyncio.get_running_loop().time(),
-                )
+    except asyncio.CancelledError:
+        await asyncio.shield(_abort_startup_channels(started))
+        await asyncio.shield(
+            asyncio.gather(
+                *(agent.close() for agent in agents),
+                return_exceptions=True,
             )
+        )
+        raise
+    except (ChannelError, TelegramChannelError) as exc:
+        await _abort_startup_channels(started)
         await asyncio.gather(
             *(agent.close() for agent in agents),
             return_exceptions=True,
@@ -1111,7 +1794,20 @@ async def _run_enabled_channels(
         print(f"{exc}", file=sys.stderr)
         return 1
 
-    claimed_rows = await claim_deliveries(delivery_store, set(channels))
+    try:
+        claimed_rows = await claim_deliveries(delivery_store, set(channels))
+    except Exception as exc:
+        logger.exception("Startup final-response recovery could not inspect its ledger")
+        await _abort_startup_channels(started)
+        await asyncio.gather(
+            *(agent.close() for agent in agents),
+            return_exceptions=True,
+        )
+        print(
+            f"Delivery recovery could not start safely: {exc}",
+            file=sys.stderr,
+        )
+        return 1
     if claimed_rows:
         async def recover_final_responses() -> None:
             recovered = await redeliver_claimed_deliveries(
@@ -1141,12 +1837,107 @@ async def _run_enabled_channels(
         else:
             await recovery_task
 
-    for running_channel in started:
-        release_inbound = getattr(running_channel, "release_inbound", None)
-        if callable(release_inbound):
-            released = release_inbound()
-            if inspect.isawaitable(released):
-                await released
+    if unknown_turns:
+        try:
+            retired = await _retire_unknown_turn_claims(
+                unknown_turns,
+                channels=channels,
+                delivery_store=delivery_store,
+                notices={
+                    "whatsapp": t(
+                        "runtime.interrupted_unknown",
+                        config.language,
+                    ),
+                    "telegram": t(
+                        "runtime.interrupted_unknown",
+                        telegram_config.language,
+                    ),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Interrupted tool-turn startup quarantine failed"
+            )
+            if recovery_task is not None and not recovery_task.done():
+                recovery_task.cancel()
+            if recovery_task is not None:
+                await asyncio.gather(recovery_task, return_exceptions=True)
+            await _abort_startup_channels(started)
+            await asyncio.gather(
+                *(agent.close() for agent in agents),
+                return_exceptions=True,
+            )
+            print(
+                "Interrupted conversation recovery could not finish safely.",
+                file=sys.stderr,
+            )
+            return 1
+        if retired:
+            logger.info(
+                "Retired %d interrupted tool-turn inbound claim(s)",
+                retired,
+            )
+
+    if recoverable_turns:
+        active_recovery_task = asyncio.create_task(
+            _recover_interrupted_turns(
+                recoverable_turns,
+                agents=agents_by_channel,
+                channels=channels,
+                conversation_store=conversation_store,
+                delivery_store=delivery_store,
+                fenced_turn_sessions=fenced_turn_sessions,
+            ),
+            name="pilotage-conversation-recovery",
+        )
+        # The delivery ledger is now known safe and the recovery task exists to
+        # receive fresh approval control. Approval messages already held before
+        # this point stay queued until the ordinary full release below.
+        for running_channel in started:
+            enable_approvals = getattr(
+                running_channel,
+                "enable_startup_approvals",
+                None,
+            )
+            if callable(enable_approvals):
+                enabled = enable_approvals()
+                if inspect.isawaitable(enabled):
+                    await enabled
+        # A recovered answer and a replayed inbound message must never race for
+        # the same chat. Crash recovery is bounded by the ordinary model and
+        # delivery timeouts, so keep startup intake held until its fence closes.
+        recovered = await active_recovery_task
+        if recovered:
+            logger.info("Resumed %d interrupted conversation(s)", recovered)
+
+    try:
+        for running_channel in started:
+            if running_channel.failure:
+                continue
+            release_inbound = getattr(running_channel, "release_inbound", None)
+            if callable(release_inbound):
+                released = release_inbound()
+                if inspect.isawaitable(released):
+                    await released
+    except (ChannelError, TelegramChannelError) as exc:
+        if recovery_task is not None and not recovery_task.done():
+            recovery_task.cancel()
+        if recovery_task is not None:
+            await asyncio.gather(recovery_task, return_exceptions=True)
+        deadline = asyncio.get_running_loop().time() + SHUTDOWN_DRAIN_SECONDS
+        for running_channel in reversed(started):
+            await running_channel.stop(
+                drain_timeout_seconds=max(
+                    0.0,
+                    deadline - asyncio.get_running_loop().time(),
+                )
+            )
+        await asyncio.gather(
+            *(agent.close() for agent in agents),
+            return_exceptions=True,
+        )
+        print(f"{exc}", file=sys.stderr)
+        return 1
 
     if scheduler is not None:
         try:
@@ -1154,9 +1945,16 @@ async def _run_enabled_channels(
         except (CronError, OSError) as exc:
             if recovery_task is not None and not recovery_task.done():
                 recovery_task.cancel()
+            if active_recovery_task is not None and not active_recovery_task.done():
+                active_recovery_task.cancel()
             if recovery_task is not None:
                 await asyncio.gather(
                     recovery_task,
+                    return_exceptions=True,
+                )
+            if active_recovery_task is not None:
+                await asyncio.gather(
+                    active_recovery_task,
                     return_exceptions=True,
                 )
             deadline = asyncio.get_running_loop().time() + SHUTDOWN_DRAIN_SECONDS
@@ -1256,6 +2054,9 @@ async def _run_enabled_channels(
         if recovery_task is not None:
             recovery_task.cancel()
             await asyncio.gather(recovery_task, return_exceptions=True)
+        if active_recovery_task is not None:
+            active_recovery_task.cancel()
+            await asyncio.gather(active_recovery_task, return_exceptions=True)
 
         # Refuse new work first. Accepted batches are flushed now, so channel
         # turns can finish while an in-flight cron job uses the same transport.

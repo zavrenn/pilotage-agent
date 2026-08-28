@@ -20,7 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
-from openai import APIStatusError, AsyncOpenAI
+import httpx
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAIError
 
 from . import media
 from .approvals import ApprovalManager
@@ -33,7 +34,7 @@ from .codex import (
 from .config import Config
 from .context_files import build_context_files_prompt
 from .cron.jobs import CronStore, timezone_for_name
-from .history import ConversationStore, session_workspace_path
+from .history import ActiveTurn, ConversationError, ConversationStore, session_workspace_path
 from .i18n import DEFAULT_LANGUAGE, t
 from .redact import identity_pseudonym
 from .tools.memory import MemoryStore
@@ -43,6 +44,7 @@ from .tools import (
     build_registry,
     build_skills_prompt,
     enabled_groups,
+    frame_untrusted_tool_result,
     responses_tool_output,
     run_calls,
 )
@@ -122,6 +124,10 @@ class TurnResult:
     terminal_completed: bool = False
 
 
+class TurnRecoveryRejected(ConversationError):
+    """A durable interrupted turn is semantically unsafe to resume."""
+
+
 def _retire_tool_result_images(items: List[Dict[str, Any]]) -> None:
     """Keep one follow-up turn, then replace old tool images with their text."""
     for item in items:
@@ -185,6 +191,12 @@ class Agent:
         # One turn at a time per chat, so two fast messages cannot interleave
         # their history writes.
         self._chat_locks: Dict[str, asyncio.Lock] = {}
+        # Channel turns keep their exact answer fenced until the delivery
+        # obligation (and WhatsApp input identity) are durable.
+        self._ready_turns: Dict[
+            str, tuple[str, List[Dict[str, Any]], TurnResult]
+        ] = {}
+        self._completion_fences: Dict[str, asyncio.Event] = {}
         # What this build can do, and what this agent is allowed to do with it.
         # Decided once, at startup: a tool list that changed under a running
         # conversation would invalidate its prompt cache and confuse the model
@@ -549,8 +561,8 @@ class Agent:
         """
         if chat_id in self._restored:
             return
-        self._restored.add(chat_id)
         if chat_id in self._history:
+            self._restored.add(chat_id)
             return
         if self._native_compaction_active():
             stored = await asyncio.to_thread(self._store.load_with_replay, chat_id)
@@ -574,6 +586,10 @@ class Agent:
                 len(stored),
                 identity_pseudonym(chat_id, "session"),
             )
+        # A failed durable read must remain retryable. Marking this chat before
+        # load/build succeeded would make the next message silently continue
+        # from empty process memory after a transient or corrupt-history error.
+        self._restored.add(chat_id)
 
     def _history_limit(self) -> int:
         """Turns kept per chat — a question and its answer count as two."""
@@ -583,6 +599,7 @@ class Agent:
         """Clear every process-local value owned by one conversation."""
 
         self._history.pop(chat_id, None)
+        self._ready_turns.pop(chat_id, None)
         self._tool_state.pop(chat_id, None)
         self._session_instructions.pop(chat_id, None)
         self._session_workdirs.pop(chat_id, None)
@@ -603,13 +620,34 @@ class Agent:
         self._approvals.block(chat_id)
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         try:
-            async with lock:
-                # Record the boundary before changing live state. If this fails,
-                # /new reports failure and the old conversation remains intact.
-                await asyncio.to_thread(self._store.new_session, chat_id)
-                self._clear_live_session(chat_id)
+            while True:
+                async with lock:
+                    completion = self._completion_fences.get(chat_id)
+                    if completion is None or completion.is_set():
+                        # Record the boundary before changing live state. If this
+                        # fails, /new reports failure and the old conversation
+                        # remains intact.
+                        await asyncio.to_thread(self._store.new_session, chat_id)
+                        self._clear_live_session(chat_id)
+                        break
+                # Delivery owns the staged answer now. Wait outside the chat
+                # lock so finalize_ready_turn can close that durable fence.
+                await completion.wait()
         finally:
             self._approvals.unblock(chat_id)
+
+    def _begin_completion_fence(self, chat_id: str) -> None:
+        current = self._completion_fences.get(chat_id)
+        if current is not None and not current.is_set():
+            raise ConversationError(
+                "The previous answer is still completing its delivery fence"
+            )
+        self._completion_fences[chat_id] = asyncio.Event()
+
+    def _release_completion_fence(self, chat_id: str) -> None:
+        completion = self._completion_fences.pop(chat_id, None)
+        if completion is not None:
+            completion.set()
 
     def resolve_approval(
         self, chat_id: str, *, approved: bool, reason: str = ""
@@ -663,6 +701,8 @@ class Agent:
         *,
         origin: Optional[Dict[str, str]] = None,
         approval_notify: Optional[ApprovalNotice] = None,
+        claim_ids: Sequence[str] = (),
+        defer_completion: bool = False,
     ) -> str:
         result = await self.respond_result(
             chat_id,
@@ -671,6 +711,8 @@ class Agent:
             on_notice,
             origin=origin,
             approval_notify=approval_notify,
+            claim_ids=claim_ids,
+            defer_completion=defer_completion,
         )
         return result.text
 
@@ -683,6 +725,8 @@ class Agent:
         *,
         origin: Optional[Dict[str, str]] = None,
         approval_notify: Optional[ApprovalNotice] = None,
+        claim_ids: Sequence[str] = (),
+        defer_completion: bool = False,
     ) -> TurnResult:
         """Return a persisted turn plus its positive terminal-completion proof."""
 
@@ -736,6 +780,7 @@ class Agent:
                 self._session_working_directory,
                 chat_id,
             )
+            image_manifest: List[Dict[str, Any]] = []
             if attachments:
                 original_attachments = list(attachments)
                 staged_attachments = await asyncio.to_thread(
@@ -751,9 +796,14 @@ class Agent:
                         str(original.path.resolve(strict=False)),
                         str(staged.path),
                     )
-                image_parts, attached_image_paths = await asyncio.to_thread(
-                    media.image_parts_with_paths,
+                (
+                    image_parts,
+                    attached_image_paths,
+                    image_manifest,
+                ) = await asyncio.to_thread(
+                    media.image_parts_with_manifest,
                     staged_attachments,
+                    working_directory / "inputs",
                 )
             else:
                 image_parts, attached_image_paths = [], []
@@ -780,6 +830,9 @@ class Agent:
                     self._store.begin_turn,
                     chat_id,
                     user_text,
+                    origin=origin,
+                    claim_ids=claim_ids,
+                    image_manifest=image_manifest,
                 )
                 turn_begun = True
                 result = await self._run_turn(
@@ -817,15 +870,208 @@ class Agent:
                 if self._native_compaction_active()
                 else []
             )
-            await asyncio.to_thread(
-                self._store.complete_turn,
-                chat_id,
-                user_text,
-                result.text,
-                checkpoints,
-            )
-            self._remember(chat_id, user_text, image_parts, result)
+            if defer_completion:
+                self._begin_completion_fence(chat_id)
+                await asyncio.to_thread(
+                    self._store.checkpoint_answer,
+                    chat_id,
+                    user_text,
+                    result.text,
+                    checkpoints,
+                    terminal_completed=result.terminal_completed,
+                )
+                self._ready_turns[chat_id] = (user_text, image_parts, result)
+            else:
+                await asyncio.to_thread(
+                    self._store.complete_turn,
+                    chat_id,
+                    user_text,
+                    result.text,
+                    checkpoints,
+                )
+                self._remember(chat_id, user_text, image_parts, result)
             return result
+
+    async def recover_turn(
+        self,
+        active: ActiveTurn,
+        on_notice: Optional[Notice] = None,
+        *,
+        approval_notify: Optional[ApprovalNotice] = None,
+        defer_completion: bool = False,
+    ) -> TurnResult:
+        """Resume one crash-interrupted turn without repeating durable tool work."""
+
+        if active.phase not in {"started", "tool_completed", "answer_ready"}:
+            raise ConversationError(
+                "The interrupted turn has an ambiguous tool outcome and cannot resume"
+            )
+        if active.phase == "started":
+            if active.trajectory or active.iteration:
+                raise TurnRecoveryRejected(
+                    "The interrupted turn's starting checkpoint is inconsistent"
+                )
+            resume_items: List[Dict[str, Any]] = []
+        elif active.phase == "tool_completed":
+            resume_items = [dict(item) for item in active.trajectory]
+            _validate_completed_tool_trajectory(
+                resume_items,
+                expected_iterations=active.iteration,
+                max_iterations=max(1, self._config.max_tool_iterations),
+            )
+        else:
+            resume_items = []
+
+        lock = self._chat_locks.setdefault(active.chat_id, asyncio.Lock())
+        async with lock:
+            await self._restore(active.chat_id)
+            working_directory = await asyncio.to_thread(
+                self._session_working_directory,
+                active.chat_id,
+            )
+            if active.phase == "answer_ready":
+                try:
+                    image_parts = await asyncio.to_thread(
+                        media.restore_image_parts,
+                        active.image_manifest,
+                        working_directory / "inputs",
+                    )
+                except (OSError, ValueError):
+                    # The exact answer no longer needs model input. Missing old
+                    # pixels may reduce later live context, but must never lose
+                    # an answer that is already complete and durable.
+                    logger.warning(
+                        "Could not restore an answered turn's staged image",
+                        exc_info=True,
+                    )
+                    image_parts = []
+                restored_items = [dict(item) for item in active.answer_replay]
+                if restored_items:
+                    restored_items.append(
+                        {"role": "assistant", "content": active.answer_content}
+                    )
+                result = TurnResult(
+                    text=active.answer_content,
+                    items=restored_items,
+                    terminal_completed=active.terminal_completed,
+                )
+            else:
+                try:
+                    image_parts = await asyncio.to_thread(
+                        media.restore_image_parts,
+                        active.image_manifest,
+                        working_directory / "inputs",
+                    )
+                except (OSError, ValueError) as exc:
+                    raise ConversationError(
+                        "The interrupted turn's staged image cannot be restored safely"
+                    ) from exc
+                working_notice_task = asyncio.create_task(
+                    self._working_notice_loop(active.chat_id, on_notice)
+                )
+                try:
+                    result = await self._run_turn(
+                        active.chat_id,
+                        active.user_content,
+                        image_parts,
+                        on_notice,
+                        origin=active.origin,
+                        approval_notify=approval_notify,
+                        working_directory=working_directory,
+                        resume_items=resume_items,
+                        completed_steps=active.iteration,
+                    )
+                finally:
+                    working_notice_task.cancel()
+                    await asyncio.gather(
+                        working_notice_task,
+                        return_exceptions=True,
+                    )
+
+            if defer_completion:
+                # The chat lock already keeps /new behind recovery while the
+                # model is running. Create the completion fence only once an
+                # exact answer exists and delivery is about to own it.
+                self._begin_completion_fence(active.chat_id)
+                try:
+                    if active.phase != "answer_ready":
+                        checkpoints = (
+                            compaction.persistent_compaction_items(result.items)
+                            if self._native_compaction_active()
+                            else []
+                        )
+                        await asyncio.to_thread(
+                            self._store.checkpoint_answer,
+                            active.chat_id,
+                            active.user_content,
+                            result.text,
+                            checkpoints,
+                            terminal_completed=result.terminal_completed,
+                        )
+                    self._ready_turns[active.chat_id] = (
+                        active.user_content,
+                        image_parts,
+                        result,
+                    )
+                except BaseException:
+                    self._release_completion_fence(active.chat_id)
+                    raise
+            else:
+                if active.phase == "answer_ready":
+                    await asyncio.to_thread(
+                        self._store.complete_ready_turn,
+                        active.chat_id,
+                    )
+                else:
+                    checkpoints = (
+                        compaction.persistent_compaction_items(result.items)
+                        if self._native_compaction_active()
+                        else []
+                    )
+                    await asyncio.to_thread(
+                        self._store.complete_turn,
+                        active.chat_id,
+                        active.user_content,
+                        result.text,
+                        checkpoints,
+                    )
+                self._remember(
+                    active.chat_id,
+                    active.user_content,
+                    image_parts,
+                    result,
+                )
+            return result
+
+    async def finalize_ready_turn(self, chat_id: str) -> None:
+        """Move one delivery-fenced answer into canonical conversation history."""
+
+        lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
+        async with lock:
+            user_text, answer, replay, terminal_completed = await asyncio.to_thread(
+                self._store.complete_ready_turn,
+                chat_id,
+            )
+            try:
+                pending = self._ready_turns.pop(chat_id, None)
+                if pending is not None and pending[0] == user_text:
+                    self._remember(chat_id, pending[0], pending[1], pending[2])
+                    return
+                items = [dict(item) for item in replay]
+                if items:
+                    items.append({"role": "assistant", "content": answer})
+                self._remember(
+                    chat_id,
+                    user_text,
+                    [],
+                    TurnResult(
+                        text=answer,
+                        items=items,
+                        terminal_completed=terminal_completed,
+                    ),
+                )
+            finally:
+                self._release_completion_fence(chat_id)
 
     async def _run_turn(
         self,
@@ -838,6 +1084,8 @@ class Agent:
         approval_notify: Optional[ApprovalNotice] = None,
         turn_note: str = "",
         working_directory: Optional[Path] = None,
+        resume_items: Sequence[Dict[str, Any]] = (),
+        completed_steps: int = 0,
     ) -> TurnResult:
         """Call the model, run what it asks for, call it again — until it answers."""
         active_working_directory = working_directory or self._context_cwd
@@ -867,10 +1115,14 @@ class Agent:
         )
         # Everything the assistant does this turn, in order, ready to be sent
         # back on the next call and kept as history afterwards.
-        items: List[Dict[str, Any]] = []
+        items: List[Dict[str, Any]] = [dict(item) for item in resume_items]
         limit = max(1, self._config.max_tool_iterations)
 
         def _finish(text: str, *, terminal_completed: bool = False) -> TurnResult:
+            text = text or t(
+                "runtime.failure",
+                getattr(self._config, "language", DEFAULT_LANGUAGE),
+            )
             isolated = getattr(
                 self._config, "session_isolated_workspaces", False
             )
@@ -909,9 +1161,40 @@ class Agent:
             offered_tools: Optional[List[Dict[str, Any]]],
         ) -> Optional[codex_stream.StreamResult]:
             for attempt in range(1, MAX_CODEX_INCOMPLETE_RESPONSES + 1):
-                result = await self._call_model(
-                    chat_id, history + items, offered_tools, on_notice
-                )
+                try:
+                    result = await self._call_model(
+                        chat_id, history + items, offered_tools, on_notice
+                    )
+                except (
+                    OpenAIError,
+                    httpx.TransportError,
+                    codex_stream.CodexStreamError,
+                    auth.AuthError,
+                ):
+                    logger.warning(
+                        "The model request failed for %s",
+                        identity_pseudonym(chat_id, "session"),
+                        exc_info=True,
+                    )
+                    failure_key = (
+                        "runtime.interrupted_unknown"
+                        if any(
+                            item.get("type") == "function_call_output"
+                            for item in items
+                        )
+                        else "runtime.failure"
+                    )
+                    return codex_stream.StreamResult(
+                        text=t(
+                            failure_key,
+                            getattr(
+                                self._config,
+                                "language",
+                                DEFAULT_LANGUAGE,
+                            ),
+                        ),
+                        terminal_completed=False,
+                    )
                 assistant_items = _assistant_items(result)
                 items.extend(assistant_items)
                 if compaction.has_compaction_checkpoint(assistant_items):
@@ -929,7 +1212,7 @@ class Agent:
                     )
             return None
 
-        for step in range(limit):
+        for step in range(max(0, int(completed_steps)), limit):
             result = await _next_action_or_answer(self._tools)
             if result is None:
                 logger.warning(
@@ -963,6 +1246,7 @@ class Agent:
                 user_text,
                 items,
                 phase="tool_requested",
+                iteration=step + 1,
             )
             outputs = await run_calls(
                 self._registry,
@@ -973,6 +1257,11 @@ class Agent:
                 step_budget_chars=self._config.max_tool_step_chars,
             )
             for call, output in zip(result.tool_calls, outputs):
+                if isinstance(output, str):
+                    output = frame_untrusted_tool_result(
+                        str(call.get("name") or ""),
+                        output,
+                    )
                 items.append(
                     {
                         "type": "function_call_output",
@@ -986,6 +1275,7 @@ class Agent:
                 user_text,
                 items,
                 phase="tool_completed",
+                iteration=step + 1,
             )
 
         # Out of steps. Ask for what it has rather than sending nothing: the
@@ -1068,14 +1358,18 @@ class Agent:
                 )
                 force_refresh = True
                 refreshed = True
-            except codex_stream.CodexStreamTimeout as exc:
+            except (
+                codex_stream.CodexStreamTimeout,
+                APIConnectionError,
+                httpx.TransportError,
+            ) as exc:
                 if reconnects >= MAX_STREAM_RECONNECTS:
                     raise
                 reconnects += 1
                 # The credentials are not the problem here; keep the ones we have.
                 force_refresh = False
                 logger.warning(
-                    "%s Dropping the connection and reconnecting (%d/%d).",
+                    "%s Dropping the Codex stream and reconnecting (%d/%d).",
                     exc,
                     reconnects,
                     MAX_STREAM_RECONNECTS,
@@ -1164,6 +1458,159 @@ def _assistant_items(result: codex_stream.StreamResult) -> List[Dict[str, Any]]:
             }
         )
     return items
+
+
+def _validate_completed_tool_trajectory(
+    items: Sequence[Dict[str, Any]],
+    *,
+    expected_iterations: int,
+    max_iterations: int,
+) -> None:
+    """Accept only exact, ordered call/result rounds emitted by Pilotage."""
+
+    if not 1 <= expected_iterations <= max_iterations:
+        raise TurnRecoveryRejected("The interrupted turn's iteration is invalid")
+    pending: List[str] = []
+    seen: set[str] = set()
+    batches = 0
+    batch_outputs_started = False
+    for item in items:
+        if not isinstance(item, dict):
+            raise TurnRecoveryRejected(
+                "The interrupted turn's completed-tool checkpoint is malformed"
+            )
+        kind = item.get("type")
+        if kind == "function_call":
+            call_id = item.get("call_id")
+            if (
+                set(item) != {"type", "call_id", "name", "arguments"}
+                or not isinstance(call_id, str)
+                or not call_id
+                or call_id in seen
+                or not isinstance(item.get("name"), str)
+                or not item.get("name")
+                or not isinstance(item.get("arguments"), str)
+            ):
+                raise TurnRecoveryRejected(
+                    "The interrupted turn's completed-tool checkpoint is malformed"
+                )
+            if pending and batch_outputs_started:
+                raise TurnRecoveryRejected(
+                    "The interrupted turn's tool calls and results are out of order"
+                )
+            if not pending:
+                batches += 1
+                batch_outputs_started = False
+            pending.append(call_id)
+            seen.add(call_id)
+            continue
+        if kind == "function_call_output":
+            call_id = item.get("call_id")
+            output = item.get("output")
+            if (
+                set(item) != {"type", "call_id", "output"}
+                or not pending
+                or call_id != pending[0]
+                or not _valid_recovered_tool_output(output)
+            ):
+                raise TurnRecoveryRejected(
+                    "The interrupted turn's tool calls and results do not match"
+                )
+            batch_outputs_started = True
+            pending.pop(0)
+            continue
+        if pending:
+            raise TurnRecoveryRejected(
+                "The interrupted turn's tool calls and results are out of order"
+            )
+        if kind == "compaction":
+            if set(item) != {"type", "encrypted_content"} or not isinstance(
+                item.get("encrypted_content"), str
+            ) or not item.get("encrypted_content"):
+                raise TurnRecoveryRejected(
+                    "The interrupted turn's compaction checkpoint is malformed"
+                )
+            continue
+        if kind == "reasoning":
+            if (
+                not set(item).issubset(
+                    {"type", "encrypted_content", "summary", "status"}
+                )
+                or not isinstance(item.get("encrypted_content"), str)
+                or not item.get("encrypted_content")
+                or (
+                    "status" in item
+                    and not isinstance(item.get("status"), str)
+                )
+                or (
+                    "summary" in item
+                    and (
+                        not isinstance(item.get("summary"), list)
+                        or not all(
+                            isinstance(part, dict)
+                            and set(part) == {"type", "text"}
+                            and part.get("type") == "summary_text"
+                            and isinstance(part.get("text"), str)
+                            for part in item["summary"]
+                        )
+                    )
+                )
+            ):
+                raise TurnRecoveryRejected(
+                    "The interrupted turn's reasoning checkpoint is malformed"
+                )
+            continue
+        if kind == "message":
+            if codex_stream.message_items_for_replay([item]) != [item]:
+                raise TurnRecoveryRejected(
+                    "The interrupted turn's assistant message is malformed"
+                )
+            continue
+        if (
+            kind is None
+            and set(item) == {"role", "content"}
+            and item.get("role") == "assistant"
+            and isinstance(item.get("content"), str)
+        ):
+            continue
+        raise TurnRecoveryRejected(
+            "The interrupted turn contains an unsupported replay item"
+        )
+    if pending or not seen or batches != expected_iterations:
+        raise TurnRecoveryRejected(
+            "The interrupted turn's tool calls and results do not match"
+        )
+
+
+def _valid_recovered_tool_output(output: Any) -> bool:
+    if isinstance(output, str):
+        return True
+    if not isinstance(output, list):
+        return False
+    for part in output:
+        if not isinstance(part, dict):
+            return False
+        if part.get("type") == "input_text":
+            if set(part) != {"type", "text"} or not isinstance(
+                part.get("text"), str
+            ):
+                return False
+            continue
+        if part.get("type") == "input_image":
+            if (
+                not {"type", "image_url"}.issubset(part)
+                or not set(part).issubset({"type", "image_url", "detail"})
+                or not isinstance(part.get("image_url"), str)
+                or not part.get("image_url")
+                or (
+                    "detail" in part
+                    and not isinstance(part.get("detail"), str)
+                )
+            ):
+                return False
+            continue
+        return False
+    return True
 
 
 def _append_generated_media(

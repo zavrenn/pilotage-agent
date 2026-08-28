@@ -20,6 +20,7 @@ describing it four times.
 
 from __future__ import annotations
 
+import difflib
 import math
 import os
 import re
@@ -29,10 +30,197 @@ from typing import Any, Dict, List, Optional
 
 CONFIG_FILENAME = "config.yaml"
 _CHANNEL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+_LEAF = object()
+
+# Pilotage is a closed production runtime. Unlike Hermes, it has no plugin or
+# provider namespaces whose children are defined by third parties, so every
+# behavioral key can be checked before defaults are allowed to take effect.
+_COMMON_SETTINGS_SCHEMA: Dict[str, Any] = {
+    "display": {"language": _LEAF},
+    "timezone": _LEAF,
+    "agent": {
+        "model": _LEAF,
+        "reasoning_effort": _LEAF,
+        "instructions": _LEAF,
+        "history_turns": _LEAF,
+        "request_timeout": _LEAF,
+        "first_event_timeout": _LEAF,
+        "quiet_stream_timeout": _LEAF,
+        "working_notice_interval": _LEAF,
+        "working_notice_text": _LEAF,
+    },
+    "compression": {
+        "codex_responses_native": _LEAF,
+        "codex_responses_compact_threshold": _LEAF,
+    },
+    "session_reset": {
+        "mode": _LEAF,
+        "idle_minutes": _LEAF,
+        "at_hour": _LEAF,
+        "notify": _LEAF,
+    },
+    "sessions": {
+        "auto_prune": _LEAF,
+        "retention_days": _LEAF,
+        "isolated_workspaces": _LEAF,
+    },
+    "gateway": {"media_delivery_allow_dirs": _LEAF},
+    "whatsapp": {
+        "enabled": _LEAF,
+        "require_mention": _LEAF,
+        "batch_delay": _LEAF,
+        "batch_split_delay": _LEAF,
+        "batch_hard_cap": _LEAF,
+        "bridge_port": _LEAF,
+        "read_receipts": _LEAF,
+        # Retained so Config can report the specific migration errors.
+        "allowed_senders": _LEAF,
+        "answer_groups": _LEAF,
+        "group_policy": _LEAF,
+        "group_allow_from": _LEAF,
+    },
+    "telegram": {
+        "enabled": _LEAF,
+        "require_mention": _LEAF,
+        "reply_to_mode": _LEAF,
+        "batch_delay": _LEAF,
+        "batch_split_delay": _LEAF,
+        "media_batch_delay": _LEAF,
+        "batch_hard_cap": _LEAF,
+        "disable_link_previews": _LEAF,
+        # Retained for precise secret/retired-setting errors.
+        "bot_token": _LEAF,
+        "allowed_users": _LEAF,
+        "group_policy": _LEAF,
+        "group_allow_from": _LEAF,
+    },
+    "tools": {
+        "enabled": _LEAF,
+        "disabled": _LEAF,
+        "max_iterations": _LEAF,
+        "max_result_chars": _LEAF,
+        "max_step_chars": _LEAF,
+    },
+    "approvals": {
+        "memory": _LEAF,
+        "skills": _LEAF,
+        "cron": _LEAF,
+        "timeout": _LEAF,
+    },
+    "memory": {"memory_char_limit": _LEAF, "user_char_limit": _LEAF},
+    "image_gen": {"provider": _LEAF, "model": _LEAF},
+    "web": {"extract_char_limit": _LEAF},
+    "stt": {
+        "enabled": _LEAF,
+        "provider": _LEAF,
+        "echo_transcripts": _LEAF,
+        "language": _LEAF,
+        "prompt": _LEAF,
+        "cloud_trim_silence": _LEAF,
+        "cloud_trim_threshold_db": _LEAF,
+        "cloud_trim_keep_ms": _LEAF,
+        "openai": {
+            "model": _LEAF,
+            "language": _LEAF,
+            # Retained so transcription reports the secret-placement error.
+            "api_key": _LEAF,
+        },
+    },
+    "cron": {
+        "enabled": _LEAF,
+        "timezone": _LEAF,
+        "tick_seconds": _LEAF,
+        "claim_ttl_seconds": _LEAF,
+        "max_concurrent": _LEAF,
+        "output_retention": _LEAF,
+    },
+    "terminal": {"cwd": _LEAF, "timeout": _LEAF},
+    "code_execution": {"root": _LEAF, "timeout": _LEAF},
+    "skills": {
+        "template_vars": _LEAF,
+        "inline_shell": _LEAF,
+        "inline_shell_timeout": _LEAF,
+        "disabled": _LEAF,
+    },
+}
+_SETTINGS_SCHEMA: Dict[str, Any] = dict(_COMMON_SETTINGS_SCHEMA)
+_SETTINGS_SCHEMA["channels"] = {
+    "whatsapp": _COMMON_SETTINGS_SCHEMA,
+    "telegram": _COMMON_SETTINGS_SCHEMA,
+}
 
 
 class ConfigError(RuntimeError):
     """The configuration file exists but cannot be used."""
+
+
+def _load_yaml(text: str, path: Path) -> Any:
+    """Parse YAML while refusing duplicate keys at every mapping depth."""
+
+    try:
+        import yaml
+        from yaml.constructor import ConstructorError
+    except ImportError as exc:  # pragma: no cover - dependency is declared
+        raise ConfigError("PyYAML is required to read the configuration file.") from exc
+
+    class UniqueKeyLoader(yaml.SafeLoader):
+        def construct_mapping(self, node, deep=False):
+            self.flatten_mapping(node)
+            mapping = {}
+            for key_node, value_node in node.value:
+                key = self.construct_object(key_node, deep=deep)
+                try:
+                    duplicate = key in mapping
+                except TypeError as exc:
+                    raise ConstructorError(
+                        "while constructing a settings mapping",
+                        node.start_mark,
+                        "configuration keys must be scalar values",
+                        key_node.start_mark,
+                    ) from exc
+                if duplicate:
+                    raise ConstructorError(
+                        "while constructing a settings mapping",
+                        node.start_mark,
+                        f"duplicate key {key!r}",
+                        key_node.start_mark,
+                    )
+                mapping[key] = self.construct_object(value_node, deep=deep)
+            return mapping
+
+    try:
+        return yaml.load(text, Loader=UniqueKeyLoader)
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"{path} is not valid YAML: {exc}") from exc
+
+
+def _validate_known_settings(
+    value: Any,
+    schema: Dict[str, Any],
+    *,
+    path: Path,
+    prefix: str = "",
+) -> None:
+    """Reject unknown paths before a misspelled capability uses a default."""
+
+    if not isinstance(value, dict):
+        label = prefix or "configuration"
+        raise ConfigError(f"{path}: {label} must be a settings block")
+    for key, child in value.items():
+        if not isinstance(key, str):
+            label = prefix or "configuration"
+            raise ConfigError(f"{path}: {label} contains a non-text key {key!r}")
+        dotted = f"{prefix}.{key}" if prefix else key
+        expected = schema.get(key, _LEAF)
+        if key not in schema:
+            suggestion = difflib.get_close_matches(key, schema.keys(), n=1, cutoff=0.6)
+            hint = ""
+            if suggestion:
+                corrected = f"{prefix}.{suggestion[0]}" if prefix else suggestion[0]
+                hint = f"; did you mean {corrected!r}?"
+            raise ConfigError(f"{path}: unknown setting {dotted!r}{hint}")
+        if isinstance(expected, dict):
+            _validate_known_settings(child, expected, path=path, prefix=dotted)
 
 
 def config_path(state_dir: Path) -> Path:
@@ -211,20 +399,13 @@ class Settings:
         except OSError as exc:
             raise ConfigError(f"Could not read {path}: {exc}") from exc
 
-        try:
-            import yaml
-        except ImportError as exc:  # pragma: no cover - dependency is declared
-            raise ConfigError("PyYAML is required to read the configuration file.") from exc
-
-        try:
-            data = yaml.safe_load(text)
-        except yaml.YAMLError as exc:
-            raise ConfigError(f"{path} is not valid YAML: {exc}") from exc
+        data = _load_yaml(text, path)
 
         if data is None:
             return cls({})
         if not isinstance(data, dict):
             raise ConfigError(f"{path} must describe settings by name, not a {type(data).__name__}.")
+        _validate_known_settings(data, _SETTINGS_SCHEMA, path=path)
         return cls(data)
 
     # -- lookup -------------------------------------------------------------

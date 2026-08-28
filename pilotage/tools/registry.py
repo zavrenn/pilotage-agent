@@ -22,11 +22,14 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
 from ..approvals import ApprovalOutcome, approval_required
+from ..redact import redact_sensitive_text
+from .ansi_strip import sanitize_display_text, strip_unicode_tags
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,29 @@ TRUNCATION_MARKER = "… [truncated]"
 # start of a command's output or a file is where the answer usually is.
 DEFAULT_MAX_RESULT_CHARS = 100_000
 DEFAULT_STEP_BUDGET_CHARS = 200_000
+
+# Pilotage has a fixed tool surface, so concurrency policy can stay explicit.
+# Only tools that cannot mutate runtime, workspace, or conversation state may
+# overlap, and only while contiguous in the model's emitted order. Everything
+# else (including unknown future tools) is an ordered barrier by default.
+PARALLEL_SAFE_TOOL_NAMES = frozenset(
+    {
+        "read_file",
+        "search_files",
+        "session_search",
+        "skills_list",
+        "vision_analyze",
+        "web_extract",
+        "web_search",
+    }
+)
+
+_TOOL_ERROR_ROLE_TAG_RE = re.compile(
+    r"</?(?:tool_call|function_call|result|response|output|input|system|assistant|user)>",
+    re.IGNORECASE,
+)
+_TOOL_ERROR_FENCE_RE = re.compile(r"```(?:[A-Za-z0-9_-]+)?", re.IGNORECASE)
+_TOOL_ERROR_CDATA_RE = re.compile(r"<!\[CDATA\[.*?\]\]>", re.DOTALL)
 
 MultimodalToolResult = Dict[str, Any]
 ToolOutput = Union[str, MultimodalToolResult]
@@ -109,7 +135,7 @@ def responses_tool_output(value: ToolOutput) -> Any:
 
 def tool_error(message: Any, **extra: Any) -> str:
     """The JSON a handler returns when it cannot do what was asked."""
-    result: Dict[str, Any] = {"error": _bound(str(message))}
+    result: Dict[str, Any] = {"error": sanitize_tool_error(message)}
     if extra:
         result.update(extra)
     return json.dumps(result, ensure_ascii=False)
@@ -126,7 +152,24 @@ def _bound(text: str) -> str:
     if len(text) <= MAX_ERROR_CHARS:
         return text
     logger.debug("Tool error body truncated (%d chars): %s", len(text), text[:8192])
-    return text[:MAX_ERROR_CHARS] + TRUNCATION_MARKER
+    keep = max(0, MAX_ERROR_CHARS - len(TRUNCATION_MARKER))
+    return text[:keep] + TRUNCATION_MARKER
+
+
+def sanitize_tool_error(message: Any) -> str:
+    """Make arbitrary failure text safe and bounded for model context.
+
+    The JSON ``error`` field is already the semantic envelope, so preserving
+    safe text keeps established handler contracts stable.
+    """
+
+    sanitized = sanitize_display_text("" if message is None else str(message))
+    sanitized = strip_unicode_tags(sanitized)
+    sanitized = _TOOL_ERROR_ROLE_TAG_RE.sub("", sanitized)
+    sanitized = _TOOL_ERROR_FENCE_RE.sub("", sanitized)
+    sanitized = _TOOL_ERROR_CDATA_RE.sub("", sanitized)
+    sanitized = redact_sensitive_text(sanitized)
+    return _bound(sanitized)
 
 
 @dataclass
@@ -347,26 +390,36 @@ async def run_calls(
     max_result_chars: Optional[int] = None,
     step_budget_chars: int = DEFAULT_STEP_BUDGET_CHARS,
 ) -> List[ToolOutput]:
-    """Run the calls the model asked for in one step, and return their results.
-
-    They run at the same time — the model asks for several precisely when they
-    do not depend on each other — but the results come back in the order they
-    were asked for, so the request built from them is the same every time.
-    """
+    """Run one ordered tool step, overlapping only known read-only runs."""
     if not calls:
         return []
-    results = await asyncio.gather(
-        *(
-            registry.dispatch(
-                str(call.get("name") or ""),
-                str(call.get("arguments") or "{}"),
-                context,
-                allowed_groups=allowed_groups,
-                max_result_chars=max_result_chars,
-            )
-            for call in calls
+
+    async def dispatch(call: Dict[str, Any]) -> ToolOutput:
+        return await registry.dispatch(
+            str(call.get("name") or ""),
+            str(call.get("arguments") or "{}"),
+            context,
+            allowed_groups=allowed_groups,
+            max_result_chars=max_result_chars,
         )
-    )
+
+    results: List[ToolOutput] = []
+    parallel_run: List[Dict[str, Any]] = []
+
+    async def flush_parallel_run() -> None:
+        if not parallel_run:
+            return
+        results.extend(await asyncio.gather(*(dispatch(call) for call in parallel_run)))
+        parallel_run.clear()
+
+    for call in calls:
+        name = str(call.get("name") or "")
+        if name in PARALLEL_SAFE_TOOL_NAMES:
+            parallel_run.append(call)
+            continue
+        await flush_parallel_run()
+        results.append(await dispatch(call))
+    await flush_parallel_run()
 
     # One step's results together are also bounded: eight tools each just
     # inside the per-result cap would otherwise still blow the context apart.

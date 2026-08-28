@@ -3123,6 +3123,15 @@ class ShellFileOperations(FileOperations):
         """Search using ripgrep."""
         cmd_parts = ["rg", "--line-number", "--no-heading", "--with-filename"]
 
+        # Bound giant single-line matches before they enter the subprocess
+        # transport. ``head -n`` limits rows, not row width, so a match in a
+        # minified bundle or serialized dump could otherwise make Python hold
+        # the entire multi-megabyte line before the parser's [:500] clamp.
+        # Preview mode keeps the hit visible instead of omitting it entirely.
+        # Paths and counts are already naturally bounded and must stay exact.
+        if output_mode not in {"files_only", "count"}:
+            cmd_parts.extend(["--max-columns", "2000", "--max-columns-preview"])
+
         # Auto-multiline: a regex `\n` (or a literal newline in the pattern)
         # cannot match in rg's default line-oriented mode — it used to hard
         # error ("the literal \"\\n\" is not allowed") and burn a turn. When
@@ -3312,6 +3321,11 @@ class ShellFileOperations(FileOperations):
         # Fetch generously so we can compute total before slicing
         fetch_limit = limit + offset + (200 if context > 0 else 0)
         cmd_parts.extend(["|", "head", "-n", str(fetch_limit)])
+        # GNU grep has no ripgrep-style column cap. Clip content rows in the
+        # pipeline so a giant matched line cannot cross into Python whole.
+        # This only drops the content tail; the file:line prefix remains.
+        if output_mode not in {"files_only", "count"}:
+            cmd_parts.extend(["|", "cut", "-c1-2000"])
         
         # `set -o pipefail` so grep's exit status propagates through `| head`
         # (without it the pipeline reports head's 0, masking grep's error 2).

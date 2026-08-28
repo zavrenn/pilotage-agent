@@ -62,6 +62,15 @@ escaped_home="$(escape_unit_value "$HOME")"
 escaped_state="$(escape_unit_value "$state_root")"
 escaped_path="$(escape_unit_value "$repo_root/.venv/bin:$(dirname "$(command -v node)"):$PATH")"
 
+# Full worst-case stop path: Telegram intake teardown runs before the shared
+# drain deadline, channel cleanup runs after it, and the final reserve covers
+# client close plus systemd/process scheduling overhead.
+stop_intake_budget=20
+shutdown_drain_budget=30
+channel_cleanup_budget=10
+shutdown_headroom=30
+timeout_stop_sec=$((stop_intake_budget + shutdown_drain_budget + channel_cleanup_budget + shutdown_headroom))
+
 temp_unit="$(mktemp "$unit_dir/.pilotage-agent.XXXXXX")"
 trap 'rm -f "$temp_unit"' EXIT
 cat >"$temp_unit" <<EOF
@@ -85,7 +94,7 @@ Restart=always
 RestartSec=5
 KillMode=mixed
 KillSignal=SIGTERM
-TimeoutStopSec=60
+TimeoutStopSec=$timeout_stop_sec
 StandardOutput=journal
 StandardError=journal
 

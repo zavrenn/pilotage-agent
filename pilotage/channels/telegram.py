@@ -9,16 +9,33 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import logging
 import math
 import mimetypes
 import os
 import re
-from contextlib import asynccontextmanager
+import sqlite3
+import threading
+import time
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Collection,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+)
 from urllib.parse import urlparse
+
+import httpx
 
 from .. import media
 from ..commands import CommandInvocation, parse_command
@@ -74,6 +91,13 @@ SHUTDOWN_STEP_SECONDS = 10.0
 STARTUP_FAILURE_DRAIN_SECONDS = 30.0
 MEDIA_REGISTRATION_GRACE_SECONDS = 0.01
 MEDIA_DOWNLOAD_GRACE_SECONDS = 1.0
+POLLING_STARTUP_PROGRESS_SECONDS = 60.0
+POLLING_WATCHDOG_INTERVAL_SECONDS = 30.0
+POLLING_STALL_SECONDS = 150.0
+INBOUND_SPOOL_MAX_ROWS = 10_000
+INBOUND_SPOOL_MAX_BYTES = 64 * 1024 * 1024
+INBOUND_SPOOL_MAX_UPDATE_BYTES = 1024 * 1024
+INBOUND_SPOOL_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif"})
 _VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"})
@@ -263,6 +287,7 @@ class InboundMessage:
     is_group: bool
     thread_id: str = ""
     message_ids: List[str] = field(default_factory=list)
+    claim_ids: List[str] = field(default_factory=list)
     attachments: List[media.Attachment] = field(default_factory=list)
 
 
@@ -276,7 +301,7 @@ class _MediaDownloadFence:
 
 Handler = Callable[[InboundMessage], Awaitable[None]]
 CommandHandler = Callable[
-    [str, str, str, str, CommandInvocation], Awaitable[None]
+    [str, str, str, str, CommandInvocation, str], Awaitable[None]
 ]
 
 
@@ -326,6 +351,49 @@ def _telegram_entity_text(source: str, offset: int, length: int) -> str:
         return ""
 
 
+def _expand_telegram_text_links(message: Any) -> str:
+    """Expose Telegram URLs stored outside the visible text/caption."""
+
+    text = str(getattr(message, "text", None) or "")
+    entities = getattr(message, "entities", None) or []
+    if not text:
+        text = str(getattr(message, "caption", None) or "")
+        entities = getattr(message, "caption_entities", None) or []
+    if not text or not entities:
+        return text
+
+    encoded = text.encode("utf-16-le")
+    links: list[tuple[int, bytes]] = []
+    for entity in entities:
+        kind = str(getattr(entity, "type", "")).split(".")[-1].lower()
+        raw_url = getattr(entity, "url", None)
+        url = raw_url.strip() if isinstance(raw_url, str) else ""
+        if kind != "text_link" or not url:
+            continue
+        try:
+            offset = int(getattr(entity, "offset", -1))
+            length = int(getattr(entity, "length", 0))
+        except (TypeError, ValueError):
+            continue
+        start = offset * 2
+        end = (offset + length) * 2
+        if start < 0 or end <= start or end > len(encoded):
+            continue
+        try:
+            encoded[start:end].decode("utf-16-le")
+        except UnicodeDecodeError:
+            continue
+        inline = f" ({url})".encode("utf-16-le")
+        links.append((end, inline))
+
+    expanded = encoded
+    for end, inline in sorted(links, reverse=True):
+        if expanded[end : end + len(inline)] == inline:
+            continue
+        expanded = expanded[:end] + inline + expanded[end:]
+    return expanded.decode("utf-16-le")
+
+
 def _safe_filename(value: str, fallback: str) -> str:
     name = Path(str(value or "")).name
     cleaned = re.sub(r"[^A-Za-z0-9._ -]", "_", name).strip(" .")
@@ -351,13 +419,510 @@ def _send_failure(exc: BaseException, token: str) -> SendResult:
             delay = float(value)
         except (TypeError, ValueError):
             delay = None
+        if delay is not None and (not math.isfinite(delay) or delay < 0):
+            delay = None
         return SendResult(False, written, retryable=True, retry_after=delay)
     if isinstance(exc, TimedOut):
-        # Telegram may have accepted a request whose response timed out.
-        return SendResult(False, written)
+        # PTB uses TimedOut for connect, pool, read, and write timeouts. Only
+        # failures before a connection/request exists prove Telegram did not
+        # accept the send.
+        retryable = isinstance(
+            exc.__cause__, (httpx.ConnectTimeout, httpx.PoolTimeout)
+        )
+        return SendResult(False, written, retryable=retryable)
     if isinstance(exc, NetworkError):
-        return SendResult(False, written, retryable=True)
+        # PTB collapses every other httpx.HTTPError into NetworkError. A
+        # ConnectError is pre-acceptance; read/write/protocol errors are not.
+        return SendResult(
+            False,
+            written,
+            retryable=isinstance(exc.__cause__, httpx.ConnectError),
+        )
     return SendResult(False, written)
+
+
+class _PollingProgressRequest(HTTPXRequest):
+    """Record successful getUpdates round-trips without PTB internals."""
+
+    def __init__(self, on_progress: Callable[[], None], **kwargs: Any):
+        super().__init__(**kwargs)
+        self._on_progress = on_progress
+
+    async def do_request(self, *args: Any, **kwargs: Any) -> tuple[int, bytes]:
+        code, payload = await super().do_request(*args, **kwargs)
+        if 200 <= code < 300:
+            try:
+                response = self.parse_json_payload(payload)
+            except Exception:
+                response = None
+            if isinstance(response, dict) and response.get("ok") is True:
+                self._on_progress()
+        return code, payload
+
+
+class _InboundSpoolError(RuntimeError):
+    """Telegram input could not be accepted without losing its identity."""
+
+
+def _update_message(update: Any) -> Any:
+    return getattr(update, "effective_message", None) or getattr(
+        update, "message", None
+    )
+
+
+def _durable_update_required(update: Any) -> bool:
+    """Whether Pilotage has a handler that can consume this update."""
+
+    message = _update_message(update)
+    if message is None:
+        return False
+    if getattr(message, "text", None):
+        return True
+    return any(
+        getattr(message, name, None)
+        for name in (
+            "location",
+            "venue",
+            "photo",
+            "video",
+            "audio",
+            "voice",
+            "document",
+            "sticker",
+        )
+    )
+
+
+def _update_sender_is_allowed(update: Any, allowed_users: Collection[str]) -> bool:
+    message = _update_message(update)
+    user = getattr(message, "from_user", None) if message is not None else None
+    user_id = str(getattr(user, "id", "") or "").strip()
+    return bool(user_id and user_id in allowed_users)
+
+
+class _TelegramInboundStore:
+    """Profile-local write-ahead spool for Telegram updates."""
+
+    _SCHEMA = """
+    CREATE TABLE IF NOT EXISTS telegram_updates (
+        claim_id      TEXT PRIMARY KEY,
+        namespace     TEXT NOT NULL,
+        update_id     INTEGER NOT NULL,
+        payload       TEXT NOT NULL,
+        payload_sha256 TEXT NOT NULL,
+        state         TEXT NOT NULL CHECK (state IN ('pending', 'completed')),
+        created_at    REAL NOT NULL,
+        updated_at    REAL NOT NULL,
+        UNIQUE (namespace, update_id)
+    );
+    """
+
+    _MIGRATION_SCHEMA = """
+    CREATE TABLE telegram_updates_v2 (
+        claim_id      TEXT PRIMARY KEY,
+        namespace     TEXT NOT NULL,
+        update_id     INTEGER NOT NULL,
+        payload       TEXT NOT NULL,
+        payload_sha256 TEXT NOT NULL,
+        state         TEXT NOT NULL CHECK (state IN ('pending', 'completed')),
+        created_at    REAL NOT NULL,
+        updated_at    REAL NOT NULL,
+        UNIQUE (namespace, update_id)
+    )
+    """
+
+    def __init__(self, path: Path, token: str):
+        self.path = Path(path)
+        bot_id = str(token).partition(":")[0]
+        identity = (
+            f"bot:{bot_id}"
+            if re.fullmatch(r"[1-9][0-9]*", bot_id) is not None
+            else "unconfigured:"
+            + hashlib.sha256(str(token).encode("utf-8", "replace")).hexdigest()
+        )
+        self._namespace = hashlib.sha256(
+            f"telegram-bot-v1\0{identity}".encode("ascii")
+        ).hexdigest()
+        self._lock = threading.Lock()
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.path, timeout=10)
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.executescript(self._SCHEMA)
+            self._migrate_namespace_uniqueness(connection)
+            connection.commit()
+            with contextlib.suppress(OSError):
+                os.chmod(self.path, 0o600)
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
+    @classmethod
+    def _migrate_namespace_uniqueness(
+        cls, connection: sqlite3.Connection
+    ) -> None:
+        """Replace the legacy global update-id constraint transactionally."""
+
+        has_composite = False
+        has_global_update_id = False
+        for index in connection.execute(
+            "PRAGMA index_list('telegram_updates')"
+        ).fetchall():
+            if not bool(index["unique"]):
+                continue
+            name = str(index["name"]).replace('"', '""')
+            columns = [
+                str(row["name"])
+                for row in connection.execute(
+                    f'PRAGMA index_info("{name}")'
+                ).fetchall()
+            ]
+            if (
+                columns == ["namespace", "update_id"]
+                and not bool(index["partial"])
+            ):
+                has_composite = True
+            elif columns == ["update_id"]:
+                has_global_update_id = True
+        if has_composite and not has_global_update_id:
+            return
+
+        with connection:
+            connection.execute("DROP TABLE IF EXISTS telegram_updates_v2")
+            connection.execute(cls._MIGRATION_SCHEMA)
+            connection.execute(
+                "INSERT INTO telegram_updates_v2"
+                " (claim_id, namespace, update_id, payload, payload_sha256,"
+                " state, created_at, updated_at)"
+                " SELECT claim_id, namespace, update_id, payload, payload_sha256,"
+                " state, created_at, updated_at FROM telegram_updates"
+                " ORDER BY rowid ASC"
+            )
+            connection.execute("DROP TABLE telegram_updates")
+            connection.execute(
+                "ALTER TABLE telegram_updates_v2 RENAME TO telegram_updates"
+            )
+
+    def claim_id(self, update_id: Any) -> str:
+        if isinstance(update_id, bool):
+            raise _InboundSpoolError("Telegram update identity is invalid")
+        try:
+            written = int(update_id)
+        except (TypeError, ValueError) as exc:
+            raise _InboundSpoolError("Telegram update identity is invalid") from exc
+        if written < 0:
+            raise _InboundSpoolError("Telegram update identity is invalid")
+        return self._claim_id_for_namespace(self._namespace, written)
+
+    @staticmethod
+    def _claim_id_for_namespace(namespace: str, update_id: int) -> str:
+        return hashlib.sha256(
+            f"telegram-update-v1\0{namespace}\0{update_id}".encode("ascii")
+        ).hexdigest()
+
+    @staticmethod
+    def _payload(update: Any) -> str:
+        to_dict = getattr(update, "to_dict", None)
+        if not callable(to_dict):
+            raise _InboundSpoolError("Telegram update cannot be serialized safely")
+        value = to_dict()
+        if not isinstance(value, dict):
+            raise _InboundSpoolError("Telegram update payload is malformed")
+        try:
+            payload = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise _InboundSpoolError(
+                "Telegram update cannot be serialized safely"
+            ) from exc
+        if len(payload.encode("utf-8")) > INBOUND_SPOOL_MAX_UPDATE_BYTES:
+            raise _InboundSpoolError("Telegram update payload exceeds the durable limit")
+        return payload
+
+    def _validate_rows(
+        self,
+        rows: Sequence[sqlite3.Row],
+        *,
+        current_namespace_only: bool = False,
+    ) -> None:
+        for row in rows:
+            claim_id = str(row["claim_id"])
+            namespace = str(row["namespace"])
+            payload = str(row["payload"])
+            digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            try:
+                decoded = json.loads(payload)
+                update_id = int(row["update_id"])
+                created_at = float(row["created_at"])
+                updated_at = float(row["updated_at"])
+            except (TypeError, ValueError) as exc:
+                raise _InboundSpoolError(
+                    "Telegram inbound spool contains malformed durable data"
+                ) from exc
+            if (
+                re.fullmatch(r"[a-f0-9]{64}", claim_id) is None
+                or re.fullmatch(r"[a-f0-9]{64}", namespace) is None
+                or (
+                    current_namespace_only
+                    and namespace != self._namespace
+                )
+                or self._claim_id_for_namespace(
+                    namespace, update_id
+                )
+                != claim_id
+                or str(row["payload_sha256"]) != digest
+                or str(row["state"]) not in {"pending", "completed"}
+                or not isinstance(decoded, dict)
+                or update_id < 0
+                or not math.isfinite(created_at)
+                or not math.isfinite(updated_at)
+            ):
+                raise _InboundSpoolError(
+                    "Telegram inbound spool contains corrupt durable data"
+                )
+
+    def _prune(self, connection: sqlite3.Connection, now: float) -> None:
+        columns = (
+            "claim_id, namespace, update_id, payload, payload_sha256, state,"
+            " created_at, updated_at"
+        )
+        expired = connection.execute(
+            f"SELECT {columns} FROM telegram_updates"
+            " WHERE state = 'completed' AND updated_at < ?",
+            (now - INBOUND_SPOOL_RETENTION_SECONDS,),
+        ).fetchall()
+        self._validate_rows(expired)
+        if expired:
+            claims = [str(row["claim_id"]) for row in expired]
+            placeholders = ",".join("?" for _ in claims)
+            connection.execute(
+                f"DELETE FROM telegram_updates WHERE claim_id IN ({placeholders})",
+                claims,
+            )
+        remaining, payload_bytes = connection.execute(
+            "SELECT COUNT(*),"
+            " COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0)"
+            " FROM telegram_updates WHERE namespace = ?",
+            (self._namespace,),
+        ).fetchone()
+        if (
+            int(remaining) > INBOUND_SPOOL_MAX_ROWS
+            or int(payload_bytes) > INBOUND_SPOOL_MAX_BYTES
+        ):
+            raise _InboundSpoolError(
+                "Telegram inbound spool capacity is exhausted by retained updates"
+            )
+
+    def record(self, update: Any) -> tuple[str, str]:
+        update_id = getattr(update, "update_id", None)
+        claim_id = self.claim_id(update_id)
+        payload = self._payload(update)
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO telegram_updates"
+                " (claim_id, namespace, update_id, payload, payload_sha256, state,"
+                " created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+                (
+                    claim_id,
+                    self._namespace,
+                    int(update_id),
+                    payload,
+                    digest,
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT claim_id, namespace, update_id, payload, payload_sha256, state"
+                " FROM telegram_updates WHERE namespace = ? AND update_id = ?",
+                (self._namespace, int(update_id)),
+            ).fetchone()
+            if row is None:
+                raise _InboundSpoolError("Telegram update was not recorded")
+            recorded = (
+                str(row["claim_id"]),
+                str(row["namespace"]),
+                int(row["update_id"]),
+                str(row["payload"]),
+                str(row["payload_sha256"]),
+            )
+            expected = (
+                claim_id,
+                self._namespace,
+                int(update_id),
+                payload,
+                digest,
+            )
+            state = str(row["state"])
+            if recorded != expected or state not in {"pending", "completed"}:
+                raise _InboundSpoolError(
+                    "Telegram update identity collides with different durable data"
+                )
+            self._prune(connection, now)
+            return claim_id, state
+
+    def pending(self) -> list[tuple[str, str]]:
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            self._prune(connection, now)
+            rows = connection.execute(
+                "SELECT claim_id, namespace, update_id, payload, payload_sha256,"
+                " state, created_at, updated_at"
+                " FROM telegram_updates WHERE state = 'pending'"
+                " ORDER BY rowid ASC"
+            ).fetchall()
+            self._validate_rows(rows)
+            if any(str(row["namespace"]) != self._namespace for row in rows):
+                raise _InboundSpoolError(
+                    "Telegram inbound spool has pending updates for a different bot"
+                )
+            pending: list[tuple[str, str]] = []
+            for row in rows:
+                claim_id = str(row["claim_id"])
+                payload = str(row["payload"])
+                pending.append((claim_id, payload))
+            return pending
+
+    def complete(self, claim_ids: Sequence[str]) -> None:
+        claims = list(dict.fromkeys(str(value) for value in claim_ids if value))
+        if not claims:
+            return
+        if any(re.fullmatch(r"[a-f0-9]{64}", value) is None for value in claims):
+            raise _InboundSpoolError("Telegram inbound claim identity is invalid")
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            placeholders = ",".join("?" for _ in claims)
+            rows = connection.execute(
+                "SELECT claim_id, namespace, update_id, payload, payload_sha256,"
+                " state, created_at, updated_at FROM telegram_updates"
+                f" WHERE claim_id IN ({placeholders})",
+                claims,
+            ).fetchall()
+            self._validate_rows(rows, current_namespace_only=True)
+            found = {str(row["claim_id"]) for row in rows}
+            if found != set(claims) or any(
+                str(row["namespace"]) != self._namespace
+                or str(row["state"]) not in {"pending", "completed"}
+                for row in rows
+            ):
+                raise _InboundSpoolError(
+                    "Telegram inbound claim has no exact durable update"
+                )
+            connection.execute(
+                "UPDATE telegram_updates SET state = 'completed', updated_at = ?"
+                f" WHERE claim_id IN ({placeholders})",
+                (now, *claims),
+            )
+            self._prune(connection, now)
+
+    def discard_pending(self, claim_id: str) -> None:
+        """Forget an update that current authorization explicitly rejects."""
+
+        written = str(claim_id or "")
+        if re.fullmatch(r"[a-f0-9]{64}", written) is None:
+            raise _InboundSpoolError("Telegram inbound claim identity is invalid")
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT claim_id, namespace, update_id, payload, payload_sha256,"
+                " state, created_at, updated_at FROM telegram_updates"
+                " WHERE claim_id = ?",
+                (written,),
+            ).fetchone()
+            if row is None:
+                raise _InboundSpoolError(
+                    "Telegram rejected update has no exact durable record"
+                )
+            self._validate_rows([row], current_namespace_only=True)
+            if str(row["state"]) == "completed":
+                return
+            removed = connection.execute(
+                "DELETE FROM telegram_updates"
+                " WHERE claim_id = ? AND state = 'pending'",
+                (written,),
+            ).rowcount
+            if removed != 1:
+                raise _InboundSpoolError(
+                    "Telegram rejected update could not be discarded safely"
+                )
+
+
+class _DurableUpdateQueue(asyncio.Queue):
+    """Commit Telegram work before PTB can advance its server offset."""
+
+    def __init__(
+        self,
+        store: _TelegramInboundStore,
+        on_failure: Callable[[str], None],
+        allowed_users: Collection[str],
+    ):
+        super().__init__()
+        self._store = store
+        self._on_failure = on_failure
+        self._allowed_users = frozenset(str(value) for value in allowed_users)
+        self._enqueued_claims: set[str] = set()
+        self._enqueue_lock = asyncio.Lock()
+
+    async def put(self, item: Any) -> None:
+        if not _durable_update_required(item):
+            await super().put(item)
+            return
+        if not _update_sender_is_allowed(item, self._allowed_users):
+            return
+        try:
+            claim_id, state = await asyncio.to_thread(self._store.record, item)
+        except (OSError, sqlite3.Error, _InboundSpoolError) as exc:
+            self._on_failure("The Telegram durable inbound spool failed.")
+            raise ChannelError("Telegram could not durably accept an update") from exc
+        if state == "completed":
+            return
+        async with self._enqueue_lock:
+            if claim_id in self._enqueued_claims:
+                return
+            self._enqueued_claims.add(claim_id)
+            try:
+                await super().put(item)
+            except BaseException:
+                self._enqueued_claims.discard(claim_id)
+                raise
+
+    def forget_completed(self, claim_ids: Sequence[str]) -> None:
+        self._enqueued_claims.difference_update(claim_ids)
+
+    async def replay_pending(self, bot: Any) -> None:
+        try:
+            pending = await asyncio.to_thread(self._store.pending)
+            for claim_id, payload in pending:
+                if claim_id in self._enqueued_claims:
+                    continue
+                update = Update.de_json(json.loads(payload), bot)
+                if (
+                    not _durable_update_required(update)
+                    or self._store.claim_id(update.update_id) != claim_id
+                ):
+                    raise _InboundSpoolError(
+                        "Telegram pending update cannot be reconstructed safely"
+                    )
+                if not _update_sender_is_allowed(update, self._allowed_users):
+                    await asyncio.to_thread(self._store.discard_pending, claim_id)
+                    continue
+                self._enqueued_claims.add(claim_id)
+                await super().put(update)
+        except (OSError, sqlite3.Error, TypeError, ValueError, _InboundSpoolError) as exc:
+            self._on_failure("The Telegram durable inbound spool failed.")
+            raise ChannelError("Telegram pending updates are not recoverable") from exc
 
 
 class TelegramChannel:
@@ -407,12 +972,19 @@ class TelegramChannel:
         self._bot_username = ""
         self._running = False
         self._intake_stopped = False
+        self._intake_started = False
         self._drop_delayed_deliveries = False
         self._startup_hold_closed = False
+        self._startup_approvals_enabled = False
         self.stopped = asyncio.Event()
         self.failure: Optional[str] = None
 
         self._seen = MessageDeduplicator()
+        self._completed_claims = MessageDeduplicator(
+            max_size=INBOUND_SPOOL_MAX_ROWS * 2,
+            ttl_seconds=INBOUND_SPOOL_RETENTION_SECONDS,
+        )
+        self._completed_claims_lock = threading.Lock()
         self._reported_blocked: set[str] = set()
         self._pending: Dict[str, InboundMessage] = {}
         self._pending_started: Dict[str, float] = {}
@@ -422,17 +994,45 @@ class TelegramChannel:
         self._background_tasks: set[asyncio.Task] = set()
         self._intake_tasks: set[asyncio.Task] = set()
         self._startup_updates: List[tuple[str, Any, Any]] = []
+        self._startup_held_claims: set[str] = set()
         self._held_inbound: Dict[str, InboundMessage] = {}
+        self._inbound_store = _TelegramInboundStore(
+            config.state_dir / "telegram-inbound.db",
+            self._token,
+        )
+        self._update_queue = _DurableUpdateQueue(
+            self._inbound_store,
+            self._fail,
+            self._allowed_users,
+        )
+        self._polling_progress: Optional[asyncio.Event] = None
+        self._polling_last_progress = 0.0
+        self._polling_watchdog_task: Optional[asyncio.Task] = None
         self._media_downloads: Dict[str, _MediaDownloadFence] = {}
 
     # -- lifetime -------------------------------------------------------
 
     def hold_inbound(self) -> None:
         self._startup_hold_closed = True
+        self._startup_approvals_enabled = False
+
+    async def enable_startup_approvals(self) -> None:
+        """Allow only approval control through the still-closed startup gate."""
+
+        if not self._startup_hold_closed:
+            return
+        self._startup_approvals_enabled = True
+
+    @property
+    def startup_approval_available(self) -> bool:
+        """Whether startup recovery can safely receive an approval command."""
+
+        return self._intake_started and self._startup_approvals_enabled
 
     async def release_inbound(self) -> None:
         if not self._startup_hold_closed and not self._startup_updates:
             return
+        self._startup_approvals_enabled = False
         try:
             # Keep the gate closed while draining. Fresh callbacks append to
             # the same FIFO, so they cannot overtake an older held update.
@@ -441,6 +1041,8 @@ class TelegramChannel:
                 await self._replay_startup_update(kind, update, context)
         finally:
             self._startup_hold_closed = False
+            self._startup_approvals_enabled = False
+            self._startup_held_claims.clear()
 
     def _preflight(self) -> None:
         if not TELEGRAM_AVAILABLE:
@@ -466,12 +1068,15 @@ class TelegramChannel:
             "media_write_timeout": 60.0,
         }
         request = HTTPXRequest(**request_options)
-        updates_request = HTTPXRequest(**request_options)
+        updates_request = _PollingProgressRequest(
+            self._record_polling_progress, **request_options
+        )
         app = (
             Application.builder()
             .token(self._token)
             .request(request)
             .get_updates_request(updates_request)
+            .update_queue(self._update_queue)
             .build()
         )
         self._register_handlers(app)
@@ -513,6 +1118,22 @@ class TelegramChannel:
         self.failure = None
         self._intake_stopped = False
         self._drop_delayed_deliveries = False
+        self._intake_started = False
+        self._seen = MessageDeduplicator()
+        # The SQLite spool, not shutdown RAM, is authoritative for identified
+        # Telegram work when the same channel object is started again.
+        self._held_inbound = {
+            key: message
+            for key, message in self._held_inbound.items()
+            if not message.claim_ids
+        }
+        self._polling_progress = asyncio.Event()
+        self._polling_last_progress = 0.0
+        self._update_queue = _DurableUpdateQueue(
+            self._inbound_store,
+            self._fail,
+            self._allowed_users,
+        )
         app = self._build_application()
         self._app = app
         try:
@@ -523,50 +1144,30 @@ class TelegramChannel:
                 .lstrip("@")
                 .lower()
             )
+            # Replay locally committed work before accepting new server work.
+            await self._update_queue.replay_pending(self._bot)
             await app.start()
-            if app.updater is None:
-                raise ChannelError("Telegram update delivery is unavailable.")
-            if self._webhook_url:
-                webhook_path = urlparse(self._webhook_url).path or "/telegram"
-                await asyncio.wait_for(
-                    app.updater.start_webhook(
-                        listen=self._webhook_host,
-                        port=self._webhook_port,
-                        url_path=webhook_path,
-                        webhook_url=self._webhook_url,
-                        secret_token=self._webhook_secret,
-                        allowed_updates=Update.ALL_TYPES,
-                        # A message accepted by Telegram while Pilotage is
-                        # stopped is still work owed to the user.  Startup must
-                        # never erase that server-side backlog implicitly.
-                        drop_pending_updates=False,
-                    ),
-                    timeout=30.0,
-                )
-                self._webhook_mode = True
-            else:
-                await app.bot.delete_webhook(drop_pending_updates=False)
-                await asyncio.wait_for(
-                    app.updater.start_polling(
-                        drop_pending_updates=False,
-                        error_callback=self._polling_error_callback,
-                    ),
-                    timeout=30.0,
-                )
-                self._webhook_mode = False
+            self._running = True
+            await self._start_update_intake()
         except asyncio.CancelledError:
-            await asyncio.shield(
-                self.stop(
+            cleanup = (
+                self.abort_startup()
+                if self._startup_hold_closed
+                else self.stop(
                     drain_timeout_seconds=STARTUP_FAILURE_DRAIN_SECONDS
                 )
             )
+            await asyncio.shield(cleanup)
             raise
         except BaseException as exc:
-            await asyncio.shield(
-                self.stop(
+            cleanup = (
+                self.abort_startup()
+                if self._startup_hold_closed
+                else self.stop(
                     drain_timeout_seconds=STARTUP_FAILURE_DRAIN_SECONDS
                 )
             )
+            await asyncio.shield(cleanup)
             if isinstance(exc, InvalidToken):
                 raise ChannelError("Telegram rejected TELEGRAM_BOT_TOKEN.") from exc
             if isinstance(exc, ChannelError):
@@ -575,7 +1176,60 @@ class TelegramChannel:
                 "Telegram could not start: " + _redact_error(exc, self._token)
             ) from exc
 
-        self._running = True
+        self._log_ready()
+
+    async def _start_update_intake(self) -> None:
+        if self._intake_started:
+            return
+        app = self._app
+        if app is None or app.updater is None:
+            raise ChannelError("Telegram update delivery is unavailable.")
+        if self._webhook_url:
+            webhook_path = urlparse(self._webhook_url).path or "/telegram"
+            await asyncio.wait_for(
+                app.updater.start_webhook(
+                    listen=self._webhook_host,
+                    port=self._webhook_port,
+                    url_path=webhook_path,
+                    webhook_url=self._webhook_url,
+                    secret_token=self._webhook_secret,
+                    allowed_updates=Update.ALL_TYPES,
+                    # A message accepted by Telegram while Pilotage is stopped
+                    # remains work owed to the user.
+                    drop_pending_updates=False,
+                ),
+                timeout=30.0,
+            )
+            self._webhook_mode = True
+        else:
+            await app.bot.delete_webhook(drop_pending_updates=False)
+            await asyncio.wait_for(
+                app.updater.start_polling(
+                    drop_pending_updates=False,
+                    error_callback=self._polling_error_callback,
+                ),
+                timeout=30.0,
+            )
+            try:
+                assert self._polling_progress is not None
+                await asyncio.wait_for(
+                    self._polling_progress.wait(),
+                    timeout=POLLING_STARTUP_PROGRESS_SECONDS,
+                )
+            except asyncio.TimeoutError as exc:
+                raise ChannelError(
+                    "Telegram polling made no successful getUpdates progress "
+                    f"within {POLLING_STARTUP_PROGRESS_SECONDS:.0f}s."
+                ) from exc
+            self._webhook_mode = False
+        self._intake_started = True
+        if not self._webhook_mode:
+            self._polling_watchdog_task = asyncio.create_task(
+                self._polling_watchdog(),
+                name="pilotage-telegram-polling-watchdog",
+            )
+
+    def _log_ready(self) -> None:
         self._release_held_inbound()
         logger.info(
             "Telegram channel ready as %s (%s)",
@@ -595,12 +1249,16 @@ class TelegramChannel:
                 _redact_error(exc, self._token),
             )
 
-    async def stop_intake(self) -> None:
+    async def stop_intake(self, *, release_held_inbound: bool = True) -> None:
         """Stop receiving updates and dispatch every batch already accepted."""
 
         if self._intake_stopped:
-            await self.release_inbound()
-            self._release_held_inbound()
+            if release_held_inbound:
+                await self.release_inbound()
+                self._release_held_inbound()
+            else:
+                self._startup_updates.clear()
+                self._held_inbound.clear()
             return
         self._intake_stopped = True
         # Hermes fences delayed delivery before the first teardown await. PTB
@@ -608,16 +1266,29 @@ class TelegramChannel:
         # be held instead of scheduling work that teardown will never observe.
         self._drop_delayed_deliveries = True
         self._running = False
+        watchdog = self._polling_watchdog_task
+        self._polling_watchdog_task = None
+        if watchdog is not None and watchdog is not asyncio.current_task():
+            watchdog.cancel()
+            await asyncio.gather(watchdog, return_exceptions=True)
         app = self._app
         updater = getattr(app, "updater", None) if app is not None else None
         if updater is not None and getattr(updater, "running", False):
             await self._bounded_step(updater.stop(), "update receiver stop")
 
-        await self.release_inbound()
+        if release_held_inbound:
+            await self.release_inbound()
+        else:
+            # The durable spool remains pending. Drop only the in-memory PTB
+            # callback so restart replay, not failed-startup teardown, owns it.
+            self._startup_updates.clear()
         timers = set(self._pending_tasks.values())
         for key in list(self._pending):
             self._flush_pending_now(key)
-        self._release_held_inbound()
+        if release_held_inbound:
+            self._release_held_inbound()
+        else:
+            self._held_inbound.clear()
         for task in timers:
             task.cancel()
         if timers:
@@ -628,12 +1299,20 @@ class TelegramChannel:
             # snapshot so callbacks already accepted by PTB can reach the hold
             # queue and then join Pilotage's bounded drain.
             await self._bounded_step(app.stop(), "application stop")
-        self._release_held_inbound()
+        if release_held_inbound:
+            self._release_held_inbound()
+        else:
+            self._held_inbound.clear()
 
-    async def stop(self, *, drain_timeout_seconds: float = 0.0) -> None:
+    async def stop(
+        self,
+        *,
+        drain_timeout_seconds: float = 0.0,
+        release_held_inbound: bool = True,
+    ) -> None:
         """Stop intake, then give already accepted work a bounded drain."""
 
-        await self.stop_intake()
+        await self.stop_intake(release_held_inbound=release_held_inbound)
 
         loop = asyncio.get_running_loop()
         # Telegram may already have advanced its server offset when a channel
@@ -664,7 +1343,10 @@ class TelegramChannel:
             task.cancel()
         if intake:
             await asyncio.gather(*intake, return_exceptions=True)
-        self._release_held_inbound()
+        if release_held_inbound:
+            self._release_held_inbound()
+        else:
+            self._held_inbound.clear()
 
         owned = set(self._pending_tasks.values())
         owned.update(self._turn_tasks.values())
@@ -694,7 +1376,12 @@ class TelegramChannel:
         self._background_tasks.clear()
         self._intake_tasks.clear()
         self._startup_updates.clear()
+        self._startup_held_claims.clear()
         self._startup_hold_closed = False
+        self._startup_approvals_enabled = False
+        self._intake_started = False
+        self._polling_progress = None
+        self._polling_last_progress = 0.0
         for fence in self._media_downloads.values():
             fence.changed.set()
         self._media_downloads.clear()
@@ -715,6 +1402,14 @@ class TelegramChannel:
                 )
             self.stopped.set()
 
+    async def abort_startup(self) -> None:
+        """Stop without dispatching or completing startup-spooled updates."""
+
+        await self.stop(
+            drain_timeout_seconds=0.0,
+            release_held_inbound=False,
+        )
+
     def _polling_error_callback(self, error: BaseException) -> None:
         written = _redact_error(error, self._token)
         if isinstance(error, Conflict) or "conflict" in written.lower():
@@ -728,12 +1423,51 @@ class TelegramChannel:
             return
         logger.warning("Telegram polling error: %s", written)
 
+    def _record_polling_progress(self) -> None:
+        self._polling_last_progress = time.monotonic()
+        progress = self._polling_progress
+        if progress is not None:
+            progress.set()
+
+    async def _polling_watchdog(self) -> None:
+        """Let PTB recover briefly, then fail loudly if polling stays deaf."""
+
+        try:
+            while self._running and not self._webhook_mode:
+                await asyncio.sleep(POLLING_WATCHDOG_INTERVAL_SECONDS)
+                if not self._running or self._webhook_mode:
+                    return
+                app = self._app
+                updater = getattr(app, "updater", None) if app is not None else None
+                if updater is None or not getattr(updater, "running", False):
+                    self._fail("Telegram polling stopped while Pilotage was running.")
+                    return
+                stalled_for = time.monotonic() - self._polling_last_progress
+                if stalled_for > POLLING_STALL_SECONDS:
+                    self._fail(
+                        "Telegram polling made no successful getUpdates progress "
+                        f"for {stalled_for:.0f}s."
+                    )
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._fail(
+                "Telegram polling watchdog failed: "
+                + _redact_error(exc, self._token)
+            )
+
     async def _handle_update_error(self, update: object, context: Any) -> None:
         error = getattr(context, "error", RuntimeError("unknown update error"))
         logger.error(
             "Telegram update handling failed: %s",
             _redact_error(error, self._token),
         )
+        if _durable_update_required(update):
+            self._fail(
+                "Telegram stopped after an accepted update failed; its durable "
+                "input will replay after restart."
+            )
 
     def _fail(self, message: str) -> None:
         if self.failure:
@@ -907,9 +1641,57 @@ class TelegramChannel:
 
     @staticmethod
     def _message_from_update(update: Any) -> Any:
-        return getattr(update, "effective_message", None) or getattr(
-            update, "message", None
-        )
+        return _update_message(update)
+
+    def _claim_ids_for_update(self, update: Any) -> List[str]:
+        update_id = getattr(update, "update_id", None)
+        if update_id is None:
+            # Direct handler calls in tests have no PTB update identity. Every
+            # production callback enters through the durable update queue.
+            return []
+        try:
+            return [self._inbound_store.claim_id(update_id)]
+        except _InboundSpoolError as exc:
+            self._fail("Telegram delivered an update without a stable identity.")
+            raise ChannelError("Telegram update identity is invalid") from exc
+
+    def persist_completed_claims(self, claim_ids: Sequence[str]) -> None:
+        """Fence recovered/model-complete input before its handler returns."""
+
+        claims = list(claim_ids)
+        self._inbound_store.complete(claims)
+        self._cache_completed_claims(claims)
+
+    def _cache_completed_claims(self, claim_ids: Sequence[str]) -> None:
+        with self._completed_claims_lock:
+            for claim_id in claim_ids:
+                self._completed_claims.is_duplicate(claim_id)
+
+    def _claims_are_completed(self, claim_ids: Sequence[str]) -> bool:
+        if not claim_ids:
+            return False
+        with self._completed_claims_lock:
+            completed = all(
+                self._completed_claims.contains(claim_id) for claim_id in claim_ids
+            )
+        if completed:
+            self._update_queue.forget_completed(claim_ids)
+        return completed
+
+    async def _complete_claims(self, claim_ids: Sequence[str]) -> None:
+        claims = list(dict.fromkeys(value for value in claim_ids if value))
+        if not claims:
+            return
+        if self._claims_are_completed(claims):
+            return
+        try:
+            await asyncio.to_thread(self._inbound_store.complete, claims)
+        except (OSError, sqlite3.Error, _InboundSpoolError) as exc:
+            logger.exception("Persisting completed Telegram claims failed")
+            self._fail("The Telegram durable inbound spool failed.")
+            raise ChannelError("Telegram claims could not be completed") from exc
+        self._cache_completed_claims(claims)
+        self._update_queue.forget_completed(claims)
 
     async def _handle_text(
         self,
@@ -919,14 +1701,18 @@ class TelegramChannel:
         _startup_replay: bool = False,
     ) -> None:
         async with self._track_intake():
+            claim_ids = self._claim_ids_for_update(update)
+            if self._claims_are_completed(claim_ids):
+                return
             message = self._message_from_update(update)
             if message is None or not self._authorized(message):
+                await self._complete_claims(claim_ids)
                 return
             if not _startup_replay and self._hold_startup_update(
-                "text", update, context
+                "text", update, context, claim_ids
             ):
                 return
-            await self._accept_message(message, [])
+            await self._accept_message(message, [], claim_ids=claim_ids)
 
     async def _handle_command(
         self,
@@ -936,14 +1722,18 @@ class TelegramChannel:
         _startup_replay: bool = False,
     ) -> None:
         async with self._track_intake():
+            claim_ids = self._claim_ids_for_update(update)
+            if self._claims_are_completed(claim_ids):
+                return
             message = self._message_from_update(update)
             if message is None or not self._authorized(message):
+                await self._complete_claims(claim_ids)
                 return
             if not _startup_replay and self._hold_startup_update(
-                "command", update, context
+                "command", update, context, claim_ids
             ):
                 return
-            await self._accept_message(message, [])
+            await self._accept_message(message, [], claim_ids=claim_ids)
 
     async def _handle_location(
         self,
@@ -953,11 +1743,15 @@ class TelegramChannel:
         _startup_replay: bool = False,
     ) -> None:
         async with self._track_intake():
+            claim_ids = self._claim_ids_for_update(update)
+            if self._claims_are_completed(claim_ids):
+                return
             message = self._message_from_update(update)
             if message is None or not self._authorized(message):
+                await self._complete_claims(claim_ids)
                 return
             if not _startup_replay and self._hold_startup_update(
-                "location", update, context
+                "location", update, context, claim_ids
             ):
                 return
             venue = getattr(message, "venue", None)
@@ -967,10 +1761,12 @@ class TelegramChannel:
                 else getattr(message, "location", None)
             )
             if location is None:
+                await self._complete_claims(claim_ids)
                 return
             latitude = getattr(location, "latitude", None)
             longitude = getattr(location, "longitude", None)
             if latitude is None or longitude is None:
+                await self._complete_claims(claim_ids)
                 return
             parts = ["[The sender shared a location pin.]"]
             if venue is not None:
@@ -988,7 +1784,12 @@ class TelegramChannel:
                     f"{latitude},{longitude}",
                 ]
             )
-            await self._accept_message(message, [], text_override="\n".join(parts))
+            await self._accept_message(
+                message,
+                [],
+                claim_ids=claim_ids,
+                text_override="\n".join(parts),
+            )
 
     async def _handle_media(
         self,
@@ -998,12 +1799,16 @@ class TelegramChannel:
         _startup_replay: bool = False,
     ) -> None:
         async with self._track_intake():
+            claim_ids = self._claim_ids_for_update(update)
+            if self._claims_are_completed(claim_ids):
+                return
             message = self._message_from_update(update)
             # Authorization must precede get_file/download_as_bytearray.
             if message is None or not self._authorized(message):
+                await self._complete_claims(claim_ids)
                 return
             if not _startup_replay and self._hold_startup_update(
-                "media", update, context
+                "media", update, context, claim_ids
             ):
                 return
             session_id = self._message_session_id(message)
@@ -1018,7 +1823,12 @@ class TelegramChannel:
                     )
                     attachments = []
                     notes = ["[A Telegram attachment could not be downloaded.]"]
-                await self._accept_message(message, attachments, notes=notes)
+                await self._accept_message(
+                    message,
+                    attachments,
+                    claim_ids=claim_ids,
+                    notes=notes,
+                )
             finally:
                 self._end_media_download(session_id)
 
@@ -1059,12 +1869,42 @@ class TelegramChannel:
                 self._media_downloads.pop(session_id, None)
 
     def _hold_startup_update(
-        self, kind: str, update: Any, context: Any
+        self,
+        kind: str,
+        update: Any,
+        context: Any,
+        claim_ids: Sequence[str],
     ) -> bool:
         if not self._startup_hold_closed:
             return False
+        claim_id = claim_ids[0] if claim_ids else ""
+        if claim_id and claim_id in self._startup_held_claims:
+            return True
+        if (
+            self._startup_approvals_enabled
+            and kind == "command"
+            and self._startup_approval_command(update)
+        ):
+            return False
         self._startup_updates.append((kind, update, context))
+        if claim_id:
+            self._startup_held_claims.add(claim_id)
         return True
+
+    def _startup_approval_command(self, update: Any) -> bool:
+        """Let approval control reach a turn resumed behind the startup gate."""
+
+        message = getattr(update, "effective_message", None)
+        if message is None:
+            return False
+        text = _expand_telegram_text_links(message)
+        if _is_group(message):
+            text = self._clean_routing_mention(text)
+        invocation = parse_command(text.strip())
+        return bool(
+            invocation is not None
+            and invocation.command.name in {"approve", "deny"}
+        )
 
     async def _replay_startup_update(
         self, kind: str, update: Any, context: Any
@@ -1088,11 +1928,13 @@ class TelegramChannel:
         message: Any,
         attachments: List[media.Attachment],
         *,
+        claim_ids: Sequence[str] = (),
         text_override: Optional[str] = None,
         notes: Optional[List[str]] = None,
     ) -> None:
         message_key = self._message_key(message)
         if message_key and self._seen.is_duplicate(message_key):
+            await self._complete_claims(claim_ids)
             return
 
         chat = getattr(message, "chat", None)
@@ -1104,11 +1946,7 @@ class TelegramChannel:
         raw_text = (
             text_override
             if text_override is not None
-            else str(
-                getattr(message, "text", None)
-                or getattr(message, "caption", None)
-                or ""
-            )
+            else _expand_telegram_text_links(message)
         )
         clean_text = (
             self._clean_routing_mention(raw_text)
@@ -1120,8 +1958,9 @@ class TelegramChannel:
         session_id = self._message_session_id(message)
         message_id = str(getattr(message, "message_id", "") or "")
         if invocation is not None:
-            if invocation.command.name == "new":
-                self._drop_pending_session(session_id)
+            if invocation.command.name == "new" and not invocation.arguments:
+                dropped_claims = self._drop_pending_session(session_id)
+                await self._complete_claims(dropped_claims)
             task = asyncio.create_task(
                 self._run_command(
                     chat_id,
@@ -1129,6 +1968,7 @@ class TelegramChannel:
                     message_id,
                     thread_id,
                     invocation,
+                    list(claim_ids),
                 )
             )
             self._background_tasks.add(task)
@@ -1144,6 +1984,7 @@ class TelegramChannel:
             user_id=user_id,
         )
         if not body and not attachments:
+            await self._complete_claims(claim_ids)
             return
 
         username = str(getattr(user, "username", "") or "")
@@ -1157,6 +1998,7 @@ class TelegramChannel:
             is_group=is_group,
             thread_id=thread_id,
             message_ids=[message_id] if message_id else [],
+            claim_ids=list(claim_ids),
             attachments=attachments,
         )
         self._enqueue(inbound)
@@ -1212,15 +2054,19 @@ class TelegramChannel:
         message_id: str,
         thread_id: str,
         invocation: CommandInvocation,
+        claim_ids: List[str],
     ) -> None:
         try:
+            claim_id = claim_ids[-1] if claim_ids else ""
             await self._on_command(
                 chat_id,
                 session_id,
                 message_id,
                 thread_id,
                 invocation,
+                claim_id,
             )
+            await self._complete_claims(claim_ids)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1229,17 +2075,24 @@ class TelegramChannel:
                 invocation.command.name,
                 identity_pseudonym(chat_id, "tg"),
             )
+            if claim_ids:
+                self._fail("A durable Telegram command could not be completed.")
 
-    def _drop_pending_session(self, session_id: str) -> None:
+    def _drop_pending_session(self, session_id: str) -> List[str]:
         task = self._pending_tasks.pop(session_id, None)
         if task is not None:
             task.cancel()
-        self._pending.pop(session_id, None)
+        dropped = self._pending.pop(session_id, None)
         self._pending_started.pop(session_id, None)
-        self._queued.pop(session_id, None)
+        queued = self._queued.pop(session_id, None)
         fence = self._media_downloads.get(session_id)
         if fence is not None and fence.count == 0:
             self._media_downloads.pop(session_id, None)
+        claims: List[str] = []
+        for message in (dropped, queued):
+            if message is not None:
+                claims.extend(message.claim_ids)
+        return claims
 
     async def _download_attachments(
         self, message: Any
@@ -1426,6 +2279,7 @@ class TelegramChannel:
                 else message.text
             )
         pending.message_ids.extend(message.message_ids)
+        pending.claim_ids.extend(message.claim_ids)
         pending.attachments.extend(message.attachments)
         pending.chat_id = message.chat_id
         pending.user_id = message.user_id
@@ -1582,6 +2436,7 @@ class TelegramChannel:
             while message is not None:
                 try:
                     await self._handler(message)
+                    await self._complete_claims(message.claim_ids)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -1589,6 +2444,10 @@ class TelegramChannel:
                         "Handling a Telegram message from %s failed",
                         identity_pseudonym(message.chat_id, "tg"),
                     )
+                    if message.claim_ids:
+                        self._fail(
+                            "A durable Telegram message could not be completed."
+                        )
                 if self.failure:
                     self._queued.pop(key, None)
                     break

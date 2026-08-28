@@ -13,7 +13,7 @@ from typing import Dict
 import httpx
 from openai import AsyncOpenAI
 
-from .auth import Credentials, chatgpt_account_id
+from .auth import Credentials, chatgpt_account_id, validated_codex_base_url
 
 CODEX_USER_AGENT = "codex_cli_rs/0.0.0 (Pilotage Agent)"
 
@@ -49,9 +49,10 @@ def cloudflare_headers(access_token: str) -> Dict[str, str]:
 
 
 def build_client(credentials: Credentials, *, timeout_seconds: float) -> AsyncOpenAI:
+    base_url = validated_codex_base_url(credentials.base_url)
     return AsyncOpenAI(
         api_key=credentials.access_token,
-        base_url=credentials.base_url,
+        base_url=base_url,
         default_headers=cloudflare_headers(credentials.access_token),
         timeout=timeout_seconds,
         max_retries=2,

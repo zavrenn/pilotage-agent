@@ -141,7 +141,4 @@ code_execution:
 skills:
   # Skills are installed per profile under ~/.pilotage-agent/skills.
   template_vars: true
-  # Trusted skills may opt into Hermes' inline !`command` expansion.
-  inline_shell: false
-  inline_shell_timeout: 10
   # disabled: [skill-name]

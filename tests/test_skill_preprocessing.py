@@ -1,20 +1,16 @@
-"""Contract for Hermes-compatible skill template and inline-shell preprocessing."""
+"""Contract for inert skill template preprocessing."""
 
 from __future__ import annotations
 
 import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from pilotage.settings import Settings
 from pilotage.tools import ToolContext
 from pilotage.tools.skill_preprocessing import (
-    expand_inline_shell,
     preprocess_skill_content,
-    run_inline_shell,
     substitute_template_vars,
 )
 from pilotage.tools.skills import handle_skill_view, skill_view
@@ -73,67 +69,19 @@ class TemplateVariableTests(unittest.TestCase):
         self.assertEqual(rendered, "${HERMES_SESSION_ID}")
 
 
-class InlineShellTests(unittest.TestCase):
-    def test_inline_shell_is_off_by_default(self):
+class ExecutablePreprocessingTests(unittest.TestCase):
+    def test_inline_shell_syntax_is_always_inert(self):
         content = "Today is !`date +%F`"
-        self.assertEqual(
-            preprocess_skill_content(content, Path("/skill"), skills_cfg={}),
-            content,
-        )
-
-    def test_enabled_inline_shell_uses_bash_skill_cwd_and_timeout(self):
-        completed = subprocess.CompletedProcess(
-            args=["bash", "-c", "pwd"],
-            returncode=0,
-            stdout="/skill\n",
-            stderr="",
-        )
-        with mock.patch(
-            "pilotage.tools.skill_preprocessing.subprocess.run",
-            return_value=completed,
-        ) as run:
-            rendered = preprocess_skill_content(
-                "cwd=!`pwd`",
-                Path("/skill"),
-                skills_cfg={"inline_shell": True, "inline_shell_timeout": 7},
-            )
-
-        self.assertEqual(rendered, "cwd=/skill")
-        args, kwargs = run.call_args
-        self.assertEqual(args[0], ["bash", "-c", "pwd"])
-        self.assertEqual(kwargs["cwd"], str(Path("/skill")))
-        self.assertEqual(kwargs["timeout"], 7)
-        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
-
-    def test_failure_and_timeout_become_content_markers(self):
-        with mock.patch(
-            "pilotage.tools.skill_preprocessing.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(["bash"], 2),
-        ):
-            rendered = expand_inline_shell("value=!`slow`", Path("/skill"), 2)
-        self.assertIn("timeout after 2s", rendered)
-
-        with mock.patch(
-            "pilotage.tools.skill_preprocessing.subprocess.run",
-            side_effect=FileNotFoundError,
-        ):
-            rendered = run_inline_shell("echo ok", Path("/skill"), 2)
-        self.assertEqual(rendered, "[inline-shell error: bash not found]")
-
-    def test_inline_output_is_bounded(self):
-        completed = subprocess.CompletedProcess(
-            args=["bash"],
-            returncode=0,
-            stdout="x" * 5000,
-            stderr="",
-        )
-        with mock.patch(
-            "pilotage.tools.skill_preprocessing.subprocess.run",
-            return_value=completed,
-        ):
-            rendered = run_inline_shell("large", Path("/skill"), 2)
-        self.assertTrue(rendered.endswith("...[truncated]"))
-        self.assertLess(len(rendered), 4100)
+        for config in ({}, {"inline_shell": True, "inline_shell_timeout": 1}):
+            with self.subTest(config=config):
+                self.assertEqual(
+                    preprocess_skill_content(
+                        content,
+                        Path("/skill"),
+                        skills_cfg=config,
+                    ),
+                    content,
+                )
 
 
 class SkillViewPreprocessingTests(unittest.IsolatedAsyncioTestCase):
@@ -174,23 +122,19 @@ class SkillViewPreprocessingTests(unittest.IsolatedAsyncioTestCase):
         config = _Config(self.root, {"inline_shell": True})
         context = ToolContext("chat", config)
 
-        with mock.patch(
-            "pilotage.tools.skill_preprocessing.subprocess.run",
-            side_effect=AssertionError("linked files must not execute"),
-        ):
-            result = json.loads(
-                await handle_skill_view(
-                    {"name": "example", "file_path": "references/literal.md"},
-                    context,
-                )
+        result = json.loads(
+            await handle_skill_view(
+                {"name": "example", "file_path": "references/literal.md"},
+                context,
             )
+        )
 
         self.assertEqual(
             result["content"],
             "${HERMES_SESSION_ID} !`dangerous command`",
         )
 
-    async def test_inline_shell_runs_only_when_profile_config_enables_it(self):
+    async def test_main_skill_never_executes_inline_shell_syntax(self):
         (self.skill_dir / "SKILL.md").write_text(
             "---\nname: example\ndescription: Example.\nversion: 1\n"
             "channels: [whatsapp, telegram]\n---\n"
@@ -202,20 +146,9 @@ class SkillViewPreprocessingTests(unittest.IsolatedAsyncioTestCase):
             {"inline_shell": True, "inline_shell_timeout": 3},
         )
         context = ToolContext("chat", config)
-        completed = subprocess.CompletedProcess(
-            args=["bash"],
-            returncode=0,
-            stdout="ready",
-            stderr="",
-        )
+        result = json.loads(await handle_skill_view({"name": "example"}, context))
 
-        with mock.patch(
-            "pilotage.tools.skill_preprocessing.subprocess.run",
-            return_value=completed,
-        ):
-            result = json.loads(await handle_skill_view({"name": "example"}, context))
-
-        self.assertIn("value=ready", result["content"])
+        self.assertIn("value=!`printf ready`", result["content"])
 
 
 if __name__ == "__main__":

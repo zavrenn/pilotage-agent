@@ -9,7 +9,10 @@ the wrong thing.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any, Dict, List
 
 from pilotage.channels.whatsapp import InboundMessage, WhatsAppChannel
@@ -37,16 +40,21 @@ class FakeHttp:
         return FakeResponse()
 
 
-def _channel() -> WhatsAppChannel:
+def _channel(state_dir: Path) -> WhatsAppChannel:
     async def handler(message: InboundMessage) -> None:  # pragma: no cover
         raise AssertionError("no turn should run here")
 
     async def on_command(
-        chat_id: str, session_id: str, message_id: str, _invocation
+        chat_id: str,
+        session_id: str,
+        message_id: str,
+        _invocation,
+        _claim_id: str,
     ) -> None:  # pragma: no cover
         raise AssertionError("no command should run here")
 
     config = Config.load()
+    object.__setattr__(config, "state_dir", state_dir)
     object.__setattr__(config, "allowed_senders", frozenset({"212600000000"}))
     object.__setattr__(config, "text_batch_delay_seconds", 30.0)
     return WhatsAppChannel(config, handler, on_command)
@@ -54,7 +62,9 @@ def _channel() -> WhatsAppChannel:
 
 class SendTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.channel = _channel()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.channel = _channel(Path(temporary.name))
         self.http = FakeHttp()
         self.channel._http = self.http
 
@@ -76,12 +86,17 @@ class BatchTests(unittest.IsolatedAsyncioTestCase):
     """Three messages are one question, and the answer lands under the last."""
 
     def setUp(self):
-        self.channel = _channel()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.channel = _channel(Path(temporary.name))
 
     def _event(self, text: str, message_id: str) -> Dict[str, Any]:
         return {
             "chatId": "chat",
             "messageId": message_id,
+            "_pilotageClaimId": hashlib.sha256(
+                f"chat|{message_id}".encode("utf-8")
+            ).hexdigest(),
             "senderId": "212600000000@s.whatsapp.net",
             "senderNumber": "212600000000",
             "body": text,
@@ -104,7 +119,9 @@ class BatchTests(unittest.IsolatedAsyncioTestCase):
 
 class DirectMessageIdentityTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.channel = _channel()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.channel = _channel(Path(temporary.name))
 
     def _event(
         self,
@@ -117,6 +134,9 @@ class DirectMessageIdentityTests(unittest.IsolatedAsyncioTestCase):
         return {
             "chatId": chat_id,
             "messageId": message_id,
+            "_pilotageClaimId": hashlib.sha256(
+                f"{chat_id}|{message_id}".encode("utf-8")
+            ).hexdigest(),
             "senderId": chat_id,
             "senderNumber": sender_number,
             "identities": identities,
@@ -162,7 +182,9 @@ class DirectMessageIdentityTests(unittest.IsolatedAsyncioTestCase):
 
 class GroupIsolationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.channel = _channel()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.channel = _channel(Path(temporary.name))
         object.__setattr__(
             self.channel._config,
             "allowed_senders",
@@ -181,6 +203,9 @@ class GroupIsolationTests(unittest.IsolatedAsyncioTestCase):
         return {
             "chatId": "120363000000000000@g.us",
             "messageId": message_id,
+            "_pilotageClaimId": hashlib.sha256(
+                f"{participant}|{message_id}".encode("utf-8")
+            ).hexdigest(),
             "senderId": participant,
             "senderNumber": sender_number,
             "identities": identities or [],

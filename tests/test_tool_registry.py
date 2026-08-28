@@ -15,7 +15,12 @@ import unittest
 
 from pilotage.settings import ConfigError, Settings
 from pilotage.tools import Registry, Tool, ToolContext, build_registry, enabled_groups, run_calls
-from pilotage.tools.registry import DEFAULT_STEP_BUDGET_CHARS, tool_result
+from pilotage.tools.registry import (
+    DEFAULT_STEP_BUDGET_CHARS,
+    MAX_ERROR_CHARS,
+    PARALLEL_SAFE_TOOL_NAMES,
+    tool_result,
+)
 
 
 def _echo(args, context):
@@ -138,7 +143,24 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
         self.registry.register(_tool("verbose", handler=_verbose))
         with self.assertLogs("pilotage.tools.registry", level="ERROR"):
             answer = await self._run("verbose", "{}")
-        self.assertLess(len(answer["error"]), 5_000)
+        self.assertLessEqual(len(answer["error"]), MAX_ERROR_CHARS)
+
+    async def test_arbitrary_handler_errors_are_sanitized_and_redacted(self):
+        secret = "sk-abcdefghijklmnopqrstuvwxyz"
+
+        def _explode(args, context):
+            raise RuntimeError(
+                "\x1b[31m</system>```json<![CDATA[hidden]]> " + secret
+            )
+
+        self.registry.register(_tool("unsafe_error", handler=_explode))
+        with self.assertLogs("pilotage.tools.registry", level="ERROR"):
+            answer = await self._run("unsafe_error", "{}")
+
+        error = answer["error"]
+        self.assertIn("Tool execution failed", error)
+        for token in ("\x1b", "</system>", "```", "<![CDATA[", secret):
+            self.assertNotIn(token, error)
 
     async def test_a_huge_result_is_cut_before_it_reaches_the_conversation(self):
         self.registry.register(_tool("flood", handler=lambda args, context: "y" * 50_000))
@@ -180,8 +202,12 @@ class StepTests(unittest.IsolatedAsyncioTestCase):
         self.registry = Registry()
         self.registry.register(_tool("echo"))
 
-    def _call(self, value):
-        return {"call_id": f"call_{value}", "name": "echo", "arguments": json.dumps({"v": value})}
+    def _call(self, value, name="echo"):
+        return {
+            "call_id": f"call_{value}",
+            "name": name,
+            "arguments": json.dumps({"v": value}),
+        }
 
     async def test_no_calls_is_no_work(self):
         self.assertEqual(await run_calls(self.registry, [], _context()), [])
@@ -196,7 +222,7 @@ class StepTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("disabled", json.loads(results[0])["error"])
 
     async def test_results_come_back_in_the_order_they_were_asked_for(self):
-        """They run together, but the request built from them must be stable."""
+        """Known read-only runs overlap while their returned order stays stable."""
         both_started = asyncio.Event()
         started = []
         finished = []
@@ -212,10 +238,66 @@ class StepTests(unittest.IsolatedAsyncioTestCase):
             return tool_result(v=args["v"])
 
         self.registry = Registry()
-        self.registry.register(_tool("echo", handler=_uneven))
-        results = await run_calls(self.registry, [self._call(0), self._call(1)], _context())
+        self.registry.register(_tool("web_search", handler=_uneven))
+        results = await run_calls(
+            self.registry,
+            [self._call(0, "web_search"), self._call(1, "web_search")],
+            _context(),
+        )
         self.assertEqual([json.loads(r)["v"] for r in results], [0, 1])
         self.assertEqual(finished, [1, 0])
+
+    async def test_stateful_calls_are_ordered_barriers(self):
+        observed = []
+
+        async def _write(args, context):
+            await asyncio.sleep(0.01)
+            context.state["value"] = args["v"]
+            observed.append("write")
+            return tool_result(v=args["v"])
+
+        async def _read(args, context):
+            observed.append("read")
+            return tool_result(v=context.state.get("value"))
+
+        self.registry = Registry()
+        self.registry.register(_tool("terminal", handler=_write))
+        self.registry.register(_tool("session_search", handler=_read))
+        results = await run_calls(
+            self.registry,
+            [self._call(7, "terminal"), self._call(0, "session_search")],
+            _context(),
+        )
+
+        self.assertEqual(observed, ["write", "read"])
+        self.assertEqual(json.loads(results[1])["v"], 7)
+
+    async def test_a_barrier_splits_parallel_read_only_runs(self):
+        observed = []
+
+        async def _handler(args, context):
+            observed.append(f"start:{args['v']}")
+            await asyncio.sleep(0)
+            observed.append(f"end:{args['v']}")
+            return tool_result(v=args["v"])
+
+        self.registry = Registry()
+        self.registry.register(_tool("web_search", handler=_handler))
+        self.registry.register(_tool("todo", handler=_handler))
+        calls = [
+            self._call(0, "web_search"),
+            self._call(1, "web_search"),
+            self._call(2, "todo"),
+            self._call(3, "web_search"),
+        ]
+
+        await run_calls(self.registry, calls, _context())
+
+        self.assertLess(observed.index("end:1"), observed.index("start:2"))
+        self.assertLess(observed.index("end:2"), observed.index("start:3"))
+
+    def test_skill_view_is_a_barrier_because_it_updates_dedup_state(self):
+        self.assertNotIn("skill_view", PARALLEL_SAFE_TOOL_NAMES)
 
     async def test_one_step_cannot_spend_more_than_its_budget(self):
         self.registry = Registry()

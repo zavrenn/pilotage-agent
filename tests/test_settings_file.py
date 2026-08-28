@@ -102,11 +102,38 @@ class LoadingTests(unittest.TestCase):
             settings.text("agent.model")
 
     def test_flags_accept_what_operators_actually_write(self):
-        settings = self._write("a:\n  yaml: true\n  word: 'yes'\n  digit: 1\n  off: 'no'\n")
-        self.assertTrue(settings.flag("a.yaml"))
-        self.assertTrue(settings.flag("a.word"))
-        self.assertTrue(settings.flag("a.digit"))
-        self.assertFalse(settings.flag("a.off"))
+        settings = self._write(
+            "approvals:\n"
+            "  memory: true\n"
+            "  skills: 'yes'\n"
+            "  cron: 1\n"
+            "sessions:\n"
+            "  auto_prune: 'no'\n"
+        )
+        self.assertTrue(settings.flag("approvals.memory"))
+        self.assertTrue(settings.flag("approvals.skills"))
+        self.assertTrue(settings.flag("approvals.cron"))
+        self.assertFalse(settings.flag("sessions.auto_prune"))
+
+    def test_duplicate_keys_are_refused_at_every_depth(self):
+        for body in (
+            "agent:\n  model: gpt-5.6-sol\nagent:\n  model: gpt-5.6-terra\n",
+            "agent:\n  model: gpt-5.6-sol\n  model: gpt-5.6-terra\n",
+        ):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(ConfigError, "duplicate key"):
+                    self._write(body)
+
+    def test_unknown_keys_are_refused_recursively_with_a_hint(self):
+        with self.assertRaisesRegex(
+            ConfigError,
+            r"unknown setting 'tools\.enabld'.*tools\.enabled",
+        ):
+            self._write("tools:\n  enabld: [terminal]\n")
+
+    def test_unknown_top_level_key_is_refused(self):
+        with self.assertRaisesRegex(ConfigError, "unknown setting 'plugims'"):
+            self._write("plugims: {}\n")
 
     def test_an_unknown_flag_word_is_refused(self):
         settings = self._write("whatsapp:\n  answer_groups: yess\n")
@@ -270,13 +297,23 @@ class ConfigFileTests(unittest.TestCase):
         self.assertGreater(config.max_tool_iterations, 0)
 
     def test_the_file_sets_the_model(self):
-        self._write("agent:\n  model: gpt-from-file\n")
-        self.assertEqual(Config.load().model, "gpt-from-file")
+        self._write("agent:\n  model: gpt-5.6-terra\n")
+        self.assertEqual(Config.load().model, "gpt-5.6-terra")
 
     def test_behavior_comes_from_the_file_not_the_environment(self):
-        self._write("agent:\n  model: gpt-from-file\n")
+        self._write("agent:\n  model: gpt-5.6-terra\n")
         with mock.patch.dict(os.environ, {"PILOTAGE_MODEL": "gpt-from-env"}):
-            self.assertEqual(Config.load().model, "gpt-from-file")
+            self.assertEqual(Config.load().model, "gpt-5.6-terra")
+
+    def test_only_the_three_production_models_are_accepted(self):
+        for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+            with self.subTest(model=model):
+                self._write(f"agent:\n  model: {model}\n")
+                self.assertEqual(Config.load().model, model)
+
+        self._write("agent:\n  model: gpt-5.5\n")
+        with self.assertRaisesRegex(ConfigError, "agent.model"):
+            Config.load()
 
     def test_behavior_environment_variables_are_not_a_second_configuration(self):
         self._write("agent:\n  history_turns: 5\n")
@@ -524,15 +561,15 @@ class ConfigFileTests(unittest.TestCase):
     def test_a_channel_can_be_loaded_on_its_own(self):
         self._write(
             "agent:\n"
-            "  model: common-model\n"
+            "  model: gpt-5.6-sol\n"
             "channels:\n"
             "  whatsapp:\n"
             "    agent:\n"
-            "      model: whatsapp-model\n"
+            "      model: gpt-5.6-terra\n"
         )
-        self.assertEqual(Config.load().model, "common-model")
-        self.assertEqual(Config.load(channel="whatsapp").model, "whatsapp-model")
-        self.assertEqual(Config.load().for_channel("whatsapp").model, "whatsapp-model")
+        self.assertEqual(Config.load().model, "gpt-5.6-sol")
+        self.assertEqual(Config.load(channel="whatsapp").model, "gpt-5.6-terra")
+        self.assertEqual(Config.load().for_channel("whatsapp").model, "gpt-5.6-terra")
 
     def test_a_broken_file_stops_the_agent_rather_than_defaulting(self):
         self._write("agent:\n  model: [unclosed\n")
@@ -544,11 +581,11 @@ class ConfigFileTests(unittest.TestCase):
 
         self._write(
             "agent:\n"
-            "  model: common-model\n"
+            "  model: gpt-5.6-sol\n"
             "channels:\n"
             "  whatsapp:\n"
             "    agent:\n"
-            "      model: whatsapp-model\n"
+            "      model: gpt-5.6-terra\n"
         )
         seen = {}
 
@@ -561,7 +598,7 @@ class ConfigFileTests(unittest.TestCase):
             self.assertEqual(main.main(["status"]), 0)
 
         self.assertEqual(seen["config"].settings.channel, "whatsapp")
-        self.assertEqual(seen["config"].model, "whatsapp-model")
+        self.assertEqual(seen["config"].model, "gpt-5.6-terra")
         self.assertEqual(seen["profile"], "default")
 
     def test_status_uses_telegram_view_when_it_is_only_enabled(self):
@@ -575,7 +612,7 @@ class ConfigFileTests(unittest.TestCase):
             "channels:\n"
             "  telegram:\n"
             "    agent:\n"
-            "      model: telegram-model\n"
+            "      model: gpt-5.6-luna\n"
         )
         seen = {}
 
@@ -599,7 +636,7 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(
             seen["config"].settings.channel, "telegram"
         )
-        self.assertEqual(seen["config"].model, "telegram-model")
+        self.assertEqual(seen["config"].model, "gpt-5.6-luna")
         self.assertEqual(seen["profile"], "default")
 
     def test_a_broken_file_exits_instead_of_starting(self):
@@ -614,7 +651,7 @@ class ConfigFileTests(unittest.TestCase):
 
         self._write(
             "agent:\n"
-            "  model: common-model\n"
+            "  model: gpt-5.6-sol\n"
             "channels:\n"
             "  whatsapp:\n"
             "    tools:\n"
@@ -647,6 +684,21 @@ class ConfigFileTests(unittest.TestCase):
         self._write("approvals:\n  timeout: 0\n")
         with self.assertRaisesRegex(ConfigError, "approvals.timeout"):
             Config.load()
+
+    def test_approval_timeout_has_a_conservative_upper_bound(self):
+        self._write("approvals:\n  timeout: 31536000\n")
+        self.assertEqual(Config.load().approval_timeout_seconds, 31_536_000)
+
+        self._write("approvals:\n  timeout: 31536001\n")
+        with self.assertRaisesRegex(ConfigError, "at most 31536000"):
+            Config.load()
+
+    def test_retired_inline_shell_settings_are_explicitly_rejected(self):
+        for key, value in (("inline_shell", "true"), ("inline_shell_timeout", "10")):
+            with self.subTest(key=key):
+                self._write(f"skills:\n  {key}: {value}\n")
+                with self.assertRaisesRegex(ConfigError, "always inert"):
+                    Config.load()
 
     def test_unknown_tool_groups_stop_startup(self):
         for key in ("enabled", "disabled"):
@@ -773,6 +825,11 @@ class ConfigFileTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "compact_threshold"):
             Config.load()
 
+    def test_native_compaction_cannot_be_disabled(self):
+        self._write("compression:\n  codex_responses_native: false\n")
+        with self.assertRaisesRegex(ConfigError, "must remain enabled"):
+            Config.load()
+
 
 class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -795,8 +852,13 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         from pilotage.channels.whatsapp import ChannelError
 
         class RejectingChannel:
-            async def send(self, _chat_id, _text, **_kwargs):
-                return False
+            async def send(self, _chat_id, _text, *, delivery_ledger):
+                units = await delivery_ledger.prepare([("text", "fingerprint")])
+
+                async def rejected():
+                    return False
+
+                return await delivery_ledger.run(units[0], rejected)
 
         store = main.DeliveryStore(self.runtime_root / "scheduled-delivery.db")
         with self.assertRaisesRegex(ChannelError, "rejected"):
@@ -807,6 +869,47 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 "result",
                 "job:run",
             )
+
+    async def test_abandoned_scheduled_obligation_is_not_reported_as_success(self):
+        from pilotage import main
+        from pilotage.channels.whatsapp import ChannelError
+
+        channel = mock.Mock()
+        channel.send = mock.AsyncMock(
+            side_effect=AssertionError("an abandoned obligation must not resend")
+        )
+        path = self.runtime_root / "scheduled-abandoned.db"
+        store = main.DeliveryStore(path)
+        session_key = "cron:whatsapp:123@c.us:"
+        obligation_id = main.compute_obligation_id(
+            session_key,
+            "job:run",
+            "result",
+        )
+        store.record(
+            obligation_id=obligation_id,
+            session_key=session_key,
+            platform="whatsapp",
+            chat_id="123@c.us",
+            thread_id="",
+            content="result",
+        )
+        with contextlib.closing(sqlite3.connect(path)) as connection:
+            connection.execute(
+                "UPDATE delivery_obligations SET state = 'abandoned'"
+            )
+            connection.commit()
+
+        with self.assertRaisesRegex(ChannelError, "not durably claimed"):
+            await main._deliver_scheduled(
+                store,
+                channel,
+                {"channel": "whatsapp", "chat_id": "123@c.us"},
+                "result",
+                "job:run",
+            )
+
+        channel.send.assert_not_awaited()
 
     async def test_runtime_refuses_channels_when_delivery_database_is_unwritable(self):
         from pilotage import main
@@ -828,6 +931,663 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 1)
         channel.assert_not_called()
         self.assertIn("Delivery database is not writable", error.getvalue())
+
+    async def test_whatsapp_recovery_requires_its_durable_claim_identity(self):
+        from pilotage import main
+        from pilotage.history import ConversationStore
+
+        config = Config.load(channel="whatsapp")
+        store = ConversationStore(config.conversations_path)
+        origin = {
+            "channel": "whatsapp",
+            "chat_id": "212600000000@s.whatsapp.net",
+            "reply_to": "m1",
+        }
+        store.begin_turn("started", "input", origin=origin)
+        store.begin_turn("answered", "input", origin=origin)
+        store.checkpoint_answer("answered", "input", "Exact answer")
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+        class FakeChannel:
+            def __init__(self, _config, _handler, _manage):
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                pass
+
+            async def start(self):
+                self.stopped.set()
+
+            def release_inbound(self):
+                pass
+
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                pass
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(main.auth, "read_credentials"),
+            mock.patch.object(
+                main,
+                "_recover_interrupted_turns",
+                new=mock.AsyncMock(),
+            ) as recover,
+        ):
+            self.assertEqual(await main.command_run(config), 0)
+
+        active = {turn.chat_id: turn for turn in store.list_active_turns()}
+        self.assertEqual(active["started"].phase, "unknown")
+        self.assertEqual(active["answered"].phase, "answer_ready")
+        self.assertEqual(active["answered"].answer_content, "Exact answer")
+        recover.assert_not_awaited()
+
+    async def test_interrupted_tool_notice_is_deduplicated_across_restarts(self):
+        from pilotage import main
+        from pilotage.delivery import SendResult
+        from pilotage.history import ConversationStore
+
+        config = Config.load(channel="whatsapp")
+        object.__setattr__(config, "cron_enabled", False)
+        claim_id = "9" * 64
+        store = ConversationStore(config.conversations_path)
+        store.begin_turn(
+            "212600000000",
+            "possibly acted",
+            origin={
+                "channel": "whatsapp",
+                "chat_id": "212600000000@s.whatsapp.net",
+                "reply_to": "m-tool",
+            },
+            claim_ids=[claim_id],
+        )
+        store.checkpoint_turn(
+            "212600000000",
+            "possibly acted",
+            [{"type": "function_call", "call_id": "call-1"}],
+            phase="tool_requested",
+        )
+        events = []
+        network_sends = []
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+        class FakeChannel:
+            def __init__(self, _config, _handler, _manage):
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                events.append("hold")
+
+            async def start(self):
+                events.append("start")
+
+            async def send(
+                self,
+                _chat_id,
+                text,
+                _reply_to="",
+                *,
+                delivery_ledger=None,
+                **_kwargs,
+            ):
+                if delivery_ledger is None:
+                    raise AssertionError("unknown-turn notice bypassed its ledger")
+                units = await delivery_ledger.prepare(
+                    [("text", "interrupted-tool-notice-v1")]
+                )
+
+                async def accepted():
+                    network_sends.append(text)
+                    return SendResult(True, message_id="notice-id")
+
+                return await delivery_ledger.run(units[0], accepted)
+
+            def persist_completed_claims(self, claims):
+                events.append(("claims", list(claims)))
+
+            def release_inbound(self):
+                events.append("release")
+                self.stopped.set()
+
+            async def stop_intake(self, **_kwargs):
+                pass
+
+            async def stop(self, **_kwargs):
+                pass
+
+        for _ in range(2):
+            with (
+                mock.patch.object(main, "Agent", FakeAgent),
+                mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+                mock.patch.object(main.auth, "read_credentials"),
+            ):
+                self.assertEqual(await main.command_run(config), 0)
+
+        self.assertEqual(len(network_sends), 1)
+        self.assertIn("/new", network_sends[0])
+        self.assertEqual(
+            [event for event in events if isinstance(event, tuple)],
+            [("claims", [claim_id]), ("claims", [claim_id])],
+        )
+        claim_positions = [
+            index for index, event in enumerate(events) if isinstance(event, tuple)
+        ]
+        release_positions = [
+            index for index, event in enumerate(events) if event == "release"
+        ]
+        self.assertTrue(
+            all(claim < release for claim, release in zip(claim_positions, release_positions))
+        )
+        self.assertEqual(store.list_active_turns()[0].phase, "unknown")
+
+    async def test_config_drift_recovery_releases_inbound_for_new(self):
+        from pilotage import main
+        from pilotage.commands import parse_command
+        from pilotage.delivery import SendResult
+        from pilotage.history import ConversationStore
+
+        config = Config.load(channel="whatsapp")
+        object.__setattr__(config, "cron_enabled", False)
+        object.__setattr__(config, "max_tool_iterations", 2)
+        session_id = "212600000000"
+        chat_id = "212600000000@s.whatsapp.net"
+        original_claim = "a" * 64
+        reset_claim = "b" * 64
+        store = ConversationStore(config.conversations_path)
+        store.begin_turn(
+            session_id,
+            "continue safely",
+            origin={
+                "channel": "whatsapp",
+                "chat_id": chat_id,
+                "reply_to": "m-tool",
+            },
+            claim_ids=[original_claim],
+        )
+        trajectory = []
+        for iteration in range(1, 4):
+            call_id = f"call-{iteration}"
+            trajectory.extend(
+                [
+                    {
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": "todo",
+                        "arguments": '{"todos": []}',
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": '{"todos": []}',
+                    },
+                ]
+            )
+        store.checkpoint_turn(
+            session_id,
+            "continue safely",
+            trajectory,
+            phase="tool_completed",
+            iteration=3,
+        )
+        events = []
+        completed_claims = []
+        network_sends = []
+        phases_at_release = []
+        agents = []
+
+        class GuardedAgent(main.Agent):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._stream_once = mock.AsyncMock(
+                    side_effect=AssertionError("rejected recovery must not call the model")
+                )
+                self._registry.dispatch = mock.AsyncMock(
+                    side_effect=AssertionError("completed tools must not run again")
+                )
+                agents.append(self)
+
+        class FakeChannel:
+            def __init__(self, _config, _handler, manage):
+                self.manage = manage
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                events.append("hold")
+
+            async def start(self):
+                events.append("start")
+
+            async def release_inbound(self):
+                events.append("release")
+                phases_at_release.extend(
+                    turn.phase for turn in store.list_active_turns()
+                )
+                reset = parse_command("/new")
+                assert reset is not None
+                await self.manage(
+                    chat_id,
+                    session_id,
+                    "m-new",
+                    reset,
+                    reset_claim,
+                )
+                self.persist_completed_claims([reset_claim])
+                self.stopped.set()
+
+            async def send(
+                self,
+                target_chat,
+                text,
+                reply_to="",
+                *,
+                delivery_ledger=None,
+                **_kwargs,
+            ):
+                async def accepted():
+                    network_sends.append((target_chat, text, reply_to))
+                    return SendResult(True, message_id=f"sent-{len(network_sends)}")
+
+                if delivery_ledger is None:
+                    return await accepted()
+                units = await delivery_ledger.prepare(
+                    [("text", f"{reply_to}:{text}")]
+                )
+                return await delivery_ledger.run(units[0], accepted)
+
+            def persist_completed_claims(self, claims):
+                completed_claims.extend(claims)
+                events.append(("claims", list(claims)))
+
+            def _fail(self, message):
+                self.failure = message
+
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, **_kwargs):
+                self.stopped.set()
+
+        with (
+            mock.patch.object(main, "Agent", GuardedAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(main.auth, "read_credentials"),
+            self.assertLogs("pilotage", level="WARNING"),
+        ):
+            self.assertEqual(await main.command_run(config), 0)
+
+        self.assertIn("release", events)
+        self.assertLess(
+            events.index(("claims", [original_claim])),
+            events.index("release"),
+        )
+        self.assertIn(original_claim, completed_claims)
+        self.assertIn(reset_claim, completed_claims)
+        self.assertEqual(phases_at_release, ["unknown"])
+        self.assertTrue(any("/new" in text for _, text, _ in network_sends))
+        self.assertEqual(store.list_active_turns(), [])
+        self.assertEqual(store.current_session(session_id), 2)
+        agents[0]._stream_once.assert_not_awaited()
+        agents[0]._registry.dispatch.assert_not_awaited()
+
+    async def _exercise_unknown_turn_fifo(self, channel_name: str) -> None:
+        from pilotage import main
+        from pilotage.channels.telegram import InboundMessage as TelegramInbound
+        from pilotage.channels.whatsapp import InboundMessage as WhatsAppInbound
+        from pilotage.commands import parse_command
+        from pilotage.delivery import SendResult
+        from pilotage.history import ConversationStore
+
+        if channel_name == "whatsapp":
+            settings = "whatsapp:\n  enabled: true\ntelegram:\n  enabled: false\n"
+            chat_id = "212600000000@s.whatsapp.net"
+            session_id = "212600000000"
+            thread_id = ""
+            channel_class = "WhatsAppChannel"
+        else:
+            settings = "whatsapp:\n  enabled: false\ntelegram:\n  enabled: true\n"
+            chat_id = "42"
+            session_id = "telegram:dm:42"
+            thread_id = "7"
+            channel_class = "TelegramChannel"
+            telegram_environment = mock.patch.dict(
+                os.environ,
+                {
+                    "TELEGRAM_BOT_TOKEN": "test-token",
+                    "TELEGRAM_ALLOWED_USERS": chat_id,
+                },
+            )
+            telegram_environment.start()
+            self.addCleanup(telegram_environment.stop)
+        (self.runtime_root / "config.yaml").write_text(settings, encoding="utf-8")
+        config = Config.load(channel=channel_name)
+        object.__setattr__(config, "cron_enabled", False)
+        store = ConversationStore(config.conversations_path)
+        original_claim = "a" * 64
+        store.begin_turn(
+            session_id,
+            "possibly acted",
+            origin={
+                "channel": channel_name,
+                "chat_id": chat_id,
+                "reply_to": "m1",
+                **({"thread_id": thread_id} if thread_id else {}),
+            },
+            claim_ids=[original_claim],
+        )
+        store.checkpoint_turn(
+            session_id,
+            "possibly acted",
+            [{"type": "function_call", "call_id": "call-1"}],
+            phase="tool_requested",
+        )
+
+        model_inputs = []
+        transcribed_inputs = []
+        completed_claims = []
+        network_sends = []
+        phases_after_invalid_reset = []
+        instances = []
+
+        def inbound(text: str, message_id: str, claim_id: str):
+            if channel_name == "whatsapp":
+                return WhatsAppInbound(
+                    chat_id=chat_id,
+                    session_id=session_id,
+                    sender_id=chat_id,
+                    sender_number="212600000000",
+                    push_name="Operator",
+                    text=text,
+                    is_group=False,
+                    message_ids=[message_id],
+                    dedup_ids=[claim_id],
+                    claim_ids=[claim_id],
+                )
+            return TelegramInbound(
+                chat_id=chat_id,
+                session_id=session_id,
+                user_id=chat_id,
+                user_name="Operator",
+                text=text,
+                is_group=False,
+                thread_id=thread_id,
+                message_ids=[message_id],
+                claim_ids=[claim_id],
+            )
+
+        class FakeAgent:
+            def __init__(self, _config, **runtime_dependencies):
+                self.store = runtime_dependencies["store"]
+
+            async def respond(self, _session_id, text, *_args, **_kwargs):
+                model_inputs.append(text)
+                return "normal answer"
+
+            async def forget(self, target_session):
+                await asyncio.to_thread(self.store.new_session, target_session)
+
+            async def finalize_ready_turn(self, _session_id):
+                pass
+
+            async def close(self):
+                pass
+
+        class FakeChannel:
+            def __init__(self, _config, handler, manage):
+                self.handler = handler
+                self.manage = manage
+                self.stopped = asyncio.Event()
+                self.failure = None
+                instances.append(self)
+
+            def hold_inbound(self):
+                pass
+
+            async def start(self):
+                pass
+
+            async def release_inbound(self):
+                blocked_claim = "b" * 64
+                invalid_reset_claim = "c" * 64
+                still_blocked_claim = "d" * 64
+                reset_claim = "e" * 64
+                normal_claim = "f" * 64
+                blocked = inbound("continue", "m2", blocked_claim)
+                await self.handler(blocked)
+                self.persist_completed_claims(blocked.claim_ids)
+
+                invalid_reset = parse_command("/new later")
+                assert invalid_reset is not None
+                if channel_name == "whatsapp":
+                    await self.manage(
+                        chat_id,
+                        session_id,
+                        "m3",
+                        invalid_reset,
+                        invalid_reset_claim,
+                    )
+                else:
+                    await self.manage(
+                        chat_id,
+                        session_id,
+                        "m3",
+                        thread_id,
+                        invalid_reset,
+                        invalid_reset_claim,
+                    )
+                self.persist_completed_claims([invalid_reset_claim])
+
+                still_blocked = inbound("still blocked", "m4", still_blocked_claim)
+                await self.handler(still_blocked)
+                self.persist_completed_claims(still_blocked.claim_ids)
+                phases_after_invalid_reset.extend(
+                    turn.phase for turn in store.list_active_turns()
+                )
+
+                reset = parse_command("/new")
+                assert reset is not None
+                if channel_name == "whatsapp":
+                    await self.manage(
+                        chat_id,
+                        session_id,
+                        "m5",
+                        reset,
+                        reset_claim,
+                    )
+                else:
+                    await self.manage(
+                        chat_id,
+                        session_id,
+                        "m5",
+                        thread_id,
+                        reset,
+                        reset_claim,
+                    )
+                self.persist_completed_claims([reset_claim])
+
+                normal = inbound("after reset", "m6", normal_claim)
+                await self.handler(normal)
+                self.persist_completed_claims(normal.claim_ids)
+                self.stopped.set()
+
+            @contextlib.asynccontextmanager
+            async def typing(self, *_args):
+                yield
+
+            async def send(
+                self,
+                target_chat,
+                text,
+                reply_to="",
+                *,
+                delivery_ledger=None,
+                thread_id="",
+                **_kwargs,
+            ):
+                async def accepted():
+                    network_sends.append(
+                        (target_chat, text, reply_to, str(thread_id or ""))
+                    )
+                    return SendResult(True, message_id=f"sent-{len(network_sends)}")
+
+                if delivery_ledger is None:
+                    return await accepted()
+                units = await delivery_ledger.prepare(
+                    [("text", f"{reply_to}:{text}")]
+                )
+                return await delivery_ledger.run(units[0], accepted)
+
+            def persist_completed_claims(self, claims):
+                completed_claims.extend(claims)
+
+            def _fail(self, message):
+                self.failure = message
+
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, **_kwargs):
+                self.stopped.set()
+
+        async def enrich(text, _attachments, _settings):
+            transcribed_inputs.append(text)
+            return text, []
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, channel_class, FakeChannel),
+            mock.patch.object(main.transcription, "enrich_message", new=enrich),
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            self.assertEqual(await main.command_run(config), 0)
+
+        interrupted = main.t("runtime.interrupted_unknown", config.language)
+        blocked_notices = [
+            sent
+            for sent in network_sends
+            if sent[1] == interrupted and sent[2] in {"m2", "m4"}
+        ]
+        self.assertEqual(len(blocked_notices), 2)
+        self.assertTrue(all(sent[3] == thread_id for sent in blocked_notices))
+        self.assertEqual(model_inputs, ["after reset"])
+        self.assertEqual(transcribed_inputs, ["after reset"])
+        self.assertEqual(phases_after_invalid_reset, ["unknown"])
+        self.assertIn("b" * 64, completed_claims)
+        self.assertIn("c" * 64, completed_claims)
+        self.assertIn("d" * 64, completed_claims)
+        self.assertIn("e" * 64, completed_claims)
+        self.assertIsNone(instances[0].failure)
+        self.assertEqual(store.list_active_turns(), [])
+
+    async def test_whatsapp_unknown_turn_does_not_poison_fifo_before_new(self):
+        await self._exercise_unknown_turn_fifo("whatsapp")
+
+    async def test_telegram_unknown_turn_does_not_poison_fifo_before_new(self):
+        await self._exercise_unknown_turn_fifo("telegram")
+
+    async def test_interrupted_tool_notice_failure_never_releases_inbound(self):
+        from pilotage import main
+        from pilotage.history import ConversationStore
+
+        config = Config.load(channel="whatsapp")
+        object.__setattr__(config, "cron_enabled", False)
+        claim_id = "8" * 64
+        store = ConversationStore(config.conversations_path)
+        store.begin_turn(
+            "212600000000",
+            "possibly acted",
+            origin={
+                "channel": "whatsapp",
+                "chat_id": "212600000000@s.whatsapp.net",
+                "reply_to": "m-tool",
+            },
+            claim_ids=[claim_id],
+        )
+        store.checkpoint_turn(
+            "212600000000",
+            "possibly acted",
+            [{"type": "function_call", "call_id": "call-1"}],
+            phase="tool_requested",
+        )
+        events = []
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                events.append("close")
+
+        class FakeChannel:
+            def __init__(self, _config, _handler, _manage):
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                events.append("hold")
+
+            async def start(self):
+                events.append("start")
+
+            def _fail(self, message):
+                self.failure = message
+                events.append("fail")
+
+            async def send(
+                self,
+                _chat_id,
+                _text,
+                _reply_to="",
+                *,
+                delivery_ledger=None,
+                **_kwargs,
+            ):
+                await delivery_ledger.prepare([("text", "notice")])
+                raise AssertionError("plan failure must stop before network")
+
+            def persist_completed_claims(self, _claims):
+                events.append("claims")
+
+            def release_inbound(self):
+                events.append("release")
+
+            async def abort_startup(self):
+                events.append("abort")
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(
+                main.DeliveryStore,
+                "record_units",
+                side_effect=sqlite3.OperationalError("plan write failed"),
+            ),
+            mock.patch.object(main.auth, "read_credentials"),
+            mock.patch("sys.stderr", new_callable=StringIO),
+        ):
+            self.assertEqual(await main.command_run(config), 1)
+
+        self.assertEqual(events, ["hold", "start", "fail", "abort", "close"])
+        self.assertNotIn("claims", events)
+        self.assertNotIn("release", events)
+        self.assertEqual(store.list_active_turns()[0].phase, "unknown")
 
     async def test_live_delivery_recovery_continues_after_an_unexpected_error(self):
         from pilotage import main
@@ -927,6 +1687,8 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         object.__setattr__(channel_config, "cron_enabled", False)
         seen = {}
         delivery = {"accepted": True}
+        claim_id = "b" * 64
+        order = []
 
         class FakeAgent:
             def __init__(self, _config, **_runtime_dependencies):
@@ -944,10 +1706,18 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 on_notice,
                 origin,
                 approval_notify,
+                claim_ids,
+                defer_completion,
             ):
                 seen["origin"] = origin
                 seen["approval_notify"] = approval_notify
+                seen["claim_ids"] = claim_ids
+                seen["defer_completion"] = defer_completion
                 return "answer"
+
+            async def finalize_ready_turn(self, session_id):
+                order.append("finalize")
+                seen["finalized"] = session_id
 
         class FakeChannel:
             def __init__(self, _config, handler, _manage):
@@ -960,7 +1730,19 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 yield
 
             async def send(self, *_args, **_kwargs):
-                return delivery["accepted"]
+                ledger = _kwargs.get("delivery_ledger")
+                if ledger is None:
+                    return delivery["accepted"]
+                units = await ledger.prepare([("text", "fake-whatsapp-unit")])
+
+                async def accepted():
+                    return delivery["accepted"]
+
+                return await ledger.run(units[0], accepted)
+
+            def persist_completed_claims(self, claim_ids):
+                order.append("claims")
+                seen["persisted_claim_ids"] = claim_ids
 
             async def start(self):
                 await self.handler(
@@ -973,6 +1755,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                         text="hello",
                         is_group=False,
                         message_ids=["m1"],
+                        claim_ids=[claim_id],
                     )
                 )
                 self.stopped.set()
@@ -992,13 +1775,291 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             seen["origin"],
-            {"channel": "whatsapp", "chat_id": "123@c.us"},
+            {
+                "channel": "whatsapp",
+                "chat_id": "123@c.us",
+                "reply_to": "m1",
+            },
         )
         self.assertIsNotNone(seen["approval_notify"])
+        self.assertEqual(seen["claim_ids"], [claim_id])
+        self.assertEqual(seen["persisted_claim_ids"], [claim_id])
+        self.assertEqual(order, ["claims", "finalize"])
+        self.assertTrue(seen["defer_completion"])
+        self.assertEqual(seen["finalized"], "123@c.us")
         delivery["accepted"] = False
         self.assertFalse(
             await seen["approval_notify"]("Approve this change")
         )
+
+    async def test_whatsapp_plan_failure_does_not_complete_inbound_claim(self):
+        from pilotage import main
+        from pilotage.channels.whatsapp import InboundMessage
+        from pilotage.delivery import SendResult
+
+        channel_config = Config.load(channel="whatsapp")
+        object.__setattr__(channel_config, "cron_enabled", False)
+        claim_id = "e" * 64
+        seen = {"completed": [], "finalized": [], "network": []}
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+            async def respond(self, *_args, **_kwargs):
+                return "answer"
+
+            async def finalize_ready_turn(self, session_id):
+                seen["finalized"].append(session_id)
+
+        class FakeChannel:
+            def __init__(self, _config, handler, _manage):
+                self.handler = handler
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                pass
+
+            def release_inbound(self):
+                pass
+
+            def _fail(self, message):
+                self.failure = message
+
+            @contextlib.asynccontextmanager
+            async def typing(self, _chat_id):
+                yield
+
+            async def send(self, *_args, **kwargs):
+                ledger = kwargs.get("delivery_ledger")
+                if ledger is None:
+                    return SendResult(True)
+                units = await ledger.prepare([("text", "wa-exact-plan")])
+
+                async def accepted():
+                    seen["network"].append(True)
+                    return SendResult(True)
+
+                return await ledger.run(units[0], accepted)
+
+            def persist_completed_claims(self, claims):
+                seen["completed"].extend(claims)
+
+            async def start(self):
+                try:
+                    await self.handler(
+                        InboundMessage(
+                            chat_id="123@c.us",
+                            session_id="123@c.us",
+                            sender_id="123@s.whatsapp.net",
+                            sender_number="123",
+                            push_name="User",
+                            text="hello",
+                            is_group=False,
+                            message_ids=["m-plan"],
+                            claim_ids=[claim_id],
+                        )
+                    )
+                except Exception:
+                    pass
+                self.stopped.set()
+
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                pass
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(
+                main.DeliveryStore,
+                "record_units",
+                side_effect=sqlite3.OperationalError("plan write failed"),
+            ),
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            code = await main.command_run(channel_config)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(seen["network"], [])
+        self.assertEqual(seen["completed"], [])
+        self.assertEqual(seen["finalized"], [])
+
+    async def test_whatsapp_unclassified_agent_failure_stays_fail_closed(self):
+        from pilotage import main
+        from pilotage.channels.whatsapp import InboundMessage
+        from pilotage.delivery import SendResult
+
+        channel_config = Config.load(channel="whatsapp")
+        object.__setattr__(channel_config, "cron_enabled", False)
+        seen = {}
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+            async def respond(self, *_args, **_kwargs):
+                raise RuntimeError("unexpected agent failure")
+
+        class FakeChannel:
+            def __init__(self, _config, handler, _manage):
+                self.handler = handler
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def _fail(self, message):
+                self.failure = message
+                seen["failure"] = message
+
+            @contextlib.asynccontextmanager
+            async def typing(self, _chat_id):
+                yield
+
+            async def send(self, *_args, **_kwargs):
+                return SendResult(True)
+
+            def hold_inbound(self):
+                pass
+
+            async def start(self):
+                try:
+                    await self.handler(
+                        InboundMessage(
+                            chat_id="123@c.us",
+                            session_id="123@c.us",
+                            sender_id="123@s.whatsapp.net",
+                            sender_number="123",
+                            push_name="User",
+                            text="hello",
+                            is_group=False,
+                            message_ids=["m1"],
+                            claim_ids=["c" * 64],
+                        )
+                    )
+                except Exception:
+                    pass
+                self.stopped.set()
+
+            def release_inbound(self):
+                pass
+
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                pass
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(
+                main,
+                "deliver_final",
+                new=mock.AsyncMock(
+                    return_value=SendResult(
+                        False,
+                        "final-response delivery obligation was not durably claimed",
+                    )
+                ),
+            ) as deliver,
+            mock.patch.object(
+                main,
+                "_exact_delivery_obligation_exists",
+                new=mock.AsyncMock(return_value=False),
+            ) as exact_delivery,
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            code = await main.command_run(channel_config)
+
+        self.assertEqual(code, 1)
+        self.assertIn("before a durable reply was chosen", seen["failure"])
+        deliver.assert_not_awaited()
+        exact_delivery.assert_not_awaited()
+
+    async def test_whatsapp_command_failure_keeps_a_durable_reply_obligation(self):
+        from pilotage import main
+        from pilotage.commands import parse_command
+        from pilotage.delivery import SendResult
+
+        channel_config = Config.load(channel="whatsapp")
+        object.__setattr__(channel_config, "cron_enabled", False)
+        claim_id = "d" * 64
+        seen = {"returned": False}
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+        class FakeChannel:
+            def __init__(self, _config, _handler, manage):
+                self.manage = manage
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                pass
+
+            async def start(self):
+                await self.manage(
+                    "123@c.us",
+                    "123@c.us",
+                    "m-command",
+                    parse_command("/help"),
+                    claim_id,
+                )
+                seen["returned"] = True
+                self.stopped.set()
+
+            def release_inbound(self):
+                pass
+
+            async def send(self, *_args, **_kwargs):
+                return SendResult(False, "offline", retryable=True)
+
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                pass
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(main.auth, "read_credentials"),
+            mock.patch(
+                "pilotage.delivery.asyncio.sleep",
+                new=mock.AsyncMock(),
+            ),
+        ):
+            code = await main.command_run(channel_config)
+
+        self.assertEqual(code, 0)
+        self.assertTrue(seen["returned"])
+        with contextlib.closing(
+            sqlite3.connect(channel_config.state_dir / "delivery.db")
+        ) as connection:
+            command_state = connection.execute(
+                "SELECT state FROM command_outcomes"
+            ).fetchone()[0]
+            delivery_state = connection.execute(
+                "SELECT state FROM delivery_obligations"
+                " WHERE session_key = ? AND reply_to = ?",
+                ("123@c.us", "m-command"),
+            ).fetchone()[0]
+        self.assertEqual(command_state, "completed")
+        self.assertEqual(delivery_state, "failed")
 
     async def test_whatsapp_runs_with_its_channel_configuration(self):
         from pilotage import main
@@ -1107,6 +2168,139 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_startup_approval_gate_opens_only_for_created_turn_recovery(self):
+        from pilotage import main
+        from pilotage.history import ConversationStore
+
+        channel_config = Config.load(channel="whatsapp")
+        object.__setattr__(channel_config, "cron_enabled", False)
+        ConversationStore(channel_config.conversations_path).begin_turn(
+            "recovering-chat",
+            "input",
+            origin={
+                "channel": "whatsapp",
+                "chat_id": "212600000000@s.whatsapp.net",
+                "reply_to": "m-recover",
+            },
+            claim_ids=["7" * 64],
+        )
+        events = []
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                pass
+
+        class FakeChannel:
+            def __init__(self, _config, _handler, _manage):
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                events.append("hold")
+
+            async def start(self):
+                events.append("start")
+
+            def enable_startup_approvals(self):
+                recovery_exists = any(
+                    task.get_name() == "pilotage-conversation-recovery"
+                    for task in asyncio.all_tasks()
+                )
+                events.append(("enable", recovery_exists))
+
+            def release_inbound(self):
+                events.append("release")
+                self.stopped.set()
+
+            async def stop_intake(self):
+                pass
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                pass
+
+        async def fake_claim(_store, platforms):
+            events.append(("claim", set(platforms)))
+            return []
+
+        async def fake_recover(active_turns, **_kwargs):
+            events.append(("recover", [turn.chat_id for turn in active_turns]))
+            return 0
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(main, "claim_deliveries", fake_claim),
+            mock.patch.object(main, "_recover_interrupted_turns", fake_recover),
+            mock.patch.object(main.auth, "read_credentials"),
+        ):
+            self.assertEqual(await main.command_run(channel_config), 0)
+
+        self.assertEqual(
+            events[:6],
+            [
+                "hold",
+                "start",
+                ("claim", {"whatsapp"}),
+                ("enable", True),
+                ("recover", ["recovering-chat"]),
+                "release",
+            ],
+        )
+
+    async def test_startup_delivery_ledger_failure_stops_before_releasing_inbound(self):
+        from pilotage import main
+
+        channel_config = Config.load(channel="whatsapp")
+        object.__setattr__(channel_config, "cron_enabled", False)
+        events = []
+
+        class FakeAgent:
+            def __init__(self, _config, **_runtime_dependencies):
+                pass
+
+            async def close(self):
+                events.append("agent_close")
+
+        class FakeChannel:
+            def __init__(self, _config, _handler, _manage):
+                self.stopped = asyncio.Event()
+                self.failure = None
+
+            def hold_inbound(self):
+                events.append("hold")
+
+            async def start(self):
+                events.append("start")
+
+            def release_inbound(self):
+                events.append("release")
+
+            async def abort_startup(self):
+                events.append("abort")
+
+            async def stop(self, *, drain_timeout_seconds=0):
+                events.append("stop")
+
+        async def fail_claim(_store, _platforms):
+            raise sqlite3.DatabaseError("delivery ledger is malformed")
+
+        with (
+            mock.patch.object(main, "Agent", FakeAgent),
+            mock.patch.object(main, "WhatsAppChannel", FakeChannel),
+            mock.patch.object(main, "claim_deliveries", fail_claim),
+            mock.patch.object(main.auth, "read_credentials"),
+            mock.patch("sys.stderr", new_callable=StringIO) as error,
+        ):
+            code = await main.command_run(channel_config)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(events, ["hold", "start", "abort", "agent_close"])
+        self.assertNotIn("release", events)
+        self.assertIn("could not start safely", error.getvalue())
+
     async def test_startup_timeout_releases_inbound_before_shutdown_cancels_recovery(self):
         from pilotage import main
 
@@ -1178,8 +2372,8 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(main.auth, "read_credentials"),
         ):
             run_task = asyncio.create_task(main.command_run(channel_config))
-            await asyncio.wait_for(redelivery_started.wait(), 0.05)
-            await asyncio.wait_for(released.wait(), 0.05)
+            await asyncio.wait_for(redelivery_started.wait(), 1.0)
+            await asyncio.wait_for(released.wait(), 1.0)
             self.assertFalse(redelivery_cancelled.is_set())
             self.assertEqual(
                 events[:5],
@@ -1194,7 +2388,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             seen["channel"].stopped.set()
             self.assertEqual(await run_task, 0)
 
-        await asyncio.wait_for(redelivery_cancelled.wait(), 0.05)
+        await asyncio.wait_for(redelivery_cancelled.wait(), 1.0)
         self.assertLess(events.index("release"), events.index("cancelled"))
 
 

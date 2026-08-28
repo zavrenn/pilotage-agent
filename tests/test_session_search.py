@@ -292,6 +292,18 @@ class SessionSearchTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_recalled_content_has_ansi_sequences_removed(self):
+        self.seed(
+            "old",
+            [("user", "saffron \x1b[31mwarning\x1b[0m remains readable")],
+        )
+
+        result = await self.call(query="saffron")
+        rendered = json.dumps(result, ensure_ascii=False)
+
+        self.assertIn("saffron warning remains readable", rendered)
+        self.assertNotIn("\x1b", rendered)
+
     async def test_missing_session_and_bad_scroll_are_visible_errors(self):
         missing = await self.call(session_id="999999")
         no_session = await self.call(around_message_id=1)

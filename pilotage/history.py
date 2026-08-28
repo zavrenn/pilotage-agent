@@ -30,6 +30,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import re
 import shutil
 import sqlite3
 import threading
@@ -83,6 +85,13 @@ CREATE TABLE IF NOT EXISTS active_turns (
     user_content TEXT    NOT NULL,
     trajectory   TEXT    NOT NULL DEFAULT '[]',
     phase        TEXT    NOT NULL DEFAULT 'started',
+    iteration    INTEGER NOT NULL DEFAULT 0,
+    origin       TEXT    NOT NULL DEFAULT '{}',
+    claim_ids    TEXT    NOT NULL DEFAULT '[]',
+    image_manifest TEXT  NOT NULL DEFAULT '[]',
+    answer_content TEXT  NOT NULL DEFAULT '',
+    answer_replay TEXT   NOT NULL DEFAULT '[]',
+    terminal_completed INTEGER NOT NULL DEFAULT 0,
     updated_at   REAL    NOT NULL,
     PRIMARY KEY (chat_id, session)
 );
@@ -135,6 +144,28 @@ class SessionReset:
     had_activity: bool
 
 
+@dataclass(frozen=True)
+class ActiveTurn:
+    """One accepted turn left unfinished by an earlier runtime process."""
+
+    chat_id: str
+    session: int
+    user_content: str
+    trajectory: List[Dict[str, Any]]
+    phase: str
+    iteration: int
+    origin: Dict[str, str]
+    claim_ids: List[str]
+    image_manifest: List[Dict[str, Any]]
+    answer_content: str
+    answer_replay: List[Dict[str, str]]
+    terminal_completed: bool
+    updated_at: float
+
+
+_WHATSAPP_CLAIM_ID_RE = re.compile(r"^[a-f0-9]{64}$")
+
+
 def _automatic_reset_reason(
     last_active: float,
     now: float,
@@ -179,10 +210,16 @@ def _decode_replay(raw: str) -> List[Dict[str, str]]:
         return []
     try:
         value = json.loads(raw)
-    except (TypeError, ValueError):
-        logger.warning("Ignoring malformed replay data in conversation history")
-        return []
-    return _compaction_items(value)
+    except (TypeError, ValueError) as exc:
+        raise ConversationError(
+            "Conversation replay data is malformed"
+        ) from exc
+    if not isinstance(value, list):
+        raise ConversationError("Conversation replay data is not a list")
+    decoded = _compaction_items(value)
+    if len(decoded) != len(value):
+        raise ConversationError("Conversation replay data contains invalid items")
+    return decoded
 
 
 def session_workspace_path(
@@ -245,6 +282,31 @@ class ConversationStore:
                         "ALTER TABLE chats"
                         " ADD COLUMN last_active REAL NOT NULL DEFAULT 0"
                     )
+                active_columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(active_turns)")
+                }
+                if "iteration" not in active_columns:
+                    connection.execute(
+                        "ALTER TABLE active_turns"
+                        " ADD COLUMN iteration INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "origin" not in active_columns:
+                    connection.execute(
+                        "ALTER TABLE active_turns"
+                        " ADD COLUMN origin TEXT NOT NULL DEFAULT '{}'"
+                    )
+                for column, declaration in (
+                    ("claim_ids", "TEXT NOT NULL DEFAULT '[]'"),
+                    ("image_manifest", "TEXT NOT NULL DEFAULT '[]'"),
+                    ("answer_content", "TEXT NOT NULL DEFAULT ''"),
+                    ("answer_replay", "TEXT NOT NULL DEFAULT '[]'"),
+                    ("terminal_completed", "INTEGER NOT NULL DEFAULT 0"),
+                ):
+                    if column not in active_columns:
+                        connection.execute(
+                            f"ALTER TABLE active_turns ADD COLUMN {column} {declaration}"
+                        )
 
                 if self._fts_error is None:
                     had_fts = connection.execute(
@@ -422,13 +484,16 @@ class ConversationStore:
                     " ORDER BY id DESC LIMIT ?",
                     (chat_id, self._session(connection, chat_id), limit),
                 ).fetchall()
-        except (sqlite3.Error, OSError):
+        except (sqlite3.Error, OSError) as exc:
             logger.warning(
                 "Could not read the history of %s",
                 identity_pseudonym(chat_id, "session"),
                 exc_info=True,
             )
-            return []
+            raise ConversationError(
+                "Could not read the history of "
+                f"{identity_pseudonym(chat_id, 'session')}"
+            ) from exc
         return [(role, content) for role, content in reversed(rows)]
 
     def load_with_replay(
@@ -455,13 +520,16 @@ class ConversationStore:
                         (chat_id, session, limit),
                     ).fetchall()
                     rows.reverse()
-        except (sqlite3.Error, OSError):
+        except (sqlite3.Error, OSError) as exc:
             logger.warning(
                 "Could not read the history of %s",
                 identity_pseudonym(chat_id, "session"),
                 exc_info=True,
             )
-            return []
+            raise ConversationError(
+                "Could not read the history of "
+                f"{identity_pseudonym(chat_id, 'session')}"
+            ) from exc
         return [
             (role, content, _decode_replay(replay))
             for role, content, replay in rows
@@ -517,13 +585,37 @@ class ConversationStore:
                 f"{identity_pseudonym(chat_id, 'session')}"
             ) from exc
 
-    def begin_turn(self, chat_id: str, user_content: str) -> None:
+    def begin_turn(
+        self,
+        chat_id: str,
+        user_content: str,
+        *,
+        origin: Optional[Dict[str, str]] = None,
+        claim_ids: Sequence[str] = (),
+        image_manifest: Sequence[Dict[str, Any]] = (),
+    ) -> None:
         """Durably accept one user turn before the model can act on it."""
 
         if self._path is None:
             return
         now = time.time()
         try:
+            claims = list(dict.fromkeys(str(value) for value in claim_ids if value))
+            if any(not _WHATSAPP_CLAIM_ID_RE.fullmatch(value) for value in claims):
+                raise ConversationError("The inbound WhatsApp claim identity is invalid")
+            encoded_origin = json.dumps(
+                {
+                    str(key): str(value)
+                    for key, value in (origin or {}).items()
+                    if str(key) and value is not None
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            encoded_claims = json.dumps(claims, separators=(",", ":"))
+            encoded_images = json.dumps(
+                list(image_manifest), ensure_ascii=False, separators=(",", ":")
+            )
             with self._connect() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 session = self._session(connection, chat_id)
@@ -546,13 +638,22 @@ class ConversationStore:
                 )
                 connection.execute(
                     "INSERT INTO active_turns"
-                    " (chat_id, session, user_content, trajectory, phase, updated_at)"
-                    " VALUES (?, ?, ?, '[]', 'started', ?)",
-                    (chat_id, session, user_content, now),
+                    " (chat_id, session, user_content, trajectory, phase,"
+                    " iteration, origin, claim_ids, image_manifest, updated_at)"
+                    " VALUES (?, ?, ?, '[]', 'started', 0, ?, ?, ?, ?)",
+                    (
+                        chat_id,
+                        session,
+                        user_content,
+                        encoded_origin,
+                        encoded_claims,
+                        encoded_images,
+                        now,
+                    ),
                 )
         except ConversationError:
             raise
-        except (sqlite3.Error, OSError) as exc:
+        except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
             logger.warning(
                 "Could not begin the turn for %s",
                 identity_pseudonym(chat_id, "session"),
@@ -570,6 +671,7 @@ class ConversationStore:
         items: Sequence[Dict[str, Any]],
         *,
         phase: str,
+        iteration: int = 0,
     ) -> None:
         """Persist a tool boundary before execution or model continuation."""
 
@@ -585,9 +687,17 @@ class ConversationStore:
                 session = self._session(connection, chat_id)
                 cursor = connection.execute(
                     "UPDATE active_turns"
-                    " SET trajectory = ?, phase = ?, updated_at = ?"
+                    " SET trajectory = ?, phase = ?, iteration = ?, updated_at = ?"
                     " WHERE chat_id = ? AND session = ? AND user_content = ?",
-                    (encoded, phase, time.time(), chat_id, session, user_content),
+                    (
+                        encoded,
+                        phase,
+                        max(0, int(iteration)),
+                        time.time(),
+                        chat_id,
+                        session,
+                        user_content,
+                    ),
                 )
                 if cursor.rowcount != 1:
                     raise ConversationError(
@@ -606,6 +716,255 @@ class ConversationStore:
             raise ConversationError(
                 "Could not checkpoint the turn for "
                 f"{identity_pseudonym(chat_id, 'session')}"
+            ) from exc
+
+    def checkpoint_answer(
+        self,
+        chat_id: str,
+        user_content: str,
+        assistant_content: str,
+        replay: Sequence[Dict[str, Any]] = (),
+        *,
+        terminal_completed: bool = False,
+    ) -> None:
+        """Persist the exact final answer before external delivery begins."""
+
+        if self._path is None:
+            return
+        try:
+            replay_items = list(replay)
+            safe_replay = _compaction_items(replay_items)
+            if len(safe_replay) != len(replay_items):
+                raise ConversationError("The final answer replay is malformed")
+            if not isinstance(assistant_content, str) or not assistant_content:
+                raise ConversationError("The staged final answer is empty")
+            encoded_replay = json.dumps(safe_replay, separators=(",", ":"))
+            with self._connect() as connection:
+                session = self._session(connection, chat_id)
+                cursor = connection.execute(
+                    "UPDATE active_turns SET phase = 'answer_ready',"
+                    " answer_content = ?, answer_replay = ?,"
+                    " terminal_completed = ?, updated_at = ?"
+                    " WHERE chat_id = ? AND session = ? AND user_content = ?"
+                    " AND phase IN ('started', 'tool_completed')",
+                    (
+                        assistant_content,
+                        encoded_replay,
+                        int(bool(terminal_completed)),
+                        time.time(),
+                        chat_id,
+                        session,
+                        user_content,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ConversationError(
+                        "No safely completed turn can stage its final answer for "
+                        f"{identity_pseudonym(chat_id, 'session')}"
+                    )
+        except ConversationError:
+            raise
+        except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
+            logger.warning("Could not stage a final conversation answer", exc_info=True)
+            raise ConversationError("Could not durably stage the final answer") from exc
+
+    def complete_ready_turn(
+        self,
+        chat_id: str,
+    ) -> Tuple[str, str, List[Dict[str, str]], bool]:
+        """Commit one staged answer to history and remove its active fence."""
+
+        if self._path is None:
+            return "", "", [], False
+        now = time.time()
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                session = self._session(connection, chat_id)
+                row = connection.execute(
+                    "SELECT user_content, answer_content, answer_replay,"
+                    " terminal_completed FROM active_turns"
+                    " WHERE chat_id = ? AND session = ? AND phase = 'answer_ready'",
+                    (chat_id, session),
+                ).fetchone()
+                if row is None:
+                    raise ConversationError(
+                        "No staged final answer can be completed for "
+                        f"{identity_pseudonym(chat_id, 'session')}"
+                    )
+                replay = _decode_replay(str(row["answer_replay"] or ""))
+                encoded_replay = json.dumps(replay, separators=(",", ":"))
+                user_content = str(row["user_content"])
+                assistant_content = str(row["answer_content"] or "")
+                terminal_completed = bool(int(row["terminal_completed"]))
+                connection.execute(
+                    "INSERT INTO chats (chat_id, session, last_active)"
+                    " VALUES (?, ?, ?)"
+                    " ON CONFLICT (chat_id)"
+                    " DO UPDATE SET last_active = excluded.last_active",
+                    (chat_id, session, now),
+                )
+                connection.executemany(
+                    "INSERT INTO turns"
+                    " (chat_id, session, role, content, replay, written_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        (chat_id, session, "user", user_content, "", now),
+                        (
+                            chat_id,
+                            session,
+                            "assistant",
+                            assistant_content,
+                            encoded_replay,
+                            now,
+                        ),
+                    ],
+                )
+                deleted = connection.execute(
+                    "DELETE FROM active_turns"
+                    " WHERE chat_id = ? AND session = ? AND phase = 'answer_ready'",
+                    (chat_id, session),
+                )
+                if deleted.rowcount != 1:
+                    raise ConversationError("The staged final answer changed during commit")
+                return user_content, assistant_content, replay, terminal_completed
+        except ConversationError:
+            raise
+        except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
+            logger.warning("Could not complete a staged conversation answer", exc_info=True)
+            raise ConversationError("Could not complete the staged final answer") from exc
+
+    def list_active_turns(self) -> List[ActiveTurn]:
+        """Read every unfinished current-session turn or fail closed."""
+
+        if self._path is None:
+            return []
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT a.chat_id, a.session, a.user_content, a.trajectory,"
+                    " a.phase, a.iteration, a.origin, a.claim_ids,"
+                    " a.image_manifest, a.answer_content, a.answer_replay,"
+                    " a.terminal_completed, a.updated_at, c.session AS current_session"
+                    " FROM active_turns a"
+                    " LEFT JOIN chats c ON c.chat_id = a.chat_id"
+                    " ORDER BY a.updated_at, a.chat_id"
+                ).fetchall()
+            active: List[ActiveTurn] = []
+            for row in rows:
+                if row["current_session"] is None or int(row["current_session"]) != int(
+                    row["session"]
+                ):
+                    raise ValueError("active turn is detached from its current session")
+                trajectory = json.loads(row["trajectory"])
+                origin = json.loads(row["origin"])
+                claim_ids = json.loads(row["claim_ids"])
+                image_manifest = json.loads(row["image_manifest"])
+                answer_replay = _decode_replay(str(row["answer_replay"] or ""))
+                if not isinstance(trajectory, list) or not all(
+                    isinstance(item, dict) for item in trajectory
+                ):
+                    raise ValueError("active-turn trajectory is not a list of objects")
+                if not isinstance(origin, dict) or not all(
+                    isinstance(key, str) and isinstance(value, str)
+                    for key, value in origin.items()
+                ):
+                    raise ValueError("active-turn origin is not a string map")
+                if (
+                    not isinstance(claim_ids, list)
+                    or len(set(claim_ids)) != len(claim_ids)
+                    or any(
+                        not isinstance(value, str)
+                        or not _WHATSAPP_CLAIM_ID_RE.fullmatch(value)
+                        for value in claim_ids
+                    )
+                ):
+                    raise ValueError("active-turn WhatsApp claims are malformed")
+                if not isinstance(image_manifest, list) or not all(
+                    isinstance(item, dict) for item in image_manifest
+                ):
+                    raise ValueError("active-turn image manifest is malformed")
+                phase = str(row["phase"] or "")
+                if phase not in {
+                    "started",
+                    "tool_requested",
+                    "tool_completed",
+                    "answer_ready",
+                    "unknown",
+                }:
+                    raise ValueError(f"unsupported active-turn phase: {phase}")
+                iteration = int(row["iteration"])
+                if iteration < 0:
+                    raise ValueError("active-turn iteration is negative")
+                terminal_completed = int(row["terminal_completed"])
+                if terminal_completed not in {0, 1}:
+                    raise ValueError("active-turn completion proof is invalid")
+                updated_at = float(row["updated_at"])
+                if not math.isfinite(updated_at) or updated_at <= 0:
+                    raise ValueError("active-turn timestamp is invalid")
+                answer_content = str(row["answer_content"] or "")
+                if phase == "answer_ready" and not answer_content:
+                    raise ValueError("answer-ready active turn has no final answer")
+                if phase != "answer_ready" and (
+                    answer_content or answer_replay or terminal_completed
+                ):
+                    raise ValueError("unfinished active turn contains a final answer")
+                active.append(
+                    ActiveTurn(
+                        chat_id=str(row["chat_id"]),
+                        session=int(row["session"]),
+                        user_content=str(row["user_content"]),
+                        trajectory=[dict(item) for item in trajectory],
+                        phase=phase,
+                        iteration=iteration,
+                        origin=dict(origin),
+                        claim_ids=list(claim_ids),
+                        image_manifest=[dict(item) for item in image_manifest],
+                        answer_content=answer_content,
+                        answer_replay=answer_replay,
+                        terminal_completed=bool(terminal_completed),
+                        updated_at=updated_at,
+                    )
+                )
+            return active
+        except (sqlite3.Error, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Could not read interrupted conversation turns", exc_info=True)
+            raise ConversationError(
+                "Could not read interrupted conversation turns safely"
+            ) from exc
+
+    def mark_turn_unknown(self, active: ActiveTurn) -> None:
+        """Fence an interrupted turn that cannot be resumed without guessing."""
+
+        if self._path is None:
+            return
+        if active.phase == "answer_ready":
+            raise ConversationError(
+                "A completed answer cannot be downgraded to an unknown tool outcome"
+            )
+        try:
+            with self._connect() as connection:
+                cursor = connection.execute(
+                    "UPDATE active_turns SET phase = 'unknown', updated_at = ?"
+                    " WHERE chat_id = ? AND session = ?"
+                    " AND phase = ? AND phase != 'unknown'",
+                    (
+                        time.time(),
+                        active.chat_id,
+                        active.session,
+                        active.phase,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ConversationError(
+                        "The interrupted turn changed before it could be fenced"
+                    )
+        except ConversationError:
+            raise
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning("Could not fence an interrupted turn", exc_info=True)
+            raise ConversationError(
+                "Could not fence an interrupted turn safely"
             ) from exc
 
     def discard_unstarted_turn(self, chat_id: str) -> None:

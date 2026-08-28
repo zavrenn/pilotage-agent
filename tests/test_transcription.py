@@ -471,9 +471,14 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
                     on_notice,
                     origin,
                     approval_notify,
+                    claim_ids,
+                    defer_completion,
                 ):
                     seen["text"] = text
                     return "answer"
+
+                async def finalize_ready_turn(self, _session_id):
+                    pass
 
             class FakeChannel:
                 def __init__(self, _config, handler, _manage):

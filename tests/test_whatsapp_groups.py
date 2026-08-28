@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 import unittest
@@ -57,6 +58,15 @@ class GroupAdmissionTests(unittest.IsolatedAsyncioTestCase):
             "quotedParticipant": "",
         }
         event.update(overrides)
+        event.setdefault(
+            "_pilotageClaimId",
+            hashlib.sha256(
+                (
+                    f"{event.get('chatId')}|{event.get('senderId')}|"
+                    f"{event.get('messageId')}|{event.get('body')}"
+                ).encode("utf-8")
+            ).hexdigest(),
+        )
         return event
 
     async def test_unmentioned_group_message_is_ignored(self):

@@ -9,6 +9,7 @@ required capability is not ready.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib
 import json
 import os
@@ -32,8 +33,9 @@ from .channels.whatsapp import (
 )
 from .channels.telegram import normalize_telegram_home_chat_id
 from .codex import auth
+from .cron.jobs import CronError, CronStore
 from .delivery import DeliveryStore
-from .history import ConversationStore
+from .history import ConversationError, ConversationStore
 from .redact import redact_sensitive_text
 from .runtime_lock import RuntimeLockError, runtime_lock_is_held
 from .tools import ToolContext, build_registry, enabled_groups
@@ -460,6 +462,65 @@ def _check_delivery_store(config: Any) -> str:
     return "delivery write path ready"
 
 
+def _check_conversation_store(config: Any) -> str:
+    path = Path(config.conversations_path)
+    try:
+        active = ConversationStore(path).list_active_turns()
+        unknown = [turn for turn in active if turn.phase == "unknown"]
+        if unknown:
+            raise DoctorError(
+                f"conversation database has {len(unknown)} unresolved "
+                "interrupted tool turn(s)"
+            )
+
+        connection = sqlite3.connect(path, timeout=5)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                "INSERT INTO turns"
+                " (chat_id, session, role, content, replay, written_at)"
+                " VALUES ('__doctor__', -1, 'user', ?, '', 0)",
+                ("pilotagedoctorwriteprobe",),
+            )
+            indexed = connection.execute(
+                "SELECT 1 FROM turns_fts"
+                " WHERE rowid = ? AND turns_fts MATCH ?",
+                (cursor.lastrowid, "pilotagedoctorwriteprobe"),
+            ).fetchone()
+            if indexed is None:
+                raise DoctorError(
+                    "conversation FTS index did not record a rolled-back write probe"
+                )
+        finally:
+            with contextlib.suppress(sqlite3.Error):
+                connection.rollback()
+            connection.close()
+    except DoctorError:
+        raise
+    except (ConversationError, OSError, sqlite3.Error) as exc:
+        raise DoctorError(
+            "conversation database is not healthy: " + _safe_detail(exc)
+        ) from exc
+    return f"write/FTS ready; {len(active)} active turn(s)"
+
+
+def _check_cron_store(config: Any) -> str:
+    try:
+        store = CronStore(
+            Path(config.state_dir),
+            timezone_name=str(config.cron_timezone),
+            claim_ttl_seconds=float(config.cron_claim_ttl_seconds),
+            output_retention=int(config.cron_output_retention),
+        )
+        health = store.verify_health()
+    except (CronError, OSError, ValueError) as exc:
+        raise DoctorError("cron state is invalid: " + _safe_detail(exc)) from exc
+    return (
+        f"{health['jobs']} job(s), "
+        f"{health['active_claims']} active claim(s)"
+    )
+
+
 def _check_runtime(config: Any) -> str:
     path = Path(config.state_dir) / ".runtime.lock"
     try:
@@ -750,6 +811,16 @@ async def collect_report(config: Any, profile_name: str) -> DoctorReport:
         report,
         "Delivery database",
         lambda: _check_delivery_store(config),
+    )
+    await _probe(
+        report,
+        "Conversation database",
+        lambda: _check_conversation_store(config),
+    )
+    await _probe(
+        report,
+        "Scheduled jobs",
+        lambda: _check_cron_store(config),
     )
     await _probe(report, "Codex OAuth", lambda: _check_auth(config))
     await _probe_async(report, "Codex model", lambda: _check_model(config))

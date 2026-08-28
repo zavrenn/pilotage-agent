@@ -19,7 +19,9 @@ async def _handle(_message: InboundMessage) -> None:
     raise AssertionError("no message should run")
 
 
-async def _command(_chat_id, _session_id, _message_id, _invocation) -> None:
+async def _command(
+    _chat_id, _session_id, _message_id, _invocation, _claim_id
+) -> None:
     raise AssertionError("no command should run")
 
 
@@ -262,17 +264,39 @@ class BridgeOwnershipTests(unittest.IsolatedAsyncioTestCase):
         source = (Path(__file__).resolve().parent.parent / "bridge" / "bridge.js").read_text(
             encoding="utf-8"
         )
-        loop = source.index("sock.ev.on('messages.upsert'")
-        sender_gate = source.index("const senderAllowed", loop)
+        handler = source.index("async function handleMessagesUpsert")
+        sender_gate = source.index("const senderAllowed", handler)
         sender_rejection = source.index("if (!senderAllowed) continue", sender_gate)
         media_fence = source.index("item.fenceId = registerMediaFence", sender_rejection)
-        extraction = source.index("const event = await buildEvent", loop)
+        extraction = source.index("const event = await buildEvent", handler)
         self.assertLess(sender_gate, sender_rejection)
         self.assertLess(sender_rejection, media_fence)
         self.assertLess(media_fence, extraction)
         self.assertNotIn("PILOTAGE_ALLOWED_GROUPS", source)
         self.assertNotIn("ANSWER_GROUPS", source)
         self.assertIn("res.json({ messages, mediaFences, queue })", source)
+
+    def test_bridge_tracks_accepted_upserts_and_stops_on_spool_failure(self):
+        source = (Path(__file__).resolve().parent.parent / "bridge" / "bridge.js").read_text(
+            encoding="utf-8"
+        )
+        handler = source.index("async function handleMessagesUpsert")
+        enqueue = source.index("await inboundQueue.enqueue(event)", handler)
+        fatal = source.index("durable inbound enqueue failed; stopping the bridge", enqueue)
+        tracker = source.index("function trackMessagesUpsert", fatal)
+        registered = source.index("activeInboundTasks.add(task)", tracker)
+        listener = source.index("sock.ev.on('messages.upsert', trackMessagesUpsert)", registered)
+        shutdown_function = source.index("async function shutdown", listener)
+        intake_fence = source.index("inboundIntakeClosed = true", shutdown_function)
+        source_detached = source.index(".off?.('messages.upsert', trackMessagesUpsert)", intake_fence)
+        shutdown = source.index("await drainTasksForShutdown(activeInboundTasks", source_detached)
+
+        self.assertLess(enqueue, fatal)
+        self.assertLess(fatal, registered)
+        self.assertLess(registered, listener)
+        self.assertLess(listener, intake_fence)
+        self.assertLess(intake_fence, source_detached)
+        self.assertLess(source_detached, shutdown)
 
     def test_pair_only_waits_for_credentials_before_reporting_success(self):
         source = (Path(__file__).resolve().parent.parent / "bridge" / "bridge.js").read_text(
@@ -485,9 +509,12 @@ class BatchLifecycleTests(unittest.IsolatedAsyncioTestCase):
             started.set()
             await release.wait()
 
-        async def command(_chat_id, session_id, _message_id, invocation) -> None:
+        async def command(
+            _chat_id, session_id, _message_id, invocation, claim_id
+        ) -> None:
             self.assertEqual(session_id, "212600000000")
             self.assertEqual(invocation.command.name, "approve")
+            self.assertEqual(claim_id, "1" * 64)
             command_seen.set()
 
         config = Config.load()
@@ -503,6 +530,7 @@ class BatchLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 "senderId": "212600000000@s.whatsapp.net",
                 "senderNumber": "212600000000",
                 "messageId": "m2",
+                "_pilotageClaimId": "1" * 64,
                 "body": "/approve",
                 "isGroup": False,
             }
@@ -512,14 +540,64 @@ class BatchLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(channel._turn_tasks["212600000000"].done())
         release.set()
 
-    async def test_startup_gate_holds_a_recognized_command_until_release(self):
+    async def test_invalid_new_command_does_not_discard_pending_input(self):
+        commands = []
         command_seen = asyncio.Event()
 
-        async def command(chat_id, session_id, message_id, invocation) -> None:
+        async def command(
+            _chat_id, _session_id, _message_id, invocation, _claim_id
+        ) -> None:
+            commands.append(invocation)
+            command_seen.set()
+
+        config = Config.load()
+        object.__setattr__(config, "allowed_senders", frozenset({"212600000000"}))
+        object.__setattr__(config, "text_batch_delay_seconds", 60.0)
+        object.__setattr__(config, "text_batch_hard_cap_seconds", 60.0)
+        handler = mock.AsyncMock()
+        channel = WhatsAppChannel(config, handler, command)
+        channel._settle_claims = mock.AsyncMock()
+        channel._ack_later = mock.Mock()
+        self.addAsyncCleanup(channel.stop)
+
+        def event(message_id: str, body: str, claim_id: str):
+            return {
+                "chatId": "212600000000@s.whatsapp.net",
+                "senderId": "212600000000@s.whatsapp.net",
+                "senderNumber": "212600000000",
+                "messageId": message_id,
+                "_pilotageClaimId": claim_id,
+                "body": body,
+                "isGroup": False,
+            }
+
+        channel._accept(event("m1", "keep me", "6" * 64))
+        self.assertEqual(channel._pending["212600000000"].text, "keep me")
+
+        channel._accept(event("m2", "/new later", "7" * 64))
+        await asyncio.wait_for(command_seen.wait(), timeout=0.5)
+        self.assertEqual(channel._pending["212600000000"].text, "keep me")
+        self.assertEqual(commands[0].arguments, "later")
+        handler.assert_not_awaited()
+
+        command_seen.clear()
+        channel._accept(event("m3", "/new", "8" * 64))
+        await asyncio.wait_for(command_seen.wait(), timeout=0.5)
+        self.assertNotIn("212600000000", channel._pending)
+        self.assertEqual(commands[1].arguments, "")
+        channel._ack_later.assert_called_once_with(["6" * 64])
+
+    async def test_startup_gate_allows_approval_control_during_recovery(self):
+        command_seen = asyncio.Event()
+        commands = []
+
+        async def command(
+            chat_id, session_id, message_id, invocation, claim_id
+        ) -> None:
             self.assertEqual(chat_id, "212600000000@s.whatsapp.net")
             self.assertEqual(session_id, "212600000000")
-            self.assertEqual(message_id, "m2")
             self.assertEqual(invocation.command.name, "approve")
+            commands.append((message_id, claim_id))
             command_seen.set()
 
         config = Config.load()
@@ -534,15 +612,172 @@ class BatchLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 "senderId": "212600000000@s.whatsapp.net",
                 "senderNumber": "212600000000",
                 "messageId": "m2",
+                "_pilotageClaimId": "2" * 64,
                 "body": "/approve",
                 "isGroup": False,
             }
         )
         await asyncio.sleep(0)
         self.assertFalse(command_seen.is_set())
+        self.assertEqual(len(channel._startup_events), 1)
 
-        channel.release_inbound()
+        channel.enable_startup_approvals()
+        channel._accept(
+            {
+                "chatId": "212600000000@s.whatsapp.net",
+                "senderId": "212600000000@s.whatsapp.net",
+                "senderNumber": "212600000000",
+                "messageId": "m2",
+                "_pilotageClaimId": "2" * 64,
+                "body": "/approve",
+                "isGroup": False,
+            }
+        )
+        await asyncio.sleep(0)
+        self.assertFalse(command_seen.is_set())
+        self.assertEqual(len(channel._startup_events), 1)
+        channel._accept(
+            {
+                "chatId": "212600000000@s.whatsapp.net",
+                "senderId": "212600000000@s.whatsapp.net",
+                "senderNumber": "212600000000",
+                "messageId": "m3",
+                "_pilotageClaimId": "6" * 64,
+                "body": "/approve",
+                "isGroup": False,
+            }
+        )
         await asyncio.wait_for(command_seen.wait(), timeout=0.5)
+        self.assertEqual(commands, [("m3", "6" * 64)])
+        self.assertEqual(len(channel._startup_events), 1)
+        self.assertEqual(channel._startup_events[0]["messageId"], "m2")
+        await channel.abort_startup()
+
+    async def test_recovery_completion_skips_event_already_held_in_ram(self):
+        handler = mock.AsyncMock()
+        command = mock.AsyncMock()
+        config = Config.load()
+        object.__setattr__(config, "allowed_senders", frozenset({"212600000000"}))
+        channel = WhatsAppChannel(config, handler, command)
+        claim_id = "7" * 64
+        event = {
+            "chatId": "212600000000@s.whatsapp.net",
+            "senderId": "212600000000@s.whatsapp.net",
+            "senderNumber": "212600000000",
+            "messageId": "m-recovered",
+            "_pilotageClaimId": claim_id,
+            "body": "recover me",
+            "isGroup": False,
+        }
+        channel._ack_later = mock.Mock()
+        channel.hold_inbound()
+
+        channel._accept(event)
+        self.assertEqual(len(channel._startup_events), 1)
+        await asyncio.to_thread(channel.persist_completed_claims, [claim_id])
+        channel.release_inbound()
+
+        handler.assert_not_awaited()
+        command.assert_not_awaited()
+        channel._ack_later.assert_called_once_with([claim_id])
+
+    async def test_startup_abort_retains_held_bridge_claims_without_dispatch(self):
+        handler = mock.AsyncMock()
+        command = mock.AsyncMock()
+        config = Config.load()
+        object.__setattr__(config, "allowed_senders", frozenset({"212600000000"}))
+        channel = WhatsAppChannel(config, handler, command)
+        settle = mock.AsyncMock()
+        channel._settle_claims = settle
+        channel.hold_inbound()
+
+        async def late_poll_callback():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                channel._accept(
+                    {
+                        "chatId": "212600000000@s.whatsapp.net",
+                        "senderId": "212600000000@s.whatsapp.net",
+                        "senderNumber": "212600000000",
+                        "messageId": "m3",
+                        "_pilotageClaimId": "5" * 64,
+                        "body": "late ordinary",
+                        "isGroup": False,
+                    }
+                )
+
+        channel._poll_task = asyncio.create_task(late_poll_callback())
+        await asyncio.sleep(0)
+
+        for message_id, body, claim_id in (
+            ("m1", "ordinary", "3" * 64),
+            ("m2", "/new", "4" * 64),
+        ):
+            channel._accept(
+                {
+                    "chatId": "212600000000@s.whatsapp.net",
+                    "senderId": "212600000000@s.whatsapp.net",
+                    "senderNumber": "212600000000",
+                    "messageId": message_id,
+                    "_pilotageClaimId": claim_id,
+                    "body": body,
+                    "isGroup": False,
+                }
+            )
+
+        self.assertEqual(len(channel._startup_events), 2)
+        await channel.abort_startup()
+        await asyncio.sleep(0)
+
+        handler.assert_not_awaited()
+        command.assert_not_awaited()
+        settle.assert_not_awaited()
+        self.assertEqual(channel._startup_events, [])
+        self.assertEqual(channel._startup_held_claims, set())
+        self.assertTrue(channel.stopped.is_set())
+
+    async def test_missing_or_invalid_durable_claim_fails_closed_before_intake(self):
+        for label, claim_id in (("missing", None), ("invalid", "A" * 64)):
+            with self.subTest(label=label):
+                handler = mock.AsyncMock()
+                command = mock.AsyncMock()
+                config = Config.load()
+                object.__setattr__(
+                    config,
+                    "allowed_senders",
+                    frozenset({"212600000000"}),
+                )
+                channel = WhatsAppChannel(config, handler, command)
+                channel._http = mock.Mock()
+                channel._http.post = mock.AsyncMock()
+                channel.hold_inbound()
+                event = {
+                    "chatId": "212600000000@s.whatsapp.net",
+                    "senderId": "212600000000@s.whatsapp.net",
+                    "senderNumber": "212600000000",
+                    "messageId": "platform-fallback-must-not-run",
+                    "body": "/approve",
+                    "isGroup": False,
+                }
+                if claim_id is not None:
+                    event["_pilotageClaimId"] = claim_id
+
+                channel._accept(event)
+                await asyncio.sleep(0)
+
+                self.assertEqual(
+                    channel.failure,
+                    "The WhatsApp bridge returned an invalid durable claim identity.",
+                )
+                self.assertTrue(channel.stopped.is_set())
+                self.assertEqual(channel._startup_events, [])
+                self.assertEqual(channel._pending, {})
+                self.assertEqual(channel._turn_tasks, {})
+                handler.assert_not_awaited()
+                command.assert_not_awaited()
+                channel._http.post.assert_not_awaited()
+                channel._http = None
 
     async def test_stop_cancels_and_awaits_the_active_handler(self):
         started = asyncio.Event()
