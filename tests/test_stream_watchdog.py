@@ -251,10 +251,7 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         result = await self.agent._run_turn("chat", "hi", [], self._notice)
         self.assertEqual(result.text, "Answered.")
         self.assertEqual(len(self.attempts), 2)
-        self.assertEqual(
-            self.notices,
-            [t("runtime.reconnect", self.agent._config.language)],
-        )
+        self.assertEqual(self.notices, [])
 
     async def test_a_second_quiet_connection_gives_up(self):
         quiet = [
@@ -267,6 +264,7 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.text, t("runtime.failure", self.agent._config.language))
         self.assertFalse(result.terminal_completed)
         self.assertEqual(len(self.attempts), 2)
+        self.assertEqual(self.notices, [])
 
     async def test_a_transport_interruption_is_retried_once(self):
         broken = httpx.ReadError(
@@ -279,10 +277,7 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.text, "Answered.")
         self.assertEqual(len(self.attempts), 2)
-        self.assertEqual(
-            self.notices,
-            [t("runtime.reconnect", self.agent._config.language)],
-        )
+        self.assertEqual(self.notices, [])
 
     async def test_transport_and_silence_share_one_reconnect_budget(self):
         failures = [
@@ -304,6 +299,7 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.text, t("runtime.failure", self.agent._config.language))
         self.assertFalse(result.terminal_completed)
         self.assertEqual(len(self.attempts), 2)
+        self.assertEqual(self.notices, [])
 
     async def test_an_api_status_failure_becomes_a_local_failure_reply(self):
         self.agent._stream_once = self._answer_after(
@@ -331,9 +327,9 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         # Refresh once for the 401, then leave the fresh credentials alone.
         self.assertEqual(self.attempts, [False, True, False])
 
-    async def test_a_failed_notice_does_not_fail_the_turn(self):
+    async def test_a_reconnect_does_not_call_the_public_notice(self):
         async def explode(text: str) -> None:
-            raise RuntimeError("the phone is unreachable")
+            raise AssertionError("an internal reconnect reached the channel")
 
         quiet = codex_stream.CodexStreamTimeout("quiet", code="codex_stream_stalled")
         self.agent._stream_once = self._answer_after([quiet])

@@ -1163,7 +1163,7 @@ class Agent:
             for attempt in range(1, MAX_CODEX_INCOMPLETE_RESPONSES + 1):
                 try:
                     result = await self._call_model(
-                        chat_id, history + items, offered_tools, on_notice
+                        chat_id, history + items, offered_tools
                     )
                 except (
                     OpenAIError,
@@ -1299,7 +1299,6 @@ class Agent:
         chat_id: str,
         input_items: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]],
-        on_notice: Optional[Notice] = None,
     ) -> codex_stream.StreamResult:
         """One call to the model, retried when the connection rather than the request fails."""
         request = codex_stream.build_request(
@@ -1374,17 +1373,9 @@ class Agent:
                     reconnects,
                     MAX_STREAM_RECONNECTS,
                 )
-                await _notify(
-                    on_notice,
-                    t(
-                        "runtime.reconnect",
-                        getattr(
-                            self._config,
-                            "language",
-                            DEFAULT_LANGUAGE,
-                        ),
-                    ),
-                )
+                # A reconnect is an internal recovery attempt, not a message
+                # for the person using the channel. Long-running turns still
+                # use the configured generic heartbeat.
 
     async def _stream_once(
         self,

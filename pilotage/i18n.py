@@ -33,7 +33,6 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "Verify it, then use /new to continue."
         ),
         "runtime.reset": "Starting fresh. I forgot our conversation.",
-        "runtime.reconnect": "Still nothing back from the model. Reconnecting…",
         "runtime.working": "Still working.",
         "session.auto_reset_idle": "Session automatically reset after inactivity.",
         "session.auto_reset_daily": "Session automatically reset on the daily schedule.",
@@ -74,7 +73,6 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "Vérifiez-la, puis utilisez /new pour continuer."
         ),
         "runtime.reset": "On repart de zéro. J'ai oublié notre conversation.",
-        "runtime.reconnect": "Toujours aucune réponse du modèle. Je me reconnecte…",
         "runtime.working": "Je continue.",
         "session.auto_reset_idle": "La session a été réinitialisée après une période d'inactivité.",
         "session.auto_reset_daily": "La session a été réinitialisée selon l'horaire quotidien.",
@@ -114,7 +112,6 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "/new للمتابعة."
         ),
         "runtime.reset": "سنبدأ من جديد. لقد نسيت محادثتنا السابقة.",
-        "runtime.reconnect": "لم يصل رد من النموذج بعد. أعيد الاتصال…",
         "runtime.working": "ما زلت أعمل.",
         "session.auto_reset_idle": "أُعيد ضبط الجلسة تلقائيًا بعد فترة من عدم النشاط.",
         "session.auto_reset_daily": "أُعيد ضبط الجلسة تلقائيًا وفق الجدول اليومي.",
