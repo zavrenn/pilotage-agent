@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pilotage-agent"
 version = "0.1.0"
-description = "A small runtime for focused, long-lived agents."
+description = "A personal, opinionated AI agent runtime for a controlled deployment."
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "openai==2.24.0",

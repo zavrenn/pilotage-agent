@@ -6,9 +6,15 @@
 
 A lightweight runtime for focused, long-lived AI agents.
 
-Pilotage Agent is a deliberately small alternative to broad, general-purpose
-agent frameworks. It prioritizes clarity, control, and reliability over support
-for every model, channel, environment, and use case.
+> [!IMPORTANT]
+> Pilotage Agent is a personal, opinionated runtime built for a specific,
+> controlled deployment. It is shared publicly for reuse and study, not as a
+> general-purpose agent framework or supported product. Its capabilities and
+> integrations are deliberately limited to concrete needs. Ubuntu Server is the
+> documented deployment target; other compatible environments may work, but are
+> not currently validated.
+
+Pilotage Agent prioritizes clarity, control, and reliability over breadth.
 
 > Build the smallest system that can be trusted with a company.
 
@@ -18,8 +24,8 @@ The project is intended for personal and organizational agents that maintain
 context, retain useful knowledge, use tools and skills, run scheduled work, and
 communicate through familiar messaging channels.
 
-New capabilities will be added from concrete use cases, not to pursue framework
-completeness.
+New capabilities are added only when required by the maintainer's deployment,
+not to pursue framework completeness.
 
 ## Principles
 
@@ -31,16 +37,11 @@ completeness.
 
 ## Status
 
-The Genesis core currently provides ChatGPT subscription authentication,
-allowlisted WhatsApp and Telegram messaging, persistent conversations with
-native context compaction, full-text conversation recall, curated memory,
-profile-local tools and skills, profile-separated state, management commands, DDGS
-web search, Firecrawl page extraction, native image analysis, OpenAI
-voice-message transcription,
-Codex-backed image generation and editing, user-authorized DMs and groups, and
-durable cron jobs. Memory, skill, and cron changes use configurable per-profile
-approval gates over both messaging channels. This Genesis slice is not
-production-complete, and there is no stable public API.
+Pilotage Agent is an early V1 focused on ChatGPT subscription authentication,
+GPT-5.6, WhatsApp and Telegram, persistent context and memory, selected tools
+and skills, and scheduled work.
+
+It is still evolving and has no stable public API or compatibility guarantee.
 
 ## Install on Ubuntu
 
