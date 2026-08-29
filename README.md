@@ -10,9 +10,9 @@ A lightweight runtime for focused, long-lived AI agents.
 > Pilotage Agent is a personal, opinionated runtime built for a specific,
 > controlled deployment. It is shared publicly for reuse and study, not as a
 > general-purpose agent framework or supported product. Its capabilities and
-> integrations are deliberately limited to concrete needs. Ubuntu Server is the
-> documented deployment target; other compatible environments may work, but are
-> not currently validated.
+> integrations are deliberately limited to concrete needs. Ubuntu Server 24.04
+> on amd64 is the documented deployment target; other compatible environments
+> may work, but are not currently validated.
 
 Pilotage Agent prioritizes clarity, control, and reliability over breadth.
 
@@ -45,24 +45,36 @@ It is still evolving and has no stable public API or compatibility guarantee.
 
 ## Install on Ubuntu
 
-In a fresh Ubuntu 24.04 container, first run
-sudo bash scripts/install-system-dependencies.sh as root. Then run the
-commands below as the unprivileged service user.
+Clone the repository as the unprivileged service user:
 
 ```bash
-scripts/install.sh
-# Review ~/.pilotage-agent/config.yaml and add unrelated service secrets to .env
+git clone https://github.com/zavrenn/pilotage-agent.git
+cd pilotage-agent
+```
+
+Run the system dependency installer from that checkout as root:
+
+```bash
+bash scripts/install-system-dependencies.sh
+```
+
+Then return to the unprivileged service user:
+
+```bash
+bash scripts/install.sh
+# Review ~/.pilotage-agent/config.yaml and add required integration credentials to .env
 ./.venv/bin/pilotage login
 ./.venv/bin/pilotage whatsapp  # optional: configure, pair, and enable WhatsApp
 ./.venv/bin/pilotage telegram  # optional: configure, verify, and enable Telegram
 ./.venv/bin/pilotage run
 ```
 
-Voice-message transcription requires VOICE_TOOLS_OPENAI_KEY in the profile
-.env; ChatGPT login does not authorize the OpenAI audio API.
+Voice-message transcription requires `VOICE_TOOLS_OPENAI_KEY` in the profile
+`.env`; ChatGPT login does not authorize the OpenAI audio API.
 
-Full-page web extraction requires FIRECRAWL_API_KEY in the profile .env, or
-FIRECRAWL_API_URL for a self-hosted Firecrawl instance. DDGS search needs no key.
+Full-page web extraction requires `FIRECRAWL_API_KEY` in the profile `.env`, or
+`FIRECRAWL_API_URL` for a self-hosted Firecrawl instance. DDGS search needs no
+key.
 
 `pilotage whatsapp` saves the WhatsApp allowlist and home destination in the
 effective profile environment file, then pairs and enables the channel.
@@ -72,8 +84,8 @@ commands; a fresh install enables neither channel.
 An allowed WhatsApp number or Telegram user ID may use the agent in a DM or any
 group; `require_mention` can require that person to address the agent directly
 inside groups.
-Webhook delivery also requires TELEGRAM_WEBHOOK_URL and a long random
-TELEGRAM_WEBHOOK_SECRET; leaving the URL blank uses long polling.
+Webhook delivery also requires `TELEGRAM_WEBHOOK_URL` and a long random
+`TELEGRAM_WEBHOOK_SECRET`; leaving the URL blank uses long polling.
 After testing the enabled channels, install the resident user service:
 
 ```bash
@@ -106,6 +118,15 @@ The top-level `timezone` is shared by cron and daily conversation resets.
 A named profile may fall back only to the default profile's ChatGPT
 authentication. An optional `AGENTS.md` in
 the working directory supplies workspace instructions to each new conversation.
+
+## Verify changes
+
+After installing the locked environments:
+
+```bash
+./.venv/bin/python -m unittest discover -s tests
+npm --prefix bridge test
+```
 
 ## Origin
 
