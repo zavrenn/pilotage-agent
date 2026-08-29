@@ -47,6 +47,7 @@ MAX_MEDIA_FENCES = 100
 # WhatsApp clears the "typing…" indicator by itself after a few seconds, so it
 # has to be renewed for as long as the model is still thinking.
 TYPING_REFRESH_SECONDS = 8.0
+TYPING_CLEANUP_TIMEOUT_SECONDS = 0.25
 HTTP_TIMEOUT_SECONDS = 30.0
 MEDIA_HTTP_TIMEOUT_SECONDS = 120.0
 BRIDGE_READY_TIMEOUT_SECONDS = 120.0
@@ -117,6 +118,39 @@ _BARE_PHONE_RE = re.compile(r"^\+?[\d \t().-]+$")
 _CLAIM_ID_RE = re.compile(r"^[a-f0-9]{64}$")
 _DIRECT_JID_DOMAINS = frozenset({"s.whatsapp.net", "lid", "c.us"})
 _HOME_JID_DOMAINS = _DIRECT_JID_DOMAINS | {"g.us"}
+
+
+def _consume_cosmetic_task(task: asyncio.Task) -> None:
+    """Retrieve a detached cosmetic task's terminal exception, if any."""
+
+    if task.cancelled():
+        return
+    try:
+        task.exception()
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
+async def _stop_cosmetic_task(task: asyncio.Task) -> None:
+    """Bound cosmetic cleanup without making the conversation owner wait."""
+
+    if task.done():
+        _consume_cosmetic_task(task)
+        return
+    task.add_done_callback(_consume_cosmetic_task)
+    task.cancel()
+    try:
+        done, _pending = await asyncio.wait(
+            {task},
+            timeout=TYPING_CLEANUP_TIMEOUT_SECONDS,
+        )
+    except asyncio.CancelledError:
+        # A repeated owner cancellation must still leave the detached task
+        # observed and must never turn cosmetic cleanup into a new wait.
+        task.cancel()
+        raise
+    if task not in done:
+        logger.debug("Detached a cancellation-resistant WhatsApp typing task")
 
 
 class _CompletedClaimStore:
@@ -527,6 +561,7 @@ class WhatsAppChannel:
         self._http: Optional[httpx.AsyncClient] = None
         self._poll_task: Optional[asyncio.Task] = None
         self._running = False
+        self._stopping = False
         self._startup_hold_closed = False
         self._startup_approvals_enabled = False
         self._startup_events: List[Dict[str, Any]] = []
@@ -549,6 +584,9 @@ class WhatsAppChannel:
         # session. This bounds work even when messages arrive faster than replies.
         self._queued: Dict[str, InboundMessage] = {}
         self._turn_tasks: Dict[str, asyncio.Task] = {}
+        # The newest task is one serialized tail for all session-control
+        # commands. Follow-up delivery stays fenced until that tail completes.
+        self._control_tasks: Dict[str, asyncio.Task] = {}
         # Read receipts run detached; hold a reference so they are not
         # garbage-collected mid-flight.
         self._pending_tasks_background: set[asyncio.Task] = set()
@@ -570,7 +608,7 @@ class WhatsAppChannel:
         self._startup_approvals_enabled = False
 
     def enable_startup_approvals(self) -> None:
-        """Allow only approval control through the still-closed startup gate."""
+        """Allow fresh approval control through the closed startup gate."""
 
         if not self._startup_hold_closed:
             return
@@ -588,6 +626,7 @@ class WhatsAppChannel:
             self._accept(event)
 
     async def start(self) -> None:
+        self._stopping = False
         self._preflight()
         await self._stop_stale_bridge()
         self._http = httpx.AsyncClient(
@@ -612,6 +651,7 @@ class WhatsAppChannel:
     async def stop_intake(self, *, release_held_inbound: bool = True) -> None:
         """Stop accepting bridge events and dispatch every accepted batch."""
 
+        self._stopping = True
         self._running = False
         if self._poll_task is not None:
             self._poll_task.cancel()
@@ -671,6 +711,7 @@ class WhatsAppChannel:
         self._pending_tasks.clear()
         self._pending_tasks_background.clear()
         self._turn_tasks.clear()
+        self._control_tasks.clear()
         self._pending.clear()
         self._pending_started.clear()
         self._queued.clear()
@@ -1073,10 +1114,11 @@ class WhatsAppChannel:
         if self._startup_hold_closed:
             if claim_id in self._startup_held_claims:
                 return
-            if not (
+            startup_control = (
                 self._startup_approvals_enabled
                 and self._startup_approval_command(event)
-            ):
+            )
+            if not startup_control:
                 self._startup_events.append(dict(event))
                 self._startup_held_claims.add(claim_id)
                 return
@@ -1130,11 +1172,15 @@ class WhatsAppChannel:
             asyncio.create_task(self._mark_read(event.get("readReceiptKey")))
         )
 
-        invocation = parse_command(text)
+        invocation = parse_command(self._command_text(event))
         if invocation is not None:
-            if invocation.command.name == "new" and not invocation.arguments:
+            control_command = (
+                invocation.command.name in {"new", "stop"}
+                and not invocation.arguments
+            )
+            if control_command:
                 # Drop a half-written batch on the spot. Sending it after /new
-                # would answer the conversation the person just ended.
+                # or /stop would answer work the person explicitly abandoned.
                 waiting = self._pending_tasks.pop(session_id, None)
                 if waiting is not None:
                     waiting.cancel()
@@ -1155,8 +1201,24 @@ class WhatsAppChannel:
                         self._fail("The WhatsApp completed-message ledger failed.")
                         return
                     self._ack_later(superseded_claims)
-            self._pending_tasks_background.add(
-                asyncio.create_task(
+                # The bridge can deliver a turn and its following control
+                # command in one synchronous batch. Defer the control body by
+                # one scheduler cycle so the older handler can publish its
+                # preparation owner before /stop or /new inspects the Agent.
+            if control_command:
+                task = asyncio.create_task(
+                    self._run_control_command_after_yield(
+                        chat_id,
+                        session_id,
+                        message_id,
+                        claim_id,
+                        invocation,
+                        [claim_id],
+                        previous_control=self._control_tasks.get(session_id),
+                    )
+                )
+            else:
+                task = asyncio.create_task(
                     self._run_command(
                         chat_id,
                         session_id,
@@ -1166,7 +1228,15 @@ class WhatsAppChannel:
                         [claim_id],
                     )
                 )
-            )
+            self._pending_tasks_background.add(task)
+            if control_command:
+                self._control_tasks[session_id] = task
+                task.add_done_callback(
+                    lambda completed, key=session_id: self._finish_control_task(
+                        key,
+                        completed,
+                    )
+                )
             return
 
         message = InboundMessage(
@@ -1203,19 +1273,16 @@ class WhatsAppChannel:
         )
         if not self._is_allowed(sender_id, sender_number, identities):
             return False
-        invocation = parse_command(self._compose_text(event, []))
-        return bool(
-            invocation is not None
-            and invocation.command.name in {"approve", "deny"}
-        )
+        invocation = parse_command(self._command_text(event))
+        if invocation is None:
+            return False
+        return invocation.command.name in {"approve", "deny"}
 
     def _compose_text(
         self, event: Dict[str, Any], attachments: List[media.Attachment]
     ) -> str:
         """Turn a bridge event into the text the model actually sees."""
-        body = str(event.get("body") or "").strip()
-        if event.get("isGroup"):
-            body = _clean_bot_mention_text(body, event)
+        body = self._command_text(event)
         media_type = str(event.get("mediaType") or "")
 
         # The bridge writes "[image received]" when media arrives with no
@@ -1243,6 +1310,15 @@ class WhatsAppChannel:
             )
             body = f"{prefix}\n\n{body}" if body else prefix
 
+        return body.strip()
+
+    @staticmethod
+    def _command_text(event: Dict[str, Any]) -> str:
+        """Return only the sender's cleaned body for command routing."""
+
+        body = str(event.get("body") or "").strip()
+        if event.get("isGroup"):
+            body = _clean_bot_mention_text(body, event)
         return body.strip()
 
     async def _mark_read(self, key: Any) -> None:
@@ -1310,6 +1386,30 @@ class WhatsAppChannel:
         logger.warning(
             "Ignored a message from %s.",
             identity_pseudonym(identity, "wa"),
+        )
+
+    async def _run_control_command_after_yield(
+        self,
+        chat_id: str,
+        session_id: str,
+        message_id: str,
+        dedup_id: str,
+        invocation: CommandInvocation,
+        claim_ids: List[str],
+        *,
+        previous_control: Optional[asyncio.Task],
+    ) -> None:
+        if previous_control is None:
+            await asyncio.sleep(0)
+        else:
+            await previous_control
+        await self._run_command(
+            chat_id,
+            session_id,
+            message_id,
+            dedup_id,
+            invocation,
+            claim_ids,
         )
 
     async def _run_command(
@@ -1448,6 +1548,13 @@ class WhatsAppChannel:
 
     def _queue_turn(self, message: InboundMessage) -> None:
         key = message.session_id
+        if self._control_tasks.get(key) is not None:
+            queued = self._queued.get(key)
+            if queued is None:
+                self._queued[key] = message
+            else:
+                self._merge_message(queued, message)
+            return
         active = self._turn_tasks.get(key)
         if active is not None and not active.done():
             queued = self._queued.get(key)
@@ -1459,6 +1566,25 @@ class WhatsAppChannel:
 
         task = asyncio.create_task(self._run_turn_queue(key, message))
         self._turn_tasks[key] = task
+
+    def _finish_control_task(
+        self,
+        key: str,
+        task: asyncio.Task,
+    ) -> None:
+        """Release post-control input only after the command response settles."""
+
+        if self._control_tasks.get(key) is not task:
+            return
+        self._control_tasks.pop(key, None)
+        if self._stopping:
+            return
+        active = self._turn_tasks.get(key)
+        if active is not None and not active.done():
+            return
+        queued = self._queued.pop(key, None)
+        if queued is not None and not self.failure:
+            self._queue_turn(queued)
 
     async def _run_turn_queue(self, key: str, message: InboundMessage) -> None:
         current = asyncio.current_task()
@@ -1493,6 +1619,8 @@ class WhatsAppChannel:
                     await self._settle_claims("release", message.claim_ids)
                 if self.failure:
                     self._queued.pop(key, None)
+                    break
+                if self._control_tasks.get(key) is not None:
                     break
                 message = self._queued.pop(key, None)
         finally:
@@ -1572,9 +1700,7 @@ class WhatsAppChannel:
         try:
             yield
         finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            await _stop_cosmetic_task(task)
 
     async def _typing_loop(self, chat_id: str) -> None:
         while True:
@@ -1646,6 +1772,7 @@ class WhatsAppChannel:
             units = await delivery_ledger.prepare(descriptors)
 
         delivery_index = 0
+        last_message_id = ""
         for chunk_index, chunk in enumerate(chunks):
             payload: Dict[str, Any] = {
                 "chatId": target_chat_id,
@@ -1664,6 +1791,7 @@ class WhatsAppChannel:
                 if delivery_ledger is None and delivery_index:
                     return SendResult(False, result.error)
                 return result
+            last_message_id = result.message_id or last_message_id
             delivery_index += 1
             if chunk_index < len(chunks) - 1:
                 await asyncio.sleep(OUTBOUND_CHUNK_DELAY_SECONDS)
@@ -1690,8 +1818,43 @@ class WhatsAppChannel:
                 if delivery_ledger is None and delivery_index:
                     return SendResult(False, result.error)
                 return result
+            last_message_id = result.message_id or last_message_id
             delivery_index += 1
-        return SendResult(True)
+        return SendResult(True, message_id=last_message_id)
+
+    async def edit_message(
+        self,
+        chat_id: str,
+        message_id: str,
+        text: str,
+    ) -> SendResult:
+        """Edit one short, process-owned progress message in place."""
+
+        if self._http is None:
+            return SendResult(False, "WhatsApp transport is not connected")
+        if not message_id:
+            return SendResult(False, "WhatsApp edit requires a message id")
+        try:
+            target_chat_id = normalize_whatsapp_chat_id(chat_id)
+        except ValueError as exc:
+            return SendResult(False, str(exc))
+        body = to_whatsapp(text or "").strip()
+        chunks = split_whatsapp_message(body)
+        if len(chunks) != 1:
+            return SendResult(False, "WhatsApp progress edit must fit one message")
+        result = await self._send_http_unit(
+            "edit",
+            {
+                "chatId": target_chat_id,
+                "messageId": message_id,
+                "message": chunks[0],
+            },
+            timeout=15.0,
+            ambiguous_retryable=True,
+        )
+        if not result:
+            return result
+        return SendResult(True, message_id=message_id)
 
     async def _send_http_unit(
         self,
@@ -1699,6 +1862,7 @@ class WhatsAppChannel:
         payload: Dict[str, Any],
         *,
         timeout: Optional[float] = None,
+        ambiguous_retryable: bool = False,
     ) -> SendResult:
         client = self._http
         if client is None:
@@ -1737,7 +1901,20 @@ class WhatsAppChannel:
                         retry_after = float(written)
                     except (TypeError, ValueError):
                         retry_after = None
+                if ambiguous_retryable and status >= 500:
+                    try:
+                        response_text = exc.response.text.lower()
+                    except Exception:
+                        response_text = ""
+                    retryable = retryable or "timed out" in response_text
             elif isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+                retryable = True
+            elif ambiguous_retryable and isinstance(
+                exc,
+                (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout),
+            ):
+                # The bridge may have accepted the edit. Retrying that same
+                # edit is safe; sending a replacement could create a duplicate.
                 retryable = True
             # Read/write/pool timeouts and other transport failures can happen
             # after bridge acceptance, so their unit stays unsafe to retry.

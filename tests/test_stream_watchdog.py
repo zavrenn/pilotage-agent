@@ -179,7 +179,7 @@ class ContextSizingTests(unittest.TestCase):
         estimate = codex_stream.estimate_context_tokens(self._photo_request(count=4))
         self.assertLess(estimate, 10_000)
 
-    def test_a_long_conversation_earns_more_patience(self):
+    def test_a_long_conversation_only_extends_idle_patience(self):
         # Roughly 75,000 tokens of conversation.
         request = {
             "instructions": "Be brief.",
@@ -189,8 +189,7 @@ class ContextSizingTests(unittest.TestCase):
             request, ttfb_timeout=120.0, idle_timeout=12.0
         )
         self.assertEqual(idle, 120.0)
-        # The first event is what a big prefill delays, so that wait grows too.
-        self.assertGreater(ttfb, 120.0)
+        self.assertEqual(ttfb, 120.0)
 
     def test_text_is_still_counted(self):
         request = {"instructions": "", "input": [{"role": "user", "content": "y" * 80_000}]}
@@ -224,16 +223,14 @@ class ContextSizingTests(unittest.TestCase):
 
         self.assertGreater(estimate, 10_000)
         self.assertEqual(idle, 60.0)
-        self.assertGreater(ttfb, 120.0)
+        self.assertEqual(ttfb, 120.0)
 
-    def test_the_first_event_wait_is_capped(self):
-        """Nobody waits out nine minutes of silence, however big the request."""
+    def test_context_size_does_not_multiply_the_first_event_budget(self):
         request = {"instructions": "", "input": [{"role": "user", "content": "x" * 8_000_000}]}
         ttfb, _ = codex_stream.stream_timeouts(request, ttfb_timeout=120.0, idle_timeout=12.0)
-        self.assertEqual(ttfb, codex_stream.MAX_FIRST_EVENT_TIMEOUT_SECONDS)
+        self.assertEqual(ttfb, 120.0)
 
-    def test_an_explicit_setting_is_never_capped(self):
-        """The cap bounds what we add, not what was asked for."""
+    def test_an_explicit_first_event_budget_is_preserved(self):
         request = {"instructions": "", "input": [{"role": "user", "content": "x" * 8_000_000}]}
         ttfb, _ = codex_stream.stream_timeouts(request, ttfb_timeout=600.0, idle_timeout=12.0)
         self.assertEqual(ttfb, 600.0)
@@ -543,6 +540,52 @@ class ClientLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 idle_timeout=1.0,
             )
         self.assertEqual(caught.exception.code, "codex_stream_no_first_byte")
+
+    async def test_creation_and_first_event_share_one_ttfb_budget(self):
+        class DelayedResponses:
+            async def create(self, **_kwargs):
+                await asyncio.sleep(0.1)
+                return FakeStream([0.1, _completed()])
+
+        async def client(*, force_refresh=False):
+            return SimpleNamespace(responses=DelayedResponses())
+
+        self.agent._ensure_client = client
+        started_at = asyncio.get_running_loop().time()
+        with self.assertRaises(codex_stream.CodexStreamTimeout) as caught:
+            await self.agent._stream_once(
+                {"model": "gpt-test", "input": []},
+                force_refresh=False,
+                ttfb_timeout=0.15,
+                idle_timeout=1.0,
+            )
+        elapsed = asyncio.get_running_loop().time() - started_at
+
+        self.assertEqual(caught.exception.code, "codex_stream_no_first_byte")
+        self.assertIsNotNone(caught.exception.timing)
+        self.assertGreaterEqual(caught.exception.timing.elapsed_seconds, 0.09)
+        self.assertLess(elapsed, 0.19)
+        self.assertTrue(caught.exception.timing.first_event_seconds is None)
+
+    async def test_success_timing_includes_stream_creation(self):
+        class DelayedResponses:
+            async def create(self, **_kwargs):
+                await asyncio.sleep(0.02)
+                return FakeStream([_completed()])
+
+        async def client(*, force_refresh=False):
+            return SimpleNamespace(responses=DelayedResponses())
+
+        self.agent._ensure_client = client
+        result = await self.agent._stream_once(
+            {"model": "gpt-test", "input": []},
+            force_refresh=False,
+            ttfb_timeout=1.0,
+            idle_timeout=1.0,
+        )
+
+        self.assertIsNotNone(result.timing)
+        self.assertGreaterEqual(result.timing.first_event_seconds, 0.015)
 
     async def test_stream_call_routes_bulk_payload_around_the_sdk_transform(self):
         class RecordingResponses:

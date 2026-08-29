@@ -934,6 +934,77 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["reply_to_message_id"], 7)
         self.assertEqual(kwargs["message_thread_id"], 9)
 
+    async def test_text_send_preserves_the_telegram_message_id(self):
+        channel, _, _ = self._channel()
+        channel._bot = SimpleNamespace(
+            send_message=mock.AsyncMock(return_value=SimpleNamespace(message_id=21))
+        )
+
+        delivered = await channel.send("42", "hello")
+
+        self.assertTrue(delivered)
+        self.assertEqual(delivered.message_id, "21")
+
+    async def test_progress_edit_targets_the_exact_message(self):
+        channel, _, _ = self._channel()
+        edit = mock.AsyncMock(return_value=SimpleNamespace(message_id=21))
+        channel._bot = SimpleNamespace(edit_message_text=edit)
+        parse_mode = SimpleNamespace(MARKDOWN_V2="MarkdownV2")
+
+        with mock.patch.object(telegram, "ParseMode", parse_mode):
+            edited = await channel.edit_message(
+                "42",
+                "21",
+                "Still working. (2 min)",
+            )
+
+        self.assertTrue(edited)
+        self.assertEqual(edited.message_id, "21")
+        edit.assert_awaited_once_with(
+            chat_id=42,
+            message_id=21,
+            text="Still working\. \(2 min\)",
+            parse_mode="MarkdownV2",
+        )
+
+    async def test_progress_edit_parse_error_falls_back_in_place(self):
+        class FakeBadRequest(Exception):
+            pass
+
+        channel, _, _ = self._channel()
+        edit = mock.AsyncMock(
+            side_effect=[FakeBadRequest("Can't parse entities"), object()]
+        )
+        channel._bot = SimpleNamespace(edit_message_text=edit)
+        parse_mode = SimpleNamespace(MARKDOWN_V2="MarkdownV2")
+
+        with (
+            mock.patch.object(telegram, "ParseMode", parse_mode),
+            mock.patch.object(telegram, "BadRequest", FakeBadRequest),
+        ):
+            edited = await channel.edit_message("42", "21", "**working**")
+
+        self.assertTrue(edited)
+        self.assertEqual(edit.await_count, 2)
+        fallback = edit.await_args.kwargs
+        self.assertEqual(fallback["chat_id"], 42)
+        self.assertEqual(fallback["message_id"], 21)
+        self.assertEqual(fallback["text"], "working")
+        self.assertIsNone(fallback["parse_mode"])
+
+    async def test_progress_edit_network_failure_retries_the_same_edit(self):
+        channel, _, _ = self._channel()
+        error = telegram.NetworkError("offline")
+        error.__cause__ = telegram.httpx.ReadTimeout("late response")
+        channel._bot = SimpleNamespace(
+            edit_message_text=mock.AsyncMock(side_effect=error)
+        )
+
+        edited = await channel.edit_message("42", "21", "working")
+
+        self.assertFalse(edited)
+        self.assertTrue(edited.retryable)
+
     async def test_markdown_parse_error_falls_back_to_plaintext(self):
         channel, _, _ = self._channel()
         bot = SimpleNamespace(

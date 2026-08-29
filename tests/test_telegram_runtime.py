@@ -61,6 +61,16 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
             async def close(self):
                 seen["agent_closed"] = True
 
+            @contextlib.asynccontextmanager
+            async def prepare_turn(self, _session_id, **_kwargs):
+                yield object()
+
+            async def run_preparation_step(self, _session_id, _execution, run):
+                return await run()
+
+            async def preparation_stop_barrier(self, _session_id, _execution):
+                pass
+
             async def respond(
                 self,
                 session_id,
@@ -72,6 +82,7 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 approval_notify,
                 claim_ids,
                 defer_completion,
+                prepared_execution,
             ):
                 seen["session_id"] = session_id
                 seen["text"] = text
@@ -80,6 +91,7 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 seen["approval_notify"] = approval_notify
                 seen["claim_ids"] = claim_ids
                 seen["defer_completion"] = defer_completion
+                seen["prepared_execution"] = prepared_execution
                 return "answer"
 
             async def finalize_ready_turn(self, session_id):

@@ -163,6 +163,16 @@ class ActiveTurn:
     updated_at: float
 
 
+@dataclass(frozen=True)
+class StopCheckpoint:
+    """Durable result of asking one current turn to stop."""
+
+    chat_id: str
+    session: int
+    state: str
+    previous_phase: str
+
+
 _WHATSAPP_CLAIM_ID_RE = re.compile(r"^[a-f0-9]{64}$")
 
 
@@ -593,11 +603,11 @@ class ConversationStore:
         origin: Optional[Dict[str, str]] = None,
         claim_ids: Sequence[str] = (),
         image_manifest: Sequence[Dict[str, Any]] = (),
-    ) -> None:
+    ) -> int:
         """Durably accept one user turn before the model can act on it."""
 
         if self._path is None:
-            return
+            return 1
         now = time.time()
         try:
             claims = list(dict.fromkeys(str(value) for value in claim_ids if value))
@@ -651,6 +661,7 @@ class ConversationStore:
                         now,
                     ),
                 )
+                return session
         except ConversationError:
             raise
         except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
@@ -672,6 +683,8 @@ class ConversationStore:
         *,
         phase: str,
         iteration: int = 0,
+        expected_session: Optional[int] = None,
+        expected_claim_ids: Optional[Sequence[str]] = None,
     ) -> None:
         """Persist a tool boundary before execution or model continuation."""
 
@@ -679,16 +692,48 @@ class ConversationStore:
             return
         if phase not in {"tool_requested", "tool_completed"}:
             raise ValueError(f"Unsupported active-turn phase: {phase}")
+        previous_phases = (
+            ("started", "tool_completed")
+            if phase == "tool_requested"
+            else ("tool_requested",)
+        )
+        placeholders = ", ".join("?" for _ in previous_phases)
         try:
             encoded = json.dumps(
                 list(items), ensure_ascii=False, separators=(",", ":")
             )
+            expected_claims: Optional[str] = None
+            if expected_claim_ids is not None:
+                claims = list(
+                    dict.fromkeys(
+                        str(value) for value in expected_claim_ids if value
+                    )
+                )
+                if any(not _WHATSAPP_CLAIM_ID_RE.fullmatch(value) for value in claims):
+                    raise ConversationError(
+                        "The inbound WhatsApp claim identity is invalid"
+                    )
+                expected_claims = json.dumps(claims, separators=(",", ":"))
             with self._connect() as connection:
                 session = self._session(connection, chat_id)
-                cursor = connection.execute(
+                if expected_session is not None and session != int(expected_session):
+                    raise ConversationError(
+                        "The active turn no longer owns the current session"
+                    )
+                ownership_clause = ""
+                ownership_parameters: tuple[str, ...] = ()
+                if expected_claims is not None:
+                    ownership_clause = " AND claim_ids = ?"
+                    ownership_parameters = (expected_claims,)
+                query = (
                     "UPDATE active_turns"
                     " SET trajectory = ?, phase = ?, iteration = ?, updated_at = ?"
-                    " WHERE chat_id = ? AND session = ? AND user_content = ?",
+                    " WHERE chat_id = ? AND session = ? AND user_content = ?"
+                    + ownership_clause
+                    + f" AND phase IN ({placeholders})"
+                )
+                cursor = connection.execute(
+                    query,
                     (
                         encoded,
                         phase,
@@ -697,6 +742,8 @@ class ConversationStore:
                         chat_id,
                         session,
                         user_content,
+                        *ownership_parameters,
+                        *previous_phases,
                     ),
                 )
                 if cursor.rowcount != 1:
@@ -890,6 +937,7 @@ class ConversationStore:
                     "tool_requested",
                     "tool_completed",
                     "answer_ready",
+                    "stopped",
                     "unknown",
                 }:
                     raise ValueError(f"unsupported active-turn phase: {phase}")
@@ -903,12 +951,14 @@ class ConversationStore:
                 if not math.isfinite(updated_at) or updated_at <= 0:
                     raise ValueError("active-turn timestamp is invalid")
                 answer_content = str(row["answer_content"] or "")
-                if phase == "answer_ready" and not answer_content:
-                    raise ValueError("answer-ready active turn has no final answer")
-                if phase != "answer_ready" and (
+                if phase in {"answer_ready", "stopped"} and not answer_content:
+                    raise ValueError(f"{phase} active turn has no terminal text")
+                if phase not in {"answer_ready", "stopped"} and (
                     answer_content or answer_replay or terminal_completed
                 ):
                     raise ValueError("unfinished active turn contains a final answer")
+                if phase == "stopped" and (answer_replay or terminal_completed):
+                    raise ValueError("stopped active turn contains final-answer proof")
                 active.append(
                     ActiveTurn(
                         chat_id=str(row["chat_id"]),
@@ -938,9 +988,9 @@ class ConversationStore:
 
         if self._path is None:
             return
-        if active.phase == "answer_ready":
+        if active.phase in {"answer_ready", "stopped"}:
             raise ConversationError(
-                "A completed answer cannot be downgraded to an unknown tool outcome"
+                "A terminal turn cannot be downgraded to an unknown tool outcome"
             )
         try:
             with self._connect() as connection:
@@ -965,6 +1015,170 @@ class ConversationStore:
             logger.warning("Could not fence an interrupted turn", exc_info=True)
             raise ConversationError(
                 "Could not fence an interrupted turn safely"
+            ) from exc
+
+    def request_stop(
+        self,
+        chat_id: str,
+        stopped_text: str,
+        *,
+        stopped_after_actions_text: str = "",
+        expected_session: Optional[int] = None,
+    ) -> Optional[StopCheckpoint]:
+        """Stage a crash-safe stop before the exact live owner is cancelled.
+
+        A safe stop remains as a ``stopped`` tombstone until the channel has
+        durably retired the original inbound claim. An in-flight tool is
+        instead fenced as ``unknown`` because cancelling an async waiter cannot
+        prove that an external side effect did not finish.
+        """
+
+        terminal_text = str(stopped_text or "").strip()
+        if not terminal_text:
+            raise ValueError("A stopped turn requires terminal history text")
+        if self._path is None:
+            return StopCheckpoint(chat_id, 1, "stopped", "started")
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                session = self._session(connection, chat_id)
+                if expected_session is not None and session != int(expected_session):
+                    return None
+                row = connection.execute(
+                    "SELECT phase FROM active_turns"
+                    " WHERE chat_id = ? AND session = ?",
+                    (chat_id, session),
+                ).fetchone()
+                if row is None:
+                    return None
+                previous_phase = str(row["phase"] or "")
+                if previous_phase in {"started", "tool_completed"}:
+                    history_text = (
+                        str(stopped_after_actions_text or "").strip()
+                        if previous_phase == "tool_completed"
+                        else terminal_text
+                    )
+                    if not history_text:
+                        history_text = terminal_text
+                    cursor = connection.execute(
+                        "UPDATE active_turns SET phase = 'stopped',"
+                        " answer_content = ?, answer_replay = '[]',"
+                        " terminal_completed = 0, updated_at = ?"
+                        " WHERE chat_id = ? AND session = ? AND phase = ?",
+                        (
+                            history_text,
+                            time.time(),
+                            chat_id,
+                            session,
+                            previous_phase,
+                        ),
+                    )
+                    state = "stopped"
+                elif previous_phase == "tool_requested":
+                    cursor = connection.execute(
+                        "UPDATE active_turns SET phase = 'unknown', updated_at = ?"
+                        " WHERE chat_id = ? AND session = ?"
+                        " AND phase = 'tool_requested'",
+                        (time.time(), chat_id, session),
+                    )
+                    state = "unknown"
+                elif previous_phase in {"stopped", "unknown"}:
+                    cursor = None
+                    state = previous_phase
+                elif previous_phase == "answer_ready":
+                    cursor = None
+                    state = "answer_ready"
+                else:
+                    raise ConversationError(
+                        f"Unsupported active-turn phase: {previous_phase}"
+                    )
+                if cursor is not None and cursor.rowcount != 1:
+                    raise ConversationError(
+                        "The active turn changed while its stop was staged"
+                    )
+                return StopCheckpoint(
+                    chat_id=chat_id,
+                    session=session,
+                    state=state,
+                    previous_phase=previous_phase,
+                )
+        except ConversationError:
+            raise
+        except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Could not stage a stop for %s",
+                identity_pseudonym(chat_id, "session"),
+                exc_info=True,
+            )
+            raise ConversationError(
+                "Could not durably stop the turn for "
+                f"{identity_pseudonym(chat_id, 'session')}"
+            ) from exc
+
+    def complete_stopped_turn(
+        self,
+        checkpoint: StopCheckpoint,
+    ) -> Tuple[str, str]:
+        """Commit a stopped tombstone only after its input claim is retired."""
+
+        if checkpoint.state != "stopped":
+            raise ValueError("Only a stopped checkpoint can be completed")
+        if self._path is None:
+            return "", ""
+        now = time.time()
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT user_content, answer_content FROM active_turns"
+                    " WHERE chat_id = ? AND session = ? AND phase = 'stopped'",
+                    (checkpoint.chat_id, checkpoint.session),
+                ).fetchone()
+                if row is None:
+                    raise ConversationError(
+                        "The stopped turn changed before it could be completed"
+                    )
+                user_content = str(row["user_content"])
+                assistant_content = str(row["answer_content"] or "")
+                if not assistant_content:
+                    raise ConversationError("The stopped turn has no history marker")
+                connection.executemany(
+                    "INSERT INTO turns"
+                    " (chat_id, session, role, content, replay, written_at)"
+                    " VALUES (?, ?, ?, ?, '', ?)",
+                    [
+                        (
+                            checkpoint.chat_id,
+                            checkpoint.session,
+                            "user",
+                            user_content,
+                            now,
+                        ),
+                        (
+                            checkpoint.chat_id,
+                            checkpoint.session,
+                            "assistant",
+                            assistant_content,
+                            now,
+                        ),
+                    ],
+                )
+                deleted = connection.execute(
+                    "DELETE FROM active_turns"
+                    " WHERE chat_id = ? AND session = ? AND phase = 'stopped'",
+                    (checkpoint.chat_id, checkpoint.session),
+                )
+                if deleted.rowcount != 1:
+                    raise ConversationError(
+                        "The stopped turn changed during completion"
+                    )
+                return user_content, assistant_content
+        except ConversationError:
+            raise
+        except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
+            logger.warning("Could not complete a stopped turn", exc_info=True)
+            raise ConversationError(
+                "Could not complete the stopped turn safely"
             ) from exc
 
     def discard_unstarted_turn(self, chat_id: str) -> None:
@@ -1011,7 +1225,7 @@ class ConversationStore:
                 connection.execute("BEGIN IMMEDIATE")
                 session = self._session(connection, chat_id)
                 active = connection.execute(
-                    "SELECT 1 FROM active_turns"
+                    "SELECT phase FROM active_turns"
                     " WHERE chat_id = ? AND session = ? AND user_content = ?",
                     (chat_id, session, user_content),
                 ).fetchone()
@@ -1019,6 +1233,13 @@ class ConversationStore:
                     raise ConversationError(
                         "No active turn can be completed for "
                         f"{identity_pseudonym(chat_id, 'session')}"
+                    )
+                if str(active["phase"] or "") not in {
+                    "started",
+                    "tool_completed",
+                }:
+                    raise ConversationError(
+                        "The active turn is no longer safe to complete"
                     )
                 connection.execute(
                     "INSERT INTO chats (chat_id, session, last_active)"

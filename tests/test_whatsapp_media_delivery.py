@@ -276,6 +276,53 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(self.http.posts[1]["timeout"], 120.0)
 
+    async def test_text_send_preserves_the_bridge_message_id(self):
+        sent = await self.channel.send(CHAT_ID, "hello")
+
+        self.assertTrue(sent)
+        self.assertEqual(sent.message_id, "accepted-message")
+
+    async def test_progress_edit_uses_the_exact_bridge_message_key(self):
+        edited = await self.channel.edit_message(
+            CHAT_ID,
+            "progress-1",
+            "Still working. (2 min)",
+        )
+
+        self.assertTrue(edited)
+        self.assertEqual(edited.message_id, "progress-1")
+        self.assertEqual(
+            self.http.posts,
+            [
+                {
+                    "url": f"{self.channel._base_url}/edit",
+                    "json": {
+                        "chatId": CHAT_ID,
+                        "messageId": "progress-1",
+                        "message": "Still working. (2 min)",
+                    },
+                    "timeout": 15.0,
+                }
+            ],
+        )
+
+    async def test_ambiguous_progress_edit_timeout_retries_only_the_edit(self):
+        request = httpx.Request("POST", f"{self.channel._base_url}/edit")
+        self.channel._http = mock.Mock(
+            post=mock.AsyncMock(
+                side_effect=httpx.ReadTimeout("late response", request=request)
+            )
+        )
+
+        edited = await self.channel.edit_message(
+            CHAT_ID,
+            "progress-1",
+            "Still working. (2 min)",
+        )
+
+        self.assertFalse(edited)
+        self.assertTrue(edited.retryable)
+
     async def test_media_only_document_is_sent_without_empty_text(self):
         report = self.config.workspace_dir / "report.xlsx"
         report.write_bytes(b"xlsx")

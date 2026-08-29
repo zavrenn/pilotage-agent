@@ -137,11 +137,22 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
     class FakeAgent:
         def __init__(self):
             self.forgotten = []
+            self.forget_result = True
+            self.stopped = []
+            self.stop_outcome = SimpleNamespace(
+                status="not_running",
+                previous_phase="",
+            )
             self.approval_waiting = False
             self.approval_resolutions = []
 
         async def forget(self, session_id):
             self.forgotten.append(session_id)
+            return self.forget_result
+
+        async def stop(self, session_id):
+            self.stopped.append(session_id)
+            return self.stop_outcome
 
         def resolve_approval(self, session_id, *, approved, reason=""):
             self.approval_resolutions.append((session_id, approved, reason))
@@ -173,9 +184,42 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.execute("/reset"), "reset done")
         self.assertEqual(self.agent.forgotten, ["wa-chat"])
 
+    async def test_new_keeps_stop_reachable_while_a_request_runs(self):
+        self.agent.forget_result = False
+
+        self.assertEqual(
+            await self.execute("/new"),
+            "A request is still running. Use /stop, then /new.",
+        )
+
     async def test_arguments_are_rejected_without_resetting(self):
         self.assertEqual(await self.execute("/new named"), "Usage: /new")
         self.assertEqual(self.agent.forgotten, [])
+
+    async def test_stop_targets_the_exact_session_without_model_input(self):
+        self.agent.stop_outcome = SimpleNamespace(
+            status="stopped",
+            previous_phase="started",
+        )
+
+        self.assertEqual(await self.execute("/stop"), "Stopped.")
+        self.assertEqual(self.agent.stopped, ["wa-chat"])
+
+    async def test_stop_reports_unsafe_and_completed_races(self):
+        self.agent.stop_outcome = SimpleNamespace(
+            status="unknown",
+            previous_phase="tool_requested",
+        )
+        self.assertIn("may have acted", await self.execute("/stop"))
+        self.agent.stop_outcome = SimpleNamespace(
+            status="too_late",
+            previous_phase="answer_ready",
+        )
+        self.assertIn("already complete", await self.execute("/stop"))
+
+    async def test_stop_arguments_return_usage_without_stopping(self):
+        self.assertEqual(await self.execute("/stop later"), "Usage: /stop")
+        self.assertEqual(self.agent.stopped, [])
 
     async def test_info_commands_do_not_touch_the_session(self):
         self.assertIn("/new", await self.execute("/help"))

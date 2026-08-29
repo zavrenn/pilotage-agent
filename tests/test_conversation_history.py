@@ -12,6 +12,7 @@ import asyncio
 import json
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import closing
@@ -271,6 +272,13 @@ class StoreTests(unittest.TestCase):
         self.store.checkpoint_turn(
             "chat",
             "do it",
+            items[:1],
+            phase="tool_requested",
+            iteration=3,
+        )
+        self.store.checkpoint_turn(
+            "chat",
+            "do it",
             items,
             phase="tool_completed",
             iteration=3,
@@ -394,6 +402,24 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(phase, "tool_requested")
         self.assertEqual(json.loads(trajectory), items)
 
+        with self.assertRaisesRegex(ConversationError, "no longer safe"):
+            self.store.complete_turn("chat", "do it", "Done too early.")
+        self.assertEqual(self.store.load("chat", 10), [])
+
+        completed_items = [
+            *items,
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "ok",
+            },
+        ]
+        self.store.checkpoint_turn(
+            "chat",
+            "do it",
+            completed_items,
+            phase="tool_completed",
+        )
         self.store.complete_turn("chat", "do it", "Done.")
 
         with closing(sqlite3.connect(self.path)) as connection:
@@ -698,7 +724,7 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
             [("user", "answer me"), ("assistant", failure)],
         )
 
-    async def test_new_waits_for_the_answer_delivery_fence(self):
+    async def test_new_refuses_while_the_answer_delivery_fence_is_open(self):
         agent = self._agent()
         await agent.respond_result(
             "chat",
@@ -706,14 +732,11 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
             defer_completion=True,
         )
 
-        reset = asyncio.create_task(agent.forget("chat"))
-        await asyncio.sleep(0)
-
-        self.assertFalse(reset.done())
+        self.assertFalse(await agent.forget("chat"))
         self.assertEqual(ConversationStore(self.path).current_session("chat"), 1)
 
         await agent.finalize_ready_turn("chat")
-        await asyncio.wait_for(reset, timeout=1)
+        self.assertTrue(await agent.forget("chat"))
 
         store = ConversationStore(self.path)
         self.assertEqual(store.current_session("chat"), 2)
@@ -759,6 +782,13 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
         store.checkpoint_turn(
             "chat",
             "continue safely",
+            items[:1],
+            phase="tool_requested",
+            iteration=1,
+        )
+        store.checkpoint_turn(
+            "chat",
+            "continue safely",
             items,
             phase="tool_completed",
             iteration=1,
@@ -784,22 +814,30 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
             origin={"channel": "telegram", "chat_id": "42", "reply_to": "9"},
             claim_ids=[claim_id],
         )
+        items = [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "todo",
+                "arguments": '{"todos": []}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": '{"todos": []}',
+            },
+        ]
         store.checkpoint_turn(
             "chat",
             "continue safely",
-            [
-                {
-                    "type": "function_call",
-                    "call_id": "call_1",
-                    "name": "todo",
-                    "arguments": '{"todos": []}',
-                },
-                {
-                    "type": "function_call_output",
-                    "call_id": "call_1",
-                    "output": '{"todos": []}',
-                },
-            ],
+            items[:1],
+            phase="tool_requested",
+            iteration=1,
+        )
+        store.checkpoint_turn(
+            "chat",
+            "continue safely",
+            items,
             phase="tool_completed",
             iteration=1,
         )
@@ -884,16 +922,26 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_mismatched_completed_checkpoint_fails_closed(self):
         store = ConversationStore(self.path)
         store.begin_turn("chat", "corrupt")
+        requested = [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "todo",
+                "arguments": "{}",
+            }
+        ]
+        store.checkpoint_turn(
+            "chat",
+            "corrupt",
+            requested,
+            phase="tool_requested",
+            iteration=1,
+        )
         store.checkpoint_turn(
             "chat",
             "corrupt",
             [
-                {
-                    "type": "function_call",
-                    "call_id": "call_1",
-                    "name": "todo",
-                    "arguments": "{}",
-                },
+                *requested,
                 {
                     "type": "function_call_output",
                     "call_id": "call_other",
@@ -910,22 +958,32 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_interleaved_completed_checkpoint_fails_closed(self):
         store = ConversationStore(self.path)
         store.begin_turn("chat", "corrupt")
+        requested = [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "todo",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_2",
+                "name": "todo",
+                "arguments": "{}",
+            },
+        ]
+        store.checkpoint_turn(
+            "chat",
+            "corrupt",
+            requested,
+            phase="tool_requested",
+            iteration=1,
+        )
         store.checkpoint_turn(
             "chat",
             "corrupt",
             [
-                {
-                    "type": "function_call",
-                    "call_id": "call_1",
-                    "name": "todo",
-                    "arguments": "{}",
-                },
-                {
-                    "type": "function_call",
-                    "call_id": "call_2",
-                    "name": "todo",
-                    "arguments": "{}",
-                },
+                *requested,
                 {
                     "type": "function_call_output",
                     "call_id": "call_1",
@@ -958,17 +1016,27 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
     async def test_arbitrary_reasoning_checkpoint_fails_closed(self):
         store = ConversationStore(self.path)
         store.begin_turn("chat", "corrupt")
+        requested = [
+            {"type": "reasoning", "unexpected": "injected"},
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "todo",
+                "arguments": "{}",
+            },
+        ]
+        store.checkpoint_turn(
+            "chat",
+            "corrupt",
+            requested,
+            phase="tool_requested",
+            iteration=1,
+        )
         store.checkpoint_turn(
             "chat",
             "corrupt",
             [
-                {"type": "reasoning", "unexpected": "injected"},
-                {
-                    "type": "function_call",
-                    "call_id": "call_1",
-                    "name": "todo",
-                    "arguments": "{}",
-                },
+                *requested,
                 {
                     "type": "function_call_output",
                     "call_id": "call_1",
@@ -1171,7 +1239,7 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
         object.__setattr__(agent._config, "session_reset_notify", True)
         notices = []
 
-        async def notice(text):
+        async def notice(text, _replace_id=""):
             notices.append(text)
 
         await agent.respond("chat", "old context", on_notice=notice)
@@ -1240,14 +1308,13 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.04)
             return codex_stream.StreamResult(text="Answered.")
 
-        async def notice(text):
+        async def notice(text, _replace_id=""):
             notices.append(text)
 
         agent._stream_once = slow_stream
         await agent.respond("chat", "take your time", on_notice=notice)
 
-        self.assertGreaterEqual(len(notices), 1)
-        self.assertEqual(set(notices), {"Still safely working."})
+        self.assertEqual(notices, ["Still safely working. (<1 min)"])
 
     async def test_restricted_mode_routes_each_session_to_new_exports(self):
         agent = self._agent()
@@ -1265,7 +1332,7 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
         )
 
         await agent.respond("chat", "make a report")
-        first = agent._session_workdirs["chat"]
+        first = agent._session_workdirs["chat"][1]
         self.assertTrue((first / "inputs").is_dir())
         self.assertTrue((first / "tmp").is_dir())
         self.assertTrue((first / "exports").is_dir())
@@ -1274,10 +1341,61 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
 
         await agent.forget("chat")
         await agent.respond("chat", "start over")
-        second = agent._session_workdirs["chat"]
+        second = agent._session_workdirs["chat"][1]
         self.assertNotEqual(first, second)
         self.assertEqual(first.name, "session-1")
         self.assertEqual(second.name, "session-2")
+
+    async def test_cancelled_workspace_lookup_cannot_revive_the_old_generation(self):
+        agent = self._agent()
+        object.__setattr__(
+            agent._config,
+            "session_isolated_workspaces",
+            True,
+        )
+        agent._context_cwd = self.path.parent / "workspace"
+        agent._fixed_working_directory = False
+        lookup_started = threading.Event()
+        release_lookup = threading.Event()
+        real_workspace_path = session_workspace_path
+
+        def delayed_workspace_path(base, chat_id, generation):
+            result = real_workspace_path(base, chat_id, generation)
+            lookup_started.set()
+            release_lookup.wait(timeout=2)
+            return result
+
+        with patch(
+            "pilotage.agent.session_workspace_path",
+            side_effect=delayed_workspace_path,
+        ):
+            stale_lookup = asyncio.create_task(
+                asyncio.to_thread(agent._session_working_directory, "chat")
+            )
+            started = await asyncio.to_thread(lookup_started.wait, 1)
+            self.assertTrue(started)
+            stale_lookup.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await stale_lookup
+
+            await agent.forget("chat")
+            release_lookup.set()
+            for _ in range(100):
+                cached = agent._session_workdirs.get("chat")
+                if cached is not None:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertIsNotNone(cached)
+            assert cached is not None
+            self.assertEqual(cached[0], 1)
+
+            fresh = await asyncio.to_thread(
+                agent._session_working_directory,
+                "chat",
+            )
+
+        self.assertEqual(fresh.name, "session-2")
+        self.assertEqual(agent._session_workdirs["chat"], (2, fresh))
 
     async def test_inbound_document_path_is_rewritten_to_session_inputs(self):
         agent = self._agent()
@@ -1304,7 +1422,7 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
             [attachment],
         )
 
-        session_root = agent._session_workdirs["chat"]
+        session_root = agent._session_workdirs["chat"][1]
         staged = list((session_root / "inputs").iterdir())
         self.assertEqual(len(staged), 1)
         user_content = str(self.sent["input"][-1]["content"])

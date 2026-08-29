@@ -29,6 +29,7 @@ class CommandDef:
 COMMAND_REGISTRY: tuple[CommandDef, ...] = (
     CommandDef("help", "Show the available management commands", "Info", aliases=("commands",)),
     CommandDef("new", "Start a fresh conversation", "Session", aliases=("reset",)),
+    CommandDef("stop", "Stop the active request", "Session"),
     CommandDef("approve", "Allow the oldest pending change once", "Approval"),
     CommandDef("deny", "Refuse the oldest pending change", "Approval"),
     CommandDef("status", "Show the running agent's essential status", "Info"),
@@ -184,8 +185,23 @@ async def execute_command(
     if name == "help":
         return help_text(language)
     if name == "new":
-        await agent.forget(session_id)
-        return reset_reply
+        reset = await agent.forget(session_id)
+        return reset_reply if reset else t("commands.reset_running", language)
+    if name == "stop":
+        outcome = await agent.stop(session_id)
+        status = str(getattr(outcome.status, "value", outcome.status))
+        if status == "stopped":
+            key = (
+                "commands.stopped_after_actions"
+                if outcome.previous_phase == "tool_completed"
+                else "commands.stopped"
+            )
+            return t(key, language)
+        if status == "unknown":
+            return t("commands.stop_unknown", language)
+        if status == "too_late":
+            return t("commands.stop_too_late", language)
+        return t("commands.nothing_to_stop", language)
     if name == "status":
         return status_text(config, profile_name)
     if name == "profile":

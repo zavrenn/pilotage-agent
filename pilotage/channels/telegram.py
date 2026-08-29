@@ -87,6 +87,7 @@ MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 SPLIT_THRESHOLD = 4000
 QUOTE_SNIPPET_LIMIT = 500
 TYPING_REFRESH_SECONDS = 5.0
+TYPING_CLEANUP_TIMEOUT_SECONDS = 0.25
 SHUTDOWN_STEP_SECONDS = 10.0
 STARTUP_FAILURE_DRAIN_SECONDS = 30.0
 MEDIA_REGISTRATION_GRACE_SECONDS = 0.01
@@ -105,6 +106,39 @@ _VOICE_SUFFIXES = frozenset({".ogg", ".opus"})
 _AUDIO_SUFFIXES = frozenset({".mp3", ".m4a", ".aac"})
 _FOREIGN_BOT_HANDLE_RE = re.compile(r"[a-z0-9_]{2,29}bot", re.IGNORECASE)
 _BOT_TOKEN_RE = re.compile(r"[1-9][0-9]*:[A-Za-z0-9_-]{30,}")
+
+
+def _consume_cosmetic_task(task: asyncio.Task) -> None:
+    """Retrieve a detached cosmetic task's terminal exception, if any."""
+
+    if task.cancelled():
+        return
+    try:
+        task.exception()
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
+async def _stop_cosmetic_task(task: asyncio.Task) -> None:
+    """Bound cosmetic cleanup without making the conversation owner wait."""
+
+    if task.done():
+        _consume_cosmetic_task(task)
+        return
+    task.add_done_callback(_consume_cosmetic_task)
+    task.cancel()
+    try:
+        done, _pending = await asyncio.wait(
+            {task},
+            timeout=TYPING_CLEANUP_TIMEOUT_SECONDS,
+        )
+    except asyncio.CancelledError:
+        # A repeated owner cancellation must still leave the detached task
+        # observed and must never turn cosmetic cleanup into a new wait.
+        task.cancel()
+        raise
+    if task not in done:
+        logger.debug("Detached a cancellation-resistant Telegram typing task")
 
 
 class ChannelError(RuntimeError):
@@ -991,6 +1025,9 @@ class TelegramChannel:
         self._pending_tasks: Dict[str, asyncio.Task] = {}
         self._queued: Dict[str, InboundMessage] = {}
         self._turn_tasks: Dict[str, asyncio.Task] = {}
+        # The newest task is one serialized tail for all session-control
+        # commands. Follow-up delivery stays fenced until that tail completes.
+        self._control_tasks: Dict[str, asyncio.Task] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._intake_tasks: set[asyncio.Task] = set()
         self._startup_updates: List[tuple[str, Any, Any]] = []
@@ -1017,7 +1054,7 @@ class TelegramChannel:
         self._startup_approvals_enabled = False
 
     async def enable_startup_approvals(self) -> None:
-        """Allow only approval control through the still-closed startup gate."""
+        """Allow fresh approval control through the closed startup gate."""
 
         if not self._startup_hold_closed:
             return
@@ -1373,6 +1410,7 @@ class TelegramChannel:
         self._pending_tasks.clear()
         self._queued.clear()
         self._turn_tasks.clear()
+        self._control_tasks.clear()
         self._background_tasks.clear()
         self._intake_tasks.clear()
         self._startup_updates.clear()
@@ -1729,10 +1767,11 @@ class TelegramChannel:
             if message is None or not self._authorized(message):
                 await self._complete_claims(claim_ids)
                 return
-            if not _startup_replay and self._hold_startup_update(
-                "command", update, context, claim_ids
-            ):
-                return
+            if not _startup_replay:
+                if self._hold_startup_update(
+                    "command", update, context, claim_ids
+                ):
+                    return
             await self._accept_message(message, [], claim_ids=claim_ids)
 
     async def _handle_location(
@@ -1901,10 +1940,9 @@ class TelegramChannel:
         if _is_group(message):
             text = self._clean_routing_mention(text)
         invocation = parse_command(text.strip())
-        return bool(
-            invocation is not None
-            and invocation.command.name in {"approve", "deny"}
-        )
+        if invocation is None:
+            return False
+        return invocation.command.name in {"approve", "deny"}
 
     async def _replay_startup_update(
         self, kind: str, update: Any, context: Any
@@ -1958,21 +1996,49 @@ class TelegramChannel:
         session_id = self._message_session_id(message)
         message_id = str(getattr(message, "message_id", "") or "")
         if invocation is not None:
-            if invocation.command.name == "new" and not invocation.arguments:
-                dropped_claims = self._drop_pending_session(session_id)
-                await self._complete_claims(dropped_claims)
-            task = asyncio.create_task(
-                self._run_command(
-                    chat_id,
-                    session_id,
-                    message_id,
-                    thread_id,
-                    invocation,
-                    list(claim_ids),
-                )
+            control_command = (
+                invocation.command.name in {"new", "stop"}
+                and not invocation.arguments
             )
+            if control_command:
+                dropped_claims = self._drop_pending_session(session_id)
+                active_turn = self._turn_tasks.get(session_id)
+                task = asyncio.create_task(
+                    self._run_control_command_after_fence(
+                        chat_id,
+                        session_id,
+                        message_id,
+                        thread_id,
+                        invocation,
+                        list(claim_ids),
+                        dropped_claims,
+                        yield_before=bool(
+                            active_turn is not None and not active_turn.done()
+                        ),
+                        previous_control=self._control_tasks.get(session_id),
+                    )
+                )
+            else:
+                task = asyncio.create_task(
+                    self._run_command(
+                        chat_id,
+                        session_id,
+                        message_id,
+                        thread_id,
+                        invocation,
+                        list(claim_ids),
+                    )
+                )
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
+            if control_command:
+                self._control_tasks[session_id] = task
+                task.add_done_callback(
+                    lambda completed, key=session_id: self._finish_control_task(
+                        key,
+                        completed,
+                    )
+                )
             return
 
         body = self._compose_text(
@@ -2046,6 +2112,40 @@ class TelegramChannel:
             attribution = f"[Telegram group sender: {name} (user_id={user_id})]"
             body = f"{attribution}\n\n{body}" if body else attribution
         return body.strip()
+
+    async def _run_control_command_after_fence(
+        self,
+        chat_id: str,
+        session_id: str,
+        message_id: str,
+        thread_id: str,
+        invocation: CommandInvocation,
+        claim_ids: List[str],
+        dropped_claims: List[str],
+        *,
+        yield_before: bool,
+        previous_control: Optional[asyncio.Task],
+    ) -> None:
+        """Retire superseded input after publishing the post-control gate."""
+
+        if previous_control is not None:
+            await previous_control
+        elif yield_before:
+            # Updates from one polling batch can schedule a turn and a following
+            # control command without yielding in between.
+            await asyncio.sleep(0)
+        try:
+            await self._complete_claims(dropped_claims)
+        except ChannelError:
+            return
+        await self._run_command(
+            chat_id,
+            session_id,
+            message_id,
+            thread_id,
+            invocation,
+            claim_ids,
+        )
 
     async def _run_command(
         self,
@@ -2417,6 +2517,13 @@ class TelegramChannel:
 
     def _queue_turn(self, message: InboundMessage) -> None:
         key = message.session_id
+        if self._control_tasks.get(key) is not None:
+            queued = self._queued.get(key)
+            if queued is None:
+                self._queued[key] = message
+            else:
+                self._merge_message(queued, message)
+            return
         active = self._turn_tasks.get(key)
         if active is not None and not active.done():
             queued = self._queued.get(key)
@@ -2427,6 +2534,23 @@ class TelegramChannel:
             return
         task = asyncio.create_task(self._run_turn_queue(key, message))
         self._turn_tasks[key] = task
+
+    def _finish_control_task(
+        self,
+        key: str,
+        task: asyncio.Task,
+    ) -> None:
+        if self._control_tasks.get(key) is not task:
+            return
+        self._control_tasks.pop(key, None)
+        if self._intake_stopped:
+            return
+        active = self._turn_tasks.get(key)
+        if active is not None and not active.done():
+            return
+        queued = self._queued.pop(key, None)
+        if queued is not None and not self.failure:
+            self._queue_turn(queued)
 
     async def _run_turn_queue(
         self, key: str, message: Optional[InboundMessage]
@@ -2450,6 +2574,8 @@ class TelegramChannel:
                         )
                 if self.failure:
                     self._queued.pop(key, None)
+                    break
+                if self._control_tasks.get(key) is not None:
                     break
                 message = self._queued.pop(key, None)
         finally:
@@ -2497,9 +2623,7 @@ class TelegramChannel:
         try:
             yield
         finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            await _stop_cosmetic_task(task)
 
     async def _typing_loop(self, chat_id: str, thread_id: str) -> None:
         while True:
@@ -2586,6 +2710,7 @@ class TelegramChannel:
             units = await delivery_ledger.prepare(descriptors)
 
         delivery_index = 0
+        last_message_id = ""
         for chunk in chunks:
             kwargs = {
                 **self._thread_kwargs(thread_id),
@@ -2604,6 +2729,7 @@ class TelegramChannel:
                 if delivery_ledger is None and delivery_index:
                     return SendResult(False, result.error)
                 return result
+            last_message_id = result.message_id or last_message_id
             delivery_index += 1
 
         for attachment in attachments:
@@ -2623,8 +2749,70 @@ class TelegramChannel:
                 if delivery_ledger is None and delivery_index:
                     return SendResult(False, result.error)
                 return result
+            last_message_id = result.message_id or last_message_id
             delivery_index += 1
-        return SendResult(True)
+        return SendResult(True, message_id=last_message_id)
+
+    async def edit_message(
+        self,
+        chat_id: str,
+        message_id: str,
+        text: str,
+    ) -> SendResult:
+        """Edit one short progress message without changing its topic lane."""
+
+        if self._bot is None:
+            return SendResult(False, "Telegram transport is not connected")
+        target_message_id = self._integer_id(message_id)
+        if target_message_id is None:
+            return SendResult(False, "Telegram edit requires a numeric message id")
+        formatted = to_telegram(text or "").strip()
+        chunks = split_telegram_message(formatted, MAX_MESSAGE_LENGTH)
+        if len(chunks) != 1 or not chunks[0].strip():
+            return SendResult(False, "Telegram progress edit must fit one message")
+        target = normalize_telegram_chat_id(chat_id)
+        kwargs = self._preview_kwargs()
+        try:
+            await self._bot.edit_message_text(
+                chat_id=target,
+                message_id=target_message_id,
+                text=chunks[0],
+                parse_mode=ParseMode.MARKDOWN_V2,
+                **kwargs,
+            )
+            return SendResult(True, message_id=message_id)
+        except BadRequest as exc:
+            written = str(exc).lower()
+            if "message is not modified" in written:
+                return SendResult(True, message_id=message_id)
+            if "parse" in written or "markdown" in written:
+                try:
+                    await self._bot.edit_message_text(
+                        chat_id=target,
+                        message_id=target_message_id,
+                        text=strip_telegram_markdown(chunks[0]),
+                        parse_mode=None,
+                        **kwargs,
+                    )
+                    return SendResult(True, message_id=message_id)
+                except Exception as fallback_exc:
+                    return self._progress_edit_failure(fallback_exc)
+            return SendResult(False, _redact_error(exc, self._token))
+        except Exception as exc:
+            return self._progress_edit_failure(exc)
+
+    def _progress_edit_failure(self, exc: BaseException) -> SendResult:
+        """Keep retrying one edit when replacement could duplicate a message."""
+
+        failure = _send_failure(exc, self._token)
+        if isinstance(exc, (RetryAfter, TimedOut, NetworkError)):
+            return SendResult(
+                False,
+                failure.error,
+                retryable=True,
+                retry_after=failure.retry_after,
+            )
+        return failure
 
     @staticmethod
     def _sent_message_id(value: Any) -> str:

@@ -144,7 +144,7 @@ class ForgetTests(unittest.IsolatedAsyncioTestCase):
         self.agent._stream_once = self._answering(open_gate)
         await self.agent.respond("chat", "remember this")
         self.assertIn("chat", self.agent._history)
-        await self.agent.forget("chat")
+        self.assertTrue(await self.agent.forget("chat"))
         self.assertNotIn("chat", self.agent._history)
 
     async def test_failed_durable_reset_keeps_the_live_conversation(self):
@@ -177,18 +177,18 @@ class ForgetTests(unittest.IsolatedAsyncioTestCase):
 
         return _stream_once
 
-    async def test_a_turn_in_flight_does_not_survive_the_reset(self):
+    async def test_a_turn_in_flight_refuses_reset_without_blocking(self):
         gate = asyncio.Event()
         self.agent._stream_once = self._answering(gate)
         turn = asyncio.create_task(self.agent.respond("chat", "the old question"))
         await asyncio.sleep(0)  # let the turn take the chat's lock
 
-        forgetting = asyncio.create_task(self.agent.forget("chat"))
-        await asyncio.sleep(0)
+        self.assertFalse(await self.agent.forget("chat"))
         gate.set()
         await turn
-        await forgetting
 
+        self.assertIn("chat", self.agent._history)
+        self.assertTrue(await self.agent.forget("chat"))
         self.assertNotIn("chat", self.agent._history)
 
 

@@ -587,6 +587,41 @@ class BatchLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(commands[1].arguments, "")
         channel._ack_later.assert_called_once_with(["6" * 64])
 
+    async def test_replied_stop_is_routed_from_the_sender_body(self):
+        command_seen = asyncio.Event()
+        commands = []
+
+        async def command(
+            _chat_id, _session_id, _message_id, invocation, _claim_id
+        ) -> None:
+            commands.append(invocation.command.name)
+            command_seen.set()
+
+        config = Config.load()
+        object.__setattr__(config, "allowed_senders", frozenset({"212600000000"}))
+        handler = mock.AsyncMock()
+        channel = WhatsAppChannel(config, handler, command)
+        self.addAsyncCleanup(channel.stop)
+
+        channel._accept(
+            {
+                "chatId": "212600000000@s.whatsapp.net",
+                "senderId": "212600000000@s.whatsapp.net",
+                "senderNumber": "212600000000",
+                "messageId": "m-stop",
+                "_pilotageClaimId": "9" * 64,
+                "body": "/stop",
+                "quotedText": "Je continue.",
+                "quotedMessageId": "bot-progress",
+                "quotedFromMe": True,
+                "isGroup": False,
+            }
+        )
+        await asyncio.wait_for(command_seen.wait(), timeout=0.5)
+
+        self.assertEqual(commands, ["stop"])
+        handler.assert_not_awaited()
+
     async def test_startup_gate_allows_approval_control_during_recovery(self):
         command_seen = asyncio.Event()
         commands = []

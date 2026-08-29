@@ -1124,28 +1124,35 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         trajectory = []
         for iteration in range(1, 4):
             call_id = f"call-{iteration}"
-            trajectory.extend(
-                [
-                    {
-                        "type": "function_call",
-                        "call_id": call_id,
-                        "name": "todo",
-                        "arguments": '{"todos": []}',
-                    },
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": '{"todos": []}',
-                    },
-                ]
+            trajectory.append(
+                {
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": "todo",
+                    "arguments": '{"todos": []}',
+                }
             )
-        store.checkpoint_turn(
-            session_id,
-            "continue safely",
-            trajectory,
-            phase="tool_completed",
-            iteration=3,
-        )
+            store.checkpoint_turn(
+                session_id,
+                "continue safely",
+                trajectory,
+                phase="tool_requested",
+                iteration=iteration,
+            )
+            trajectory.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": '{"todos": []}',
+                }
+            )
+            store.checkpoint_turn(
+                session_id,
+                "continue safely",
+                trajectory,
+                phase="tool_completed",
+                iteration=iteration,
+            )
         events = []
         completed_claims = []
         network_sends = []
@@ -1304,7 +1311,10 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         completed_claims = []
         network_sends = []
         phases_after_invalid_reset = []
+        phases_after_busy_reset = []
         instances = []
+        prepared_turns = []
+        prepared_responses = []
 
         def inbound(text: str, message_id: str, claim_id: str):
             if channel_name == "whatsapp":
@@ -1335,13 +1345,36 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         class FakeAgent:
             def __init__(self, _config, **runtime_dependencies):
                 self.store = runtime_dependencies["store"]
+                self.forget_attempts = 0
 
-            async def respond(self, _session_id, text, *_args, **_kwargs):
+            @contextlib.asynccontextmanager
+            async def prepare_turn(
+                self,
+                target_session,
+                *,
+                before_stop=None,
+            ):
+                token = object()
+                prepared_turns.append((target_session, before_stop, token))
+                yield token
+
+            async def run_preparation_step(self, _session_id, _execution, run):
+                return await run()
+
+            async def preparation_stop_barrier(self, _session_id, _execution):
+                pass
+
+            async def respond(self, _session_id, text, *_args, **kwargs):
                 model_inputs.append(text)
+                prepared_responses.append(kwargs.get("prepared_execution"))
                 return "normal answer"
 
             async def forget(self, target_session):
+                self.forget_attempts += 1
+                if self.forget_attempts == 1:
+                    return False
                 await asyncio.to_thread(self.store.new_session, target_session)
+                return True
 
             async def finalize_ready_turn(self, _session_id):
                 pass
@@ -1367,8 +1400,10 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 blocked_claim = "b" * 64
                 invalid_reset_claim = "c" * 64
                 still_blocked_claim = "d" * 64
-                reset_claim = "e" * 64
-                normal_claim = "f" * 64
+                busy_reset_claim = "e" * 64
+                blocked_after_busy_claim = "f" * 64
+                reset_claim = "0" * 64
+                normal_claim = "1" * 64
                 blocked = inbound("continue", "m2", blocked_claim)
                 await self.handler(blocked)
                 self.persist_completed_claims(blocked.claim_ids)
@@ -1401,15 +1436,15 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                     turn.phase for turn in store.list_active_turns()
                 )
 
-                reset = parse_command("/new")
-                assert reset is not None
+                busy_reset = parse_command("/new")
+                assert busy_reset is not None
                 if channel_name == "whatsapp":
                     await self.manage(
                         chat_id,
                         session_id,
                         "m5",
-                        reset,
-                        reset_claim,
+                        busy_reset,
+                        busy_reset_claim,
                     )
                 else:
                     await self.manage(
@@ -1417,12 +1452,44 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                         session_id,
                         "m5",
                         thread_id,
+                        busy_reset,
+                        busy_reset_claim,
+                    )
+                self.persist_completed_claims([busy_reset_claim])
+
+                blocked_after_busy = inbound(
+                    "still blocked after busy reset",
+                    "m6",
+                    blocked_after_busy_claim,
+                )
+                await self.handler(blocked_after_busy)
+                self.persist_completed_claims(blocked_after_busy.claim_ids)
+                phases_after_busy_reset.extend(
+                    turn.phase for turn in store.list_active_turns()
+                )
+
+                reset = parse_command("/new")
+                assert reset is not None
+                if channel_name == "whatsapp":
+                    await self.manage(
+                        chat_id,
+                        session_id,
+                        "m7",
+                        reset,
+                        reset_claim,
+                    )
+                else:
+                    await self.manage(
+                        chat_id,
+                        session_id,
+                        "m7",
+                        thread_id,
                         reset,
                         reset_claim,
                     )
                 self.persist_completed_claims([reset_claim])
 
-                normal = inbound("after reset", "m6", normal_claim)
+                normal = inbound("after reset", "m8", normal_claim)
                 await self.handler(normal)
                 self.persist_completed_claims(normal.claim_ids)
                 self.stopped.set()
@@ -1482,17 +1549,24 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         blocked_notices = [
             sent
             for sent in network_sends
-            if sent[1] == interrupted and sent[2] in {"m2", "m4"}
+            if sent[1] == interrupted and sent[2] in {"m2", "m4", "m6"}
         ]
-        self.assertEqual(len(blocked_notices), 2)
+        self.assertEqual(len(blocked_notices), 3)
         self.assertTrue(all(sent[3] == thread_id for sent in blocked_notices))
         self.assertEqual(model_inputs, ["after reset"])
         self.assertEqual(transcribed_inputs, ["after reset"])
+        self.assertEqual(len(prepared_turns), 1)
+        self.assertEqual(prepared_turns[0][0], session_id)
+        self.assertTrue(callable(prepared_turns[0][1]))
+        self.assertEqual(prepared_responses, [prepared_turns[0][2]])
         self.assertEqual(phases_after_invalid_reset, ["unknown"])
+        self.assertEqual(phases_after_busy_reset, ["unknown"])
         self.assertIn("b" * 64, completed_claims)
         self.assertIn("c" * 64, completed_claims)
         self.assertIn("d" * 64, completed_claims)
         self.assertIn("e" * 64, completed_claims)
+        self.assertIn("f" * 64, completed_claims)
+        self.assertIn("0" * 64, completed_claims)
         self.assertIsNone(instances[0].failure)
         self.assertEqual(store.list_active_turns(), [])
 
@@ -1689,12 +1763,34 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         delivery = {"accepted": True}
         claim_id = "b" * 64
         order = []
+        prepared = {}
 
         class FakeAgent:
             def __init__(self, _config, **_runtime_dependencies):
                 pass
 
             async def close(self):
+                pass
+
+            @contextlib.asynccontextmanager
+            async def prepare_turn(
+                self,
+                session_id,
+                *,
+                before_stop=None,
+            ):
+                token = object()
+                prepared.update(
+                    session_id=session_id,
+                    before_stop=before_stop,
+                    token=token,
+                )
+                yield token
+
+            async def run_preparation_step(self, _session_id, _execution, run):
+                return await run()
+
+            async def preparation_stop_barrier(self, _session_id, _execution):
                 pass
 
             async def respond(
@@ -1708,11 +1804,13 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 approval_notify,
                 claim_ids,
                 defer_completion,
+                prepared_execution,
             ):
                 seen["origin"] = origin
                 seen["approval_notify"] = approval_notify
                 seen["claim_ids"] = claim_ids
                 seen["defer_completion"] = defer_completion
+                seen["prepared_execution"] = prepared_execution
                 return "answer"
 
             async def finalize_ready_turn(self, session_id):
@@ -1784,6 +1882,9 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(seen["approval_notify"])
         self.assertEqual(seen["claim_ids"], [claim_id])
         self.assertEqual(seen["persisted_claim_ids"], [claim_id])
+        self.assertEqual(prepared["session_id"], "123@c.us")
+        self.assertTrue(callable(prepared["before_stop"]))
+        self.assertIs(seen["prepared_execution"], prepared["token"])
         self.assertEqual(order, ["claims", "finalize"])
         self.assertTrue(seen["defer_completion"])
         self.assertEqual(seen["finalized"], "123@c.us")
@@ -2168,7 +2269,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_startup_approval_gate_opens_only_for_created_turn_recovery(self):
+    async def test_startup_approvals_open_only_after_recovery_task_exists(self):
         from pilotage import main
         from pilotage.history import ConversationStore
 

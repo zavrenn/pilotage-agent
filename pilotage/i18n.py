@@ -34,6 +34,12 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
         ),
         "runtime.reset": "Starting fresh. I forgot our conversation.",
         "runtime.working": "Still working.",
+        "runtime.working_elapsed_under_minute": "{text} (<1 min)",
+        "runtime.working_elapsed_minutes": "{text} ({minutes} min)",
+        "runtime.stopped": "Stopped by your request.",
+        "runtime.stopped_after_actions": (
+            "Stopped by your request. Actions completed before the stop were not rolled back."
+        ),
         "session.auto_reset_idle": "Session automatically reset after inactivity.",
         "session.auto_reset_daily": "Session automatically reset on the daily schedule.",
         "approval.required": "Approval required — {category}",
@@ -45,6 +51,20 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
         "commands.approved": "Approved. I’ll continue.",
         "commands.denied": "Denied. Nothing will be changed.",
         "commands.no_approval": "No approval is waiting.",
+        "commands.stopped": "Stopped.",
+        "commands.stopped_after_actions": (
+            "Stopped. Actions completed before the stop were not rolled back."
+        ),
+        "commands.stop_unknown": (
+            "Stopped, but the active tool may have acted. Verify it, then use /new."
+        ),
+        "commands.stop_too_late": (
+            "The answer was already complete and is being delivered."
+        ),
+        "commands.nothing_to_stop": "Nothing is running.",
+        "commands.reset_running": (
+            "A request is still running. Use /stop, then /new."
+        ),
         "commands.unknown": "Unknown command: /{command}",
         "commands.profile": "Profile: {profile}",
         "commands.state": "State: {state}",
@@ -74,6 +94,12 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
         ),
         "runtime.reset": "On repart de zéro. J'ai oublié notre conversation.",
         "runtime.working": "Je continue.",
+        "runtime.working_elapsed_under_minute": "{text} (<1 min)",
+        "runtime.working_elapsed_minutes": "{text} ({minutes} min)",
+        "runtime.stopped": "Arrêté à votre demande.",
+        "runtime.stopped_after_actions": (
+            "Arrêté à votre demande. Les actions déjà terminées n'ont pas été annulées."
+        ),
         "session.auto_reset_idle": "La session a été réinitialisée après une période d'inactivité.",
         "session.auto_reset_daily": "La session a été réinitialisée selon l'horaire quotidien.",
         "approval.required": "Approbation requise — {category}",
@@ -85,6 +111,20 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
         "commands.approved": "Approuvé. Je continue.",
         "commands.denied": "Refusé. Rien ne sera modifié.",
         "commands.no_approval": "Aucune approbation n'est en attente.",
+        "commands.stopped": "Arrêté.",
+        "commands.stopped_after_actions": (
+            "Arrêté. Les actions terminées avant l'arrêt n'ont pas été annulées."
+        ),
+        "commands.stop_unknown": (
+            "Arrêté, mais l'outil actif a peut-être agi. Vérifiez-le, puis utilisez /new."
+        ),
+        "commands.stop_too_late": (
+            "La réponse était déjà terminée et est en cours d'envoi."
+        ),
+        "commands.nothing_to_stop": "Aucun travail n'est en cours.",
+        "commands.reset_running": (
+            "Une demande est toujours en cours. Utilisez /stop, puis /new."
+        ),
         "commands.unknown": "Commande inconnue : /{command}",
         "commands.profile": "Profil : {profile}",
         "commands.state": "État : {state}",
@@ -113,6 +153,12 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
         ),
         "runtime.reset": "سنبدأ من جديد. لقد نسيت محادثتنا السابقة.",
         "runtime.working": "ما زلت أعمل.",
+        "runtime.working_elapsed_under_minute": "{text} (أقل من دقيقة)",
+        "runtime.working_elapsed_minutes": "{text} ({minutes} د)",
+        "runtime.stopped": "توقّفت بناءً على طلبك.",
+        "runtime.stopped_after_actions": (
+            "توقّفت بناءً على طلبك. لم يتم التراجع عن الإجراءات المكتملة قبل الإيقاف."
+        ),
         "session.auto_reset_idle": "أُعيد ضبط الجلسة تلقائيًا بعد فترة من عدم النشاط.",
         "session.auto_reset_daily": "أُعيد ضبط الجلسة تلقائيًا وفق الجدول اليومي.",
         "approval.required": "الموافقة مطلوبة — {category}",
@@ -124,6 +170,18 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
         "commands.approved": "تمت الموافقة. سأتابع.",
         "commands.denied": "تم الرفض. لن يتغير شيء.",
         "commands.no_approval": "لا توجد موافقة معلّقة.",
+        "commands.stopped": "تم الإيقاف.",
+        "commands.stopped_after_actions": (
+            "تم الإيقاف. لم يتم التراجع عن الإجراءات التي اكتملت قبل الإيقاف."
+        ),
+        "commands.stop_unknown": (
+            "تم الإيقاف، لكن الأداة النشطة ربما نفّذت إجراءً. تحقّق منه، ثم استخدم /new."
+        ),
+        "commands.stop_too_late": "كانت الإجابة مكتملة بالفعل ويجري إرسالها.",
+        "commands.nothing_to_stop": "لا يوجد عمل قيد التنفيذ.",
+        "commands.reset_running": (
+            "لا يزال هناك طلب قيد التشغيل. استخدم /stop ثم /new."
+        ),
         "commands.unknown": "أمر غير معروف: /{command}",
         "commands.profile": "الملف الشخصي: {profile}",
         "commands.state": "الحالة: {state}",

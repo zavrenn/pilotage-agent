@@ -462,6 +462,16 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
                 async def close(self):
                     pass
 
+                @contextlib.asynccontextmanager
+                async def prepare_turn(self, _session_id, **_kwargs):
+                    yield object()
+
+                async def run_preparation_step(self, _session_id, _execution, run):
+                    return await run()
+
+                async def preparation_stop_barrier(self, _session_id, _execution):
+                    pass
+
                 async def respond(
                     self,
                     _session_id,
@@ -473,6 +483,7 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
                     approval_notify,
                     claim_ids,
                     defer_completion,
+                    prepared_execution,
                 ):
                     seen["text"] = text
                     return "answer"

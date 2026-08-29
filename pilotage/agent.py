@@ -17,9 +17,11 @@ import asyncio
 import json
 import logging
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Sequence
 
 import httpx
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAIError
@@ -35,7 +37,13 @@ from .codex import (
 from .config import Config
 from .context_files import build_context_files_prompt
 from .cron.jobs import CronStore, timezone_for_name
-from .history import ActiveTurn, ConversationError, ConversationStore, session_workspace_path
+from .history import (
+    ActiveTurn,
+    ConversationError,
+    ConversationStore,
+    StopCheckpoint,
+    session_workspace_path,
+)
 from .i18n import DEFAULT_LANGUAGE, t
 from .redact import identity_pseudonym
 from .tools.memory import MemoryStore
@@ -58,6 +66,8 @@ logger = logging.getLogger(__name__)
 # thirty calls, and one bad socket at step two should not spend the whole
 # turn's patience.
 MAX_STREAM_RECONNECTS = 1
+STREAM_CLOSE_TIMEOUT_SECONDS = 5.0
+COSMETIC_CLEANUP_TIMEOUT_SECONDS = 0.25
 
 # What the model is told when it has used every step it is allowed. Hermes'
 # wording. It is asked to answer rather than cut off, so the person waiting
@@ -75,6 +85,8 @@ MAX_CODEX_INCOMPLETE_RESPONSES = 3
 CODEX_INCOMPLETE_RESPONSE = (
     "Codex response remained incomplete after 3 continuation attempts"
 )
+
+_NOTICE_SENT_WITHOUT_ID = "\x00pilotage-notice-without-id"
 
 
 def _seconds(value: Optional[float]) -> str:
@@ -102,9 +114,10 @@ ISOLATED_WORKSPACE_NOTE = (
     "with MEDIA. Put every deliverable there first."
 )
 
-# Called with a line to show the person waiting, mid-turn.
-Notice = Callable[[str], Awaitable[None]]
+# Called with a line and an optional message to replace while a turn is active.
+Notice = Callable[[str, str], Awaitable[Any]]
 ApprovalNotice = Callable[[str], Awaitable[Any]]
+PreStopFence = Callable[[], Awaitable[None]]
 
 
 @dataclass
@@ -133,6 +146,60 @@ class TurnResult:
 
 class TurnRecoveryRejected(ConversationError):
     """A durable interrupted turn is semantically unsafe to resume."""
+
+
+class StopStatus(str, Enum):
+    """Channel-neutral outcome of one exact-session stop request."""
+
+    NOT_RUNNING = "not_running"
+    STOPPED = "stopped"
+    UNKNOWN = "unknown"
+    TOO_LATE = "too_late"
+
+
+@dataclass(frozen=True)
+class StopOutcome:
+    status: StopStatus
+    checkpoint: Optional[StopCheckpoint] = None
+
+    @property
+    def previous_phase(self) -> str:
+        return self.checkpoint.previous_phase if self.checkpoint else ""
+
+
+class TurnStopped(Exception):
+    """Expected control-flow signal for a durably stopped channel turn."""
+
+    def __init__(self, outcome: StopOutcome):
+        super().__init__(outcome.status.value)
+        self.outcome = outcome
+
+
+def _stopped_history_text(outcome: StopOutcome, language: str) -> str:
+    key = (
+        "runtime.stopped_after_actions"
+        if outcome.previous_phase == "tool_completed"
+        else "runtime.stopped"
+    )
+    return t(key, language)
+
+
+@dataclass
+class _ActiveExecution:
+    """Identity guard shared by the model owner and concurrent /stop."""
+
+    session: int
+    claim_ids: tuple[str, ...] = ()
+    task: Optional[asyncio.Task] = None
+    owner_task: Optional[asyncio.Task] = None
+    notice_task: Optional[asyncio.Task] = None
+    before_preparation_stop: Optional[PreStopFence] = None
+    preparing: bool = False
+    transition_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    stop_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    stop_task: Optional["asyncio.Task[StopOutcome]"] = None
+    finished: asyncio.Event = field(default_factory=asyncio.Event)
+    outcome: Optional[StopOutcome] = None
 
 
 def _retire_tool_result_images(items: List[Dict[str, Any]]) -> None:
@@ -204,6 +271,14 @@ class Agent:
             str, tuple[str, List[Dict[str, Any]], TurnResult]
         ] = {}
         self._completion_fences: Dict[str, asyncio.Event] = {}
+        # Exact live owners for /stop. A control entry outlives model return
+        # until the answer checkpoint wins, so completion and cancellation
+        # cannot both become terminal outcomes.
+        self._active_executions: Dict[str, _ActiveExecution] = {}
+        self._stopped_turns: Dict[
+            str, tuple[int, str, List[Dict[str, Any]], TurnResult]
+        ] = {}
+        self._owned_tasks: set[asyncio.Task] = set()
         # What this build can do, and what this agent is allowed to do with it.
         # Decided once, at startup: a tool list that changed under a running
         # conversation would invalidate its prompt cache and confuse the model
@@ -267,7 +342,7 @@ class Agent:
             )
         )
         self._fixed_working_directory = working_directory is not None
-        self._session_workdirs: Dict[str, Path] = {}
+        self._session_workdirs: Dict[str, tuple[int, Path]] = {}
 
         self._memory_store: Optional[MemoryStore] = None
         if "memory" in self._tool_groups:
@@ -358,15 +433,15 @@ class Agent:
             self._config, "session_isolated_workspaces", False
         ):
             return self._context_cwd
+        generation = self._store.current_session(chat_id)
         cached = self._session_workdirs.get(chat_id)
-        if cached is not None:
-            return cached
+        if cached is not None and cached[0] == generation:
+            return cached[1]
 
         base = self._context_cwd.expanduser().resolve(strict=False)
         if self._fixed_working_directory:
             candidate = base
         else:
-            generation = self._store.current_session(chat_id)
             candidate = session_workspace_path(base, chat_id, generation)
 
         resolved_candidate = candidate.resolve(strict=False)
@@ -391,7 +466,7 @@ class Agent:
             child = root / name
             child.mkdir(mode=0o700, exist_ok=True)
             child.chmod(0o700)
-        self._session_workdirs[chat_id] = root
+        self._session_workdirs[chat_id] = (generation, root)
         return root
 
     # -- credentials --------------------------------------------------------
@@ -458,6 +533,19 @@ class Agent:
     async def close(self) -> None:
         """Close every resident Codex pool owned by this Agent."""
 
+        owned = list(self._owned_tasks)
+        for task in owned:
+            task.cancel()
+        if owned:
+            _done, pending = await asyncio.wait(
+                owned,
+                timeout=COSMETIC_CLEANUP_TIMEOUT_SECONDS,
+            )
+            if pending:
+                logger.warning(
+                    "%d Agent-owned task(s) ignored shutdown cancellation",
+                    len(pending),
+                )
         async with self._auth_lock:
             clients = list(self._retired_clients.values())
             if self._client is not None and all(
@@ -470,6 +558,22 @@ class Agent:
             self._credentials = None
         for client in clients:
             await self._close_client(client)
+
+    def _observe_task(self, task: asyncio.Task) -> None:
+        if task.done():
+            self._finish_owned_task(task)
+            return
+        self._owned_tasks.add(task)
+        task.add_done_callback(self._finish_owned_task)
+
+    def _finish_owned_task(self, task: asyncio.Task) -> None:
+        self._owned_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            task.exception()
+        except (asyncio.CancelledError, Exception):
+            pass
 
     # -- history ------------------------------------------------------------
 
@@ -607,39 +711,44 @@ class Agent:
 
         self._history.pop(chat_id, None)
         self._ready_turns.pop(chat_id, None)
+        self._stopped_turns.pop(chat_id, None)
         self._tool_state.pop(chat_id, None)
         self._session_instructions.pop(chat_id, None)
         self._session_workdirs.pop(chat_id, None)
         # The durable boundary already selected an empty current session.
         self._restored.add(chat_id)
 
-    async def forget(self, chat_id: str) -> None:
+    async def forget(self, chat_id: str) -> bool:
         """Drop a conversation's history.
 
-        Takes the chat's lock rather than clearing outright. A turn already
-        running writes its question and answer back when it finishes, so
-        clearing underneath it would hand back the conversation the person
-        just asked to end.
+        Refuse immediately while a turn or delivery fence owns the chat. This
+        keeps a later /stop reachable on channels that serialize controls.
         """
-        # /new is allowed to arrive while the active turn is waiting here.
-        # Release that waiter before taking the chat lock or reset would wait
-        # behind a turn that can only be resumed by another approval command.
-        self._approvals.block(chat_id)
+
+        execution = self._active_executions.get(chat_id)
+        if execution is not None and not execution.finished.is_set():
+            return False
+        completion = self._completion_fences.get(chat_id)
+        if completion is not None and not completion.is_set():
+            return False
+
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
+        if lock.locked():
+            return False
+        self._approvals.block(chat_id)
         try:
-            while True:
-                async with lock:
-                    completion = self._completion_fences.get(chat_id)
-                    if completion is None or completion.is_set():
-                        # Record the boundary before changing live state. If this
-                        # fails, /new reports failure and the old conversation
-                        # remains intact.
-                        await asyncio.to_thread(self._store.new_session, chat_id)
-                        self._clear_live_session(chat_id)
-                        break
-                # Delivery owns the staged answer now. Wait outside the chat
-                # lock so finalize_ready_turn can close that durable fence.
-                await completion.wait()
+            async with lock:
+                execution = self._active_executions.get(chat_id)
+                if execution is not None and not execution.finished.is_set():
+                    return False
+                completion = self._completion_fences.get(chat_id)
+                if completion is not None and not completion.is_set():
+                    return False
+                # Record the boundary before changing live state. If this fails,
+                # /new reports failure and the old conversation remains intact.
+                await asyncio.to_thread(self._store.new_session, chat_id)
+                self._clear_live_session(chat_id)
+                return True
         finally:
             self._approvals.unblock(chat_id)
 
@@ -664,6 +773,324 @@ class Agent:
         return self._approvals.resolve(
             chat_id, approved=approved, reason=reason
         )
+
+    def _register_execution(
+        self,
+        chat_id: str,
+        session: int,
+        *,
+        claim_ids: Sequence[str] = (),
+    ) -> _ActiveExecution:
+        current = self._active_executions.get(chat_id)
+        if current is not None:
+            if not current.finished.is_set():
+                raise ConversationError("This conversation already has an active owner")
+            self._active_executions.pop(chat_id, None)
+        execution = _ActiveExecution(
+            session=session,
+            claim_ids=tuple(dict.fromkeys(str(value) for value in claim_ids if value)),
+        )
+        self._active_executions[chat_id] = execution
+        return execution
+
+    @asynccontextmanager
+    async def prepare_turn(
+        self,
+        chat_id: str,
+        *,
+        before_stop: Optional[PreStopFence] = None,
+    ) -> AsyncIterator[_ActiveExecution]:
+        """Expose accepted preprocessing to the same exact-session stop owner."""
+
+        execution = self._register_execution(
+            chat_id,
+            0,
+        )
+        owner = asyncio.current_task()
+        execution.owner_task = owner
+        execution.task = owner
+        execution.before_preparation_stop = before_stop
+        execution.preparing = True
+        try:
+            yield execution
+        except TurnStopped:
+            raise
+        finally:
+            if self._active_executions.get(chat_id) is execution:
+                self._release_execution(chat_id, execution)
+
+    async def run_preparation_step(
+        self,
+        chat_id: str,
+        execution: _ActiveExecution,
+        run: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """Bound an external preprocessing child without abandoning its owner."""
+
+        self._require_live_execution(chat_id, execution)
+        owner = asyncio.current_task()
+        if owner is None or execution.owner_task is not owner:
+            raise ConversationError("The prepared turn no longer owns this task")
+        task = asyncio.create_task(run())
+        try:
+            result = await self._await_execution_child(execution, task)
+            await self._stop_barrier(execution)
+            self._require_live_execution(chat_id, execution)
+            return result
+        finally:
+            if execution.task is task:
+                execution.task = owner
+
+    async def preparation_stop_barrier(
+        self,
+        chat_id: str,
+        execution: _ActiveExecution,
+    ) -> None:
+        """Reject late preprocessing before it can emit or begin the turn."""
+
+        await self._stop_barrier(execution)
+        self._require_live_execution(chat_id, execution)
+
+    def _release_execution(
+        self,
+        chat_id: str,
+        execution: _ActiveExecution,
+    ) -> None:
+        if self._active_executions.get(chat_id) is execution:
+            self._active_executions.pop(chat_id, None)
+        execution.finished.set()
+
+    async def _stop_barrier(self, execution: _ActiveExecution) -> None:
+        """Let an in-flight durable stop win or lose before completion."""
+
+        stop_task = execution.stop_task
+        if stop_task is None:
+            return
+        try:
+            outcome = await asyncio.shield(stop_task)
+        except Exception:
+            # Persistence failure leaves the exact owner authoritative. The
+            # command reports the error; ordinary work may continue safely.
+            return
+        if outcome is not None and outcome.status in {
+            StopStatus.STOPPED,
+            StopStatus.UNKNOWN,
+        }:
+            raise TurnStopped(outcome)
+
+    async def _await_execution_child(
+        self,
+        execution: _ActiveExecution,
+        task: asyncio.Task,
+    ) -> Any:
+        """Race one cooperative child against the authoritative stop result."""
+
+        execution.task = task
+        self._observe_task(task)
+        stop_wait = asyncio.create_task(execution.stop_ready.wait())
+        self._observe_task(stop_wait)
+        try:
+            await self._stop_barrier(execution)
+            done, _pending = await asyncio.wait(
+                {task, stop_wait},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if task in done:
+                try:
+                    return task.result()
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is None or not current.cancelling():
+                        await self._stop_barrier(execution)
+                    raise
+            await self._stop_barrier(execution)
+            return await task
+        finally:
+            stop_wait.cancel()
+            if not task.done():
+                task.cancel()
+
+    async def _run_owned_turn(
+        self,
+        chat_id: str,
+        execution: _ActiveExecution,
+        run: Awaitable[TurnResult],
+        on_notice: Optional[Notice],
+    ) -> TurnResult:
+        """Run the exact cancellable child while its cosmetic heartbeat lives."""
+
+        task = asyncio.create_task(run)
+        guarded_notice = self._guard_execution_notice(
+            chat_id,
+            execution,
+            on_notice,
+        )
+        working_notice_task = asyncio.create_task(
+            self._working_notice_loop(chat_id, guarded_notice)
+        )
+        self._observe_task(working_notice_task)
+        execution.notice_task = working_notice_task
+        try:
+            return await self._await_execution_child(execution, task)
+        finally:
+            working_notice_task.cancel()
+            if not working_notice_task.done():
+                await asyncio.wait(
+                    {working_notice_task},
+                    timeout=COSMETIC_CLEANUP_TIMEOUT_SECONDS,
+                )
+            if execution.notice_task is working_notice_task:
+                execution.notice_task = None
+
+    def _guard_execution_notice(
+        self,
+        chat_id: str,
+        execution: _ActiveExecution,
+        on_notice: Optional[Notice],
+    ) -> Optional[Notice]:
+        if on_notice is None:
+            return None
+
+        async def guarded(text: str, replace_id: str = "") -> Any:
+            outcome = execution.outcome
+            if (
+                self._active_executions.get(chat_id) is not execution
+                or (
+                    outcome is not None
+                    and outcome.status in {StopStatus.STOPPED, StopStatus.UNKNOWN}
+                )
+            ):
+                return False
+            return await on_notice(text, replace_id)
+
+        return guarded
+
+    async def stop(self, chat_id: str) -> StopOutcome:
+        """Durably stop only the exact live owner for this conversation."""
+
+        execution = self._active_executions.get(chat_id)
+        if execution is not None and execution.finished.is_set():
+            execution = None
+        if execution is None:
+            completion = self._completion_fences.get(chat_id)
+            if completion is not None and not completion.is_set():
+                return StopOutcome(StopStatus.TOO_LATE)
+            return StopOutcome(StopStatus.NOT_RUNNING)
+        transition = execution.stop_task
+        if transition is not None and transition.done():
+            try:
+                failed = transition.cancelled() or transition.exception() is not None
+            except asyncio.CancelledError:
+                failed = True
+            if failed:
+                transition = None
+        if transition is None:
+            execution.outcome = None
+            execution.stop_ready.clear()
+            transition = asyncio.create_task(
+                self._run_stop_transition(chat_id, execution)
+            )
+            execution.stop_task = transition
+            self._observe_task(transition)
+        return await asyncio.shield(transition)
+
+    async def _run_stop_transition(
+        self,
+        chat_id: str,
+        execution: _ActiveExecution,
+    ) -> StopOutcome:
+        """Publish one durable stop result and cancel its exact owner atomically."""
+
+        try:
+            async with execution.transition_lock:
+                if execution.finished.is_set() and execution.preparing:
+                    outcome = StopOutcome(StopStatus.NOT_RUNNING)
+                elif execution.outcome is not None:
+                    outcome = execution.outcome
+                elif execution.preparing:
+                    before_stop = execution.before_preparation_stop
+                    if before_stop is not None:
+                        await before_stop()
+                    outcome = StopOutcome(StopStatus.STOPPED)
+                else:
+                    checkpoint = await asyncio.to_thread(
+                        self._store.request_stop,
+                        chat_id,
+                        t("runtime.stopped", self._config.language),
+                        stopped_after_actions_text=t(
+                            "runtime.stopped_after_actions",
+                            self._config.language,
+                        ),
+                        expected_session=execution.session,
+                    )
+                    if checkpoint is None:
+                        outcome = StopOutcome(StopStatus.NOT_RUNNING)
+                    elif checkpoint.state == "stopped":
+                        outcome = StopOutcome(
+                            StopStatus.STOPPED,
+                            checkpoint,
+                        )
+                    elif checkpoint.state == "unknown":
+                        outcome = StopOutcome(
+                            StopStatus.UNKNOWN,
+                            checkpoint,
+                        )
+                    elif checkpoint.state == "answer_ready":
+                        outcome = StopOutcome(StopStatus.TOO_LATE, checkpoint)
+                    else:
+                        raise ConversationError(
+                            f"Unsupported durable stop state: {checkpoint.state}"
+                        )
+                execution.outcome = outcome
+            if outcome.status in {StopStatus.STOPPED, StopStatus.UNKNOWN}:
+                self._approvals.clear(
+                    chat_id,
+                    reason="The conversation was stopped.",
+                )
+                task = execution.task
+                if (
+                    task is not None
+                    and task is not execution.owner_task
+                    and not task.done()
+                ):
+                    task.cancel()
+                notice_task = execution.notice_task
+                if notice_task is not None and not notice_task.done():
+                    notice_task.cancel()
+        except BaseException:
+            # A persistence failure is not an authoritative stop outcome. Keep
+            # the cooperative child waiting so a later /stop can retry safely.
+            raise
+        execution.stop_ready.set()
+        return outcome
+
+    async def finalize_stop(self, outcome: StopOutcome) -> None:
+        """Retire a safe tombstone after the channel retires its input claim."""
+
+        checkpoint = outcome.checkpoint
+        if outcome.status != StopStatus.STOPPED or checkpoint is None:
+            return
+        lock = self._chat_locks.setdefault(checkpoint.chat_id, asyncio.Lock())
+        async with lock:
+            user_text, stopped_text = await asyncio.to_thread(
+                self._store.complete_stopped_turn,
+                checkpoint,
+            )
+            pending = self._stopped_turns.pop(checkpoint.chat_id, None)
+            if pending is not None and pending[0] == checkpoint.session:
+                self._remember(
+                    checkpoint.chat_id,
+                    pending[1],
+                    pending[2],
+                    pending[3],
+                )
+            elif user_text or stopped_text:
+                self._remember(
+                    checkpoint.chat_id,
+                    user_text,
+                    [],
+                    TurnResult(text=stopped_text),
+                )
 
     async def _working_notice_loop(
         self,
@@ -691,11 +1118,42 @@ class Agent:
         ).strip()
         if not text:
             return
+        started_at = time.monotonic()
+        message_id = ""
+        last_elapsed_bucket = -1
+        delay = interval
         while True:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(delay)
+            delay = interval
             if self._approvals.has_pending(chat_id):
                 continue
-            await _notify(on_notice, text)
+            elapsed_seconds = max(0.0, time.monotonic() - started_at)
+            elapsed_minutes = int(elapsed_seconds // 60)
+            if elapsed_minutes == last_elapsed_bucket:
+                delay = max(interval, 60.0 - (elapsed_seconds % 60.0))
+                continue
+            last_elapsed_bucket = elapsed_minutes
+            if message_id == _NOTICE_SENT_WITHOUT_ID:
+                return
+            language = getattr(self._config, "language", DEFAULT_LANGUAGE)
+            if elapsed_minutes < 1:
+                notice_text = t(
+                    "runtime.working_elapsed_under_minute",
+                    language,
+                    text=text,
+                )
+            else:
+                notice_text = t(
+                    "runtime.working_elapsed_minutes",
+                    language,
+                    text=text,
+                    minutes=elapsed_minutes,
+                )
+            message_id = await _notify(
+                on_notice,
+                notice_text,
+                replace_id=message_id,
+            )
 
     # -- the turn -----------------------------------------------------------
 
@@ -710,6 +1168,7 @@ class Agent:
         approval_notify: Optional[ApprovalNotice] = None,
         claim_ids: Sequence[str] = (),
         defer_completion: bool = False,
+        prepared_execution: Optional[_ActiveExecution] = None,
     ) -> str:
         result = await self.respond_result(
             chat_id,
@@ -720,6 +1179,7 @@ class Agent:
             approval_notify=approval_notify,
             claim_ids=claim_ids,
             defer_completion=defer_completion,
+            prepared_execution=prepared_execution,
         )
         return result.text
 
@@ -734,6 +1194,7 @@ class Agent:
         approval_notify: Optional[ApprovalNotice] = None,
         claim_ids: Sequence[str] = (),
         defer_completion: bool = False,
+        prepared_execution: Optional[_ActiveExecution] = None,
     ) -> TurnResult:
         """Return a persisted turn plus its positive terminal-completion proof."""
 
@@ -771,17 +1232,30 @@ class Agent:
                     reset.had_activity
                     and getattr(self._config, "session_reset_notify", True)
                 ):
-                    await _notify(
-                        on_notice,
-                        t(
-                            f"session.auto_reset_{reset.reason}",
-                            getattr(
-                                self._config,
-                                "language",
-                                DEFAULT_LANGUAGE,
-                            ),
+                    reset_notice = t(
+                        f"session.auto_reset_{reset.reason}",
+                        getattr(
+                            self._config,
+                            "language",
+                            DEFAULT_LANGUAGE,
                         ),
                     )
+                    if prepared_execution is not None:
+                        guarded_notice = self._guard_execution_notice(
+                            chat_id,
+                            prepared_execution,
+                            on_notice,
+                        )
+                        await self.run_preparation_step(
+                            chat_id,
+                            prepared_execution,
+                            lambda: _notify(
+                                guarded_notice,
+                                reset_notice,
+                            ),
+                        )
+                    else:
+                        await _notify(on_notice, reset_notice)
             await self._restore(chat_id)
             working_directory = await asyncio.to_thread(
                 self._session_working_directory,
@@ -828,30 +1302,122 @@ class Agent:
                 user_text = f"{base_text}\n\n{hints}"
             if self._memory_store is not None:
                 self._memory_store.reset_consolidation_failures()
-            working_notice_task = asyncio.create_task(
-                self._working_notice_loop(chat_id, on_notice)
-            )
             turn_begun = False
+            execution: Optional[_ActiveExecution] = prepared_execution
+            owns_execution = execution is None
             try:
-                await asyncio.to_thread(
-                    self._store.begin_turn,
-                    chat_id,
-                    user_text,
-                    origin=origin,
-                    claim_ids=claim_ids,
-                    image_manifest=image_manifest,
-                )
+                if execution is not None:
+                    async with execution.transition_lock:
+                        if self._active_executions.get(chat_id) is not execution:
+                            raise ConversationError(
+                                "The prepared turn no longer owns this conversation"
+                            )
+                        if execution.stop_ready.is_set():
+                            outcome = execution.outcome
+                            if outcome is not None and outcome.status in {
+                                StopStatus.STOPPED,
+                                StopStatus.UNKNOWN,
+                            }:
+                                raise TurnStopped(outcome)
+                        turn_session = await asyncio.to_thread(
+                            self._store.begin_turn,
+                            chat_id,
+                            user_text,
+                            origin=origin,
+                            claim_ids=claim_ids,
+                            image_manifest=image_manifest,
+                        )
+                        execution.session = turn_session
+                        execution.claim_ids = tuple(
+                            dict.fromkeys(str(value) for value in claim_ids if value)
+                        )
+                        execution.preparing = False
+                else:
+                    turn_session = await asyncio.to_thread(
+                        self._store.begin_turn,
+                        chat_id,
+                        user_text,
+                        origin=origin,
+                        claim_ids=claim_ids,
+                        image_manifest=image_manifest,
+                    )
                 turn_begun = True
-                result = await self._run_turn(
+                if execution is None:
+                    execution = self._register_execution(
+                        chat_id,
+                        turn_session,
+                        claim_ids=claim_ids,
+                    )
+                execution.owner_task = asyncio.current_task()
+                result = await self._run_owned_turn(
                     chat_id,
-                    user_text,
-                    image_parts,
+                    execution,
+                    self._run_turn(
+                        chat_id,
+                        user_text,
+                        image_parts,
+                        on_notice,
+                        origin=origin,
+                        approval_notify=approval_notify,
+                        turn_note=reset_note,
+                        working_directory=working_directory,
+                        execution=execution,
+                    ),
                     on_notice,
-                    origin=origin,
-                    approval_notify=approval_notify,
-                    turn_note=reset_note,
-                    working_directory=working_directory,
                 )
+                await self._stop_barrier(execution)
+                checkpoints = (
+                    compaction.persistent_compaction_items(result.items)
+                    if self._native_compaction_active()
+                    else []
+                )
+                async with execution.transition_lock:
+                    self._require_live_execution(chat_id, execution)
+                    if defer_completion:
+                        self._begin_completion_fence(chat_id)
+                        try:
+                            await asyncio.to_thread(
+                                self._store.checkpoint_answer,
+                                chat_id,
+                                user_text,
+                                result.text,
+                                checkpoints,
+                                terminal_completed=result.terminal_completed,
+                            )
+                            self._ready_turns[chat_id] = (
+                                user_text,
+                                image_parts,
+                                result,
+                            )
+                        except BaseException:
+                            self._release_completion_fence(chat_id)
+                            raise
+                    else:
+                        await asyncio.to_thread(
+                            self._store.complete_turn,
+                            chat_id,
+                            user_text,
+                            result.text,
+                            checkpoints,
+                        )
+                if not defer_completion:
+                    self._remember(chat_id, user_text, image_parts, result)
+                return result
+            except TurnStopped as stopped:
+                outcome = stopped.outcome
+                if outcome.status == StopStatus.STOPPED and outcome.checkpoint:
+                    self._stopped_turns[chat_id] = (
+                        outcome.checkpoint.session,
+                        user_text,
+                        image_parts,
+                        TurnResult(
+                            text=_stopped_history_text(
+                                outcome,
+                                self._config.language,
+                            )
+                        ),
+                    )
+                raise
             except BaseException:
                 if turn_begun:
                     try:
@@ -867,37 +1433,8 @@ class Agent:
                         )
                 raise
             finally:
-                working_notice_task.cancel()
-                await asyncio.gather(
-                    working_notice_task,
-                    return_exceptions=True,
-                )
-            checkpoints = (
-                compaction.persistent_compaction_items(result.items)
-                if self._native_compaction_active()
-                else []
-            )
-            if defer_completion:
-                self._begin_completion_fence(chat_id)
-                await asyncio.to_thread(
-                    self._store.checkpoint_answer,
-                    chat_id,
-                    user_text,
-                    result.text,
-                    checkpoints,
-                    terminal_completed=result.terminal_completed,
-                )
-                self._ready_turns[chat_id] = (user_text, image_parts, result)
-            else:
-                await asyncio.to_thread(
-                    self._store.complete_turn,
-                    chat_id,
-                    user_text,
-                    result.text,
-                    checkpoints,
-                )
-                self._remember(chat_id, user_text, image_parts, result)
-            return result
+                if owns_execution and execution is not None:
+                    self._release_execution(chat_id, execution)
 
     async def recover_turn(
         self,
@@ -931,11 +1468,26 @@ class Agent:
 
         lock = self._chat_locks.setdefault(active.chat_id, asyncio.Lock())
         async with lock:
-            await self._restore(active.chat_id)
-            working_directory = await asyncio.to_thread(
-                self._session_working_directory,
+            execution = self._register_execution(
                 active.chat_id,
+                active.session,
+                claim_ids=active.claim_ids,
             )
+            execution.owner_task = asyncio.current_task()
+            try:
+                await self._stop_barrier(execution)
+            except TurnStopped:
+                self._release_execution(active.chat_id, execution)
+                raise
+            try:
+                await self._restore(active.chat_id)
+                working_directory = await asyncio.to_thread(
+                    self._session_working_directory,
+                    active.chat_id,
+                )
+            except BaseException:
+                self._release_execution(active.chat_id, execution)
+                raise
             if active.phase == "answer_ready":
                 try:
                     image_parts = await asyncio.to_thread(
@@ -952,6 +1504,9 @@ class Agent:
                         exc_info=True,
                     )
                     image_parts = []
+                except BaseException:
+                    self._release_execution(active.chat_id, execution)
+                    raise
                 restored_items = [dict(item) for item in active.answer_replay]
                 if restored_items:
                     restored_items.append(
@@ -970,85 +1525,127 @@ class Agent:
                         working_directory / "inputs",
                     )
                 except (OSError, ValueError) as exc:
+                    self._release_execution(active.chat_id, execution)
                     raise ConversationError(
                         "The interrupted turn's staged image cannot be restored safely"
                     ) from exc
-                working_notice_task = asyncio.create_task(
-                    self._working_notice_loop(active.chat_id, on_notice)
-                )
+                except BaseException:
+                    self._release_execution(active.chat_id, execution)
+                    raise
                 try:
-                    result = await self._run_turn(
+                    result = await self._run_owned_turn(
                         active.chat_id,
-                        active.user_content,
-                        image_parts,
+                        execution,
+                        self._run_turn(
+                            active.chat_id,
+                            active.user_content,
+                            image_parts,
+                            on_notice,
+                            origin=active.origin,
+                            approval_notify=approval_notify,
+                            working_directory=working_directory,
+                            resume_items=resume_items,
+                            completed_steps=active.iteration,
+                            execution=execution,
+                        ),
                         on_notice,
-                        origin=active.origin,
-                        approval_notify=approval_notify,
-                        working_directory=working_directory,
-                        resume_items=resume_items,
-                        completed_steps=active.iteration,
                     )
-                finally:
-                    working_notice_task.cancel()
-                    await asyncio.gather(
-                        working_notice_task,
-                        return_exceptions=True,
-                    )
+                    await self._stop_barrier(execution)
+                except TurnStopped as stopped:
+                    outcome = stopped.outcome
+                    if outcome.status == StopStatus.STOPPED and outcome.checkpoint:
+                        self._stopped_turns[active.chat_id] = (
+                            outcome.checkpoint.session,
+                            active.user_content,
+                            image_parts,
+                            TurnResult(
+                                text=_stopped_history_text(
+                                    outcome,
+                                    self._config.language,
+                                )
+                            ),
+                        )
+                    self._release_execution(active.chat_id, execution)
+                    raise
+                except BaseException:
+                    self._release_execution(active.chat_id, execution)
+                    raise
 
-            if defer_completion:
-                # The chat lock already keeps /new behind recovery while the
-                # model is running. Create the completion fence only once an
-                # exact answer exists and delivery is about to own it.
-                self._begin_completion_fence(active.chat_id)
-                try:
-                    if active.phase != "answer_ready":
+            try:
+                async with execution.transition_lock:
+                    self._require_live_execution(active.chat_id, execution)
+                    if defer_completion:
+                        # Create the completion fence only once an exact answer
+                        # exists and delivery is about to own it.
+                        self._begin_completion_fence(active.chat_id)
+                        try:
+                            if active.phase != "answer_ready":
+                                checkpoints = (
+                                    compaction.persistent_compaction_items(result.items)
+                                    if self._native_compaction_active()
+                                    else []
+                                )
+                                await asyncio.to_thread(
+                                    self._store.checkpoint_answer,
+                                    active.chat_id,
+                                    active.user_content,
+                                    result.text,
+                                    checkpoints,
+                                    terminal_completed=result.terminal_completed,
+                                )
+                            self._ready_turns[active.chat_id] = (
+                                active.user_content,
+                                image_parts,
+                                result,
+                            )
+                        except BaseException:
+                            self._release_completion_fence(active.chat_id)
+                            raise
+                    elif active.phase == "answer_ready":
+                        await asyncio.to_thread(
+                            self._store.complete_ready_turn,
+                            active.chat_id,
+                        )
+                    else:
                         checkpoints = (
                             compaction.persistent_compaction_items(result.items)
                             if self._native_compaction_active()
                             else []
                         )
                         await asyncio.to_thread(
-                            self._store.checkpoint_answer,
+                            self._store.complete_turn,
                             active.chat_id,
                             active.user_content,
                             result.text,
                             checkpoints,
-                            terminal_completed=result.terminal_completed,
                         )
-                    self._ready_turns[active.chat_id] = (
+                if not defer_completion:
+                    self._remember(
+                        active.chat_id,
                         active.user_content,
                         image_parts,
                         result,
                     )
-                except BaseException:
-                    self._release_completion_fence(active.chat_id)
-                    raise
-            else:
-                if active.phase == "answer_ready":
-                    await asyncio.to_thread(
-                        self._store.complete_ready_turn,
-                        active.chat_id,
-                    )
-                else:
-                    checkpoints = (
-                        compaction.persistent_compaction_items(result.items)
-                        if self._native_compaction_active()
-                        else []
-                    )
-                    await asyncio.to_thread(
-                        self._store.complete_turn,
-                        active.chat_id,
+                return result
+            except TurnStopped as stopped:
+                outcome = stopped.outcome
+                if outcome.status == StopStatus.STOPPED and outcome.checkpoint:
+                    self._stopped_turns[active.chat_id] = (
+                        outcome.checkpoint.session,
                         active.user_content,
-                        result.text,
-                        checkpoints,
+                        image_parts,
+                        TurnResult(
+                            text=_stopped_history_text(
+                                outcome,
+                                self._config.language,
+                            )
+                        ),
                     )
-                self._remember(
-                    active.chat_id,
-                    active.user_content,
-                    image_parts,
-                    result,
-                )
-            return result
+                raise
+            except BaseException:
+                raise
+            finally:
+                self._release_execution(active.chat_id, execution)
 
     async def finalize_ready_turn(self, chat_id: str) -> None:
         """Move one delivery-fenced answer into canonical conversation history."""
@@ -1080,6 +1677,23 @@ class Agent:
             finally:
                 self._release_completion_fence(chat_id)
 
+    def _require_live_execution(
+        self,
+        chat_id: str,
+        execution: Optional[_ActiveExecution],
+    ) -> None:
+        if execution is None:
+            return
+        outcome = execution.outcome
+        if outcome is not None and outcome.status in {
+            StopStatus.STOPPED,
+            StopStatus.UNKNOWN,
+        }:
+            raise TurnStopped(outcome)
+        if self._active_executions.get(chat_id) is execution:
+            return
+        raise ConversationError("The turn no longer owns this conversation")
+
     async def _run_turn(
         self,
         chat_id: str,
@@ -1093,6 +1707,7 @@ class Agent:
         working_directory: Optional[Path] = None,
         resume_items: Sequence[Dict[str, Any]] = (),
         completed_steps: int = 0,
+        execution: Optional[_ActiveExecution] = None,
     ) -> TurnResult:
         """Call the model, run what it asks for, call it again — until it answers."""
         active_working_directory = working_directory or self._context_cwd
@@ -1168,10 +1783,12 @@ class Agent:
             offered_tools: Optional[List[Dict[str, Any]]],
         ) -> Optional[codex_stream.StreamResult]:
             for attempt in range(1, MAX_CODEX_INCOMPLETE_RESPONSES + 1):
+                self._require_live_execution(chat_id, execution)
                 try:
                     result = await self._call_model(
                         chat_id, history + items, offered_tools
                     )
+                    self._require_live_execution(chat_id, execution)
                 except (
                     OpenAIError,
                     httpx.TransportError,
@@ -1248,14 +1865,29 @@ class Agent:
                 names,
             )
             step_started_at = time.monotonic()
-            await asyncio.to_thread(
-                self._store.checkpoint_turn,
-                chat_id,
-                user_text,
-                items,
-                phase="tool_requested",
-                iteration=step + 1,
-            )
+            if execution is None:
+                await asyncio.to_thread(
+                    self._store.checkpoint_turn,
+                    chat_id,
+                    user_text,
+                    items,
+                    phase="tool_requested",
+                    iteration=step + 1,
+                )
+            else:
+                async with execution.transition_lock:
+                    self._require_live_execution(chat_id, execution)
+                    await asyncio.to_thread(
+                        self._store.checkpoint_turn,
+                        chat_id,
+                        user_text,
+                        items,
+                        phase="tool_requested",
+                        iteration=step + 1,
+                        expected_session=execution.session,
+                        expected_claim_ids=execution.claim_ids,
+                    )
+            self._require_live_execution(chat_id, execution)
             outputs = await run_calls(
                 self._registry,
                 result.tool_calls,
@@ -1264,6 +1896,7 @@ class Agent:
                 max_result_chars=self._config.max_tool_result_chars,
                 step_budget_chars=self._config.max_tool_step_chars,
             )
+            self._require_live_execution(chat_id, execution)
             for call, output in zip(result.tool_calls, outputs):
                 if isinstance(output, str):
                     output = frame_untrusted_tool_result(
@@ -1277,14 +1910,29 @@ class Agent:
                         "output": responses_tool_output(output),
                     }
                 )
-            await asyncio.to_thread(
-                self._store.checkpoint_turn,
-                chat_id,
-                user_text,
-                items,
-                phase="tool_completed",
-                iteration=step + 1,
-            )
+            if execution is None:
+                await asyncio.to_thread(
+                    self._store.checkpoint_turn,
+                    chat_id,
+                    user_text,
+                    items,
+                    phase="tool_completed",
+                    iteration=step + 1,
+                )
+            else:
+                async with execution.transition_lock:
+                    self._require_live_execution(chat_id, execution)
+                    await asyncio.to_thread(
+                        self._store.checkpoint_turn,
+                        chat_id,
+                        user_text,
+                        items,
+                        phase="tool_completed",
+                        iteration=step + 1,
+                        expected_session=execution.session,
+                        expected_claim_ids=execution.claim_ids,
+                    )
+            self._require_live_execution(chat_id, execution)
             logger.info(
                 "Step %d completed for %s in %.3fs: %s",
                 step + 1,
@@ -1450,10 +2098,12 @@ class Agent:
         ttfb_timeout: float,
         idle_timeout: float,
     ) -> codex_stream.StreamResult:
-        request_started_at = time.monotonic()
         client = await self._ensure_client(force_refresh=force_refresh)
         try:
             wire_request = codex_stream._bypass_sdk_request_transform(request)
+            # Admission in responses.create() and the first SSE event consume
+            # one wall-clock budget. Client acquisition is separate setup.
+            request_started_at = time.monotonic()
             create_stream = client.responses.create(**wire_request, stream=True)
             try:
                 if ttfb_timeout > 0:
@@ -1484,21 +2134,38 @@ class Agent:
                 # Closing the response is what actually lets go of a wedged
                 # connection, and it must not replace the error that got us here.
                 try:
-                    await stream.close()
+                    await asyncio.wait_for(
+                        stream.close(),
+                        timeout=STREAM_CLOSE_TIMEOUT_SECONDS,
+                    )
                 except Exception:  # noqa: BLE001 - the turn already has its outcome
                     logger.debug("Closing the Codex stream failed", exc_info=True)
         finally:
             await self._release_client(client)
 
 
-async def _notify(on_notice: Optional[Notice], text: str) -> None:
+async def _notify(
+    on_notice: Optional[Notice],
+    text: str,
+    *,
+    replace_id: str = "",
+) -> str:
     """Tell the person waiting what is happening. Never at the cost of the turn."""
     if on_notice is None:
-        return
+        return replace_id
     try:
-        await on_notice(text)
+        result = await on_notice(text, replace_id)
+        message_id = str(getattr(result, "message_id", "") or "")
+        if message_id:
+            return message_id
+        if result is None or bool(result):
+            return replace_id if replace_id else _NOTICE_SENT_WITHOUT_ID
+        if bool(getattr(result, "retryable", False)):
+            return replace_id
+        return _NOTICE_SENT_WITHOUT_ID
     except Exception:  # noqa: BLE001 - a failed notice must not fail the answer
         logger.debug("Could not deliver the notice %r", text, exc_info=True)
+        return _NOTICE_SENT_WITHOUT_ID
 
 
 def _assistant_items(result: codex_stream.StreamResult) -> List[Dict[str, Any]]:

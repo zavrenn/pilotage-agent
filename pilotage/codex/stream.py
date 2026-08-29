@@ -264,24 +264,6 @@ def build_request(
 # one.
 IMAGE_TOKEN_COST = 1500
 
-# How much longer than the between-events wait a large request may take to say
-# anything at all. Prefill is where a big request spends its time, so the first
-# event is exactly what a long conversation delays. The reference
-# implementation gave up on scaling this and switched the watchdog off above
-# 10k tokens; switching it off restores the hang it exists to catch, so we
-# scale instead. The factor is a judgement call — we have no measurement of
-# real prefill times yet.
-FIRST_EVENT_BRACKET_FACTOR = 3.0
-
-# The most silence we will ever sit through before deciding nothing is coming.
-# The scaling above is guesswork, and unbounded guesswork ends with someone
-# staring at a chat for nine minutes. Past this point the difference between a
-# slow backend and a dead one stops mattering: either way the person is owed a
-# reconnect. A cutoff set explicitly in configuration is honoured as given —
-# this only bounds what we add on our own.
-MAX_FIRST_EVENT_TIMEOUT_SECONDS = 180.0
-
-
 def estimate_context_tokens(request: Dict[str, Any]) -> int:
     """Roughly how much this request asks the backend to read, in tokens.
 
@@ -327,12 +309,11 @@ def stream_timeouts(
 ) -> Tuple[float, float]:
     """Pick the two cutoffs for one request.
 
-    A big request — long history, a photo — legitimately takes longer to start
-    and pauses longer between events, so both waits grow with it. The brackets
-    are the reference implementation's; the configured value is the floor, so
-    raising it in configuration is never undone here. What we add on our own is
-    capped, because nobody waits out nine minutes of silence. Zero stays zero: a
-    disabled watchdog is not re-enabled by a large request.
+    A large request can legitimately pause longer between events, so the
+    reference implementation's context brackets apply to the idle cutoff. The
+    configured first-event cutoff is already the complete admission and
+    prefill budget; context sizing must not silently multiply it. Zero stays
+    zero: a disabled watchdog is not re-enabled by a large request.
     """
     estimate = estimate_context_tokens(request)
     if estimate > 100_000:
@@ -344,9 +325,7 @@ def stream_timeouts(
     else:
         bracket = 0.0
     idle = idle_timeout if idle_timeout <= 0 else max(idle_timeout, bracket)
-    scaled = min(bracket * FIRST_EVENT_BRACKET_FACTOR, MAX_FIRST_EVENT_TIMEOUT_SECONDS)
-    ttfb = ttfb_timeout if ttfb_timeout <= 0 else max(ttfb_timeout, scaled)
-    return ttfb, idle
+    return ttfb_timeout, idle
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +429,30 @@ async def consume_stream(
 
     events = stream.__aiter__()
     while True:
-        cutoff = idle_timeout if first_event_seen else ttfb_timeout
+        if first_event_seen:
+            cutoff = idle_timeout
+            reported_cutoff = idle_timeout
+        elif ttfb_timeout > 0:
+            # ``started_at`` is the beginning of responses.create(), not the
+            # beginning of iteration. Admission and the first SSE event share
+            # one wall-clock first-event budget.
+            cutoff = max(
+                0.0,
+                ttfb_timeout - (time.monotonic() - stream_started_at),
+            )
+            reported_cutoff = ttfb_timeout
+            if cutoff <= 0:
+                timing = _stream_timing(
+                    stream_started_at,
+                    first_event_at,
+                    last_event_at,
+                    event_count,
+                    max_event_gap_seconds,
+                )
+                raise _silence_error(False, reported_cutoff, timing)
+        else:
+            cutoff = ttfb_timeout
+            reported_cutoff = ttfb_timeout
         try:
             if cutoff > 0:
                 event = await asyncio.wait_for(events.__anext__(), cutoff)
@@ -466,7 +468,11 @@ async def consume_stream(
                 event_count,
                 max_event_gap_seconds,
             )
-            raise _silence_error(first_event_seen, cutoff, timing) from None
+            raise _silence_error(
+                first_event_seen,
+                reported_cutoff,
+                timing,
+            ) from None
         event_at = time.monotonic()
         if first_event_at is None:
             first_event_at = event_at

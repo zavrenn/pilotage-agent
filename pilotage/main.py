@@ -28,7 +28,7 @@ from typing import Any, TypeVar
 import httpx
 
 from . import media, profiles, transcription
-from .agent import Agent, TurnRecoveryRejected
+from .agent import Agent, StopStatus, TurnRecoveryRejected, TurnStopped
 from .commands import CommandInvocation, execute_command, status_text
 from .channels.whatsapp import (
     ChannelError,
@@ -64,7 +64,12 @@ from .delivery import (
     redeliver_claimed_deliveries,
 )
 from .env import candidate_env_files, load_env_files, update_env_values
-from .history import ActiveTurn, ConversationError, ConversationStore
+from .history import (
+    ActiveTurn,
+    ConversationError,
+    ConversationStore,
+    StopCheckpoint,
+)
 from .i18n import t
 from .redact import (
     RedactingFormatter,
@@ -292,6 +297,21 @@ def _fail_channel(channel: Any, message: str) -> None:
         fail(message)
 
 
+async def _update_progress_notice(
+    channel: Any,
+    chat_id: str,
+    text: str,
+    replace_id: str,
+    *,
+    send: Callable[[], Any],
+) -> Any:
+    """Edit one progress bubble; never replace it and risk repeated messages."""
+
+    if replace_id:
+        return await channel.edit_message(chat_id, replace_id, text)
+    return await send()
+
+
 async def _abort_startup_channels(channels: list[Any]) -> None:
     """Stop startup-held transports without releasing accepted inbound work."""
 
@@ -331,22 +351,33 @@ async def _recover_interrupted_turns(
             thread_id = active.origin.get("thread_id", "")
             reply_to = active.origin.get("reply_to", "")
 
-            async def notice(text: str) -> None:
+            async def notice(text: str, replace_id: str = ""):
                 if channel_name == "telegram":
-                    await channel.send(
+                    return await _update_progress_notice(
+                        channel,
+                        chat_id,
+                        text,
+                        replace_id,
+                        send=lambda: channel.send(
+                            chat_id,
+                            text,
+                            reply_to,
+                            thread_id=thread_id,
+                            deliver_media=False,
+                        ),
+                    )
+                return await _update_progress_notice(
+                    channel,
+                    chat_id,
+                    text,
+                    replace_id,
+                    send=lambda: channel.send(
                         chat_id,
                         text,
                         reply_to,
-                        thread_id=thread_id,
                         deliver_media=False,
-                    )
-                else:
-                    await channel.send(
-                        chat_id,
-                        text,
-                        reply_to,
-                        deliver_media=False,
-                    )
+                    ),
+                )
 
             async def approval_notice(text: str):
                 if channel_name == "telegram":
@@ -475,6 +506,45 @@ async def _retire_unknown_turn_claims(
             _fail_channel(
                 channel,
                 "The interrupted-tool safety notice failed closed.",
+            )
+            raise
+    return retired
+
+
+async def _retire_stopped_turns(
+    active_turns: list[ActiveTurn],
+    *,
+    channels: dict[str, Any],
+    conversation_store: ConversationStore,
+) -> int:
+    """Retire stopped input first, then remove its crash-safe tombstone."""
+
+    retired = 0
+    for active in active_turns:
+        channel = channels[active.origin["channel"]]
+        try:
+            if not active.claim_ids:
+                raise ConversationError(
+                    "The stopped turn has no durable inbound claim"
+                )
+            await asyncio.to_thread(
+                channel.persist_completed_claims,
+                active.claim_ids,
+            )
+            await asyncio.to_thread(
+                conversation_store.complete_stopped_turn,
+                StopCheckpoint(
+                    chat_id=active.chat_id,
+                    session=active.session,
+                    state="stopped",
+                    previous_phase="stopped",
+                ),
+            )
+            retired += 1
+        except Exception:
+            _fail_channel(
+                channel,
+                "The stopped-turn input fence failed closed.",
             )
             raise
     return retired
@@ -1114,6 +1184,7 @@ async def _run_enabled_channels(
 
     recoverable_turns: list[ActiveTurn] = []
     unknown_turns: list[ActiveTurn] = []
+    stopped_turns: list[ActiveTurn] = []
     fenced_turn_sessions: set[str] = set()
     for active in active_turns:
         unknown_outcome = active.phase == "unknown"
@@ -1147,6 +1218,14 @@ async def _run_enabled_channels(
             or not reply_to
             or not active.claim_ids
         ):
+            if active.phase == "stopped":
+                fenced_turn_sessions.add(active.chat_id)
+                logger.error(
+                    "Stopped conversation %s has no verified recovery identity; "
+                    "its tombstone remains fenced until /new",
+                    identity_pseudonym(active.chat_id, "session"),
+                )
+                continue
             if active.phase == "answer_ready":
                 fenced_turn_sessions.add(active.chat_id)
                 logger.error(
@@ -1172,18 +1251,22 @@ async def _run_enabled_channels(
             )
             continue
         if channel_name == "whatsapp" and not whatsapp_enabled:
+            fenced_turn_sessions.add(active.chat_id)
             logger.error(
                 "Interrupted WhatsApp conversation %s remains fenced while the channel is disabled",
                 identity_pseudonym(active.chat_id, "session"),
             )
             continue
         if channel_name == "telegram" and not telegram_enabled:
+            fenced_turn_sessions.add(active.chat_id)
             logger.error(
                 "Interrupted Telegram conversation %s remains fenced while the channel is disabled",
                 identity_pseudonym(active.chat_id, "session"),
             )
             continue
-        if unknown_outcome:
+        if active.phase == "stopped":
+            stopped_turns.append(active)
+        elif unknown_outcome:
             unknown_turns.append(active)
         else:
             recoverable_turns.append(active)
@@ -1250,8 +1333,19 @@ async def _run_enabled_channels(
                     "WhatsApp inbound message has no stable delivery identity."
                 )
 
-            async def notice(text: str) -> None:
-                await whatsapp_channel.send(message.chat_id, text, quoted)
+            async def notice(text: str, replace_id: str = ""):
+                return await _update_progress_notice(
+                    whatsapp_channel,
+                    message.chat_id,
+                    text,
+                    replace_id,
+                    send=lambda: whatsapp_channel.send(
+                        message.chat_id,
+                        text,
+                        quoted,
+                        deliver_media=False,
+                    ),
+                )
 
             async def approval_notice(text: str):
                 return await whatsapp_channel.send(
@@ -1265,42 +1359,92 @@ async def _run_enabled_channels(
                 answer = whatsapp_interrupted_reply
             else:
                 try:
-                    async with whatsapp_channel.typing(message.chat_id):
-                        enriched_text, transcripts = await transcription.enrich_message(
-                            message.text,
-                            message.attachments,
-                            config.settings,
+                    async def fence_preparation_stop() -> None:
+                        if not message.claim_ids:
+                            raise ConversationError(
+                                "A prepared WhatsApp turn has no durable input claim"
+                            )
+                        await asyncio.to_thread(
+                            whatsapp_channel.persist_completed_claims,
+                            message.claim_ids,
                         )
-                        logger.info(
-                            "WhatsApp inbound (%d chars, %d attachments)",
-                            len(enriched_text),
-                            len(message.attachments),
-                        )
-                        if transcripts and transcription.transcript_echo_enabled(
-                            config.settings
-                        ):
-                            for transcript in transcripts:
-                                await whatsapp_channel.send(
-                                    message.chat_id,
-                                    f'\U0001f399\ufe0f "{transcript}"',
-                                    quoted,
-                                    deliver_media=False,
+
+                    async with whatsapp_agent.prepare_turn(
+                        message.session_id,
+                        before_stop=fence_preparation_stop,
+                    ) as prepared_execution:
+                        try:
+                            async with whatsapp_channel.typing(message.chat_id):
+                                enriched_text, transcripts = (
+                                    await whatsapp_agent.run_preparation_step(
+                                        message.session_id,
+                                        prepared_execution,
+                                        lambda: transcription.enrich_message(
+                                            message.text,
+                                            message.attachments,
+                                            config.settings,
+                                        ),
+                                    )
                                 )
-                        answer = await whatsapp_agent.respond(
-                            message.session_id,
-                            enriched_text,
-                            message.attachments,
-                            on_notice=notice,
-                            origin={
-                                "channel": "whatsapp",
-                                "chat_id": message.chat_id,
-                                "reply_to": quoted,
-                            },
-                            approval_notify=approval_notice,
-                            claim_ids=message.claim_ids,
-                            defer_completion=True,
-                        )
-                        deferred_turn = True
+                                await whatsapp_agent.preparation_stop_barrier(
+                                    message.session_id,
+                                    prepared_execution,
+                                )
+                                logger.info(
+                                    "WhatsApp inbound (%d chars, %d attachments)",
+                                    len(enriched_text),
+                                    len(message.attachments),
+                                )
+                                if transcripts and transcription.transcript_echo_enabled(
+                                    config.settings
+                                ):
+                                    for transcript in transcripts:
+                                        await whatsapp_agent.run_preparation_step(
+                                            message.session_id,
+                                            prepared_execution,
+                                            lambda transcript=transcript: whatsapp_channel.send(
+                                                message.chat_id,
+                                                f'\U0001f399\ufe0f "{transcript}"',
+                                                quoted,
+                                                deliver_media=False,
+                                            ),
+                                        )
+                                answer = await whatsapp_agent.respond(
+                                    message.session_id,
+                                    enriched_text,
+                                    message.attachments,
+                                    on_notice=notice,
+                                    origin={
+                                        "channel": "whatsapp",
+                                        "chat_id": message.chat_id,
+                                        "reply_to": quoted,
+                                    },
+                                    approval_notify=approval_notice,
+                                    claim_ids=message.claim_ids,
+                                    defer_completion=True,
+                                    prepared_execution=prepared_execution,
+                                )
+                                deferred_turn = True
+                        except TurnStopped as stopped:
+                            try:
+                                if not message.claim_ids:
+                                    raise ConversationError(
+                                        "A stopped WhatsApp turn has no durable input claim"
+                                    )
+                                await asyncio.to_thread(
+                                    whatsapp_channel.persist_completed_claims,
+                                    message.claim_ids,
+                                )
+                                if stopped.outcome.status == StopStatus.UNKNOWN:
+                                    fenced_turn_sessions.add(message.session_id)
+                                await whatsapp_agent.finalize_stop(stopped.outcome)
+                            except BaseException:
+                                _fail_channel(
+                                    whatsapp_channel,
+                                    "The WhatsApp stop fence could not retire its input.",
+                                )
+                                raise
+                            return
                 except ConversationError:
                     recoverable = await _turn_has_recoverable_checkpoint(
                         conversation_store,
@@ -1408,7 +1552,11 @@ async def _run_enabled_channels(
                 except Exception:
                     logger.exception("WhatsApp management command failed")
                     return whatsapp_failure_reply
-                if invocation.command.name == "new" and not invocation.arguments:
+                if (
+                    invocation.command.name == "new"
+                    and not invocation.arguments
+                    and answer == whatsapp_reset_reply
+                ):
                     fenced_turn_sessions.discard(session_id)
                 return answer
 
@@ -1500,12 +1648,19 @@ async def _run_enabled_channels(
                     "Telegram inbound message has no durable delivery identity."
                 )
 
-            async def notice(text: str) -> None:
-                await telegram_channel.send(
+            async def notice(text: str, replace_id: str = ""):
+                return await _update_progress_notice(
+                    telegram_channel,
                     message.chat_id,
                     text,
-                    quoted,
-                    thread_id=message.thread_id,
+                    replace_id,
+                    send=lambda: telegram_channel.send(
+                        message.chat_id,
+                        text,
+                        quoted,
+                        thread_id=message.thread_id,
+                        deliver_media=False,
+                    ),
                 )
 
             async def approval_notice(text: str):
@@ -1520,49 +1675,99 @@ async def _run_enabled_channels(
                 answer = telegram_interrupted_reply
             else:
                 try:
-                    async with telegram_channel.typing(
-                        message.chat_id, message.thread_id
-                    ):
-                        enriched_text, transcripts = await transcription.enrich_message(
-                            message.text,
-                            message.attachments,
-                            telegram_config.settings,
+                    async def fence_preparation_stop() -> None:
+                        if not message.claim_ids:
+                            raise ConversationError(
+                                "A prepared Telegram turn has no durable input claim"
+                            )
+                        await asyncio.to_thread(
+                            telegram_channel.persist_completed_claims,
+                            message.claim_ids,
                         )
-                        logger.info(
-                            "Telegram inbound (%d chars, %d attachments)",
-                            len(enriched_text),
-                            len(message.attachments),
-                        )
-                        if transcripts and transcription.transcript_echo_enabled(
-                            telegram_config.settings
-                        ):
-                            for transcript in transcripts:
-                                await telegram_channel.send(
-                                    message.chat_id,
-                                    f'\U0001f399\ufe0f "{transcript}"',
-                                    quoted,
-                                    thread_id=message.thread_id,
-                                    deliver_media=False,
+
+                    async with telegram_agent.prepare_turn(
+                        message.session_id,
+                        before_stop=fence_preparation_stop,
+                    ) as prepared_execution:
+                        try:
+                            async with telegram_channel.typing(
+                                message.chat_id, message.thread_id
+                            ):
+                                enriched_text, transcripts = (
+                                    await telegram_agent.run_preparation_step(
+                                        message.session_id,
+                                        prepared_execution,
+                                        lambda: transcription.enrich_message(
+                                            message.text,
+                                            message.attachments,
+                                            telegram_config.settings,
+                                        ),
+                                    )
                                 )
-                        origin = {
-                            "channel": "telegram",
-                            "chat_id": message.chat_id,
-                        }
-                        if message.thread_id:
-                            origin["thread_id"] = message.thread_id
-                        if quoted:
-                            origin["reply_to"] = quoted
-                        answer = await telegram_agent.respond(
-                            message.session_id,
-                            enriched_text,
-                            message.attachments,
-                            on_notice=notice,
-                            origin=origin,
-                            approval_notify=approval_notice,
-                            claim_ids=message.claim_ids,
-                            defer_completion=True,
-                        )
-                        deferred_turn = True
+                                await telegram_agent.preparation_stop_barrier(
+                                    message.session_id,
+                                    prepared_execution,
+                                )
+                                logger.info(
+                                    "Telegram inbound (%d chars, %d attachments)",
+                                    len(enriched_text),
+                                    len(message.attachments),
+                                )
+                                if transcripts and transcription.transcript_echo_enabled(
+                                    telegram_config.settings
+                                ):
+                                    for transcript in transcripts:
+                                        await telegram_agent.run_preparation_step(
+                                            message.session_id,
+                                            prepared_execution,
+                                            lambda transcript=transcript: telegram_channel.send(
+                                                message.chat_id,
+                                                f'\U0001f399\ufe0f "{transcript}"',
+                                                quoted,
+                                                thread_id=message.thread_id,
+                                                deliver_media=False,
+                                            ),
+                                        )
+                                origin = {
+                                    "channel": "telegram",
+                                    "chat_id": message.chat_id,
+                                }
+                                if message.thread_id:
+                                    origin["thread_id"] = message.thread_id
+                                if quoted:
+                                    origin["reply_to"] = quoted
+                                answer = await telegram_agent.respond(
+                                    message.session_id,
+                                    enriched_text,
+                                    message.attachments,
+                                    on_notice=notice,
+                                    origin=origin,
+                                    approval_notify=approval_notice,
+                                    claim_ids=message.claim_ids,
+                                    defer_completion=True,
+                                    prepared_execution=prepared_execution,
+                                )
+                                deferred_turn = True
+                        except TurnStopped as stopped:
+                            try:
+                                if not message.claim_ids:
+                                    raise ConversationError(
+                                        "A stopped Telegram turn has no durable input claim"
+                                    )
+                                await asyncio.to_thread(
+                                    telegram_channel.persist_completed_claims,
+                                    message.claim_ids,
+                                )
+                                if stopped.outcome.status == StopStatus.UNKNOWN:
+                                    fenced_turn_sessions.add(message.session_id)
+                                await telegram_agent.finalize_stop(stopped.outcome)
+                            except BaseException:
+                                _fail_channel(
+                                    telegram_channel,
+                                    "The Telegram stop fence could not retire its input.",
+                                )
+                                raise
+                            return
                 except ConversationError:
                     recoverable = await _turn_has_recoverable_checkpoint(
                         conversation_store,
@@ -1676,7 +1881,11 @@ async def _run_enabled_channels(
                 except Exception:
                     logger.exception("Telegram management command failed")
                     return telegram_failure_reply
-                if invocation.command.name == "new" and not invocation.arguments:
+                if (
+                    invocation.command.name == "new"
+                    and not invocation.arguments
+                    and answer == telegram_reset_reply
+                ):
                     fenced_turn_sessions.discard(session_id)
                 return answer
 
@@ -1837,6 +2046,32 @@ async def _run_enabled_channels(
         else:
             await recovery_task
 
+    if stopped_turns:
+        try:
+            retired = await _retire_stopped_turns(
+                stopped_turns,
+                channels=channels,
+                conversation_store=conversation_store,
+            )
+        except Exception:
+            logger.exception("Stopped-turn startup retirement failed")
+            if recovery_task is not None and not recovery_task.done():
+                recovery_task.cancel()
+            if recovery_task is not None:
+                await asyncio.gather(recovery_task, return_exceptions=True)
+            await _abort_startup_channels(started)
+            await asyncio.gather(
+                *(agent.close() for agent in agents),
+                return_exceptions=True,
+            )
+            print(
+                "Stopped conversation recovery could not finish safely.",
+                file=sys.stderr,
+            )
+            return 1
+        if retired:
+            logger.info("Retired %d stopped conversation(s)", retired)
+
     if unknown_turns:
         try:
             retired = await _retire_unknown_turn_claims(
@@ -1855,9 +2090,7 @@ async def _run_enabled_channels(
                 },
             )
         except Exception:
-            logger.exception(
-                "Interrupted tool-turn startup quarantine failed"
-            )
+            logger.exception("Interrupted tool-turn retirement failed")
             if recovery_task is not None and not recovery_task.done():
                 recovery_task.cancel()
             if recovery_task is not None:
@@ -1890,9 +2123,8 @@ async def _run_enabled_channels(
             ),
             name="pilotage-conversation-recovery",
         )
-        # The delivery ledger is now known safe and the recovery task exists to
-        # receive fresh approval control. Approval messages already held before
-        # this point stay queued until the ordinary full release below.
+        # Recovered tool work may still require a fresh approval decision.
+        # Channels expose only approve/deny while ordinary startup intake stays held.
         for running_channel in started:
             enable_approvals = getattr(
                 running_channel,

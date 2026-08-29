@@ -951,6 +951,20 @@ export function buildTextSendPayload(text, { replyTo, messageStore } = {}) {
   return { content, options };
 }
 
+export function buildEditSendPayload(chatId, messageId, text) {
+  if (!chatId || !messageId || typeof text !== 'string' || !text.trim()) {
+    throw new Error('chatId, messageId, and a non-empty message are required');
+  }
+  return {
+    text,
+    edit: {
+      id: messageId,
+      fromMe: true,
+      remoteJid: chatId,
+    },
+  };
+}
+
 export function buildLocationPayload({ latitude, longitude, name, address } = {}) {
   const lat = Number(latitude);
   const lon = Number(longitude);

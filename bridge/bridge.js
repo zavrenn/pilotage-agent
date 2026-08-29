@@ -48,6 +48,7 @@ import {
   parseAllowedUsers,
 } from './allowlist.js';
 import {
+  buildEditSendPayload,
   buildTextSendPayload,
   createBoundedMessageStore,
   createCredentialSaveCoordinator,
@@ -777,6 +778,44 @@ app.post('/send', async (req, res) => {
     });
   } catch (error) {
     log(`send failed: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Edit one previously sent text message. Progress updates use this route so a
+// long turn owns one bubble instead of appending a new one every interval.
+app.post('/edit', async (req, res) => {
+  const { chatId, messageId, message } = req.body || {};
+  if (!connected || !sock) {
+    res.status(503).json({ error: 'not connected' });
+    return;
+  }
+  if (
+    !chatId
+    || typeof messageId !== 'string'
+    || !messageId
+    || typeof message !== 'string'
+    || !message.trim()
+  ) {
+    res.status(400).json({
+      error: 'chatId, messageId, and a non-empty message are required',
+    });
+    return;
+  }
+
+  try {
+    const chunks = splitLongMessage(message);
+    if (chunks.length !== 1) {
+      res.status(400).json({ error: 'edited message must fit one chunk' });
+      return;
+    }
+    await sendWithTimeout(
+      chatId,
+      buildEditSendPayload(chatId, messageId, chunks[0]),
+    );
+    res.json({ success: true, messageId });
+  } catch (error) {
+    log(`edit failed: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
 });
