@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -45,6 +46,7 @@ from .history import (
     session_workspace_path,
 )
 from .i18n import DEFAULT_LANGUAGE, t
+from .persistence import PersistenceAuditStore, build_persistence_policy
 from .redact import identity_pseudonym
 from .tools.memory import MemoryStore
 from .tools.skills import reset_skill_view_dedup
@@ -59,6 +61,12 @@ from .tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+SCHEDULED_PERSISTENCE_BOUNDARY = (
+    "## Scheduled persistence\n"
+    "Memory and skills are read-only during this scheduled run. Never create, "
+    "edit, or delete either."
+)
 
 # A silent stream is retried once. A fresh connection almost always works
 # straight away, and a second failure is the backend, not the socket. The
@@ -243,6 +251,9 @@ class Agent:
         enabled_tool_groups: Optional[Sequence[str]] = None,
         enabled_skills: Optional[Sequence[str]] = None,
         working_directory: Optional[Path] = None,
+        allow_persistence_writes: bool = False,
+        persistence_audit: Optional[PersistenceAuditStore] = None,
+        scheduled_run: bool = False,
     ):
         self._config = config
         self._store = store or ConversationStore(config.conversations_path)
@@ -306,9 +317,28 @@ class Agent:
             if group in requested and group not in disabled
         ]
         self._tools = self._registry.definitions(self._tool_groups)
+        self._allow_persistence_writes = bool(allow_persistence_writes)
+        self._scheduled_run = bool(scheduled_run)
+        memory_writes = self._allow_persistence_writes and "memory" in self._tool_groups
+        skill_writes = self._allow_persistence_writes and {
+            "file",
+            "skills",
+        }.issubset(self._tool_groups)
+        self._persistence_writes_enabled = memory_writes or skill_writes
+        self._persistence_policy = (
+            build_persistence_policy(
+                memory=memory_writes,
+                skills=skill_writes,
+            )
+            if self._persistence_writes_enabled
+            else ""
+        )
+        self._persistence_audit: Optional[PersistenceAuditStore] = None
+        if self._persistence_writes_enabled:
+            self._persistence_audit = persistence_audit or PersistenceAuditStore(
+                config.state_dir
+            )
         self._base_instructions = config.instructions
-        self._skills_prompt = ""
-        self._instructions = self._base_instructions
         self._enabled_skills = (
             None
             if enabled_skills is None
@@ -318,15 +348,6 @@ class Agent:
                 if str(name).strip()
             )
         )
-        if "skills" in self._tool_groups:
-            self._skills_prompt = build_skills_prompt(
-                config,
-                self._enabled_skills,
-            )
-            if self._skills_prompt:
-                self._instructions = (
-                    f"{self._instructions}\n\n{self._skills_prompt}"
-                )
 
         configured_cwd = config.settings.text("terminal.cwd", "")
         default_workspace = getattr(
@@ -396,9 +417,15 @@ class Agent:
                     exports=working_directory / "exports",
                 )
             )
-        if self._skills_prompt:
-            blocks.append(self._skills_prompt)
-
+        if "skills" in self._tool_groups:
+            # Keep an established session's prompt prefix frozen, but discover
+            # newly accepted skills when the next session snapshot is created.
+            live_skills_prompt = build_skills_prompt(
+                self._config,
+                self._enabled_skills,
+            )
+            if live_skills_prompt:
+                blocks.append(live_skills_prompt)
         if self._memory_store is not None:
             snapshot = MemoryStore(
                 self._config.memory_dir,
@@ -411,6 +438,12 @@ class Agent:
                 for target in ("memory", "user")
                 if (block := snapshot.format_for_system_prompt(target))
             )
+        if self._persistence_policy:
+            # Keep the autonomy ceiling after mutable legacy memory. A clean
+            # but over-broad old entry must not outrank the current contract.
+            blocks.append(self._persistence_policy)
+        if self._scheduled_run:
+            blocks.append(SCHEDULED_PERSISTENCE_BOUNDARY)
 
         instructions = "\n\n".join(blocks)
         self._session_instructions[chat_id] = instructions
@@ -1734,6 +1767,11 @@ class Agent:
             working_directory=active_working_directory,
             allowed_skills=self._enabled_skills,
             approval_request=request_approval,
+            persistence_audit=self._persistence_audit,
+            persistence_writes_allowed=self._persistence_writes_enabled,
+            # One opaque reference per accepted turn. Conversation sessions are
+            # generations, so they cannot distinguish repeated messages.
+            turn_reference=uuid.uuid4().hex,
         )
         # Everything the assistant does this turn, in order, ready to be sent
         # back on the next call and kept as history afterwards.

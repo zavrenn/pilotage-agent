@@ -22,13 +22,20 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
 from ..approvals import ApprovalOutcome, approval_required
-from ..redact import redact_sensitive_text
+from ..persistence import (
+    PersistenceAuditError,
+    PersistenceChangeRejected,
+    change_reason_error,
+    persistence_targets,
+)
+from ..redact import identity_pseudonym, redact_sensitive_text
 from .ansi_strip import sanitize_display_text, strip_unicode_tags
 
 logger = logging.getLogger(__name__)
@@ -206,6 +213,15 @@ class ToolContext:
     # Bound by Agent to this exact conversation and its live messaging reply
     # surface. A missing callback fails a required write closed.
     approval_request: Optional[ApprovalRequest] = None
+    # Private, profile-local provenance for agent-authored memory and skill
+    # changes. Journal contents never enter model instructions or tool results.
+    persistence_audit: Any = None
+    # Interactive foreground turns may learn. Cron and any future unattended
+    # execution keep read access but detected persistence changes are restored.
+    persistence_writes_allowed: bool = False
+    turn_reference: str = ""
+    persistence_bound_paths: frozenset[str] = frozenset()
+    persistence_approved_categories: frozenset[str] = frozenset()
 
     async def authorize(self, category: str, summary: str) -> ApprovalOutcome:
         """Apply one category switch, then request live consent when enabled."""
@@ -320,10 +336,105 @@ class Registry:
         if not isinstance(args, dict):
             return tool_error(f"The arguments must be an object, not {type(args).__name__}.", tool=name)
 
+        async def invoke_handler(call_context: ToolContext = context) -> Any:
+            handled = tool.handler(args, call_context)
+            if inspect.isawaitable(handled):
+                handled = await handled
+            return handled
+
         try:
-            result = tool.handler(args, context)
-            if inspect.isawaitable(result):
-                result = await result
+            targets: tuple[str, ...] = ()
+            if name in {"memory", "write_file", "patch"}:
+                targets = await asyncio.to_thread(
+                    persistence_targets, name, args, context
+                )
+            if targets:
+                if not context.persistence_writes_allowed:
+                    raise PersistenceChangeRejected(
+                        "Scheduled or unattended runs cannot change persistent "
+                        "memory or skills."
+                    )
+                if context.persistence_audit is None:
+                    raise PersistenceAuditError(
+                        "The persistent-learning audit boundary is unavailable; "
+                        "no canonical mutation was attempted."
+                    )
+                if reason_error := change_reason_error(args.get("change_reason")):
+                    raise PersistenceChangeRejected(reason_error)
+
+                root = Path(context.config.state_dir)
+                bound_paths = frozenset(
+                    os.path.normcase(
+                        os.path.abspath(
+                            str((root / Path(target)).resolve(strict=False))
+                        )
+                    )
+                    for target in targets
+                )
+
+                # Bind the classified path through snapshot and execution so a
+                # link swap cannot redirect the canonical file tool.
+                mutation_context = replace(
+                    context,
+                    persistence_bound_paths=bound_paths,
+                )
+
+                preflight_result: Optional[str] = None
+                approval_category = "memory" if name == "memory" else "skills"
+                if approval_required(context.config, approval_category):
+                    if name == "memory":
+                        from .memory import preauthorize_memory_mutation
+
+                        preflight_result = await preauthorize_memory_mutation(
+                            args, mutation_context
+                        )
+                    else:
+                        from .files import preauthorize_persistent_file_mutation
+
+                        preflight_result = await preauthorize_persistent_file_mutation(
+                            name, args, mutation_context
+                        )
+                    if preflight_result is None:
+                        mutation_context = replace(
+                            mutation_context,
+                            persistence_approved_categories=frozenset(
+                                {approval_category}
+                            ),
+                        )
+
+                async def invoke_mutation() -> Any:
+                    return await invoke_handler(mutation_context)
+
+                if preflight_result is not None:
+                    result = preflight_result
+                else:
+                    result = await context.persistence_audit.observe(
+                        tool_name=name,
+                        args=args,
+                        context=mutation_context,
+                        targets=targets,
+                        invoke=invoke_mutation,
+                    )
+            else:
+                result = await invoke_handler()
+        except PersistenceChangeRejected as exc:
+            logger.warning(
+                "Persistent change rejected for %s: %s",
+                identity_pseudonym(context.chat_id, "chat"),
+                exc,
+            )
+            return tool_error(
+                str(exc),
+                tool=name,
+                persistence="rejected",
+            )
+        except PersistenceAuditError as exc:
+            logger.exception("Persistence audit failed for tool %s", name)
+            return tool_error(
+                f"Persistent change failed closed: {exc}",
+                tool=name,
+                persistence="failed",
+            )
         except Exception as exc:  # noqa: BLE001 - the model is told, the turn goes on
             logger.exception("The tool %s failed", name)
             return tool_error(f"Tool execution failed: {type(exc).__name__}: {exc}", tool=name)

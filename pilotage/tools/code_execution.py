@@ -24,7 +24,11 @@ from ..process_tree import terminate_process_tree
 from ..redact import redact_sensitive_text
 from ..settings import ConfigError
 from .ansi_strip import strip_ansi
-from .command_guard import find_blocked_python_source, profile_name_for_state_dir
+from .command_guard import (
+    find_blocked_python_source,
+    find_persistence_store_reference,
+    profile_name_for_state_dir,
+)
 from .registry import Tool, ToolContext, tool_error
 from .subprocess_env import build_subprocess_env
 from .terminal import get_terminal_session, shell_cwd
@@ -262,7 +266,12 @@ def _execute(
     cancel_event: Optional[threading.Event] = None,
 ) -> str:
     working_dir = workspace or _workspace(context)
-    finding = find_blocked_python_source(
+    finding = find_persistence_store_reference(
+        code,
+        cwd=str(working_dir),
+        state_dir=getattr(context.config, "state_dir", None),
+        source_kind="python",
+    ) or find_blocked_python_source(
         code,
         cwd=str(working_dir),
         current_profile=profile_name_for_state_dir(

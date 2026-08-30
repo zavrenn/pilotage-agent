@@ -286,11 +286,7 @@ def skills_list(
             "categories": categories,
             "count": len(public),
             "skills_directory": str(root),
-            "hint": (
-                "Use skill_view(name) to load full content and linked files. "
-                "Creating or editing files under skills_directory uses the "
-                "profile's skills approval setting."
-            ),
+            "hint": "Use skill_view(name) to load full content and linked files.",
         }
     )
 

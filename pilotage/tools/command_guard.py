@@ -76,6 +76,8 @@ class CommandGuardFinding:
     def message(self) -> str:
         if self.category == "catastrophic":
             return f"Blocked catastrophic command: {self.description}."
+        if self.category == "persistence":
+            return f"Blocked direct persistent-store access: {self.description}."
         return f"Blocked Pilotage self-lifecycle command: {self.description}."
 
 
@@ -88,6 +90,73 @@ def profile_name_for_state_dir(state_dir: Any) -> str:
     if path.parent.name == "profiles" and path.name:
         return path.name.lower()
     return "default"
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def find_persistence_store_reference(
+    text: str,
+    *,
+    cwd: Optional[str],
+    state_dir: Any,
+    source_kind: str = "shell",
+) -> Optional[CommandGuardFinding]:
+    """Fence direct mutation of validated learning stores.
+
+    This is defense in depth, not a same-UID sandbox. The model is separately
+    instructed to use the canonical memory and file tools, which provide the
+    semantic policy, validation, provenance, and rollback boundary. Reads and
+    execution are intentionally allowed because skills are application code.
+    """
+
+    if state_dir is None:
+        # Direct handler tests and embedders may omit profile state entirely.
+        # Production Config always supplies it; without a root there is no
+        # canonical store path this guard can resolve.
+        return None
+    try:
+        state = Path(state_dir).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return CommandGuardFinding(
+            "persistence", "the active profile state path is unavailable"
+        )
+
+    protected_roots = tuple(
+        root.resolve(strict=False)
+        for root in (state / "memories", state / "skills")
+    )
+    try:
+        current = Path(cwd).expanduser().resolve(strict=False) if cwd else None
+    except (OSError, RuntimeError, TypeError, ValueError):
+        current = None
+
+    normalized = _normalize(text).replace("\\", "/").casefold()
+    normalized = re.sub(r"/+", "/", normalized)
+    audit_text = str(state / "persistence-audit.db").replace("\\", "/").casefold()
+    if (
+        audit_text in normalized
+        or "persistence-audit.db" in normalized
+    ):
+        return CommandGuardFinding(
+            "persistence", "the private provenance journal is operator-only"
+        )
+
+    mutates = (
+        _python_mutates_protected(text, current, protected_roots)
+        if source_kind == "python"
+        else _shell_mutates_protected(text, current, protected_roots)
+    )
+    if mutates:
+        return CommandGuardFinding(
+            "persistence", "memory or skill mutations require their canonical tools"
+        )
+    return None
 
 
 def _normalize(text: str) -> str:
@@ -179,6 +248,440 @@ def _iter_segments(text: str) -> Iterator[list[str]]:
                 segment.append(token)
             if segment:
                 yield segment
+
+
+_SHELL_PATH_MUTATORS = frozenset(
+    {"rm", "unlink", "rmdir", "mkdir", "touch", "truncate", "mv", "rename"}
+)
+_SHELL_DESTINATION_MUTATORS = frozenset({"cp", "install", "ln"})
+
+
+def _target_is_protected(
+    target: str,
+    cwd: Optional[Path],
+    roots: Sequence[Path],
+) -> bool:
+    written = str(target or "").strip().strip("\"'`[],{}()")
+    if not written or written.startswith("-"):
+        return False
+    normalized = re.sub(r"/+", "/", written.replace("\\", "/")).casefold()
+    root_text = [
+        str(root).replace("\\", "/").casefold().rstrip("/") for root in roots
+    ]
+    if any(
+        root and (normalized == root or normalized.startswith(root + "/"))
+        for root in root_text
+    ):
+        return True
+    home_reference = re.search(
+        r"(?:pilotage_home|hermes_home|\.pilotage-agent)", normalized
+    )
+    store_reference = re.search(
+        r"(?<![a-z0-9_.-])(?:memories|skills)(?![a-z0-9_.-])", normalized
+    )
+    if home_reference and store_reference:
+        return True
+    try:
+        candidate = Path(written).expanduser()
+        if not candidate.is_absolute():
+            if cwd is None:
+                return False
+            candidate = cwd / candidate
+        candidate = candidate.resolve(strict=False)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+    return any(candidate == root or _path_is_within(candidate, root) for root in roots)
+
+
+def _shell_source_payload(arguments: Sequence[str]) -> Optional[str]:
+    position = 0
+    while position < len(arguments):
+        token = arguments[position]
+        if token in {"-O", "+O", "-o", "+o"}:
+            position += 2
+            continue
+        if token == "-c" or (
+            token.startswith("-") and "c" in token[1:] and token != "--"
+        ):
+            return arguments[position + 1] if position + 1 < len(arguments) else None
+        if token == "--":
+            return None
+        if token.startswith("-"):
+            position += 1
+            continue
+        return None
+    return None
+
+
+_SHELL_VARIABLE = re.compile(
+    r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|"
+    r"(?P<plain>[A-Za-z_][A-Za-z0-9_]*))"
+)
+
+
+def _expand_shell_bindings(value: str, bindings: Dict[str, str]) -> str:
+    return _SHELL_VARIABLE.sub(
+        lambda match: bindings.get(
+            match.group("braced") or match.group("plain"),
+            match.group(0),
+        ),
+        value,
+    )
+
+
+def _shell_mutates_protected(
+    text: str,
+    cwd: Optional[Path],
+    roots: Sequence[Path],
+    *,
+    depth: int = 0,
+) -> bool:
+    current = cwd
+    bindings: Dict[str, str] = {}
+    for segment in _iter_segments(_normalize(text)):
+        index = _command_index(segment)
+        if index is None:
+            for token in segment:
+                if _ENV_ASSIGNMENT.match(token):
+                    name, value = token.split("=", 1)
+                    bindings[name] = _expand_shell_bindings(value, bindings)
+            continue
+        index = _peel_prefixes(segment, index)
+        if index >= len(segment):
+            continue
+        name = _executable_name(segment[index])
+        arguments = list(segment[index + 1 :])
+        if name in _SHELLS and depth < _MAX_RECURSION:
+            payload = _shell_source_payload(arguments)
+            if payload and _shell_mutates_protected(
+                payload,
+                current,
+                roots,
+                depth=depth + 1,
+            ):
+                return True
+        if name in {"cd", "chdir", "pushd"}:
+            operands = [token for token in arguments if not token.startswith("-")]
+            if operands:
+                try:
+                    destination = Path(
+                        _expand_shell_bindings(operands[-1], bindings)
+                    ).expanduser()
+                    if not destination.is_absolute() and current is not None:
+                        destination = current / destination
+                    current = destination.resolve(strict=False)
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    pass
+            continue
+        if _PYTHON_EXECUTABLE.fullmatch(name):
+            payload = _python_source_payload(arguments)
+            if payload and _python_mutates_protected(payload, current, roots):
+                return True
+        targets = [
+            arguments[position + 1]
+            for position, token in enumerate(arguments[:-1])
+            if token in {">", ">>"}
+        ]
+        operands = [
+            token
+            for token in arguments
+            if token not in {"--", ">", ">>"} and not token.startswith("-")
+        ]
+        if name in _SHELL_PATH_MUTATORS or name == "tee":
+            targets.extend(operands)
+        elif name in _SHELL_DESTINATION_MUTATORS and operands:
+            targets.append(operands[-1])
+        elif name in {"chmod", "chown", "chgrp"} and len(operands) > 1:
+            targets.extend(operands[1:])
+        elif (
+            name in {"sed", "perl"}
+            and any(token == "-i" or token.startswith("-i") for token in arguments)
+            and operands
+        ):
+            targets.append(operands[-1])
+        elif name == "dd":
+            targets.extend(token[3:] for token in arguments if token.startswith("of="))
+        for target in targets:
+            expanded = _expand_shell_bindings(target, bindings)
+            if _target_is_protected(expanded, current, roots):
+                return True
+    return False
+
+
+class _PythonPersistenceVisitor(ast.NodeVisitor):
+    """Track simple path bindings and inspect only actual mutation targets."""
+
+    _PATH_METHODS = frozenset(
+        {"write_text", "write_bytes", "unlink", "rmdir", "mkdir", "touch", "chmod"}
+    )
+    _ONE_PATH_CALLS = frozenset(
+        {
+            "os.remove",
+            "os.unlink",
+            "os.rmdir",
+            "os.mkdir",
+            "os.makedirs",
+            "os.chmod",
+            "os.chown",
+            "os.truncate",
+            "shutil.rmtree",
+        }
+    )
+    _TWO_PATH_CALLS = frozenset({"os.rename", "os.replace", "shutil.move"})
+    _DESTINATION_CALLS = frozenset(
+        {"shutil.copy", "shutil.copy2", "shutil.copyfile", "shutil.copytree"}
+    )
+
+    def __init__(self, code: str, cwd: Optional[Path], roots: Sequence[Path]):
+        self.code = code
+        self.current = cwd
+        self.roots = roots
+        self.bindings: dict[str, tuple[str, bool]] = {}
+        self.path_constructors = {"path", "pathlib.path"}
+        self.call_aliases: dict[str, str] = {}
+        self.mutates = False
+
+    def _value(self, node: ast.AST) -> Optional[tuple[str, bool]]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value, False
+        if isinstance(node, ast.Name):
+            return self.bindings.get(node.id)
+        if isinstance(node, ast.Call):
+            name = _call_name(node.func).casefold()
+            if name in self.path_constructors and node.args:
+                value = self._value(node.args[0])
+                source = ast.get_source_segment(self.code, node) or ""
+                return (value[0] if value else source), True
+            if name == "os.path.join" and node.args:
+                parts = [self._value(item) for item in node.args]
+                if all(part is not None for part in parts):
+                    return os.path.join(*(part[0] for part in parts if part)), False
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            left = self._value(node.left)
+            right = self._value(node.right)
+            if left and right:
+                return str(Path(left[0]) / right[0]), True
+            source = ast.get_source_segment(self.code, node) or ""
+            return (source, True) if source else None
+        constants = {name: value for name, (value, _is_path) in self.bindings.items()}
+        literal = _literal_value(node, constants)
+        return (literal, False) if isinstance(literal, str) else None
+
+    def _protected(self, node: ast.AST) -> bool:
+        value = self._value(node)
+        if value and _target_is_protected(value[0], self.current, self.roots):
+            return True
+        source = ast.get_source_segment(self.code, node) or ""
+        return bool(source) and _target_is_protected(source, self.current, self.roots)
+
+    def _mode_mutates(self, node: ast.Call, position: int) -> bool:
+        mode = node.args[position] if len(node.args) > position else next(
+            (keyword.value for keyword in node.keywords if keyword.arg == "mode"),
+            None,
+        )
+        value = self._value(mode) if mode is not None else None
+        return bool(value and any(marker in value[0] for marker in "wax+"))
+
+    @staticmethod
+    def _argument(
+        node: ast.Call, position: int, *keyword_names: str
+    ) -> Optional[ast.AST]:
+        if len(node.args) > position:
+            return node.args[position]
+        return next(
+            (
+                keyword.value
+                for keyword in node.keywords
+                if keyword.arg in keyword_names
+            ),
+            None,
+        )
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            if alias.name.casefold() == "pathlib":
+                self.path_constructors.add(
+                    f"{(alias.asname or alias.name).casefold()}.path"
+                )
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        module = (node.module or "").casefold()
+        if module == "pathlib":
+            for alias in node.names:
+                if alias.name.casefold() == "path":
+                    self.path_constructors.add(
+                        (alias.asname or alias.name).casefold()
+                    )
+        if module in {"os", "shutil"}:
+            supported = (
+                self._ONE_PATH_CALLS
+                | self._TWO_PATH_CALLS
+                | self._DESTINATION_CALLS
+            )
+            for alias in node.names:
+                canonical = f"{module}.{alias.name.casefold()}"
+                if canonical in supported:
+                    self.call_aliases[
+                        (alias.asname or alias.name).casefold()
+                    ] = canonical
+
+    @staticmethod
+    def _parameter_names(node: ast.AST) -> Iterator[str]:
+        arguments = getattr(node, "args", None)
+        if not isinstance(arguments, ast.arguments):
+            return
+        for argument in (
+            *arguments.posonlyargs,
+            *arguments.args,
+            *arguments.kwonlyargs,
+        ):
+            yield argument.arg
+        if arguments.vararg:
+            yield arguments.vararg.arg
+        if arguments.kwarg:
+            yield arguments.kwarg.arg
+
+    def _visit_function_scope(self, node: ast.AST) -> None:
+        outer_bindings = self.bindings
+        outer_constructors = self.path_constructors
+        outer_call_aliases = self.call_aliases
+        outer_current = self.current
+        self.bindings = dict(outer_bindings)
+        self.path_constructors = set(outer_constructors)
+        self.call_aliases = dict(outer_call_aliases)
+        for parameter in self._parameter_names(node):
+            self.bindings.pop(parameter, None)
+            folded = parameter.casefold()
+            self.path_constructors = {
+                constructor
+                for constructor in self.path_constructors
+                if constructor.split(".", 1)[0] != folded
+            }
+            self.call_aliases.pop(folded, None)
+        try:
+            self.generic_visit(node)
+        finally:
+            self.bindings = outer_bindings
+            self.path_constructors = outer_constructors
+            self.call_aliases = outer_call_aliases
+            self.current = outer_current
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function_scope(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function_scope(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        outer_bindings = self.bindings
+        outer_constructors = self.path_constructors
+        outer_call_aliases = self.call_aliases
+        self.bindings = dict(outer_bindings)
+        self.path_constructors = set(outer_constructors)
+        self.call_aliases = dict(outer_call_aliases)
+        try:
+            self.generic_visit(node)
+        finally:
+            self.bindings = outer_bindings
+            self.path_constructors = outer_constructors
+            self.call_aliases = outer_call_aliases
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.visit(node.value)
+        value = self._value(node.value)
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                folded = target.id.casefold()
+                self.path_constructors.discard(folded)
+                self.call_aliases.pop(folded, None)
+                if value is None:
+                    self.bindings.pop(target.id, None)
+                else:
+                    self.bindings[target.id] = value
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if node.value is not None:
+            self.visit(node.value)
+        if isinstance(node.target, ast.Name):
+            folded = node.target.id.casefold()
+            self.path_constructors.discard(folded)
+            self.call_aliases.pop(folded, None)
+            value = self._value(node.value) if node.value is not None else None
+            if value is None:
+                self.bindings.pop(node.target.id, None)
+            else:
+                self.bindings[node.target.id] = value
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if self.mutates:
+            return
+        written_name = _call_name(node.func).casefold()
+        name = self.call_aliases.get(written_name, written_name)
+        if name == "os.chdir" and node.args:
+            value = self._value(node.args[0])
+            if value:
+                try:
+                    destination = Path(value[0]).expanduser()
+                    if not destination.is_absolute() and self.current is not None:
+                        destination = self.current / destination
+                    self.current = destination.resolve(strict=False)
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    pass
+            return
+
+        targets: list[ast.AST] = []
+        file_target = self._argument(node, 0, "file")
+        if (
+            name in {"open", "io.open"}
+            and file_target is not None
+            and self._mode_mutates(node, 1)
+        ):
+            targets.append(file_target)
+        elif isinstance(node.func, ast.Attribute):
+            method = node.func.attr.casefold()
+            base = self._value(node.func.value)
+            if base and base[1] and method in self._PATH_METHODS:
+                targets.append(node.func.value)
+            elif base and base[1] and method == "open" and self._mode_mutates(node, 0):
+                targets.append(node.func.value)
+            elif base and base[1] and method in {"rename", "replace"}:
+                targets.append(node.func.value)
+                target = self._argument(node, 0, "target")
+                if target is not None:
+                    targets.append(target)
+
+        if name in self._ONE_PATH_CALLS:
+            target = self._argument(node, 0, "path", "name")
+            if target is not None:
+                targets.append(target)
+        elif name in self._TWO_PATH_CALLS:
+            source = self._argument(node, 0, "src")
+            destination = self._argument(node, 1, "dst")
+            targets.extend(
+                target for target in (source, destination) if target is not None
+            )
+        elif name in self._DESTINATION_CALLS:
+            destination = self._argument(node, 1, "dst")
+            if destination is not None:
+                targets.append(destination)
+        if any(self._protected(target) for target in targets):
+            self.mutates = True
+            return
+        self.generic_visit(node)
+
+
+def _python_mutates_protected(
+    code: str,
+    cwd: Optional[Path],
+    roots: Sequence[Path],
+) -> bool:
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return False
+    visitor = _PythonPersistenceVisitor(code, cwd, roots)
+    visitor.visit(tree)
+    return visitor.mutates
 
 
 def _executable_name(token: str) -> str:
@@ -1127,5 +1630,6 @@ __all__ = [
     "find_blocked_command",
     "find_blocked_python_source",
     "find_embedded_self_lifecycle",
+    "find_persistence_store_reference",
     "profile_name_for_state_dir",
 ]

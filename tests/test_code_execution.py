@@ -317,6 +317,45 @@ class ExecutionTests(unittest.TestCase):
                     self.assertIn("Blocked", result["error"])
                     self.assertNotIn("status", result)
 
+    def test_persistent_store_reference_never_reaches_python(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            target = workspace / "memories" / "MEMORY.md"
+            target.parent.mkdir()
+            result = self._run(
+                f"open({str(target)!r}, 'w').write('must not land')",
+                workspace,
+            )
+            self.assertFalse(target.exists())
+
+        self.assertIn("Blocked direct persistent-store access", result["error"])
+        self.assertNotIn("status", result)
+
+    def test_canonical_skill_script_can_be_read_and_executed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            skill = workspace / "skills" / "demo"
+            script = skill / "scripts" / "run.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("print('skill-ran')\n", encoding="utf-8")
+            (skill / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+
+            result = self._run(
+                "import runpy\n"
+                f"runpy.run_path({str(script)!r})\n"
+                f"text = open({str(skill / 'SKILL.md')!r}).read().strip()\n"
+                f"open({str(workspace / 'report.txt')!r}, 'w').write(text)\n"
+                "print(text)",
+                workspace,
+            )
+            self.assertEqual(
+                (workspace / "report.txt").read_text(encoding="utf-8"),
+                "# Demo",
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["output"].splitlines(), ["skill-ran", "# Demo"])
+
     def test_command_words_printed_as_data_are_not_blocked(self):
         with tempfile.TemporaryDirectory() as directory:
             result = self._run('print("reboot")', Path(directory))

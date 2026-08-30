@@ -195,11 +195,23 @@ class CronScheduler:
             enabled_tool_groups=job.get("enabled_toolsets"),
             enabled_skills=job.get("skills") or (),
             working_directory=workdir,
+            allow_persistence_writes=False,
+            scheduled_run=True,
         )
 
     def _agent_for_job(self, config: Config, job: Dict[str, Any]) -> Agent:
         if self._agent_factory is not None:
-            return self._agent_factory(config)
+            agent = self._agent_factory(config)
+            if bool(getattr(agent, "_allow_persistence_writes", False)):
+                raise CronExecutionError(
+                    "Scheduled agent factory returned a foreground-write-capable Agent."
+                )
+            if getattr(agent, "_scheduled_run", None) is not True:
+                raise CronExecutionError(
+                    "Scheduled agent factory returned an Agent without the "
+                    "scheduled read-only instruction boundary."
+                )
+            return agent
         return self._fresh_agent(config, job)
 
     @staticmethod

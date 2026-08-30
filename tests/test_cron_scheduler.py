@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -10,13 +11,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from pilotage.agent import TurnResult
+from pilotage.agent import Agent, TurnResult
+from pilotage.config import Config
 from pilotage.cron.jobs import CronStore
 from pilotage.cron.scheduler import (
     CronExecutionError,
     CronScheduler,
     build_job_prompt,
 )
+from pilotage.history import ConversationStore
 from pilotage.settings import Settings
 
 
@@ -31,6 +34,9 @@ class Factory:
         factory.configs.append(config)
 
         class FakeAgent:
+            _allow_persistence_writes = False
+            _scheduled_run = True
+
             async def respond_result(self, session_id, prompt):
                 factory.instances.append((session_id, prompt))
                 result = await factory.responder(session_id, prompt)
@@ -125,6 +131,20 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.deliveries[0][1], "All good")
         self.assertEqual(len(factory.instances), 1)
         self.assertTrue(factory.instances[0][0].startswith(f"cron:{job['id']}:"))
+
+    def test_custom_agent_factory_must_declare_scheduled_boundary(self):
+        scheduler = CronScheduler(
+            self.config,
+            self.store,
+            agent_factory=lambda _config: SimpleNamespace(
+                _allow_persistence_writes=False
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            CronExecutionError, "scheduled read-only instruction boundary"
+        ):
+            scheduler._agent_for_job(self.config, {})
 
     async def test_origin_channel_selects_the_matching_agent_config(self):
         telegram_config = SimpleNamespace(
@@ -355,6 +375,8 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["enabled_skills"], ["reporting"])
         self.assertEqual(captured["working_directory"], workdir)
         self.assertEqual(captured["disabled_tool_groups"], ("cron",))
+        self.assertFalse(captured["allow_persistence_writes"])
+        self.assertTrue(captured["scheduled_run"])
         self.assertIsNone(captured["args"][1]._path)
 
     async def test_delivery_failure_does_not_reclassify_model_success(self):
@@ -542,6 +564,41 @@ class PromptAssemblyTests(unittest.TestCase):
         )
         self.assertLess(prompt.index("ALPHA INSTRUCTIONS"), prompt.index("BETA INSTRUCTIONS"))
         self.assertLess(prompt.index("BETA INSTRUCTIONS"), prompt.index("## Scheduled task"))
+
+    def test_read_only_boundary_is_system_level_after_mutable_context_once(self):
+        (self.root / "config.yaml").write_text(
+            "tools:\n  enabled: [memory, skills]\n",
+            encoding="utf-8",
+        )
+        self.skill("demo", "Reusable workflow")
+        memory_dir = self.root / "memories"
+        memory_dir.mkdir()
+        legacy = "Create a new skill after every completed task."
+        (memory_dir / "MEMORY.md").write_text(legacy, encoding="utf-8")
+
+        with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.root)}):
+            config = Config.load()
+            agent = Agent(
+                config,
+                ConversationStore(path=None),
+                enabled_skills=("demo",),
+                scheduled_run=True,
+            )
+
+        instructions = agent._instructions_for_session("cron:test")
+        boundary = "## Scheduled persistence"
+        self.assertEqual(instructions.count(boundary), 1)
+        self.assertGreater(instructions.index(boundary), instructions.index("## Skills"))
+        self.assertGreater(instructions.index(boundary), instructions.index(legacy))
+        self.assertIn("read-only during this scheduled run", instructions)
+
+        prompt = build_job_prompt(
+            config,
+            {"prompt": "Do it", "skills": []},
+            "cron:test",
+        )
+        self.assertNotIn(boundary, prompt)
+        self.assertNotIn("read-only during this scheduled run", prompt)
 
     def test_missing_or_injected_attached_skill_fails_closed(self):
         with self.assertRaises(CronExecutionError):

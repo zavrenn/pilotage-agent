@@ -207,12 +207,62 @@ class PromptAndListTests(SkillCase):
                 self.skipTest(f"runtime dependency unavailable: {exc.name}")
             raise
         _make_skill(self.root, "reporting")
-        enabled = Agent(self.config, ConversationStore(path=None))
-        self.assertIn("<available_skills>", enabled._instructions)
+        enabled = Agent(
+            self.config,
+            ConversationStore(path=None),
+            allow_persistence_writes=True,
+        )
+        enabled_instructions = enabled._instructions_for_session("chat")
+        self.assertIn("<available_skills>", enabled_instructions)
+        self.assertNotIn("## Persistent learning", enabled_instructions)
+
+        editable_config = _Config(self.home, enabled=["skills", "file"])
+        editable = Agent(
+            editable_config,
+            ConversationStore(path=None),
+            allow_persistence_writes=True,
+        )
+        self.assertIn(
+            "## Persistent learning", editable._instructions_for_session("chat")
+        )
+        self.assertTrue(editable._persistence_writes_enabled)
+
+        file_only_config = _Config(self.home, enabled=["file"])
+        file_only = Agent(
+            file_only_config,
+            ConversationStore(path=None),
+            allow_persistence_writes=True,
+        )
+        file_only_instructions = file_only._instructions_for_session("chat")
+        self.assertNotIn("## Persistent learning", file_only_instructions)
+        self.assertFalse(file_only._persistence_writes_enabled)
+        self.assertNotIn("<available_skills>", file_only_instructions)
 
         disabled_config = _Config(self.home, enabled=["todo"])
         disabled = Agent(disabled_config, ConversationStore(path=None))
-        self.assertNotIn("<available_skills>", disabled._instructions)
+        self.assertNotIn(
+            "<available_skills>", disabled._instructions_for_session("chat")
+        )
+
+    async def test_new_session_refreshes_skill_index_without_mutating_old_prefix(self):
+        try:
+            from pilotage.agent import Agent
+            from pilotage.history import ConversationStore
+        except ModuleNotFoundError as exc:
+            if exc.name in {"openai", "httpx"}:
+                self.skipTest(f"runtime dependency unavailable: {exc.name}")
+            raise
+
+        _make_skill(self.root, "existing")
+        agent = Agent(self.config, ConversationStore(path=None))
+        first = agent._instructions_for_session("first")
+        self.assertIn("existing", first)
+        self.assertNotIn("new-skill", first)
+
+        _make_skill(self.root, "new-skill")
+
+        self.assertNotIn("new-skill", agent._instructions_for_session("first"))
+        self.assertIn("new-skill", agent._instructions_for_session("second"))
 
     async def test_scheduled_allowlist_hides_and_blocks_other_skills(self):
         _make_skill(self.root, "allowed")

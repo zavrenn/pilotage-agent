@@ -204,6 +204,40 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("Blocked", result["error"])
         self.assertEqual(_FakeShell.instances, [])
 
+    async def test_persistent_store_mutation_never_reaches_the_shell(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_dir = Path(temporary.name).resolve()
+        target = state_dir / "memories" / "MEMORY.md"
+
+        result = await self._run(
+            {"command": f'echo changed > "{target}"'},
+            _context(state_dir=state_dir),
+        )
+
+        self.assertIn("Blocked direct persistent-store access", result["error"])
+        self.assertEqual(_FakeShell.instances, [])
+
+    async def test_skill_script_execution_and_project_skill_listing_reach_shell(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_dir = Path(temporary.name).resolve()
+        script = state_dir / "skills" / "demo" / "scripts" / "run.py"
+        context = _context(state_dir=state_dir)
+
+        executed = await self._run(
+            {"command": f'python "{script}"'},
+            context,
+        )
+        listed = await self._run(
+            {"command": "cd project && ls skills"},
+            context,
+        )
+
+        self.assertEqual(executed["exit_code"], 0)
+        self.assertEqual(listed["exit_code"], 0)
+        self.assertEqual(len(_FakeShell.instances[0].calls), 2)
+
     async def test_parallel_calls_are_ordered_on_the_same_shell(self):
         context = _context()
         await asyncio.gather(

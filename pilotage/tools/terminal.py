@@ -21,7 +21,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..redact import redact_sensitive_text, redact_terminal_output
-from .command_guard import find_blocked_command, profile_name_for_state_dir
+from .command_guard import (
+    find_blocked_command,
+    find_persistence_store_reference,
+    profile_name_for_state_dir,
+)
 from .registry import Tool, ToolContext, tool_error
 from .shell import DEFAULT_TIMEOUT_SECONDS, Shell
 from .terminal_hints import masked_success_advisory
@@ -139,7 +143,11 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
             if not candidate.is_absolute() and base_cwd:
                 candidate = Path(base_cwd) / candidate
             guard_cwd = str(candidate)
-        finding = find_blocked_command(
+        finding = find_persistence_store_reference(
+            command,
+            cwd=guard_cwd,
+            state_dir=getattr(context.config, "state_dir", None),
+        ) or find_blocked_command(
             command,
             cwd=guard_cwd,
             current_profile=profile_name_for_state_dir(

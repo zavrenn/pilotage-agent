@@ -131,6 +131,20 @@ def _has_bom(text: Optional[str]) -> bool:
     return bool(text) and text.startswith(_UTF8_BOM)
 
 
+def write_content_matches_bytes(existing: bytes, content: str) -> bool:
+    """Whether ``write_file`` would preserve an existing file byte-for-byte."""
+
+    existing_text = existing.decode("utf-8", "surrogateescape")
+    if _detect_line_ending(existing_text) == "\r\n":
+        content = _normalize_line_endings(content, "\r\n")
+    if existing.startswith(b"\xef\xbb\xbf") and not _has_bom(content):
+        content = _UTF8_BOM + content
+    try:
+        return content.encode("utf-8", "surrogateescape") == existing
+    except UnicodeEncodeError:
+        return False
+
+
 def _is_write_denied(path: str) -> bool:
     """Return True if path is on the write deny list."""
     return _shared_is_write_denied(path)

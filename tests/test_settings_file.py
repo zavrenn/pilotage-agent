@@ -932,6 +932,48 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         channel.assert_not_called()
         self.assertIn("Delivery database is not writable", error.getvalue())
 
+    async def test_runtime_recovers_existing_audit_when_learning_tools_are_disabled(self):
+        from pilotage import main
+
+        (self.runtime_root / "config.yaml").write_text(
+            "whatsapp:\n"
+            "  enabled: true\n"
+            "telegram:\n"
+            "  enabled: false\n"
+            "tools:\n"
+            "  enabled: [todo]\n",
+            encoding="utf-8",
+        )
+        channel_config = Config.load(channel="whatsapp")
+        memory = self.runtime_root / "memories" / "MEMORY.md"
+        memory.parent.mkdir(parents=True)
+        memory.write_text("before", encoding="utf-8")
+        audit = main.PersistenceAuditStore(self.runtime_root)
+        before = audit._snapshot(("memories/MEMORY.md",))
+        audit._prepare(
+            operation="memory:add",
+            turn_ref="turn-1",
+            reason="Interrupted accepted foreground turn.",
+            before=before,
+        )
+        memory.write_text("partial", encoding="utf-8")
+
+        with (
+            mock.patch.object(
+                main.DeliveryStore,
+                "verify_writable",
+                side_effect=sqlite3.OperationalError("stop after recovery"),
+            ),
+            mock.patch.object(main, "WhatsAppChannel") as channel,
+            mock.patch("sys.stderr", new_callable=StringIO),
+        ):
+            code = await main._run_enabled_channels(channel_config, "default")
+
+        self.assertEqual(code, 1)
+        channel.assert_not_called()
+        self.assertEqual(memory.read_text(encoding="utf-8"), "before")
+        self.assertEqual(audit.recover_prepared(), 0)
+
     async def test_whatsapp_recovery_requires_its_durable_claim_identity(self):
         from pilotage import main
         from pilotage.history import ConversationStore

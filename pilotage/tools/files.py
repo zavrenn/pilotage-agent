@@ -26,13 +26,19 @@ from .file_operations import (
     ShellFileOperations,
     normalize_read_pagination,
     normalize_search_pagination,
+    write_content_matches_bytes,
 )
 from .file_safety import (
     get_read_block_error,
     get_write_approval_category,
     get_write_denied_error,
 )
-from .patch_parser import OperationType, apply_v4a_operations, parse_v4a_patch
+from .patch_parser import (
+    OperationType,
+    _validate_operations,
+    apply_v4a_operations,
+    parse_v4a_patch,
+)
 from .read_extract import ExtractionError, extract_document_text, is_extractable_document
 from .registry import Tool, ToolContext, tool_error
 from .shell import DEFAULT_TIMEOUT_SECONDS, Shell
@@ -259,6 +265,36 @@ def _resolve(path: Any, shell: Shell) -> Path:
     return _requested_path(path, shell).resolve(strict=False)
 
 
+def _persistence_binding_error(
+    context: ToolContext, paths: Iterable[Path]
+) -> Optional[str]:
+    expected = frozenset(
+        os.path.normcase(os.path.abspath(value))
+        for value in context.persistence_bound_paths
+    )
+    if not expected:
+        return None
+    actual = frozenset(
+        os.path.normcase(os.path.abspath(str(path.resolve(strict=False))))
+        for path in paths
+    )
+    if actual == expected:
+        return None
+    return (
+        "Persistent target changed between approval and execution; no files "
+        "were modified. Inspect the canonical skill path and retry."
+    )
+
+
+def _unbound_skill_error(context: ToolContext, category: Optional[str]) -> Optional[str]:
+    if category == "skills" and not context.persistence_bound_paths:
+        return (
+            "Skill mutation could not establish its exact audit target; no files "
+            "were modified. Retry the file-tool call."
+        )
+    return None
+
+
 def _read_guard(path: Path) -> Optional[str]:
     return get_read_block_error(str(path))
 
@@ -479,6 +515,8 @@ def _write(args: Dict[str, Any], context: ToolContext, shell: Shell,
         )
     requested_path = _requested_path(args.get("path"), shell)
     path = requested_path.resolve(strict=False)
+    if binding_error := _persistence_binding_error(context, [path]):
+        return tool_error(binding_error)
     denied = (
         _read_guard(path)
         or _write_guard(requested_path)
@@ -486,7 +524,13 @@ def _write(args: Dict[str, Any], context: ToolContext, shell: Shell,
     )
     if denied:
         return tool_error(denied)
-    category = get_write_approval_category(str(requested_path))
+    category = (
+        "skills"
+        if context.persistence_bound_paths
+        else get_write_approval_category(str(requested_path))
+    )
+    if unbound_error := _unbound_skill_error(context, category):
+        return tool_error(unbound_error)
     if category == "skills":
         validation_path = (
             requested_path
@@ -496,6 +540,21 @@ def _write(args: Dict[str, Any], context: ToolContext, shell: Shell,
         validation_error = validate_skill_file_content(validation_path, content)
         if validation_error:
             return tool_error(f"Skill validation failed: {validation_error}")
+        if path.is_file():
+            try:
+                if write_content_matches_bytes(path.read_bytes(), content):
+                    return _json(
+                        {
+                            "bytes_written": 0,
+                            "dirs_created": False,
+                            "verified": True,
+                            "no_change": True,
+                            "note": "The file already contained the exact intended bytes.",
+                            "resolved_path": str(path),
+                        }
+                    )
+            except OSError:
+                pass
     if category and category not in approved_categories:
         target_label = json.dumps(str(path), ensure_ascii=True)
         raise _ApprovalRequired(
@@ -531,7 +590,7 @@ def _write(args: Dict[str, Any], context: ToolContext, shell: Shell,
         data["resolved_path"] = str(path)
         if warning:
             data["_warning"] = warning
-        if not data.get("error"):
+        if not data.get("error") and not data.get("no_change"):
             data["files_modified"] = [str(path)]
             file_state.note_write(context.chat_id, path)
     return _json(data)
@@ -562,6 +621,42 @@ def _rewrite_v4a_paths(operations: Iterable[Any], shell: Shell) -> None:
             operation.new_path = str(_resolve(operation.new_path, shell))
 
 
+def _v4a_updates_already_applied(
+    parsed: Iterable[Any], operations: ShellFileOperations
+) -> bool:
+    """Conservatively recognize an all-update V4A patch that already landed."""
+
+    from .fuzzy_match import is_already_applied
+
+    saw_change = False
+    for operation in parsed:
+        if operation.operation != OperationType.UPDATE:
+            return False
+        read = operations.read_file_raw(operation.file_path)
+        if read.error:
+            return False
+        content = read.content
+        for hunk in operation.hunks:
+            search_lines = [
+                line.content for line in hunk.lines if line.prefix in {" ", "-"}
+            ]
+            replacement_lines = [
+                line.content for line in hunk.lines if line.prefix in {" ", "+"}
+            ]
+            if search_lines == replacement_lines:
+                continue
+            if not search_lines:
+                return False
+            saw_change = True
+            if not is_already_applied(
+                content,
+                "\n".join(search_lines),
+                "\n".join(replacement_lines),
+            ):
+                return False
+    return saw_change
+
+
 def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
            operations: ShellFileOperations, *,
            approved_categories: frozenset[str] = frozenset()) -> str:
@@ -571,6 +666,8 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
             return tool_error("patch replace mode requires old_string and new_string")
         requested_path = _requested_path(args.get("path"), shell)
         path = requested_path.resolve(strict=False)
+        if binding_error := _persistence_binding_error(context, [path]):
+            return tool_error(binding_error)
         denied = (
             _read_guard(path)
             or _write_guard(requested_path)
@@ -578,7 +675,33 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
         )
         if denied:
             return tool_error(denied)
-        category = get_write_approval_category(str(requested_path))
+        category = (
+            "skills"
+            if context.persistence_bound_paths
+            else get_write_approval_category(str(requested_path))
+        )
+        if unbound_error := _unbound_skill_error(context, category):
+            return tool_error(unbound_error)
+        if category == "skills" and path.is_file():
+            try:
+                content = path.read_text(encoding="utf-8", errors="surrogateescape")
+            except OSError:
+                content = ""
+            from .fuzzy_match import is_already_applied
+
+            if is_already_applied(
+                content,
+                args["old_string"],
+                args["new_string"],
+            ):
+                return _json(
+                    {
+                        "success": True,
+                        "no_change": True,
+                        "note": "The skill edit was already applied; no write was performed.",
+                        "resolved_path": str(path),
+                    }
+                )
         if category and category not in approved_categories:
             target_label = json.dumps(str(path), ensure_ascii=True)
             raise _ApprovalRequired(
@@ -649,6 +772,8 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
     if error:
         return tool_error(f"Failed to parse patch: {error}")
     paths = _v4a_paths(parsed, shell)
+    if binding_error := _persistence_binding_error(context, paths):
+        return tool_error(binding_error)
     approval_paths: list[Path] = []
     skill_index_paths: list[Path] = []
     validation_paths: list[Path] = []
@@ -664,7 +789,10 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
             )
             if denied:
                 return tool_error(denied)
-            if get_write_approval_category(str(requested_target)):
+            if (
+                context.persistence_bound_paths
+                or get_write_approval_category(str(requested_target))
+            ):
                 approval_paths.append(resolved_target)
             if requested_target.name.casefold() == "skill.md":
                 skill_index_paths.append(resolved_target)
@@ -689,7 +817,27 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
                     f"{destination} already exists"
                 )
 
+    if approval_paths and not context.persistence_bound_paths:
+        return tool_error(
+            "Skill mutation could not establish its exact audit targets; no files "
+            "were modified. Retry the file-tool call."
+        )
+    _rewrite_v4a_paths(parsed, shell)
     if approval_paths and "skills" not in approved_categories:
+        validation_errors = _validate_operations(parsed, operations)
+        if validation_errors:
+            return tool_error(
+                "Patch validation failed (no files were modified):\n"
+                + "\n".join(f"  • {error}" for error in validation_errors)
+            )
+        if _v4a_updates_already_applied(parsed, operations):
+            return _json(
+                {
+                    "success": True,
+                    "no_change": True,
+                    "note": "The skill patch was already applied; no write was performed.",
+                }
+            )
         unique = ", ".join(
             json.dumps(str(path), ensure_ascii=True)
             for path in dict.fromkeys(approval_paths)
@@ -704,7 +852,6 @@ def _patch(args: Dict[str, Any], context: ToolContext, shell: Shell,
             f"{patch_content}",
         )
 
-    _rewrite_v4a_paths(parsed, shell)
     with ExitStack() as locks:
         for path in sorted(paths, key=str):
             locks.enter_context(file_state.lock_path(path))
@@ -863,10 +1010,42 @@ def _search(args: Dict[str, Any], context: ToolContext, shell: Shell,
     return _json(data)
 
 
-async def _run(handler: Any, args: Dict[str, Any], context: ToolContext) -> str:
+async def _finish_started_file_call(function: Any, *args: Any, **kwargs: Any) -> Any:
+    """Do not let cancellation outlive a file worker that may already mutate."""
+
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    cancelled = False
+    worker_error: Optional[BaseException] = None
+    while True:
+        try:
+            result = await asyncio.shield(task)
+            break
+        except asyncio.CancelledError:
+            if task.done() and task.cancelled():
+                raise
+            cancelled = True
+        except BaseException as exc:
+            if not cancelled:
+                raise
+            worker_error = exc
+            break
+    if cancelled:
+        raise asyncio.CancelledError from worker_error
+    return result
+
+
+async def _run(
+    handler: Any,
+    args: Dict[str, Any],
+    context: ToolContext,
+    *,
+    stop_after_approval: bool = False,
+) -> Optional[str]:
     terminal = get_terminal_session(context)
     async with terminal.lock:
-        approved_categories: set[str] = set()
+        approved_categories = set(context.persistence_approved_categories)
+        if stop_after_approval and approved_categories:
+            raise ValueError("Persistence preflight cannot start pre-approved.")
         try:
             if terminal.shell is None:
                 terminal.shell = await asyncio.to_thread(_new_shell, context)
@@ -875,7 +1054,12 @@ async def _run(handler: Any, args: Dict[str, Any], context: ToolContext) -> str:
                 raise RuntimeError("file operations could not initialize")
             while True:
                 try:
-                    return await asyncio.to_thread(
+                    runner = (
+                        _finish_started_file_call
+                        if handler in {_write, _patch}
+                        else asyncio.to_thread
+                    )
+                    return await runner(
                         handler,
                         args,
                         context,
@@ -912,9 +1096,26 @@ async def _run(handler: Any, args: Dict[str, Any], context: ToolContext) -> str:
                             approval_error(outcome),
                             approval=outcome.status,
                         )
+                    if stop_after_approval:
+                        return None
                     approved_categories.add(request.category)
         except Exception as exc:
             return tool_error(f"{type(exc).__name__}: {exc}")
+
+
+async def preauthorize_persistent_file_mutation(
+    tool_name: str,
+    args: Dict[str, Any],
+    context: ToolContext,
+) -> Optional[str]:
+    """Validate and resolve required skill approval before audit locking."""
+
+    if not context.persistence_bound_paths:
+        return tool_error("Persistent skill targets were not bound for approval.")
+    handler = {"write_file": _write, "patch": _patch}.get(tool_name)
+    if handler is None:
+        return tool_error(f"Unsupported persistent file mutation: {tool_name}")
+    return await _run(handler, args, context, stop_after_approval=True)
 
 
 async def handle_read_file(args: Dict[str, Any], context: ToolContext) -> str:
@@ -952,7 +1153,18 @@ WRITE_FILE_SCHEMA = {
     "description": "Replace a text file completely, creating parents when needed. Use patch for targeted edits. verified:true means the on-disk hash matched.",
     "parameters": {
         "type": "object",
-        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+        "properties": {
+            "path": {"type": "string"},
+            "content": {"type": "string"},
+            "change_reason": {
+                "type": "string",
+                "maxLength": 240,
+                "description": (
+                    "Required only when the target is under the profile skills "
+                    "directory: a short factual evidence statement, not private reasoning."
+                ),
+            },
+        },
         "required": ["path", "content"],
     },
 }
@@ -969,6 +1181,14 @@ PATCH_SCHEMA = {
             "new_string": {"type": "string"},
             "replace_all": {"type": "boolean", "default": False},
             "patch": {"type": "string"},
+            "change_reason": {
+                "type": "string",
+                "maxLength": 240,
+                "description": (
+                    "Required only when any target is under the profile skills "
+                    "directory: a short factual evidence statement, not private reasoning."
+                ),
+            },
         },
         "required": ["mode"],
     },

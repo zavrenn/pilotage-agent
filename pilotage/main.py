@@ -71,6 +71,7 @@ from .history import (
     StopCheckpoint,
 )
 from .i18n import t
+from .persistence import PersistenceAuditError, PersistenceAuditStore
 from .redact import (
     RedactingFormatter,
     configure_identity_pseudonyms,
@@ -80,6 +81,7 @@ from .redact import (
 from .runtime_lock import ProfileRuntimeLock, RuntimeLockError
 from .service import run_service_command
 from .settings import config_path, set_channel_enabled
+from .tools import build_registry, enabled_groups
 
 logger = logging.getLogger("pilotage")
 
@@ -1170,11 +1172,45 @@ async def _run_enabled_channels(
     )
     conversation_store = ConversationStore(cron_config.conversations_path)
     delivery_store = DeliveryStore(cron_config.state_dir / "delivery.db")
+    channel_configs = []
+    if whatsapp_enabled:
+        channel_configs.append(config)
+    if telegram_enabled:
+        channel_configs.append(telegram_config)
+    persistence_enabled = False
+    runtime_registry = build_registry()
+    for channel_config in channel_configs:
+        channel_groups = set(
+            enabled_groups(channel_config.settings, runtime_registry)
+        )
+        if "memory" in channel_groups or {"file", "skills"}.issubset(
+            channel_groups
+        ):
+            persistence_enabled = True
+            break
+    audit_path = cron_config.state_dir / "persistence-audit.db"
+    persistence_audit = (
+        PersistenceAuditStore(cron_config.state_dir)
+        if persistence_enabled or audit_path.exists()
+        else None
+    )
     try:
+        if persistence_audit is not None:
+            recovered_persistence = await asyncio.to_thread(
+                persistence_audit.recover_prepared
+            )
+            if recovered_persistence:
+                logger.warning(
+                    "Restored %d interrupted persistent change(s)",
+                    recovered_persistence,
+                )
         await asyncio.to_thread(delivery_store.verify_writable)
         active_turns = await asyncio.to_thread(
             conversation_store.list_active_turns
         )
+    except PersistenceAuditError as exc:
+        print(f"Persistent-learning audit is not recoverable: {exc}", file=sys.stderr)
+        return 1
     except (OSError, sqlite3.Error) as exc:
         print(f"Delivery database is not writable: {exc}", file=sys.stderr)
         return 1
@@ -1317,6 +1353,8 @@ async def _run_enabled_channels(
             store=conversation_store,
             cron_store=cron_store,
             cron_wake=cron_wake,
+            allow_persistence_writes=True,
+            persistence_audit=persistence_audit,
         )
         agents.append(whatsapp_agent)
         agents_by_channel["whatsapp"] = whatsapp_agent
@@ -1632,6 +1670,8 @@ async def _run_enabled_channels(
             store=conversation_store,
             cron_store=cron_store,
             cron_wake=cron_wake,
+            allow_persistence_writes=True,
+            persistence_audit=persistence_audit,
         )
         agents.append(telegram_agent)
         agents_by_channel["telegram"] = telegram_agent

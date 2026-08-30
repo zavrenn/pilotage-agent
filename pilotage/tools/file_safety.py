@@ -93,6 +93,10 @@ def _state_files() -> tuple[str, ...]:
         _real(str(home / "delivery.db-journal")),
         _real(str(home / "delivery.db-shm")),
         _real(str(home / "delivery.db-wal")),
+        _real(str(home / "persistence-audit.db")),
+        _real(str(home / "persistence-audit.db-journal")),
+        _real(str(home / "persistence-audit.db-shm")),
+        _real(str(home / "persistence-audit.db-wal")),
         _real(str(home / "cron" / ".jobs.lock")),
         _real(str(home / "cron" / "jobs.json")),
     )

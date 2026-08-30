@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from pilotage.tools.file_operations import (
     SearchResult,
     ShellFileOperations,
     WriteResult,
+    write_content_matches_bytes,
 )
 from pilotage.tools import file_safety
 from pilotage.tools.files import (
@@ -87,6 +89,15 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(WRITE_FILE_SCHEMA["parameters"]["required"], ["path", "content"])
         self.assertEqual(PATCH_SCHEMA["parameters"]["required"], ["mode"])
         self.assertEqual(SEARCH_FILES_SCHEMA["parameters"]["required"], ["pattern"])
+
+    def test_skill_noop_comparison_accounts_for_existing_bom_and_crlf(self):
+        existing = b"\xef\xbb\xbffirst\r\nsecond\r\n"
+        self.assertTrue(
+            write_content_matches_bytes(existing, "first\nsecond\n")
+        )
+        self.assertFalse(
+            write_content_matches_bytes(existing, "first\nchanged\n")
+        )
 
     def test_internal_file_commands_request_an_exact_stdout_channel(self):
         class Environment:
@@ -188,6 +199,8 @@ class SchemaTests(unittest.TestCase):
                     "conversations.db-wal",
                     "delivery.db",
                     "delivery.db-wal",
+                    "persistence-audit.db",
+                    "persistence-audit.db-wal",
                     "SOUL.md",
                     "cron/.jobs.lock",
                     "cron/jobs.json",
@@ -200,6 +213,11 @@ class SchemaTests(unittest.TestCase):
                     self.assertIsNotNone(
                         file_safety.get_write_denied_error(str(state / relative))
                     )
+                self.assertIsNone(
+                    file_safety.get_read_block_error(
+                        str(state / "memories" / "MEMORY.md")
+                    )
+                )
 
     def test_auto_loaded_agents_files_fail_closed_until_approvals_exist(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -216,6 +234,9 @@ class SchemaTests(unittest.TestCase):
             home = Path(directory).resolve()
             target = home / "skills" / "demo" / "SKILL.md"
             context = ToolContext("chat", _Config(home))
+            context.persistence_bound_paths = frozenset(
+                {str(target.resolve(strict=False))}
+            )
             shell = SimpleNamespace(cwd=str(home))
             operations = mock.Mock()
 
@@ -251,11 +272,36 @@ class SchemaTests(unittest.TestCase):
             self.assertTrue(result["verified"])
             self.assertEqual(target.read_text(encoding="utf-8"), VALID_SKILL)
 
+    def test_unbound_skill_write_is_rejected_before_disk_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            target = home / "skills" / "demo" / "SKILL.md"
+            context = ToolContext("chat", _Config(home))
+            shell = SimpleNamespace(cwd=str(home))
+            operations = mock.Mock()
+
+            with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
+                result = json.loads(
+                    _write(
+                        {"path": str(target), "content": VALID_SKILL},
+                        context,
+                        shell,
+                        operations,
+                    )
+                )
+
+            self.assertIn("exact audit target", result["error"])
+            self.assertFalse(target.exists())
+            operations.write_file.assert_not_called()
+
     def test_invalid_skill_write_is_rejected_before_approval_or_disk(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory).resolve()
             target = home / "skills" / "demo" / "SKILL.md"
             context = ToolContext("chat", _Config(home))
+            context.persistence_bound_paths = frozenset(
+                {str(target.resolve(strict=False))}
+            )
             shell = SimpleNamespace(cwd=str(home))
             operations = mock.Mock()
             invalid = VALID_SKILL.replace("version: 1.0.0\n", "")
@@ -274,6 +320,44 @@ class SchemaTests(unittest.TestCase):
             self.assertFalse(target.exists())
             operations.write_file.assert_not_called()
 
+    def test_already_applied_v4a_skill_patch_is_a_preapproval_noop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            target = home / "skills" / "demo" / "SKILL.md"
+            target.parent.mkdir(parents=True)
+            target.write_text(VALID_SKILL, encoding="utf-8")
+            context = ToolContext("chat", _Config(home))
+            context.persistence_bound_paths = frozenset(
+                {str(target.resolve(strict=False))}
+            )
+            shell = SimpleNamespace(cwd=str(home))
+            operations = mock.Mock()
+            operations.read_file_raw.return_value = SimpleNamespace(
+                error=None,
+                content=VALID_SKILL,
+            )
+            patch = """*** Begin Patch
+*** Update File: skills/demo/SKILL.md
+@@
+-Use the old workflow.
++Follow this workflow.
+*** End Patch"""
+
+            with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
+                result = json.loads(
+                    _patch(
+                        {"mode": "patch", "patch": patch},
+                        context,
+                        shell,
+                        operations,
+                    )
+                )
+
+            self.assertTrue(result["success"])
+            self.assertTrue(result["no_change"])
+            self.assertEqual(target.read_text(encoding="utf-8"), VALID_SKILL)
+            operations.write_file.assert_not_called()
+
     def test_invalid_skill_patch_is_rolled_back(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory).resolve()
@@ -281,6 +365,9 @@ class SchemaTests(unittest.TestCase):
             target.parent.mkdir(parents=True)
             target.write_text(VALID_SKILL, encoding="utf-8")
             context = ToolContext("chat", _Config(home))
+            context.persistence_bound_paths = frozenset(
+                {str(target.resolve(strict=False))}
+            )
             shell = SimpleNamespace(cwd=str(home))
             operations = mock.Mock()
 
@@ -323,6 +410,9 @@ class SchemaTests(unittest.TestCase):
             target.parent.mkdir(parents=True)
             target.write_text(VALID_SKILL, encoding="utf-8")
             context = ToolContext("chat", _Config(home))
+            context.persistence_bound_paths = frozenset(
+                {str(target.resolve(strict=False))}
+            )
             shell = SimpleNamespace(cwd=str(home))
 
             def apply(_parsed, _operations):
@@ -514,6 +604,35 @@ class ApprovalReviewTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(review_paths), 1)
             self.assertFalse(review_paths[0].exists())
 
+
+class FileCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelling_a_read_like_worker_returns_promptly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            context = ToolContext("chat", _Config(workspace))
+            shell = SimpleNamespace(cwd=str(workspace))
+            context.state["terminal"] = TerminalSession(shell=shell)
+            context.state["file"] = FileSession(shell=shell, operations=object())
+            entered = threading.Event()
+            release = threading.Event()
+            finished = threading.Event()
+
+            def handler(_args, _context, _shell, _operations, *, approved_categories):
+                entered.set()
+                release.wait(timeout=2)
+                finished.set()
+                return json.dumps({"success": True})
+
+            task = asyncio.create_task(_run(handler, {}, context))
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=0.5)
+            self.assertFalse(finished.is_set())
+            release.set()
+            self.assertTrue(await asyncio.to_thread(finished.wait, 2))
+
+
 @unittest.skipIf(os.name == "nt", "The production file stack requires Linux/bash")
 class FileToolCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -596,6 +715,9 @@ class SessionAndGuardTests(FileToolCase):
 
         self.context.approval_request = deny
         target = self.workspace / "skills" / "demo" / "SKILL.md"
+        self.context.persistence_bound_paths = frozenset(
+            {str(target.resolve(strict=False))}
+        )
         with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.workspace)}):
             result = await self.call(
                 handle_write_file,
@@ -613,6 +735,9 @@ class SessionAndGuardTests(FileToolCase):
 
         self.context.approval_request = approve
         target = self.workspace / "skills" / "demo" / "SKILL.md"
+        self.context.persistence_bound_paths = frozenset(
+            {str(target.resolve(strict=False))}
+        )
         with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.workspace)}):
             result = await self.call(
                 handle_write_file,
@@ -879,6 +1004,35 @@ class ReplacePatchTests(FileToolCase):
 
 
 class V4APatchTests(FileToolCase):
+    async def test_already_applied_skill_v4a_patch_skips_approval(self):
+        requests = []
+
+        async def approve(category, summary):
+            requests.append((category, summary))
+            return ApprovalOutcome(True, "approved")
+
+        self.context.approval_request = approve
+        target = self.workspace / "skills" / "demo" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        target.write_text(VALID_SKILL, encoding="utf-8")
+        self.context.persistence_bound_paths = frozenset(
+            {str(target.resolve(strict=False))}
+        )
+        patch = """*** Begin Patch
+*** Update File: skills/demo/SKILL.md
+@@
+-Use the old workflow.
++Follow this workflow.
+*** End Patch"""
+
+        with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.workspace)}):
+            result = await self.call(handle_patch, {"mode": "patch", "patch": patch})
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["no_change"])
+        self.assertEqual(requests, [])
+        self.assertEqual(target.read_text(encoding="utf-8"), VALID_SKILL)
+
     async def test_skill_patch_that_breaks_metadata_is_rolled_back(self):
         async def approve(_category, _summary):
             return ApprovalOutcome(True, "approved")
@@ -887,6 +1041,9 @@ class V4APatchTests(FileToolCase):
         target = self.workspace / "skills" / "demo" / "SKILL.md"
         target.parent.mkdir(parents=True)
         target.write_text(VALID_SKILL, encoding="utf-8")
+        self.context.persistence_bound_paths = frozenset(
+            {str(target.resolve(strict=False))}
+        )
         patch = """*** Begin Patch
 *** Update File: skills/demo/SKILL.md
 @@
