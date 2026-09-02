@@ -58,6 +58,7 @@ _ENV_ASSIGN_RE = re.compile(
     rf"\s*=\s*(['\"]?)(\S+)\2"
 )
 _ENV_ASSIGN_LOWER_RE = re.compile(
+    r"(?<![a-z0-9_])"
     r"([a-z0-9_]+_(?:key|pass|pw|token|secret|password|passwd|credential|auth))"
     r"\s*=\s*(['\"]?)(\S+)\2",
     re.IGNORECASE,

@@ -6,6 +6,7 @@ import ast
 import concurrent.futures
 import logging
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -35,6 +36,17 @@ class SensitiveTextTests(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 self.assertNotIn(opaque, redact_sensitive_text(text))
+
+    def test_lowercase_secret_assignment_is_masked(self):
+        secret = "opaque-value-1234567890"
+        redacted = redact_sensitive_text(f"prefix openai_key={secret} suffix")
+        self.assertNotIn(secret, redacted)
+
+    def test_lowercase_assignment_scan_stays_linear(self):
+        text = "a" * 30_000 + "=value"
+        started = time.perf_counter()
+        self.assertEqual(redact_sensitive_text(text), text)
+        self.assertLess(time.perf_counter() - started, 1.0)
 
     def test_auth_headers_telegram_tokens_and_database_passwords_are_masked(self):
         telegram = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
