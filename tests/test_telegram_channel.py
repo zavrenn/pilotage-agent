@@ -25,6 +25,8 @@ from pilotage.delivery import (
     DeliveryStore,
     DeliveryUnitLedger,
     compute_obligation_id,
+    deliver_final,
+    recover_deliveries,
 )
 from pilotage.settings import ConfigError
 
@@ -1022,13 +1024,89 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(telegram, "ParseMode", parse_mode),
             mock.patch.object(telegram, "BadRequest", RuntimeError),
         ):
-            delivered = await channel.send("42", "**hello**")
+            delivered = await channel.send("-10042", "**hello**", "7", thread_id="9")
 
         self.assertTrue(delivered)
         self.assertEqual(bot.send_message.await_count, 2)
         fallback = bot.send_message.await_args.kwargs
         self.assertEqual(fallback["text"], "hello")
         self.assertIsNone(fallback["parse_mode"])
+        self.assertEqual(fallback["chat_id"], -10042)
+        self.assertEqual(fallback["message_thread_id"], 9)
+        self.assertEqual(fallback["reply_to_message_id"], 7)
+
+    async def test_missing_topic_never_retries_in_the_parent_chat(self):
+        channel, _, _ = self._channel()
+        for description in ("Message thread not found", "Message thread is invalid"):
+            with self.subTest(description=description):
+                send = mock.AsyncMock(side_effect=telegram.BadRequest(description))
+                channel._bot = SimpleNamespace(send_message=send)
+
+                delivered = await channel.send(
+                    "-10042", "**hello**", "7", thread_id="9",
+                )
+
+                self.assertFalse(delivered)
+                self.assertFalse(delivered.retryable)
+                send.assert_awaited_once()
+                self.assertEqual(send.await_args.kwargs["chat_id"], -10042)
+                self.assertEqual(send.await_args.kwargs["message_thread_id"], 9)
+
+    async def test_missing_quote_fallback_preserves_the_topic(self):
+        channel, _, _ = self._channel()
+        send = mock.AsyncMock(side_effect=[
+            telegram.BadRequest("Message to be replied not found"),
+            SimpleNamespace(message_id=22),
+        ])
+        channel._bot = SimpleNamespace(send_message=send)
+
+        delivered = await channel.send("-10042", "hello", "7", thread_id="9")
+
+        self.assertTrue(delivered)
+        self.assertEqual(send.await_count, 2)
+        original, fallback = [call.kwargs for call in send.await_args_list]
+        self.assertEqual(original.pop("reply_to_message_id"), 7)
+        self.assertEqual(fallback, original)
+        self.assertEqual(fallback["message_thread_id"], 9)
+
+    async def test_topic_failure_during_quote_fallback_stays_in_the_topic(self):
+        channel, _, _ = self._channel()
+        send = mock.AsyncMock(side_effect=[
+            telegram.BadRequest("Message to be replied not found"),
+            telegram.BadRequest("Message thread not found"),
+        ])
+        channel._bot = SimpleNamespace(send_message=send)
+
+        delivered = await channel.send("-10042", "hello", "7", thread_id="9")
+
+        self.assertFalse(delivered)
+        self.assertFalse(delivered.retryable)
+        self.assertEqual(send.await_count, 2)
+        for call in send.await_args_list:
+            self.assertEqual(call.kwargs["chat_id"], -10042)
+            self.assertEqual(call.kwargs["message_thread_id"], 9)
+
+    async def test_invalid_topic_delivery_remains_failed_after_restart(self):
+        channel, _, _ = self._channel()
+        send = mock.AsyncMock(side_effect=telegram.BadRequest("Message thread not found"))
+        channel._bot = SimpleNamespace(send_message=send)
+        store = DeliveryStore(self.root / "topic-failure.db")
+
+        result = await deliver_final(
+            store, session_key="session", message_ref="message", platform="telegram",
+            chat_id="-10042", thread_id="9", content="hello", reply_to="7",
+            send=lambda: channel.send("-10042", "hello", "7", thread_id="9"),
+            ledger_send=lambda ledger: channel.send(
+                "-10042", "hello", "7", thread_id="9", delivery_ledger=ledger,
+            ),
+        )
+
+        self.assertFalse(result)
+        self.assertFalse(result.retryable)
+        restarted = DeliveryStore(store.path)
+        self.assertEqual(await recover_deliveries(restarted, {"telegram": channel}), 0)
+        send.assert_awaited_once()
+        self.assertEqual(send.await_args.kwargs["message_thread_id"], 9)
 
     async def test_workspace_media_directive_sends_a_native_document(self):
         channel, _, _ = self._channel()

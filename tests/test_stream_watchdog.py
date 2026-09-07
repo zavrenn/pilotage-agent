@@ -17,6 +17,7 @@ from unittest import mock
 
 import httpx
 from openai import APIStatusError
+from openai.types.responses.response_usage import ResponseUsage
 
 from pilotage.agent import Agent
 from pilotage.codex import auth
@@ -56,10 +57,10 @@ def _delta(text: str) -> SimpleNamespace:
     return SimpleNamespace(type="response.output_text.delta", delta=text)
 
 
-def _completed() -> SimpleNamespace:
+def _completed(usage: Any = None) -> SimpleNamespace:
     return SimpleNamespace(
         type="response.completed",
-        response=SimpleNamespace(status="completed", usage=None, id="resp_1", error=None),
+        response=SimpleNamespace(status="completed", usage=usage, id="resp_1", error=None),
     )
 
 
@@ -322,6 +323,76 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("max_event_gap=1.25s", written)
         self.assertNotIn("private prompt", written)
         self.assertNotIn("private answer", written)
+
+    async def _completion_with_usage(self, usage):
+        async def stream_once(_request, **_kwargs):
+            return await codex_stream.consume_stream(
+                FakeStream([_delta("private answer"), _completed(usage)]),
+                ttfb_timeout=1.0,
+                idle_timeout=1.0,
+            )
+
+        self.agent._stream_once = stream_once
+        with self.assertLogs("pilotage.agent", level="INFO") as captured:
+            result = await self.agent._call_model(
+                "private chat id",
+                [{"role": "user", "content": "private prompt"}],
+                None,
+            )
+        self.assertEqual(result.text, "private answer")
+        self.assertTrue(result.terminal_completed)
+        written = "\n".join(captured.output)
+        for secret in ("private prompt", "private answer", "private chat id", "private usage"):
+            self.assertNotIn(secret, written)
+        return written
+
+    async def test_completed_stream_logs_usage_from_dict_and_sdk_objects(self):
+        usage = {
+            "input_tokens": 123,
+            "output_tokens": 8,
+            "input_tokens_details": {"cached_tokens": 100},
+            "output_tokens_details": {"reasoning_tokens": 2},
+            "total_tokens": 131,
+            "unknown_detail": "private usage",
+        }
+        for payload in (usage, ResponseUsage(**usage)):
+            with self.subTest(shape=type(payload).__name__):
+                written = await self._completion_with_usage(payload)
+                self.assertIn("input_tokens=123, output_tokens=8, cached_tokens=100", written)
+
+    async def test_zero_usage_is_distinct_from_missing_usage(self):
+        cases = (
+            ({"input_tokens": 0, "output_tokens": 0,
+              "input_tokens_details": {"cached_tokens": 0}}, "0", "0", "0"),
+            (None, "-", "-", "-"),
+            ({}, "-", "-", "-"),
+            ({"input_tokens": 5}, "5", "-", "-"),
+        )
+        for usage, input_count, output_count, cached_count in cases:
+            with self.subTest(usage=usage):
+                written = await self._completion_with_usage(usage)
+                self.assertIn(
+                    f"input_tokens={input_count}, output_tokens={output_count}, "
+                    f"cached_tokens={cached_count}", written,
+                )
+
+    async def test_malformed_usage_cannot_leak_content_or_fail_a_completion(self):
+        class BrokenUsage:
+            def __getattr__(self, name):
+                raise ValueError("private usage")
+
+        invalid_values = (True, False, -1, 1.5, float("nan"), float("inf"),
+                          "private usage", {"secret": "private usage"}, [1])
+        malformed = [
+            {"input_tokens": value, "output_tokens": value,
+             "input_tokens_details": {"cached_tokens": value}}
+            for value in invalid_values
+        ]
+        malformed.extend(("private usage", BrokenUsage()))
+        for usage in malformed:
+            with self.subTest(usage_type=type(usage).__name__):
+                written = await self._completion_with_usage(usage)
+                self.assertIn("input_tokens=-, output_tokens=-, cached_tokens=-", written)
 
     async def test_a_second_quiet_connection_gives_up(self):
         quiet = [

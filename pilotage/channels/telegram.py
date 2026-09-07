@@ -46,7 +46,7 @@ from ..delivery import (
     delivery_fingerprint,
     file_delivery_fingerprint,
 )
-from ..i18n import DEFAULT_PROFILE_LANGUAGE
+from ..i18n import DEFAULT_PROFILE_LANGUAGE, t
 from ..legacy_notices import attachment_notice_replacements
 from ..redact import identity_pseudonym, redact_channel_identities
 from ..settings import ConfigError, Settings
@@ -2658,8 +2658,15 @@ class TelegramChannel:
             return SendResult(False, "Telegram transport is not connected")
 
         if deliver_media:
+            notice = t(
+                "media.delivery_unavailable",
+                getattr(self._config, "language", DEFAULT_PROFILE_LANGUAGE),
+            )
+            if delivery_ledger is not None and "MEDIA:" in (text or ""):
+                notice = await delivery_ledger.attachment_notice(text, notice)
             attachments, cleaned = media.extract_outbound(
-                text or "", self._config.outbound_media_roots
+                text or "", self._config.outbound_media_roots,
+                denied_notice=notice,
             )
         else:
             attachments, cleaned = [], text or ""
@@ -2854,16 +2861,6 @@ class TelegramChannel:
             retry_kwargs = dict(kwargs)
             if "message to be replied not found" in written:
                 retry_kwargs.pop("reply_to_message_id", None)
-                return await self._send_text_once(
-                    target,
-                    chunk,
-                    ParseMode.MARKDOWN_V2,
-                    retry_kwargs,
-                )
-            if "thread" in written and (
-                "not found" in written or "invalid" in written
-            ):
-                retry_kwargs.pop("message_thread_id", None)
                 return await self._send_text_once(
                     target,
                     chunk,

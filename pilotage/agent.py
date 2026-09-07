@@ -100,6 +100,18 @@ def _seconds(value: Optional[float]) -> str:
     return "-" if value is None else f"{max(0.0, float(value)):.2f}s"
 
 
+def _usage_count(usage: Any, *fields: str) -> str:
+    """Read one provider token count without logging arbitrary usage content."""
+
+    try:
+        for name in fields:
+            usage = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+        return str(usage) if type(usage) is int and usage >= 0 else "-"
+    except Exception:
+        # Optional diagnostics must not interrupt an otherwise valid completion.
+        return "-"
+
+
 def _is_masked_codex_replay_rejection(exc: APIStatusError) -> bool:
     """Match only Codex's exact stale-encrypted-replay 400 envelope."""
 
@@ -2058,7 +2070,8 @@ class Agent:
                     "Model stream completed for %s "
                     "(attempt=%d, elapsed=%s, first_event=%s, events=%s, "
                     "max_event_gap=%s, status=%s, terminal=%s, "
-                    "tool_calls=%d, text_chars=%d)",
+                    "tool_calls=%d, text_chars=%d, input_tokens=%s, "
+                    "output_tokens=%s, cached_tokens=%s)",
                     session_label,
                     stream_attempt,
                     _seconds(timing.elapsed_seconds if timing else None),
@@ -2069,6 +2082,9 @@ class Agent:
                     result.terminal_completed,
                     len(result.tool_calls),
                     len(result.text),
+                    _usage_count(result.usage, "input_tokens"),
+                    _usage_count(result.usage, "output_tokens"),
+                    _usage_count(result.usage, "input_tokens_details", "cached_tokens"),
                 )
                 return result
             except APIStatusError as exc:

@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS delivery_obligations (
     owner_token   TEXT NOT NULL,
     last_error    TEXT,
     retry_safe    INTEGER NOT NULL DEFAULT 0,
-    next_attempt_at REAL NOT NULL DEFAULT 0
+    next_attempt_at REAL NOT NULL DEFAULT 0,
+    attachment_notice TEXT
 );
 CREATE TABLE IF NOT EXISTS delivery_units (
     obligation_id TEXT NOT NULL,
@@ -203,6 +204,10 @@ class DeliveryStore:
                 connection.execute(
                     "ALTER TABLE delivery_obligations"
                     " ADD COLUMN next_attempt_at REAL NOT NULL DEFAULT 0"
+                )
+            if "attachment_notice" not in columns:
+                connection.execute(
+                    "ALTER TABLE delivery_obligations ADD COLUMN attachment_notice TEXT"
                 )
             connection.commit()
             try:
@@ -687,6 +692,34 @@ class DeliveryStore:
                 ),
             )
             return bool(cursor.rowcount)
+
+    def record_attachment_notice(
+        self, obligation_id: str, content: str, notice: str,
+    ) -> str:
+        """Freeze omission wording before it can affect chunk identities."""
+
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            parent = connection.execute(
+                "SELECT owner_token, state, content, attachment_notice"
+                " FROM delivery_obligations WHERE obligation_id = ?",
+                (obligation_id,),
+            ).fetchone()
+            if (
+                parent is None
+                or parent["owner_token"] != self._owner_token
+                or parent["state"] not in {"pending", "attempting"}
+                or parent["content"] != content
+            ):
+                raise DeliveryPlanError("attachment notice has no matching owned obligation")
+            if parent["attachment_notice"] is not None:
+                return str(parent["attachment_notice"])
+            connection.execute(
+                "UPDATE delivery_obligations SET attachment_notice = ?"
+                " WHERE obligation_id = ?",
+                (notice, obligation_id),
+            )
+            return notice
 
     def record_units(
         self,
@@ -1267,6 +1300,16 @@ class DeliveryUnitLedger:
     @property
     def preparation_failed(self) -> bool:
         return self._preparation_failed
+
+    async def attachment_notice(self, content: str, notice: str) -> str:
+        try:
+            return await asyncio.to_thread(
+                self.store.record_attachment_notice,
+                self.obligation_id, content, notice,
+            )
+        except Exception:
+            self._preparation_failed = True
+            raise
 
     async def prepare(
         self,

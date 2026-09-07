@@ -35,6 +35,8 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "Check the result, then start a new conversation with /new."
         ),
         "media.delivery_unavailable": "I couldn't send one or more attachments.",
+        "document.too_large": "This document is too large to read. Please send a smaller file.",
+        "document.unreadable": "I couldn't read this document. Please save a new copy and send it again.",
         "cron.failure": "I couldn't confirm that the scheduled request was completed.",
         "cron.unavailable": "Scheduling automatic messages is not available.",
         "capability.unavailable": "This feature is not available.",
@@ -108,6 +110,8 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "Vérifiez le résultat, puis commencez une nouvelle conversation avec /new."
         ),
         "media.delivery_unavailable": "Je n'ai pas pu envoyer une ou plusieurs pièces jointes.",
+        "document.too_large": "Ce document est trop volumineux pour être lu. Veuillez envoyer un fichier plus petit.",
+        "document.unreadable": "Je n'ai pas pu lire ce document. Veuillez en enregistrer une nouvelle copie et la renvoyer.",
         "cron.failure": "Je n'ai pas pu confirmer que la demande programmée a été exécutée.",
         "cron.unavailable": "La programmation des envois automatiques n’est pas disponible.",
         "capability.unavailable": "Cette fonctionnalité n’est pas disponible.",
@@ -179,6 +183,8 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "تحقّق من النتيجة، ثم ابدأ محادثة جديدة باستخدام /new."
         ),
         "media.delivery_unavailable": "تعذّر عليّ إرسال مرفق واحد أو أكثر.",
+        "document.too_large": "هذا المستند كبير جدًا لقراءته. يرجى إرسال ملف أصغر.",
+        "document.unreadable": "تعذّر عليّ قراءة هذا المستند. يرجى حفظ نسخة جديدة وإرسالها مجددًا.",
         "cron.failure": "تعذّر عليّ التأكد من تنفيذ الطلب المجدول.",
         "cron.unavailable": "جدولة الرسائل التلقائية غير متاحة.",
         "capability.unavailable": "هذه الميزة غير متاحة.",

@@ -33,7 +33,7 @@ from ..delivery import (
     delivery_fingerprint,
     file_delivery_fingerprint,
 )
-from ..i18n import DEFAULT_PROFILE_LANGUAGE
+from ..i18n import DEFAULT_PROFILE_LANGUAGE, t
 from ..legacy_notices import attachment_notice_replacements
 from ..redact import identity_key_path, identity_pseudonym
 from .dedup import MessageDeduplicator
@@ -1736,8 +1736,15 @@ class WhatsAppChannel:
             return SendResult(False, str(exc))
 
         if deliver_media:
+            notice = t(
+                "media.delivery_unavailable",
+                getattr(self._config, "language", DEFAULT_PROFILE_LANGUAGE),
+            )
+            if delivery_ledger is not None and "MEDIA:" in (text or ""):
+                notice = await delivery_ledger.attachment_notice(text, notice)
             attachments, cleaned = media.extract_outbound(
-                text or "", self._config.outbound_media_roots
+                text or "", self._config.outbound_media_roots,
+                denied_notice=notice,
             )
         else:
             attachments, cleaned = [], text or ""

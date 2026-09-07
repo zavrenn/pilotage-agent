@@ -29,7 +29,9 @@ __all__ = [
     "ANYDOC_EXTENSIONS",
     "EXTRACTABLE_EXTENSIONS",
     "MAX_DOCUMENT_BYTES",
+    "DocumentTooLarge",
     "ExtractionError",
+    "UnsupportedDocumentCompression",
     "extract_document_bytes",
     "extract_document_text",
     "is_extractable_document",
@@ -45,6 +47,9 @@ ANYDOC_EXTENSIONS = frozenset({
     ".rtf", ".epub",
 })
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+# Apply the existing document byte ceiling to decoded Office XML as well.
+# This budget covers all parts actually read, before XML parsing or pagination.
+_MAX_OFFICE_XML_BYTES = MAX_DOCUMENT_BYTES
 _MAX_XLSX_ROWS_PER_SHEET = 5000
 _MAX_XLSX_COLS = 256
 _MAX_OUTPUT_CHARS = 20_000
@@ -65,6 +70,14 @@ _GAP_CONTEXT_CHARS = 60
 
 class ExtractionError(Exception):
     """A supported-looking document could not be rendered as text."""
+
+
+class DocumentTooLarge(ExtractionError):
+    """The Office document exceeds the expanded-content read budget."""
+
+
+class UnsupportedDocumentCompression(ExtractionError):
+    """The Office XML uses a codec whose decompression cannot be bounded."""
 
 
 _ANYDOC_UNSET = object()
@@ -452,9 +465,80 @@ def _extract_notebook(path: str) -> str:
     return "\n".join(output).rstrip("\n") + "\n"
 
 
-def _zip_xml(archive: zipfile.ZipFile, name: str) -> ET.Element:
+class _OfficeDeflateBudget:
+    """Meter inflater output before ZipExtFile clips it to a declared size."""
+
+    def __init__(self, inflater: Any, reader: _OfficeXmlReader):
+        self._inflater = inflater
+        self._reader = reader
+
+    @property
+    def eof(self) -> bool:
+        return self._inflater.eof
+
+    @property
+    def unconsumed_tail(self) -> bytes:
+        return self._inflater.unconsumed_tail
+
+    def decompress(self, data: bytes, max_length: int = 0) -> bytes:
+        limit = self._reader._remaining + 1
+        if max_length > 0:
+            limit = min(limit, max_length)
+        output = self._inflater.decompress(data, limit)
+        self._reader._consume(len(output))
+        return output
+
+    def flush(self) -> bytes:
+        # zlib.flush(length) does not cap output. A complete DEFLATE stream
+        # has already emitted everything through bounded decompress calls.
+        if not self.eof:
+            raise zipfile.BadZipFile("Incomplete compressed document content")
+        return b""
+
+
+class _OfficeXmlReader:
+    """Share one expanded-byte budget across the XML parts of a document."""
+
+    def __init__(self, archive: zipfile.ZipFile):
+        self._archive = archive
+        self._remaining = _MAX_OFFICE_XML_BYTES
+
+    def _consume(self, size: int) -> None:
+        if size > self._remaining:
+            raise DocumentTooLarge("Expanded document content is too large to read.")
+        self._remaining -= size
+
+    def read(self, name: str) -> bytes:
+        info = self._archive.getinfo(name)
+        # ZipExtFile's BZIP2/LZMA decoders can expand the whole payload before
+        # applying read(size). Only stored/deflated members bound that work.
+        if info.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}:
+            raise UnsupportedDocumentCompression("This document could not be read safely.")
+        if info.compress_type == zipfile.ZIP_STORED and info.compress_size != info.file_size:
+            raise zipfile.BadZipFile("Inconsistent stored document size")
+        if info.file_size > self._remaining:
+            raise DocumentTooLarge("Expanded document content is too large to read.")
+        with self._archive.open(name) as member:
+            if info.compress_type == zipfile.ZIP_DEFLATED:
+                # Keep zipfile's header/CRC checks while metering before its
+                # declared-size clipping. Fail closed if its internal hook changes.
+                inflater = getattr(member, "_decompressor", None)
+                if not (
+                    callable(getattr(inflater, "decompress", None))
+                    and isinstance(getattr(inflater, "eof", None), bool)
+                    and isinstance(getattr(inflater, "unconsumed_tail", None), bytes)
+                ):
+                    raise UnsupportedDocumentCompression("This document could not be read safely.")
+                member._decompressor = _OfficeDeflateBudget(inflater, self)
+            data = member.read(self._remaining + 1)
+        if info.compress_type == zipfile.ZIP_STORED:
+            self._consume(len(data))
+        return data
+
+
+def _zip_xml(reader: _OfficeXmlReader, name: str) -> ET.Element:
     try:
-        return ET.fromstring(archive.read(name))
+        return ET.fromstring(reader.read(name))
     except KeyError as exc:
         raise ExtractionError(f"Missing {name}") from exc
     except ET.ParseError as exc:
@@ -464,7 +548,7 @@ def _zip_xml(archive: zipfile.ZipFile, name: str) -> ET.Element:
 def _extract_docx(path: str) -> str:
     try:
         with zipfile.ZipFile(path) as archive:
-            root = _zip_xml(archive, "word/document.xml")
+            root = _zip_xml(_OfficeXmlReader(archive), "word/document.xml")
     except zipfile.BadZipFile as exc:
         raise ExtractionError(f"Not a valid DOCX: {exc}") from exc
     except OSError as exc:
@@ -490,10 +574,11 @@ def _extract_docx(path: str) -> str:
 def _extract_xlsx(path: str) -> str:
     try:
         with zipfile.ZipFile(path) as archive:
+            reader = _OfficeXmlReader(archive)
             names = set(archive.namelist())
-            shared = _shared_strings(archive, names)
-            sheets = _workbook_sheets(archive)
-            relationships = _workbook_rels(archive, names)
+            shared = _shared_strings(reader, names)
+            sheets = _workbook_sheets(reader)
+            relationships = _workbook_rels(reader, names)
             output: list[str] = []
             for name, state, relationship_id in sheets:
                 if state in {"hidden", "veryHidden"}:
@@ -502,7 +587,7 @@ def _extract_xlsx(path: str) -> str:
                 if part not in names:
                     continue
                 try:
-                    rows = _sheet_rows(archive.read(part), shared)
+                    rows = _sheet_rows(reader.read(part), shared)
                 except ET.ParseError:
                     continue
                 output.append(f"# -- Sheet: {name} --")
@@ -520,13 +605,13 @@ def _extract_xlsx(path: str) -> str:
 
 
 def _shared_strings(
-    archive: zipfile.ZipFile,
+    reader: _OfficeXmlReader,
     names: set[str],
 ) -> list[str]:
     if "xl/sharedStrings.xml" not in names:
         return []
     try:
-        root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+        root = ET.fromstring(reader.read("xl/sharedStrings.xml"))
     except ET.ParseError:
         return []
     namespace = f"{{{_NS_S}}}"
@@ -537,9 +622,9 @@ def _shared_strings(
 
 
 def _workbook_sheets(
-    archive: zipfile.ZipFile,
+    reader: _OfficeXmlReader,
 ) -> list[tuple[str, str, str]]:
-    root = _zip_xml(archive, "xl/workbook.xml")
+    root = _zip_xml(reader, "xl/workbook.xml")
     sheet_namespace = f"{{{_NS_S}}}"
     relationship_namespace = f"{{{_NS_REL}}}"
     return [
@@ -553,14 +638,14 @@ def _workbook_sheets(
 
 
 def _workbook_rels(
-    archive: zipfile.ZipFile,
+    reader: _OfficeXmlReader,
     names: set[str],
 ) -> dict[str, str]:
     relationships_path = "xl/_rels/workbook.xml.rels"
     if relationships_path not in names:
         return {}
     try:
-        root = ET.fromstring(archive.read(relationships_path))
+        root = ET.fromstring(reader.read(relationships_path))
     except ET.ParseError:
         return {}
     relationship_tag = f"{{{_NS_PKG_REL}}}Relationship"

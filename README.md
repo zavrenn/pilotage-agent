@@ -138,6 +138,10 @@ An old attachment warning appended to a business reply is replaced with a plain
 localized notice; accepted chunks are never resent.
 Other pending replies keep their normal delivery recovery.
 
+DOCX/XLSX reading caps both the input file and the total expanded XML read at
+50 MiB and supports stored or DEFLATE-compressed XML. Excessive expansion and
+unsupported XML compression are rejected with a plain message.
+
 ## Verify changes
 
 After installing the locked environments:

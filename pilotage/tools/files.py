@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 from ..approvals import approval_error
+from ..i18n import DEFAULT_LANGUAGE, t
 from . import file_state
 from .binary_extensions import BINARY_EXTENSIONS, OPAQUE_DOCUMENT_EXTENSIONS
 from .file_operations import (
@@ -39,7 +40,13 @@ from .patch_parser import (
     apply_v4a_operations,
     parse_v4a_patch,
 )
-from .read_extract import ExtractionError, extract_document_text, is_extractable_document
+from .read_extract import (
+    DocumentTooLarge,
+    ExtractionError,
+    UnsupportedDocumentCompression,
+    extract_document_text,
+    is_extractable_document,
+)
 from .registry import Tool, ToolContext, tool_error
 from .shell import DEFAULT_TIMEOUT_SECONDS, Shell
 from .skill_utils import validate_skill_file_content
@@ -417,6 +424,14 @@ def _read(args: Dict[str, Any], context: ToolContext, shell: Shell,
     if is_extractable_document(str(path)):
         try:
             extracted = extract_document_text(str(path))
+        except DocumentTooLarge:
+            return tool_error(t(
+                "document.too_large", getattr(context.config, "language", DEFAULT_LANGUAGE)
+            ))
+        except UnsupportedDocumentCompression:
+            return tool_error(t(
+                "document.unreadable", getattr(context.config, "language", DEFAULT_LANGUAGE)
+            ))
         except ExtractionError as exc:
             if path.suffix.lower() != ".ipynb":
                 return tool_error(

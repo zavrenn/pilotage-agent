@@ -330,9 +330,12 @@ def _mask_json_media_values(content: str) -> str:
 
 
 def extract_outbound(
-    content: str, roots: Sequence[Path]
+    content: str,
+    roots: Sequence[Path],
+    *,
+    denied_notice: Optional[str] = None,
 ) -> tuple[List[OutboundAttachment], str]:
-    """Extract safe Hermes ``MEDIA:`` directives and clean the visible text."""
+    """Extract safe MEDIA directives and optionally explain omitted files."""
     if "MEDIA:" not in content:
         return [], content
 
@@ -341,12 +344,14 @@ def extract_outbound(
     attachments: List[OutboundAttachment] = []
     seen: set[Path] = set()
     spans: List[tuple[int, int]] = []
+    denied = False
 
     for match in MEDIA_TAG_RE.finditer(scan):
         spans.append(match.span())
         raw = _normalize_media_tag_path(match.group("path"))
         accepted = _accept_outbound_path(raw, roots)
         if accepted is None:
+            denied = True
             logger.warning(
                 "Rejected an outbound MEDIA path outside declared delivery directories"
             )
@@ -365,6 +370,8 @@ def extract_outbound(
     for start, end in reversed(spans):
         del chars[start:end]
     cleaned = re.sub(r"\n{3,}", "\n\n", "".join(chars)).strip()
+    if denied and denied_notice:
+        cleaned = "\n\n".join(part for part in (cleaned, denied_notice) if part)
     return attachments, cleaned
 
 
