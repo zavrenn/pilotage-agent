@@ -19,7 +19,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..approvals import approval_error, approval_required
+from ..approvals import approval_error
 from .registry import Tool, ToolContext, tool_error
 from .threat_patterns import first_threat_message as _first_threat_message
 
@@ -1209,7 +1209,7 @@ def _invoke_memory(
 async def preauthorize_memory_mutation(
     args: Dict[str, Any], context: ToolContext
 ) -> Optional[str]:
-    """Validate and resolve required memory approval before audit locking."""
+    """Validate memory changes and capability settings before audit locking."""
 
     preview = _invoke_memory(args, context.memory_store, preview=True)
     try:
@@ -1221,7 +1221,7 @@ async def preauthorize_memory_mutation(
 
     summary = _memory_approval_summary(args)
     if summary is None:
-        return tool_error("The memory mutation is not valid for approval.")
+        return tool_error("The memory change is invalid.")
     outcome = await context.authorize("memory", summary)
     if not outcome.approved:
         return tool_error(
@@ -1233,10 +1233,7 @@ async def preauthorize_memory_mutation(
 
 
 async def handle_memory(args: Dict[str, Any], context: ToolContext) -> str:
-    if (
-        "memory" not in context.persistence_approved_categories
-        and approval_required(context.config, "memory")
-    ):
+    if "memory" not in context.persistence_approved_categories:
         final = await preauthorize_memory_mutation(args, context)
         if final is not None:
             return final

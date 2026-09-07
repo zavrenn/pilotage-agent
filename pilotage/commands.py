@@ -27,14 +27,15 @@ class CommandDef:
 
 
 COMMAND_REGISTRY: tuple[CommandDef, ...] = (
-    CommandDef("help", "Show the available management commands", "Info", aliases=("commands",)),
+    CommandDef("help", "Show the available actions", "Info", aliases=("commands",)),
     CommandDef("new", "Start a fresh conversation", "Session", aliases=("reset",)),
     CommandDef("stop", "Stop the active request", "Session"),
-    CommandDef("approve", "Allow the oldest pending change once", "Approval"),
-    CommandDef("deny", "Refuse the oldest pending change", "Approval"),
-    CommandDef("status", "Show the running agent's essential status", "Info"),
-    CommandDef("profile", "Show the active profile and state directory", "Info"),
+    CommandDef("status", "Check availability", "Info"),
 )
+
+# Recognize old commands so a stale client cannot send them into the model as
+# a new request. They no longer expose operator details or authorize changes.
+_RETIRED_COMMANDS = ("approve", "deny", "profile")
 
 
 def _build_command_lookup() -> dict[str, CommandDef]:
@@ -43,6 +44,8 @@ def _build_command_lookup() -> dict[str, CommandDef]:
         lookup[command.name] = command
         for alias in command.aliases:
             lookup[alias] = command
+    for name in _RETIRED_COMMANDS:
+        lookup[name] = CommandDef(name, "", "Retired")
     return lookup
 
 
@@ -82,7 +85,8 @@ def help_text(language: str = DEFAULT_LANGUAGE) -> str:
             f" ({t('commands.alias', language, alias=alias)})"
             for alias in command.aliases
         )
-        lines.append(f"/{command.name} — {command.description}{aliases}")
+        description = t(f"commands.description_{command.name}", language)
+        lines.append(f"/{command.name} — {description}{aliases}")
     return "\n".join(lines)
 
 
@@ -160,26 +164,8 @@ async def execute_command(
 
     name = invocation.command.name
     language = str(getattr(config, "language", DEFAULT_LANGUAGE))
-    if name == "approve":
-        if invocation.arguments:
-            return t("commands.usage", language, command="approve")
-        resolved = agent.resolve_approval(session_id, approved=True)
-        return (
-            t("commands.approved", language)
-            if resolved
-            else t("commands.no_approval", language)
-        )
-    if name == "deny":
-        resolved = agent.resolve_approval(
-            session_id,
-            approved=False,
-            reason=invocation.arguments,
-        )
-        return (
-            t("commands.denied", language)
-            if resolved
-            else t("commands.no_approval", language)
-        )
+    if name in _RETIRED_COMMANDS:
+        return t("capability.unavailable", language)
     if invocation.arguments:
         return t("commands.usage", language, command=name)
     if name == "help":
@@ -203,8 +189,6 @@ async def execute_command(
             return t("commands.stop_too_late", language)
         return t("commands.nothing_to_stop", language)
     if name == "status":
-        return status_text(config, profile_name)
-    if name == "profile":
-        return profile_text(config, profile_name)
+        return t("commands.ready", language)
     return t("commands.unknown", language, command=name)
 

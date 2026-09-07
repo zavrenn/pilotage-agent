@@ -68,7 +68,7 @@ class CronCliTests(unittest.TestCase):
             "cron", "create", "1h", "--prompt", "Send status"
         )
         self.assertEqual(code, 1)
-        self.assertIn("disabled", error)
+        self.assertIn("La programmation des envois automatiques n’est pas disponible.", error)
         self.assertEqual(self.run_cli("cron", "list")[0], 0)
 
     def test_operator_can_set_and_clear_workdir_and_toolsets(self):

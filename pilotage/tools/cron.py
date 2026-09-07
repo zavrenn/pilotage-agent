@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable
 
 from pilotage.cron.jobs import AmbiguousJobReference, CronError, CronStore
+from pilotage.cron.policy import scheduling_enabled
 
-from ..approvals import approval_error
+from ..i18n import t
 from .registry import Tool, ToolContext, tool_error
 
 logger = logging.getLogger(__name__)
 
 _ACTIONS = {"create", "list", "update", "pause", "resume", "remove", "run"}
-_MUTATING_ACTIONS = _ACTIONS - {"list"}
 _ACTION_ARGUMENTS = {
     "create": {
         "action",
@@ -138,6 +138,22 @@ def _enabled_toolsets(value: Any, context: ToolContext):
     return names
 
 
+def _job_tools_allowed(origin: Any, toolsets: Any, context: ToolContext) -> bool:
+    from pilotage.tools import build_registry, enabled_groups
+
+    registry = build_registry()
+    settings = context.config.settings
+    channel = str((origin or {}).get("channel") or "").strip().lower()
+    origin_groups = set(enabled_groups(settings.for_channel(channel), registry)) - {"cron"}
+    caller_groups = set(enabled_groups(settings, registry))
+    if context.allowed_tool_groups is not None:
+        caller_groups.intersection_update(context.allowed_tool_groups)
+    # The store normalizes an empty list to None: both inherit origin tools.
+    # Match the scheduled Agent's effective groups, which always exclude cron.
+    requested = set(toolsets) if toolsets else origin_groups
+    return requested.issubset(origin_groups & caller_groups)
+
+
 def _workdir(value: Any):
     if value is None:
         return None
@@ -163,14 +179,8 @@ def _missing(reference: str) -> str:
 
 
 def execute_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
-    """Execute a validated cron operation without a messaging approval round-trip.
-
-    The model-facing handler below gates mutations first. The local operator CLI
-    calls this directly because invoking that command is already the operator's
-    explicit authorization.
-    """
+    """Execute a scheduled-work operation within the configured capability."""
     try:
-        store = _store(context)
         action = str(args.get("action") or "").strip().lower()
         if action not in _ACTIONS:
             return tool_error(
@@ -185,26 +195,40 @@ def execute_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
                 success=False,
             )
 
-        if action in {"create", "resume", "run"} and not getattr(
-            context.config, "cron_enabled", True
+        # Changing executable work also requires scheduling access, even if the
+        # existing schedule stays active. Names/delivery remain metadata edits.
+        requires_scheduling = action in {"create", "resume", "run"} or (
+            action == "update" and bool({
+                "prompt", "schedule", "repeat", "skills", "enabled_toolsets", "workdir",
+            }.intersection(args))
+        )
+        if requires_scheduling and (
+            not getattr(context.config, "cron_enabled", True)
+            or not scheduling_enabled(context.config, context.origin)
         ):
             return tool_error(
-                "Cron execution is disabled in config.yaml.", success=False
+                t("cron.unavailable", getattr(context.config, "language", "en")),
+                success=False,
             )
 
+        store = _store(context)
+        toolsets = _enabled_toolsets(args.get("enabled_toolsets"), context)
         if action == "create":
             schedule = str(args.get("schedule") or "").strip()
             if not schedule:
                 return tool_error("schedule is required for create", success=False)
+            if not _job_tools_allowed(context.origin, toolsets, context):
+                return tool_error(
+                    t("capability.unavailable", getattr(context.config, "language", "en")),
+                    success=False,
+                )
             job = store.create_job(
                 prompt=str(args.get("prompt") or ""),
                 schedule=schedule,
                 name=str(args.get("name") or ""),
                 repeat=args.get("repeat"),
                 skills=_skills(args.get("skills")),
-                enabled_toolsets=_enabled_toolsets(
-                    args.get("enabled_toolsets"), context
-                ),
+                enabled_toolsets=toolsets,
                 workdir=_workdir(args.get("workdir")),
                 origin=context.origin,
                 deliver=args.get("deliver"),
@@ -253,6 +277,19 @@ def execute_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
             return _missing(reference)
         job_id = str(job["id"])
 
+        if requires_scheduling:
+            if not scheduling_enabled(context.config, job.get("origin")):
+                return tool_error(
+                    t("cron.unavailable", getattr(context.config, "language", "en")),
+                    success=False,
+                )
+            effective_toolsets = toolsets if "enabled_toolsets" in args else job.get("enabled_toolsets")
+            if not _job_tools_allowed(job.get("origin"), effective_toolsets, context):
+                return tool_error(
+                    t("capability.unavailable", getattr(context.config, "language", "en")),
+                    success=False,
+                )
+
         if action == "remove":
             if not store.remove_job(job_id):
                 return _missing(reference)
@@ -281,9 +318,7 @@ def execute_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
             if "skills" in args:
                 updates["skills"] = _skills(args["skills"])
             if "enabled_toolsets" in args:
-                updates["enabled_toolsets"] = _enabled_toolsets(
-                    args["enabled_toolsets"], context
-                )
+                updates["enabled_toolsets"] = toolsets
             if "workdir" in args:
                 updates["workdir"] = _workdir(args["workdir"])
             if not updates:
@@ -304,100 +339,8 @@ def execute_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
         return tool_error(str(exc), success=False)
 
 
-def _cron_approval_request(
-    args: Dict[str, Any], context: ToolContext
-) -> tuple[Dict[str, Any], str] | None:
-    """Validate and canonicalize enough to approve the exact durable target."""
-
-    action = str(args.get("action") or "").strip().lower()
-    if action not in _MUTATING_ACTIONS:
-        return None
-    if set(args) - _ACTION_ARGUMENTS[action]:
-        return None
-    if action in {"create", "resume", "run"} and not getattr(
-        context.config, "cron_enabled", True
-    ):
-        return None
-
-    canonical = dict(args)
-    canonical["action"] = action
-    if action == "create":
-        if not str(args.get("schedule") or "").strip():
-            return None
-        detail = {
-            key: args.get(key)
-            for key in (
-                "name",
-                "schedule",
-                "repeat",
-                "skills",
-                "enabled_toolsets",
-                "workdir",
-                "deliver",
-                "prompt",
-            )
-            if key in args
-        }
-        rendered = json.dumps(detail, ensure_ascii=False)
-        summary = "Create cron job:\n" + rendered
-    else:
-        reference = str(args.get("job_id") or "").strip()
-        if not reference:
-            return None
-        try:
-            job = _store(context).resolve_job(reference)
-        except (AmbiguousJobReference, CronError, OSError):
-            return None
-        if job is None:
-            return None
-        canonical["job_id"] = str(job["id"])
-        if action == "update":
-            changes = {
-                key: args.get(key)
-                for key in (
-                    "name",
-                    "prompt",
-                    "schedule",
-                    "repeat",
-                    "skills",
-                    "enabled_toolsets",
-                    "workdir",
-                    "deliver",
-                )
-                if key in args
-            }
-            if not changes:
-                return None
-            detail = json.dumps(changes, ensure_ascii=False)
-            summary = (
-                f"Update cron job {job.get('name')!r} ({job['id']}):\n{detail}"
-            )
-        elif action == "pause":
-            reason = str(args.get("reason") or "").strip()
-            summary = f"Pause cron job {job.get('name')!r} ({job['id']})"
-            if reason:
-                summary += f": {reason}"
-        else:
-            summary = f"{action.title()} cron job {job.get('name')!r} ({job['id']})"
-
-    if len(summary) > 1800:
-        summary = summary[:1800] + "…"
-    return canonical, summary
-
-
 async def handle_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
-    prepared = _cron_approval_request(args, context)
-    if prepared is None:
-        return execute_cronjob(args, context)
-    canonical, summary = prepared
-    outcome = await context.authorize("cron", summary)
-    if not outcome.approved:
-        return tool_error(
-            approval_error(outcome),
-            success=False,
-            approval=outcome.status,
-        )
-    return execute_cronjob(canonical, context)
+    return execute_cronjob(args, context)
 
 
 CRONJOB_SCHEMA = {

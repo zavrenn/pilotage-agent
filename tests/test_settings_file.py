@@ -462,7 +462,7 @@ class ConfigFileTests(unittest.TestCase):
                 with self.assertRaisesRegex(ConfigError, expected):
                     Config.load()
 
-    def test_persistent_write_approvals_are_safe_by_default_and_independent(self):
+    def test_legacy_approval_settings_still_parse_with_an_operator_notice(self):
         defaults = Config.load()
         self.assertTrue(defaults.approval_memory)
         self.assertTrue(defaults.approval_skills)
@@ -475,11 +475,14 @@ class ConfigFileTests(unittest.TestCase):
             "  cron: false\n"
             "  timeout: 45\n"
         )
-        configured = Config.load()
+        with self.assertLogs("pilotage.config", level="WARNING") as logged:
+            configured = Config.load()
         self.assertFalse(configured.approval_memory)
         self.assertTrue(configured.approval_skills)
         self.assertFalse(configured.approval_cron)
         self.assertEqual(configured.approval_timeout_seconds, 45)
+        self.assertTrue(configured.cron_enabled)
+        self.assertIn("Legacy approvals.*", "\n".join(logged.output))
 
     def test_the_operators_instructions_keep_the_formatting_note(self):
         self._write("agent:\n  instructions: Answer in French.\n")
@@ -1921,7 +1924,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 "reply_to": "m1",
             },
         )
-        self.assertIsNotNone(seen["approval_notify"])
+        self.assertIsNone(seen["approval_notify"])
         self.assertEqual(seen["claim_ids"], [claim_id])
         self.assertEqual(seen["persisted_claim_ids"], [claim_id])
         self.assertEqual(prepared["session_id"], "123@c.us")
@@ -1930,10 +1933,6 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order, ["claims", "finalize"])
         self.assertTrue(seen["defer_completion"])
         self.assertEqual(seen["finalized"], "123@c.us")
-        delivery["accepted"] = False
-        self.assertFalse(
-            await seen["approval_notify"]("Approve this change")
-        )
 
     async def test_whatsapp_plan_failure_does_not_complete_inbound_claim(self):
         from pilotage import main

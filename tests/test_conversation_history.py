@@ -1089,21 +1089,20 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(deliver.await_args.args[3], "Answered.")
         self.assertEqual(completed_claims, [claim_id])
 
-    async def test_startup_recovery_returns_the_real_approval_send_result(self):
+    async def test_startup_recovery_has_no_client_approval_channel(self):
         store = ConversationStore(self.path)
         store.begin_turn(
             "chat",
             "accepted",
             origin={"channel": "telegram", "chat_id": "42", "reply_to": "9"},
         )
-        accepted = object()
         seen = {}
 
         class FakeChannel:
             failure = None
 
             async def send(self, *_args, **_kwargs):
-                return accepted
+                raise AssertionError("Recovery must not send an approval proposal")
 
             def _fail(self, message):
                 self.failure = message
@@ -1119,7 +1118,7 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
                 approval_notify=None,
                 defer_completion=False,
             ):
-                seen["approval_result"] = await approval_notify("Approve")
+                seen["approval_notify"] = approval_notify
                 seen["defer_completion"] = defer_completion
                 return TurnResult(text="Answered.")
 
@@ -1140,7 +1139,7 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(recovered, 1)
-        self.assertIs(seen["approval_result"], accepted)
+        self.assertIsNone(seen["approval_notify"])
         self.assertTrue(seen["defer_completion"])
         self.assertEqual(seen["finalized"], "chat")
 

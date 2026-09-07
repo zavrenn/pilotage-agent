@@ -30,6 +30,7 @@ from pilotage.delivery import (
     recover_live_deliveries,
     send_with_retry,
 )
+from pilotage.legacy_notices import LEGACY_ATTACHMENT_NOTICE
 
 
 class DeliveryTests(unittest.IsolatedAsyncioTestCase):
@@ -65,6 +66,176 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
                 " ORDER BY position",
                 (obligation_id,),
             ).fetchall()
+
+    async def test_cached_legacy_notice_is_retired_without_send_or_identity_change(self):
+        content = "Codex response remained incomplete after 3 continuation attempts"
+        obligation_id = compute_obligation_id("session", "message", content)
+        send, ledger_send = mock.AsyncMock(), mock.AsyncMock()
+        result = await deliver_final(
+            self.store, session_key="session", message_ref="message",
+            platform="whatsapp", chat_id="42", thread_id="", content=content,
+            send=send, ledger_send=ledger_send,
+        )
+        self.assertFalse(result.success)  # Retirement is not platform acceptance.
+        send.assert_not_awaited()
+        ledger_send.assert_not_awaited()
+        self.assertEqual(self.state(obligation_id), "abandoned")
+        self.assertEqual(self.row(obligation_id)["content"], content)
+        self.assertTrue(self.store.exact_obligation_exists(
+            obligation_id=obligation_id, session_key="session", platform="whatsapp",
+            chat_id="42", thread_id="", reply_to="", content=content,
+        ))
+        restarted = DeliveryStore(self.path)
+        self.assertEqual(await claim_deliveries(restarted, {"whatsapp"}), [])
+
+    async def test_legacy_notice_recovery_preserves_partial_unit_evidence(self):
+        content = "Codex response remained incomplete after 3 continuation attempts"
+        for platform in ("whatsapp", "telegram"):
+            with self.subTest(platform=platform):
+                obligation_id = compute_obligation_id("session", platform, content)
+                self.store.record(
+                    obligation_id=obligation_id, session_key="session", platform=platform,
+                    chat_id="42", thread_id="7", content=content, reply_to="inbound",
+                )
+                ledger = DeliveryUnitLedger(self.store, obligation_id)
+                units = await ledger.prepare([("text", "old-first-chunk"), ("text", "old-last-chunk")])
+                await ledger.run(units[0], mock.AsyncMock(return_value=SendResult(True, message_id="accepted")))
+                await ledger.run(units[1], mock.AsyncMock(return_value=SendResult(False, "offline", retryable=True)))
+                self.store.mark_planned_failed(obligation_id, "offline", retry_safe=True)
+                before = [dict(row) for row in self.unit_rows(obligation_id)]
+                restarted = DeliveryStore(self.path)
+                channel = mock.Mock(send=mock.AsyncMock())
+                count = await recover_deliveries(restarted, {platform: channel})
+                self.assertEqual(count, 0)
+                channel.send.assert_not_awaited()
+                self.assertEqual(self.state(obligation_id), "abandoned")
+                self.assertEqual(self.row(obligation_id)["content"], content)
+                self.assertEqual([dict(row) for row in self.unit_rows(obligation_id)], before)
+                self.assertEqual(await claim_deliveries(DeliveryStore(self.path), {platform}), [])
+
+    async def test_legacy_notice_with_all_units_accepted_is_settled_without_resend(self):
+        content = "Scheduled job 'Status' failed. Check the agent logs."
+        self.store.record(
+            obligation_id="old-notice", session_key="session", platform="telegram",
+            chat_id="42", thread_id="", content=content,
+        )
+        ledger = DeliveryUnitLedger(self.store, "old-notice")
+        units = await ledger.prepare([("text", "exact-old-fingerprint")])
+        await ledger.run(units[0], mock.AsyncMock(return_value=SendResult(True, message_id="accepted")))
+        before = [dict(row) for row in self.unit_rows("old-notice")]
+        channel = mock.Mock(send=mock.AsyncMock())
+        await recover_deliveries(DeliveryStore(self.path), {"telegram": channel})
+        channel.send.assert_not_awaited()
+        self.assertEqual(self.state("old-notice"), "delivered")
+        self.assertEqual([dict(row) for row in self.unit_rows("old-notice")], before)
+
+    async def test_legacy_retirement_does_not_change_an_unknown_send_or_another_owner(self):
+        content = "Codex response remained incomplete after 3 continuation attempts"
+        self.store.record(
+            obligation_id="old-notice", session_key="session", platform="telegram",
+            chat_id="42", thread_id="", content=content,
+        )
+        self.assertFalse(DeliveryStore(self.path).retire_legacy_notice("old-notice"))
+        ledger = DeliveryUnitLedger(self.store, "old-notice")
+        units = await ledger.prepare([("text", "exact-old-fingerprint")])
+        self.store.activate_unit_plan("old-notice")
+        self.store.mark_unit_attempting("old-notice", units[0].unit_id)
+        before = dict(self.row("old-notice"))
+        self.assertFalse(self.store.retire_legacy_notice("old-notice"))
+        self.assertEqual(dict(self.row("old-notice")), before)
+        self.assertEqual(await claim_deliveries(DeliveryStore(self.path), {"telegram"}), [])
+
+    async def test_legacy_retirement_cannot_abandon_a_business_reply(self):
+        self.store.record(
+            obligation_id="business", session_key="session", platform="telegram",
+            chat_id="42", thread_id="", content="Revenue: 400 MAD",
+        )
+        self.assertFalse(self.store.retire_legacy_notice("business"))
+        self.assertEqual(self.state("business"), "pending")
+
+    async def test_attachment_notice_replacement_preserves_all_other_delivery_proof(self):
+        content = "Revenue: 400 MAD\n\n" + LEGACY_ATTACHMENT_NOTICE
+        descriptors = [("text", "business"), ("text", "old-notice"), ("file", "report")]
+        for state in ("pending", "retryable", "delivered"):
+            with self.subTest(state=state):
+                self.store.record(
+                    obligation_id=state, session_key="session", platform="telegram",
+                    chat_id="42", thread_id="7", content=content,
+                )
+                ledger = DeliveryUnitLedger(self.store, state)
+                original = await ledger.prepare(descriptors)
+                await ledger.run(original[0], mock.AsyncMock(return_value=SendResult(True, message_id="first")))
+                if state != "pending":
+                    result = (
+                        SendResult(True, message_id="last") if state == "delivered"
+                        else SendResult(False, "offline", retryable=True)
+                    )
+                    await ledger.run(original[1], mock.AsyncMock(return_value=result))
+                before = [dict(row) for row in self.unit_rows(state)]
+                parent = dict(self.row(state))
+                changed = await ledger.prepare(
+                    descriptors, legacy_notice_content=content,
+                    notice_fingerprints={1: ("plain-fr", "plain-en")},
+                )
+                self.assertEqual(dict(self.row(state)), parent)
+                self.assertEqual([unit.unit_id for unit in changed], [unit.unit_id for unit in original])
+                if state != "delivered":
+                    before[1]["fingerprint"] = "plain-fr"
+                self.assertEqual([dict(row) for row in self.unit_rows(state)], before)
+                # A language change must retain the recorded outgoing wording.
+                again = await ledger.prepare(
+                    descriptors, legacy_notice_content=content,
+                    notice_fingerprints={1: ("plain-en", "plain-fr")},
+                )
+                self.assertEqual(again, changed)
+                self.assertEqual([dict(row) for row in self.unit_rows(state)], before)
+
+    async def test_attachment_notice_replacement_refuses_unknown_acceptance(self):
+        content = "Revenue: 400 MAD\n\n" + LEGACY_ATTACHMENT_NOTICE
+        for state in ("attempting", "failed"):
+            with self.subTest(state=state):
+                self.store.record(
+                    obligation_id=state, session_key="session", platform="telegram",
+                    chat_id="42", thread_id="", content=content,
+                )
+                ledger = DeliveryUnitLedger(self.store, state)
+                units = await ledger.prepare([("text", "old-notice")])
+                self.store.activate_unit_plan(state)
+                self.store.mark_unit_attempting(state, units[0].unit_id)
+                if state == "failed":
+                    self.store.mark_unit_failed(state, units[0].unit_id, "unknown", retry_safe=False)
+                before = [dict(row) for row in self.unit_rows(state)]
+                with self.assertRaisesRegex(DeliveryPlanError, "outcome is unknown"):
+                    await ledger.prepare(
+                        [("text", "old-notice")], legacy_notice_content=content,
+                        notice_fingerprints={0: ("plain-fr",)},
+                    )
+                self.assertTrue(ledger.preparation_failed)
+                self.assertEqual([dict(row) for row in self.unit_rows(state)], before)
+
+    async def test_attachment_notice_compatibility_cannot_change_business_or_routing(self):
+        content = "Revenue: 400 MAD\n\n" + LEGACY_ATTACHMENT_NOTICE
+        self.store.record(
+            obligation_id="mixed", session_key="session", platform="telegram",
+            chat_id="42", thread_id="7", content=content,
+        )
+        ledger = DeliveryUnitLedger(self.store, "mixed")
+        descriptors = [("text", "business"), ("text", "old-notice"), ("file", "report")]
+        await ledger.prepare(descriptors)
+        before = [dict(row) for row in self.unit_rows("mixed")]
+        for written, proposed, choices in (
+            (content, [("text", "different"), *descriptors[1:]], {1: ("plain",)}),
+            (content, [*descriptors[:2], ("file", "different")], {1: ("plain",)}),
+            (content, descriptors[:2], {1: ("plain",)}),
+            (content, descriptors, {0: ("plain",)}),
+            ("Different report\n\n" + LEGACY_ATTACHMENT_NOTICE, descriptors, {1: ("plain",)}),
+        ):
+            with self.subTest(proposed=proposed, choices=choices, content=written):
+                with self.assertRaises(DeliveryPlanError):
+                    await ledger.prepare(
+                        proposed, legacy_notice_content=written, notice_fingerprints=choices,
+                    )
+                self.assertEqual([dict(row) for row in self.unit_rows("mixed")], before)
 
     def test_readiness_probe_writes_the_real_database_without_leaving_a_row(self):
         self.store.verify_writable()

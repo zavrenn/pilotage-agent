@@ -119,6 +119,25 @@ A named profile may fall back only to the default profile's ChatGPT
 authentication. An optional `AGENTS.md` in
 the working directory supplies workspace instructions to each new conversation.
 
+Capabilities are controlled by `tools.enabled` and `tools.disabled`, including
+channel overrides; disabled groups cannot be enabled by a client response.
+`cron.enabled: false` stops scheduled execution and blocks scheduling requests.
+Chat-created jobs keep their originating channel's execution settings even when
+their delivery destination changes. Disabling that channel also blocks job
+activation and execution until it is enabled again. Jobs without a chat origin
+use the common profile settings, matching the operator CLI.
+Enabled requests run without a client approval step. Legacy `approvals.*`
+settings remain accepted for existing profiles but no longer affect execution;
+they are not feature switches. Memory and skill changes still require the
+foreground execution boundary, configuration access, validation and the existing
+rollback journal. Messaging replies contain plain client messages; operator
+diagnostics remain available through the CLI and logs.
+Recovery suppresses recognized obsolete technical notices from earlier versions,
+retaining their delivery records and any evidence of already accepted messages.
+An old attachment warning appended to a business reply is replaced with a plain
+localized notice; accepted chunks are never resent.
+Other pending replies keep their normal delivery recovery.
+
 ## Verify changes
 
 After installing the locked environments:

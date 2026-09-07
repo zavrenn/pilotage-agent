@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from dataclasses import replace
 
 from pilotage import persistence
 from pilotage.approvals import ApprovalOutcome
@@ -25,6 +26,7 @@ from pilotage.persistence import (
     should_observe_persistence,
 )
 from pilotage.tools import ToolContext, build_registry
+from pilotage.settings import Settings
 from pilotage.tools.files import FileSession
 from pilotage.tools.memory import MemoryStore
 from pilotage.tools.terminal import TerminalSession
@@ -622,8 +624,7 @@ class RegistryPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(json.loads(result)["success"])
         self.assertEqual(len(self.audit.events()), 1)
 
-        second_context = SimpleNamespace(**vars(self.context))
-        second_context.persistence_audit = None
+        second_context = replace(self.context, persistence_audit=None)
         blocked = await build_registry().dispatch(
             "memory",
             json.dumps({**arguments, "content": "Must not land"}),
@@ -665,7 +666,7 @@ class RegistryPersistenceTests(unittest.IsolatedAsyncioTestCase):
                     }
                 ),
                 self.context,
-                allowed_groups=["file"],
+                allowed_groups=["file", "skills"],
             )
 
         self.assertNotIn("error", json.loads(result))
@@ -780,7 +781,7 @@ class RegistryPersistenceTests(unittest.IsolatedAsyncioTestCase):
                     }
                 ),
                 self.context,
-                allowed_groups=["file"],
+                allowed_groups=["file", "skills"],
             )
 
         self.assertNotIn("error", json.loads(result))
@@ -789,13 +790,12 @@ class RegistryPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(target.stat().st_mtime_ns, before_mtime)
         self.assertEqual(self.audit.events(), [])
 
-    async def test_denied_change_writes_nothing_and_creates_no_event(self):
+    async def test_disabled_memory_writes_nothing_and_creates_no_event(self):
         self.context.config.approval_memory = True
-
-        async def deny(_category, _summary):
-            return ApprovalOutcome(False, "denied", "Do not store this")
-
-        self.context.approval_request = deny
+        self.context.config.settings = Settings({"tools": {"disabled": ["memory"]}})
+        self.context.approval_request = mock.AsyncMock(
+            side_effect=AssertionError("No client approval")
+        )
         result = await build_registry().dispatch(
             "memory",
             json.dumps(
@@ -810,75 +810,92 @@ class RegistryPersistenceTests(unittest.IsolatedAsyncioTestCase):
             allowed_groups=["memory"],
         )
 
-        self.assertEqual(json.loads(result)["approval"], "denied")
+        self.assertTrue(json.loads(result)["disabled"])
+        self.assertEqual(self.memory.memory_entries, [])
+        self.assertEqual(self.audit.events(), [])
+        self.context.approval_request.assert_not_awaited()
+
+    async def test_concurrent_memory_changes_finish_without_approval_waits(self):
+        self.context.config.approval_memory = True
+        callback = mock.AsyncMock(side_effect=AssertionError("No client approval"))
+        self.context.approval_request = callback
+        second = replace(self.context, chat_id="other-chat", turn_reference="other-turn")
+        registry = build_registry()
+
+        async def write(context, content):
+            return json.loads(await registry.dispatch(
+                "memory",
+                json.dumps({
+                    "action": "add", "target": "memory", "content": content,
+                    "change_reason": "The user stated this durable fact.",
+                }),
+                context, allowed_groups=["memory"],
+            ))
+
+        completed = await asyncio.wait_for(asyncio.gather(
+            write(self.context, "First fact"), write(second, "Independent fact")
+        ), timeout=2.0)
+        self.assertTrue(all(result["success"] for result in completed))
+        self.assertCountEqual(self.memory.memory_entries, ["First fact", "Independent fact"])
+        self.assertEqual(len(self.audit.events()), 2)
+        callback.assert_not_awaited()
+
+    async def test_skill_mutations_require_skills_as_well_as_file_group(self):
+        target = self.root / "skills" / "demo" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        target.write_text(VALID_SKILL, encoding="utf-8")
+        callback = mock.AsyncMock(side_effect=AssertionError("No client approval"))
+        self.context.approval_request = callback
+        reason = "The user requested this reusable procedure change."
+        mutations = [
+            ("write_file", {"path": str(target), "content": VALID_SKILL + "New step.\n"}),
+            ("patch", {"path": str(target), "old_string": "workflow", "new_string": "procedure"}),
+            ("patch", {"mode": "patch", "patch": (
+                "*** Begin Patch\n*** Delete File: " + target.as_posix() + "\n*** End Patch"
+            )}),
+            ("patch", {"mode": "patch", "patch": (
+                "*** Begin Patch\n*** Move File: " + target.as_posix() + " -> "
+                + target.with_name("renamed.md").as_posix() + "\n*** End Patch"
+            )}),
+        ]
+        registry = build_registry()
+        for legacy in (True, False):
+            self.context.config.approval_skills = legacy
+            for tool, args in mutations:
+                with self.subTest(legacy=legacy, tool=tool, mode=args.get("mode")):
+                    result = json.loads(await registry.dispatch(
+                        tool, json.dumps({**args, "change_reason": reason}), self.context,
+                        allowed_groups=["file", "memory"],
+                    ))
+                    self.assertEqual(result["persistence"], "rejected")
+                    self.assertEqual(target.read_text(encoding="utf-8"), VALID_SKILL)
+                    self.assertEqual(self.audit.events(), [])
+        callback.assert_not_awaited()
+
+    async def test_unattended_memory_change_still_fails_closed(self):
+        self.context.persistence_writes_allowed = False
+        result = json.loads(await build_registry().dispatch(
+            "memory", json.dumps({
+                "action": "add", "target": "memory", "content": "Must not land",
+                "change_reason": "The unattended run requested a change.",
+            }), self.context, allowed_groups=["memory"],
+        ))
+        self.assertEqual(result["persistence"], "rejected")
         self.assertEqual(self.memory.memory_entries, [])
         self.assertEqual(self.audit.events(), [])
 
-    async def test_pending_approval_does_not_hold_the_profile_audit_lock(self):
-        self.context.config.approval_memory = True
-        approval_started = asyncio.Event()
-        release_approval = asyncio.Event()
-
-        async def wait_for_denial(_category, _summary):
-            approval_started.set()
-            await release_approval.wait()
-            return ApprovalOutcome(False, "denied", "Keep memory unchanged")
-
-        self.context.approval_request = wait_for_denial
-        registry = build_registry()
-        pending = asyncio.create_task(
-            registry.dispatch(
-                "memory",
-                json.dumps(
-                    {
-                        "action": "add",
-                        "target": "memory",
-                        "content": "Awaiting approval",
-                        "change_reason": "The user stated a durable fact.",
-                    }
-                ),
-                self.context,
-                allowed_groups=["memory"],
-            )
-        )
-        await asyncio.wait_for(approval_started.wait(), timeout=1.0)
-
-        second = ToolContext(
-            "other-chat",
-            config=SimpleNamespace(
-                state_dir=self.root,
-                approval_memory=False,
-                approval_skills=False,
-            ),
-            memory_store=self.memory,
-            persistence_audit=self.audit,
-            persistence_writes_allowed=True,
-            turn_reference="other-turn",
-        )
-        completed = await asyncio.wait_for(
-            registry.dispatch(
-                "memory",
-                json.dumps(
-                    {
-                        "action": "add",
-                        "target": "memory",
-                        "content": "Independent fact",
-                        "change_reason": "The user stated another durable fact.",
-                    }
-                ),
-                second,
-                allowed_groups=["memory"],
-            ),
-            timeout=1.0,
-        )
-
-        self.assertTrue(json.loads(completed)["success"])
-        self.assertEqual(self.memory.memory_entries, ["Independent fact"])
-        self.assertEqual(len(self.audit.events()), 1)
-
-        release_approval.set()
-        denied = json.loads(await pending)
-        self.assertEqual(denied["approval"], "denied")
+    async def test_disabled_skills_cannot_be_reenabled_by_the_dispatch_allowlist(self):
+        self.context.config.settings = Settings({"tools": {"disabled": ["skills"]}})
+        target = self.root / "skills" / "demo" / "SKILL.md"
+        result = json.loads(await build_registry().dispatch(
+            "write_file", json.dumps({
+                "path": str(target), "content": VALID_SKILL,
+                "change_reason": "The user requested this reusable procedure.",
+            }), self.context, allowed_groups=["file", "memory", "skills"],
+        ))
+        self.assertEqual(result["persistence"], "rejected")
+        self.assertFalse(target.exists())
+        self.assertEqual(self.audit.events(), [])
 
 
 if __name__ == "__main__":  # pragma: no cover

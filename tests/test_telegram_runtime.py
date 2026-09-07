@@ -213,10 +213,7 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 ).fetchall(),
                 [("telegram", "42", "9", "delivered")],
         )
-        delivery["accepted"] = False
-        self.assertFalse(
-            await seen["approval_notify"]("Approve this change")
-        )
+        self.assertIsNone(seen["approval_notify"])
 
     async def test_telegram_plan_failure_does_not_complete_inbound_claim(self):
         from pilotage.delivery import SendResult
@@ -402,13 +399,26 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("before a durable reply was chosen", seen["failure"])
 
     async def test_dual_channel_cron_receives_both_channel_configs(self):
+        for common_cron in (False, True):
+            for whatsapp_cron, telegram_cron in ((True, True), (False, True), (True, False), (False, False)):
+                with self.subTest(common=common_cron, whatsapp=whatsapp_cron, telegram=telegram_cron):
+                    await self._run_dual_channel_cron(whatsapp_cron, telegram_cron, common_cron)
+
+    async def _run_dual_channel_cron(self, whatsapp_cron, telegram_cron, common_cron):
         (self.root / "config.yaml").write_text(
             "whatsapp:\n"
             "  enabled: true\n"
             "telegram:\n"
             "  enabled: true\n"
             "cron:\n"
-            "  enabled: true\n",
+            f"  enabled: {str(common_cron).lower()}\n"
+            "channels:\n"
+            "  whatsapp:\n"
+            "    cron:\n"
+            f"      enabled: {str(whatsapp_cron).lower()}\n"
+            "  telegram:\n"
+            "    cron:\n"
+            f"      enabled: {str(telegram_cron).lower()}\n",
             encoding="utf-8",
         )
         config = Config.load(channel="whatsapp")
@@ -444,10 +454,12 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 *,
                 deliver,
                 channel_configs,
+                default_job_config,
             ):
                 seen["scheduler_config"] = scheduler_config
                 seen["channel_configs"] = channel_configs
                 seen["deliver"] = deliver
+                seen["default_job_config"] = default_job_config
                 self.stopped = asyncio.Event()
                 self.failure = None
 
@@ -470,7 +482,14 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
             result = await main.command_run(config)
 
         self.assertEqual(result, 0)
+        if not (common_cron or whatsapp_cron or telegram_cron):
+            self.assertEqual(seen, {})
+            return
         self.assertEqual(seen["scheduler_config"].settings.channel, "whatsapp")
+        self.assertEqual(seen["default_job_config"].settings.channel, "")
+        self.assertEqual(seen["default_job_config"].cron_enabled, common_cron)
+        self.assertEqual(seen["channel_configs"]["whatsapp"].cron_enabled, whatsapp_cron)
+        self.assertEqual(seen["channel_configs"]["telegram"].cron_enabled, telegram_cron)
         self.assertEqual(
             set(seen["channel_configs"]),
             {"whatsapp", "telegram"},

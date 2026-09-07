@@ -90,9 +90,6 @@ MAX_ITERATIONS_SUMMARY_REQUEST = (
 # Hermes proved that this is a paused turn, not an empty answer: replay its exact
 # message item and let it continue, but stop a response loop after three tries.
 MAX_CODEX_INCOMPLETE_RESPONSES = 3
-CODEX_INCOMPLETE_RESPONSE = (
-    "Codex response remained incomplete after 3 continuation attempts"
-)
 
 _NOTICE_SENT_WITHOUT_ID = "\x00pilotage-notice-without-id"
 
@@ -1750,11 +1747,6 @@ class Agent:
         )
         history = self._build_input(chat_id, model_user_text, image_parts)
 
-        async def request_approval(category: str, summary: str):
-            return await self._approvals.request(
-                chat_id, category, summary, approval_notify
-            )
-
         context = ToolContext(
             chat_id=chat_id,
             config=self._config,
@@ -1766,7 +1758,9 @@ class Agent:
             cron_wake=self._cron_wake,
             working_directory=active_working_directory,
             allowed_skills=self._enabled_skills,
-            approval_request=request_approval,
+            # Configuration decides capability access. A client cannot grant
+            # additional access and never receives an approval proposal.
+            allowed_tool_groups=frozenset(self._tool_groups),
             persistence_audit=self._persistence_audit,
             persistence_writes_allowed=self._persistence_writes_enabled,
             # One opaque reference per accepted turn. Conversation sessions are
@@ -1810,6 +1804,7 @@ class Agent:
                 finished_text = media.confine_outbound(
                     finished_text,
                     outbound_roots,
+                    language=getattr(self._config, "language", DEFAULT_LANGUAGE),
                 )
             return TurnResult(
                 text=finished_text,
@@ -1882,13 +1877,19 @@ class Agent:
                     identity_pseudonym(chat_id, "session"),
                     MAX_CODEX_INCOMPLETE_RESPONSES,
                 )
-                return _finish(CODEX_INCOMPLETE_RESPONSE)
+                return _finish(t(
+                    "runtime.incomplete_response",
+                    getattr(self._config, "language", DEFAULT_LANGUAGE),
+                ))
             if result.terminal_completed is False:
                 logger.warning(
                     "Codex response for %s ended without positive completion proof",
                     identity_pseudonym(chat_id, "session"),
                 )
-                return _finish(result.text or CODEX_INCOMPLETE_RESPONSE)
+                return _finish(result.text or t(
+                    "runtime.incomplete_response",
+                    getattr(self._config, "language", DEFAULT_LANGUAGE),
+                ))
             if not result.tool_calls:
                 return _finish(
                     result.text,
@@ -1989,7 +1990,10 @@ class Agent:
         items.append({"role": "user", "content": MAX_ITERATIONS_SUMMARY_REQUEST})
         result = await _next_action_or_answer(None)
         if result is None:
-            return _finish(CODEX_INCOMPLETE_RESPONSE)
+            return _finish(t(
+                "runtime.incomplete_response",
+                getattr(self._config, "language", DEFAULT_LANGUAGE),
+            ))
         return _finish(
             result.text,
             terminal_completed=result.terminal_completed is True,

@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 from pilotage.agent import Agent
 from pilotage.config import Config
 from pilotage.history import ConversationStore
+from pilotage.i18n import DEFAULT_PROFILE_LANGUAGE, t
 
 from .jobs import (
     CronStore,
@@ -21,6 +22,7 @@ from .jobs import (
     _unregister_active_claim_owner,
     validate_prompt,
 )
+from .policy import scheduling_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -165,8 +167,10 @@ class CronScheduler:
         deliver: Optional[Delivery] = None,
         agent_factory: Optional[AgentFactory] = None,
         channel_configs: Optional[Mapping[str, Config]] = None,
+        default_job_config: Optional[Config] = None,
     ):
         self.config = config
+        self._default_job_config = default_job_config if default_job_config is not None else config
         self.store = store
         self._deliver = deliver
         self._agent_factory = agent_factory
@@ -227,12 +231,28 @@ class CronScheduler:
             logger.debug("Closing a cron Agent failed", exc_info=True)
 
     def _config_for_job(self, job: Dict[str, Any]) -> Config:
-        origin = self._delivery_origin(job)
+        # The creating channel owns execution policy. Delivery is mutable and
+        # must never select a more permissive agent or enable scheduling.
+        origin = job.get("origin")
         if isinstance(origin, dict):
-            channel = str(origin.get("channel") or "").lower()
+            channel = str(origin.get("channel") or "").strip().lower()
             if channel in self._channel_configs:
                 return self._channel_configs[channel]
-        return self.config
+            return self.config
+        # Operator-created jobs have no chat origin. Their common profile view
+        # matches CLI admission, independently of the enabled delivery channels.
+        return self._default_job_config
+
+    def _can_run_job(self, job: Dict[str, Any]) -> bool:
+        origin = job.get("origin")
+        if isinstance(origin, dict):
+            channel = str(origin.get("channel") or "").strip().lower()
+            if channel not in self._channel_configs and channel != str(
+                getattr(self.config, "channel", "whatsapp")
+            ):
+                # A removed/disabled origin must not inherit another channel.
+                return False
+        return scheduling_enabled(self._config_for_job(job), origin)
 
     def _home_origin(self, channel: str) -> Optional[Dict[str, str]]:
         config = self._channel_configs.get(channel)
@@ -314,7 +334,9 @@ class CronScheduler:
                 due = []
                 if capacity:
                     due = await asyncio.to_thread(
-                        self.store.claim_due_jobs, limit=capacity
+                        self.store.claim_due_jobs,
+                        limit=capacity,
+                        can_run=self._can_run_job,
                     )
                 for job in due:
                     owner = str((job.get("claim") or {}).get("by") or "")
@@ -531,9 +553,9 @@ class CronScheduler:
                 lost_claim.set()
                 cancelled = True
             else:
-                public = (
-                    f"Scheduled job {job.get('name') or job_id!r} failed. "
-                    "Check the agent logs."
+                public = t(
+                    "cron.failure",
+                    getattr(self._config_for_job(job), "language", DEFAULT_PROFILE_LANGUAGE),
                 )
                 delivery_error = await self._deliver_text(job, public)
         finally:

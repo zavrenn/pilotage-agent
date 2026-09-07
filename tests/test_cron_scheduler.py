@@ -20,6 +20,7 @@ from pilotage.cron.scheduler import (
     build_job_prompt,
 )
 from pilotage.history import ConversationStore
+from pilotage.i18n import t
 from pilotage.settings import Settings
 
 
@@ -72,7 +73,8 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.config = SimpleNamespace(
             state_dir=self.root,
-            settings=Settings({}),
+            settings=Settings({"whatsapp": {"enabled": True}, "telegram": {"enabled": True}}),
+            cron_enabled=True,
             cron_max_concurrent=2,
             cron_tick_seconds=0.02,
         )
@@ -149,7 +151,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def test_origin_channel_selects_the_matching_agent_config(self):
         telegram_config = SimpleNamespace(
             state_dir=self.root,
-            settings=Settings({}),
+            settings=self.config.settings,
             cron_max_concurrent=2,
             cron_tick_seconds=0.02,
         )
@@ -172,6 +174,116 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(factory.configs, [telegram_config])
+
+    async def _assert_only_enabled_channel_runs(self, enabled_channel, disabled_channel):
+        self.config.cron_enabled = enabled_channel == "whatsapp"
+        self.config.cron_max_concurrent = 1
+        telegram_config = SimpleNamespace(**{
+            **vars(self.config), "cron_enabled": enabled_channel == "telegram"
+        })
+        channel_configs = {"whatsapp": self.config, "telegram": telegram_config}
+        disabled_origin = {"channel": disabled_channel, "chat_id": "42"}
+        blocked = [
+            self.create(origin=disabled_origin, name="Disabled one-shot"),
+            self.create(
+                origin=disabled_origin,
+                name="Disabled recurring",
+                schedule="every 1m",
+                repeat=2,
+            ),
+        ]
+        before = [self.store.resolve_job(job["id"]) for job in blocked]
+        self.now += timedelta(seconds=121)
+        enabled = self.create(
+            origin={"channel": enabled_channel, "chat_id": "123"},
+            name="Enabled one-shot",
+        )
+
+        async def answer(_session, _prompt):
+            return "Scheduled result"
+
+        scheduler, factory = await self.scheduler(answer, channel_configs=channel_configs)
+        # Wait on in-memory work, then drain before reading the durable result.
+        # Repeated unlocked readers can block Windows' atomic file replacement.
+        await wait_until(lambda: factory.instances)
+        await scheduler.stop(drain_timeout_seconds=3.0)
+
+        finished = self.store.resolve_job(enabled["id"])
+        self.assertEqual(finished["state"], "completed", finished)
+        self.assertIsNone(scheduler.failure)
+        self.assertEqual(factory.configs, [channel_configs[enabled_channel]])
+        self.assertEqual(len(factory.instances), 1)
+        self.assertEqual([delivery[0]["channel"] for delivery in self.deliveries], [enabled_channel])
+        self.assertEqual(
+            [self.store.resolve_job(job["id"]) for job in blocked], before
+        )
+
+    async def test_disabled_telegram_jobs_do_not_block_enabled_whatsapp(self):
+        await self._assert_only_enabled_channel_runs("whatsapp", "telegram")
+
+    async def test_disabled_whatsapp_jobs_do_not_block_enabled_telegram(self):
+        await self._assert_only_enabled_channel_runs("telegram", "whatsapp")
+
+    async def test_all_disabled_channels_leave_persisted_jobs_unchanged(self):
+        self.config.cron_enabled = False
+        telegram_config = SimpleNamespace(**vars(self.config))
+        self.create(origin={"channel": "whatsapp", "chat_id": "123"})
+        self.create(origin={"channel": "telegram", "chat_id": "42"})
+        self.create(origin=False)
+        self.now += timedelta(seconds=121)
+        before = self.store.jobs_path.read_bytes()
+
+        async def answer(_session, _prompt):
+            self.fail("Disabled scheduling must not invoke an agent")
+
+        with mock.patch.object(
+            self.store, "claim_due_jobs", wraps=self.store.claim_due_jobs
+        ) as claim:
+            scheduler, factory = await self.scheduler(
+                answer,
+                channel_configs={"whatsapp": self.config, "telegram": telegram_config},
+            )
+            await wait_until(lambda: claim.call_count >= 2)
+            await scheduler.stop()
+
+        self.assertEqual(factory.instances, [])
+        self.assertEqual(factory.configs, [])
+        self.assertEqual(self.deliveries, [])
+        self.assertEqual(self.store.jobs_path.read_bytes(), before)
+
+    def test_absent_origin_channel_cannot_inherit_an_enabled_default(self):
+        scheduler = CronScheduler(self.config, self.store)
+        for destination in ("origin", "local", "whatsapp", "telegram"):
+            job = self.create(
+                origin={"channel": "telegram", "chat_id": "42"}, deliver=destination,
+            )
+            with self.subTest(deliver=destination):
+                self.assertFalse(scheduler._can_run_job(job))
+
+    def test_operator_jobs_keep_default_policy_when_delivery_changes(self):
+        self.config.cron_enabled = False
+        telegram_config = SimpleNamespace(
+            cron_enabled=True, home_origin={"channel": "telegram", "chat_id": "42"},
+        )
+        scheduler = CronScheduler(
+            self.config, self.store, channel_configs={"telegram": telegram_config},
+        )
+        for destination in ("origin", "local", "whatsapp", "telegram"):
+            job = self.create(origin=False, deliver=destination)
+            with self.subTest(deliver=destination):
+                self.assertIs(scheduler._config_for_job(job), self.config)
+                self.assertFalse(scheduler._can_run_job(job))
+
+    def test_operator_jobs_use_common_profile_policy_instead_of_channel_overrides(self):
+        for common_enabled in (False, True):
+            with self.subTest(common_enabled=common_enabled):
+                self.config.cron_enabled = not common_enabled
+                common = SimpleNamespace(cron_enabled=common_enabled, settings=Settings({}))
+                scheduler = CronScheduler(self.config, self.store, default_job_config=common)
+                for destination in ("origin", "local", "whatsapp", "telegram"):
+                    job = self.create(origin=False, deliver=destination)
+                    self.assertIs(scheduler._config_for_job(job), common)
+                    self.assertEqual(scheduler._can_run_job(job), common_enabled)
 
     async def test_explicit_platform_delivers_to_its_declared_home(self):
         telegram_config = SimpleNamespace(
@@ -199,7 +311,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             lambda: self.store.resolve_job(job["id"])["state"] == "completed"
         )
 
-        self.assertEqual(factory.configs, [telegram_config])
+        self.assertEqual(factory.configs, [self.config])
         self.assertEqual(
             self.deliveries,
             [(
@@ -236,18 +348,19 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         async def answer(_session, _prompt):
             return next(replies)
 
-        await self.scheduler(answer)
-        await wait_until(
-            lambda: all(
-                self.store.resolve_job(job["id"])["state"] == "completed"
-                for job in (local, silent)
-            )
-        )
+        scheduler, factory = await self.scheduler(answer)
+        # Polling the file while jobs finish can block atomic replacement on
+        # Windows. Drain the work before checking its durable completion proof.
+        await wait_until(lambda: len(factory.instances) == 2)
+        await scheduler.stop(drain_timeout_seconds=3.0)
+        self.assertIsNone(scheduler.failure)
+        for job in (local, silent):
+            self.assertEqual(self.store.resolve_job(job["id"])["state"], "completed")
         self.assertEqual(self.deliveries, [])
         self.assertEqual(self.store.latest_output(silent["id"]), "[SILENT]")
 
     async def test_model_failure_is_saved_marked_and_reported(self):
-        job = self.create()
+        job = self.create(name="internal-job-name")
 
         async def fail(_session, _prompt):
             raise RuntimeError("backend unavailable")
@@ -262,7 +375,38 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("backend unavailable", finished["last_error"])
         self.assertIn("Cron run failed", self.store.latest_output(job["id"]))
-        self.assertIn("failed", self.deliveries[0][1])
+        self.assertEqual(self.deliveries[0][1], t("cron.failure", "fr"))
+        self.assertNotIn(job["id"], self.deliveries[0][1])
+        self.assertNotIn(job["name"], self.deliveries[0][1])
+        self.assertNotIn("backend unavailable", self.deliveries[0][1])
+        self.assertNotIn("logs", self.deliveries[0][1])
+
+    async def test_failure_notice_uses_delivery_channel_language(self):
+        job = self.create(
+            origin={"channel": "telegram", "chat_id": "42", "thread_id": "17"},
+        )
+        self.config.language = "en"
+        telegram_config = SimpleNamespace(
+            state_dir=self.root,
+            settings=self.config.settings,
+            language="ar",
+        )
+
+        async def fail(_session, _prompt):
+            raise RuntimeError("internal provider failure")
+
+        await self.scheduler(fail, channel_configs={"telegram": telegram_config})
+        finished = await wait_until(
+            lambda: (
+                value
+                if (value := self.store.resolve_job(job["id"]))["state"] == "error"
+                else None
+            )
+        )
+
+        self.assertIn("internal provider failure", finished["last_error"])
+        self.assertEqual(self.deliveries[0][0], job["origin"])
+        self.assertEqual(self.deliveries[0][1], t("cron.failure", "ar"))
 
     async def test_partial_response_is_not_saved_or_marked_successful(self):
         job = self.create()

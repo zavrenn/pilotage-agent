@@ -13,6 +13,7 @@ silently running with a different contract.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from .codex.compaction import DEFAULT_COMPACT_THRESHOLD
 from .i18n import DEFAULT_PROFILE_LANGUAGE, normalize_language, t
 from .profiles import default_state_root
 from .settings import ConfigError, Settings, config_path
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gpt-5.6-sol"
 SUPPORTED_MODELS = frozenset(
@@ -243,8 +246,8 @@ class Config:
     # Profile-wide curated notes injected as a frozen per-session snapshot.
     memory_char_limit: int
     user_memory_char_limit: int
-    # Hermes-shaped human gates, reduced to the persistent writes production
-    # needs. Each switch is per profile (and may be overridden per channel).
+    # Legacy fields accepted for existing profiles. They no longer govern
+    # execution: capabilities are enforced by tool groups and cron.enabled.
     approval_memory: bool
     approval_skills: bool
     approval_cron: bool
@@ -551,6 +554,15 @@ class Config:
             raise ConfigError(
                 "compression.codex_responses_native must remain enabled for the "
                 "supported Codex models"
+            )
+        if any(
+            settings.get(f"approvals.{name}") is not None
+            for name in ("memory", "skills", "cron", "timeout")
+        ):
+            logger.warning(
+                "Legacy approvals.* settings no longer require client consent. "
+                "Control capabilities with tools.enabled/tools.disabled and "
+                "cron.enabled."
             )
         approval_timeout = _number_in_range(
             "approvals.timeout",

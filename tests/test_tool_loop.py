@@ -19,13 +19,15 @@ from unittest import mock
 
 from pilotage import media
 from pilotage.agent import (
-    CODEX_INCOMPLETE_RESPONSE,
     MAX_ITERATIONS_SUMMARY_REQUEST,
     Agent,
 )
 from pilotage.codex import stream as codex_stream
 from pilotage.config import Config
+from pilotage.cron.jobs import CronStore
 from pilotage.history import ConversationError, ConversationStore
+from pilotage.i18n import t
+from pilotage.settings import Settings
 from pilotage.tools import Tool
 
 
@@ -78,6 +80,43 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         self.replies = [codex_stream.StreamResult(text="No tools needed.")]
         self.assertEqual(await self.agent.respond("chat", "hello"), "No tools needed.")
         self.assertEqual(len(self.requests), 1)
+
+    async def test_scheduling_uses_configuration_without_a_client_approval_channel(self):
+        notify = mock.AsyncMock(side_effect=AssertionError("No client approvals"))
+        for enabled, channel_enabled in ((True, True), (False, True), (True, False)):
+            with self.subTest(enabled=enabled, channel_enabled=channel_enabled):
+                case = f"{enabled}-{channel_enabled}"
+                object.__setattr__(self.agent._config, "cron_enabled", enabled)
+                object.__setattr__(self.agent._config, "approval_cron", True)
+                object.__setattr__(self.agent._config, "settings", Settings({
+                    "whatsapp": {"enabled": channel_enabled},
+                }))
+                store = CronStore(self.root / case)
+                self.agent._cron_store = store
+                self.replies = [
+                    codex_stream.StreamResult(tool_calls=[_call(
+                        f"schedule-{case}", "cronjob", action="create",
+                        prompt="Send the previous week's sales total", schedule="1h",
+                    )]),
+                    codex_stream.StreamResult(text="Finished."),
+                ]
+                with mock.patch.object(
+                    self.agent._approvals, "request",
+                    side_effect=AssertionError("No approval queue"),
+                ):
+                    await self.agent.respond_result(
+                        f"schedule-{case}", "Schedule the sales report",
+                        approval_notify=notify,
+                        origin={"channel": "whatsapp", "chat_id": "123@c.us"},
+                    )
+                self.assertEqual(len(store.list_jobs()), 1 if enabled and channel_enabled else 0)
+                if not (enabled and channel_enabled):
+                    output = next(
+                        item["output"] for item in self._sent()
+                        if item.get("type") == "function_call_output"
+                    )
+                    self.assertIn(t("cron.unavailable", self.agent._config.language), output)
+        notify.assert_not_awaited()
 
     async def test_persisted_turn_exposes_positive_terminal_proof(self):
         self.replies = [
@@ -356,7 +395,9 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
 
         answer = await self.agent.respond("chat", "inspect it")
 
-        self.assertEqual(answer, CODEX_INCOMPLETE_RESPONSE)
+        self.assertEqual(answer, t("runtime.incomplete_response", self.agent._config.language))
+        self.assertNotIn("Codex", answer)
+        self.assertNotIn("continuation", answer)
         self.assertEqual(len(self.requests), 3)
 
     async def test_exact_codex_message_survives_to_the_next_user_turn(self):

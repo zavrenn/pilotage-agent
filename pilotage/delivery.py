@@ -18,6 +18,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Iterator, Mapping, Optional, Sequence
 
+from .legacy_notices import has_legacy_attachment_notice, is_legacy_technical_reply
+
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
@@ -403,6 +405,48 @@ class DeliveryStore:
             expected_states=("pending",),
         )
 
+    def retire_legacy_notice(self, obligation_id: str) -> bool:
+        """Stop an obsolete notice without changing its identity or unit proof."""
+
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT content, owner_token, state FROM delivery_obligations"
+                " WHERE obligation_id = ?", (obligation_id,),
+            ).fetchone()
+            if (
+                row is None or row["owner_token"] != self._owner_token
+                or row["state"] not in {"pending", "attempting"}
+                or not is_legacy_technical_reply(row["content"])
+            ):
+                return False
+            units = connection.execute(
+                "SELECT state, retry_safe FROM delivery_units WHERE obligation_id = ?",
+                (obligation_id,),
+            ).fetchall()
+            if (not units and row["state"] != "pending") or any(
+                unit["state"] not in {"pending", "delivered"}
+                and not (unit["state"] == "failed" and unit["retry_safe"] == 1)
+                for unit in units
+            ):
+                # An in-flight/unknown send keeps its existing fence. Only
+                # proven-unsent remainder can be abandoned during retirement.
+                return False
+            already_sent = bool(units) and all(
+                unit["state"] == "delivered" for unit in units
+            )
+            connection.execute(
+                "UPDATE delivery_obligations SET state = ?, updated_at = ?,"
+                " last_error = ?, retry_safe = 0, next_attempt_at = 0"
+                " WHERE obligation_id = ?",
+                (
+                    "delivered" if already_sent else "abandoned", time.time(),
+                    None if already_sent else "Obsolete technical runtime notice retired",
+                    obligation_id,
+                ),
+            )
+            return True
+
     def activate_unit_plan(self, obligation_id: str) -> bool:
         """Claim a parent only after its exact non-empty unit plan is durable."""
 
@@ -648,7 +692,10 @@ class DeliveryStore:
         self,
         obligation_id: str,
         units: Sequence[DeliveryUnit],
-    ) -> None:
+        *,
+        legacy_notice_content: Optional[str] = None,
+        notice_fingerprints: Optional[Mapping[int, Sequence[str]]] = None,
+    ) -> list[DeliveryUnit]:
         expected = [
             (unit.unit_id, unit.position, unit.kind, unit.fingerprint)
             for unit in units
@@ -661,7 +708,7 @@ class DeliveryStore:
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             parent = connection.execute(
-                "SELECT owner_token, state FROM delivery_obligations"
+                "SELECT owner_token, state, content FROM delivery_obligations"
                 " WHERE obligation_id = ?",
                 (obligation_id,),
             ).fetchone()
@@ -672,8 +719,20 @@ class DeliveryStore:
             ):
                 raise DeliveryPlanError("delivery obligation is not owned and planable")
 
+            choices = notice_fingerprints or {}
+            if choices:
+                text_positions = [unit.position for unit in units if unit.kind == "text"]
+                if (
+                    parent["content"] != legacy_notice_content
+                    or not has_legacy_attachment_notice(parent["content"])
+                    or not text_positions
+                    or set(choices) != {text_positions[-1]}
+                    or any(not values for values in choices.values())
+                ):
+                    raise DeliveryPlanError("invalid legacy attachment notice replacement")
+
             existing = connection.execute(
-                "SELECT unit_id, position, kind, fingerprint"
+                "SELECT unit_id, position, kind, fingerprint, state, retry_safe"
                 " FROM delivery_units WHERE obligation_id = ?"
                 " ORDER BY position ASC",
                 (obligation_id,),
@@ -688,13 +747,48 @@ class DeliveryStore:
                     )
                     for row in existing
                 ]
-                if recorded != expected:
+                if not choices and recorded != expected:
                     raise DeliveryPlanError(
                         "delivery plan changed after its first attempt"
                     )
-                return
+                if not choices:
+                    return list(units)
+                if len(existing) != len(units):
+                    raise DeliveryPlanError("legacy notice replacement changed unit count")
+                resolved = []
+                updates = []
+                for row, unit in zip(existing, units):
+                    candidates = choices.get(unit.position, ())
+                    if (
+                        (row["unit_id"], row["position"], row["kind"])
+                        != (unit.unit_id, unit.position, unit.kind)
+                        or row["fingerprint"] not in (unit.fingerprint, *candidates)
+                    ):
+                        raise DeliveryPlanError("legacy notice replacement changed business delivery")
+                    fingerprint = row["fingerprint"]
+                    if candidates and fingerprint == unit.fingerprint and row["state"] != "delivered":
+                        if row["state"] != "pending" and not (
+                            row["state"] == "failed" and row["retry_safe"] == 1
+                        ):
+                            raise DeliveryPlanError("legacy notice send outcome is unknown")
+                        fingerprint = candidates[0]
+                        updates.append((fingerprint, obligation_id, unit.unit_id))
+                    resolved.append(replace(unit, fingerprint=fingerprint))
+                # Validate the entire original plan first. Accepted units and
+                # their evidence never change; only proven-unsent notice text
+                # gets its actual outgoing fingerprint, under the same unit ID.
+                connection.executemany(
+                    "UPDATE delivery_units SET fingerprint = ?"
+                    " WHERE obligation_id = ? AND unit_id = ?", updates,
+                )
+                return resolved
 
             now = time.time()
+            resolved = [
+                replace(unit, fingerprint=choices[unit.position][0])
+                if unit.position in choices else unit
+                for unit in units
+            ]
             connection.executemany(
                 "INSERT INTO delivery_units"
                 " (obligation_id, unit_id, position, kind, fingerprint, state,"
@@ -709,9 +803,13 @@ class DeliveryStore:
                         fingerprint,
                         now,
                     )
-                    for unit_id, position, kind, fingerprint in expected
+                    for unit_id, position, kind, fingerprint in (
+                        (unit.unit_id, unit.position, unit.kind, unit.fingerprint)
+                        for unit in resolved
+                    )
                 ],
             )
+            return resolved
 
     def unit_state(self, obligation_id: str, unit_id: str) -> Optional[Dict[str, Any]]:
         with self._lock, self._connect() as connection:
@@ -1173,6 +1271,9 @@ class DeliveryUnitLedger:
     async def prepare(
         self,
         descriptors: Sequence[tuple[str, str]],
+        *,
+        legacy_notice_content: Optional[str] = None,
+        notice_fingerprints: Optional[Mapping[int, Sequence[str]]] = None,
     ) -> list[DeliveryUnit]:
         units = [
             DeliveryUnit(
@@ -1188,10 +1289,15 @@ class DeliveryUnitLedger:
             for position, (kind, fingerprint) in enumerate(descriptors)
         ]
         try:
-            await asyncio.to_thread(
+            kwargs = (
+                {"legacy_notice_content": legacy_notice_content, "notice_fingerprints": notice_fingerprints}
+                if notice_fingerprints else {}
+            )
+            units = await asyncio.to_thread(
                 self.store.record_units,
                 self.obligation_id,
                 units,
+                **kwargs,
             )
         except Exception:
             self._preparation_failed = True
@@ -1398,6 +1504,11 @@ async def deliver_final(
             content=content,
             reply_to=reply_to,
         )
+        if is_legacy_technical_reply(content):
+            # Cached command responses retain their original content/identity
+            # for at-most-once execution. Retire only the obsolete outward notice.
+            await asyncio.to_thread(store.retire_legacy_notice, obligation_id)
+            return SendResult(False, "obsolete runtime notice retired")
         # Production channel sends first persist their exact text/file plan.
         # The ledger activates this parent immediately before its first unit can
         # reach the network. Generic callers retain the original parent fence.
@@ -1546,6 +1657,14 @@ async def redeliver_claimed_deliveries(
             continue
         try:
             content = row["content"]
+            if is_legacy_technical_reply(content):
+                try:
+                    await asyncio.to_thread(
+                        store.retire_legacy_notice, row["obligation_id"]
+                    )
+                except Exception:
+                    logger.exception("Could not retire an obsolete runtime notice")
+                continue
             if row["needs_marker"]:
                 content = RECOVERED_MARKER + content
             ledger = (

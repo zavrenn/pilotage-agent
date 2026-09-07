@@ -219,12 +219,12 @@ class SchemaTests(unittest.TestCase):
                     )
                 )
 
-    def test_auto_loaded_agents_files_fail_closed_until_approvals_exist(self):
+    def test_auto_loaded_agents_files_remain_operator_controlled(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             for name in ("AGENTS.md", "agents.md", "AgEnTs.Md"):
                 error = file_safety.get_write_denied_error(str(root / name))
-                self.assertIn("requires approval", error)
+                self.assertIn("cannot change its own instructions", error)
             self.assertIsNone(
                 file_safety.get_write_denied_error(str(root / "notes.md"))
             )
@@ -486,8 +486,8 @@ class SchemaTests(unittest.TestCase):
                 )
             )
 
-            self.assertIn("requires approval", written["error"])
-            self.assertIn("requires approval", patched["error"])
+            self.assertIn("cannot change its own instructions", written["error"])
+            self.assertIn("cannot change its own instructions", patched["error"])
             self.assertEqual(
                 target.read_text(encoding="utf-8"), "Operator authority."
             )
@@ -570,39 +570,29 @@ class OutputBoundTests(unittest.TestCase):
 
 
 class ApprovalReviewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_full_skill_proposal_is_attached_then_removed(self):
+    async def test_skill_validation_creates_no_client_review_or_callback(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory).resolve()
-            context = ToolContext("chat", _Config(workspace))
+            context = ToolContext("chat", _Config(workspace), persistence_writes_allowed=True)
             shell = SimpleNamespace(cwd=str(workspace))
             context.state["terminal"] = TerminalSession(shell=shell)
             context.state["file"] = FileSession(shell=shell, operations=object())
             proposal = "complete proposal\n" + "x" * 2_000 + "\nTAIL-MARKER"
-            review_paths = []
-
-            async def approve(category, summary):
-                self.assertEqual(category, "skills")
-                self.assertIn("Full proposal attached", summary)
-                review = Path(summary.rsplit("MEDIA:", 1)[1].strip())
-                review_paths.append(review)
-                self.assertTrue(review.is_file())
-                self.assertEqual(review.read_text(encoding="utf-8"), proposal)
-                attachments, cleaned = media.extract_outbound(summary, (workspace,))
-                self.assertEqual([item.path for item in attachments], [review])
-                self.assertNotIn("MEDIA:", cleaned)
-                return ApprovalOutcome(True, "approved")
+            context.approval_request = mock.AsyncMock(
+                side_effect=AssertionError("No client approval")
+            )
 
             def handler(_args, _context, _shell, _operations, *, approved_categories):
                 if "skills" not in approved_categories:
                     raise _ApprovalRequired("skills", "Short summary", proposal)
                 return json.dumps({"success": True})
 
-            context.approval_request = approve
-            result = json.loads(await _run(handler, {}, context))
-
+            with mock.patch("pilotage.tools.files._write_approval_review") as review:
+                result = json.loads(await _run(handler, {}, context))
             self.assertTrue(result["success"])
-            self.assertEqual(len(review_paths), 1)
-            self.assertFalse(review_paths[0].exists())
+            context.approval_request.assert_not_awaited()
+            review.assert_not_called()
+            self.assertEqual(list(workspace.iterdir()), [])
 
 
 class FileCancellationTests(unittest.IsolatedAsyncioTestCase):
@@ -689,7 +679,7 @@ class SessionAndGuardTests(FileToolCase):
             handle_write_file,
             {"path": "AGENTS.md", "content": "New authority."},
         )
-        self.assertIn("requires approval", created["error"])
+        self.assertIn("cannot change its own instructions", created["error"])
         self.assertFalse((self.workspace / "AGENTS.md").exists())
 
         path = self.workspace / "AGENTS.md"
@@ -703,50 +693,36 @@ class SessionAndGuardTests(FileToolCase):
                 "new_string": "Agent",
             },
         )
-        self.assertIn("requires approval", patched["error"])
+        self.assertIn("cannot change its own instructions", patched["error"])
         self.assertEqual(path.read_text(encoding="utf-8"), "Operator authority.")
 
-    async def test_skill_write_uses_live_approval_and_denial_writes_nothing(self):
-        requests = []
-
-        async def deny(category, summary):
-            requests.append((category, summary))
-            return ApprovalOutcome(False, "denied", "Keep the old skill")
-
-        self.context.approval_request = deny
-        target = self.workspace / "skills" / "demo" / "SKILL.md"
-        self.context.persistence_bound_paths = frozenset(
-            {str(target.resolve(strict=False))}
+    async def test_disabled_skill_write_never_calls_client_or_changes_files(self):
+        self.context.approval_request = mock.AsyncMock(
+            side_effect=AssertionError("No client approval")
         )
+        self.context.allowed_tool_groups = frozenset({"file", "memory"})
+        self.context.persistence_writes_allowed = True
+        target = self.workspace / "skills" / "demo" / "SKILL.md"
+        self.context.persistence_bound_paths = frozenset({str(target.resolve(strict=False))})
         with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.workspace)}):
-            result = await self.call(
-                handle_write_file,
-                {"path": str(target), "content": VALID_SKILL},
-            )
-
-        self.assertEqual(result["approval"], "denied")
+            result = await self.call(handle_write_file, {"path": str(target), "content": VALID_SKILL})
+        self.assertIn("error", result)
         self.assertFalse(target.exists())
-        self.assertEqual(requests[0][0], "skills")
-        self.assertIn(str(target), requests[0][1])
+        self.context.approval_request.assert_not_awaited()
 
-    async def test_approved_skill_write_runs_once(self):
-        async def approve(_category, _summary):
-            return ApprovalOutcome(True, "approved")
-
-        self.context.approval_request = approve
-        target = self.workspace / "skills" / "demo" / "SKILL.md"
-        self.context.persistence_bound_paths = frozenset(
-            {str(target.resolve(strict=False))}
+    async def test_enabled_skill_write_runs_without_client_confirmation(self):
+        self.context.approval_request = mock.AsyncMock(
+            side_effect=AssertionError("No client approval")
         )
+        self.context.persistence_writes_allowed = True
+        target = self.workspace / "skills" / "demo" / "SKILL.md"
+        self.context.persistence_bound_paths = frozenset({str(target.resolve(strict=False))})
         with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.workspace)}):
-            result = await self.call(
-                handle_write_file,
-                {"path": str(target), "content": VALID_SKILL},
-            )
-
+            result = await self.call(handle_write_file, {"path": str(target), "content": VALID_SKILL})
         self.assertNotIn("error", result)
         self.assertTrue(result["verified"])
         self.assertTrue(target.is_file())
+        self.context.approval_request.assert_not_awaited()
 
     async def test_agents_symlink_cannot_redirect_a_write_to_an_unprotected_name(self):
         target = self.workspace / "rules.md"
@@ -770,8 +746,8 @@ class SessionAndGuardTests(FileToolCase):
             },
         )
 
-        self.assertIn("requires approval", written["error"])
-        self.assertIn("requires approval", patched["error"])
+        self.assertIn("cannot change its own instructions", written["error"])
+        self.assertIn("cannot change its own instructions", patched["error"])
         self.assertEqual(
             target.read_text(encoding="utf-8"), "Operator authority."
         )
@@ -1034,6 +1010,7 @@ class V4APatchTests(FileToolCase):
         self.assertEqual(target.read_text(encoding="utf-8"), VALID_SKILL)
 
     async def test_skill_patch_that_breaks_metadata_is_rolled_back(self):
+        self.context.persistence_writes_allowed = True
         async def approve(_category, _summary):
             return ApprovalOutcome(True, "approved")
 

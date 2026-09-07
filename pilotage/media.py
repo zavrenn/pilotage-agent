@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from pilotage.i18n import DEFAULT_LANGUAGE, t
+
 logger = logging.getLogger(__name__)
 
 # Inlined document text, matching Hermes' cap across its channels.
@@ -370,10 +372,8 @@ def confine_outbound(
     content: str,
     roots: Sequence[Path],
     *,
-    denied_notice: str = (
-        "[File delivery blocked: restricted sessions can only deliver files "
-        "from the current session's exports directory.]"
-    ),
+    denied_notice: Optional[str] = None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> str:
     """Keep only live MEDIA directives accepted by restricted roots."""
 
@@ -395,7 +395,10 @@ def confine_outbound(
     parts = [cleaned] if cleaned else []
     parts.extend(f"MEDIA:{attachment.path}" for attachment in attachments)
     if denied:
-        parts.append(denied_notice)
+        parts.append(
+            t("media.delivery_unavailable", language)
+            if denied_notice is None else denied_notice
+        )
     return "\n\n".join(parts)
 
 

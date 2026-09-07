@@ -1,9 +1,8 @@
-"""Small, Hermes-derived approval queue for persistent agent changes.
+"""Legacy approval types and queue, disconnected from client messages.
 
-Hermes blocks an active tool call, sends the proposed change to the messaging
-surface, and lets ``/approve`` or ``/deny`` resolve that exact session's oldest
-pending request.  Pilotage keeps that mechanism and drops the framework-wide
-policy engine: only the three production write classes use it.
+Pilotage's runtime now authorizes capabilities from configuration. The existing
+queue interface remains for conversation lifecycle cleanup, without changing
+stop/reset handling as part of removing client approval requests.
 """
 
 from __future__ import annotations
@@ -61,13 +60,9 @@ def approval_required(config: Any, category: str) -> bool:
 
 
 def approval_error(outcome: ApprovalOutcome) -> str:
-    """A concise tool-facing refusal that discourages approval-loop retries."""
+    """Return a plain configuration refusal without suggesting client consent."""
 
-    detail = outcome.message.strip() or "The change was not approved."
-    return (
-        f"Approval {outcome.status}: {detail} Nothing was changed. "
-        "Do not retry this change unless the user asks for it again."
-    )
+    return outcome.message.strip() or "This feature is not available."
 
 
 class ApprovalManager:

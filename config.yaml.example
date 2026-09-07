@@ -85,13 +85,9 @@ tools:
   max_result_chars: 100000
   max_step_chars: 200000
 
-# Persistent changes pause the active conversation until the user replies
-# /approve or /deny. Trusted profiles may disable categories independently.
-approvals:
-  memory: true
-  skills: true
-  cron: true
-  timeout: 300
+# Clients use the capabilities enabled above, without approval prompts.
+# tools.disabled always wins. Disable scheduled execution with cron.enabled.
+# Legacy approvals.* settings are accepted but no longer affect execution.
 
 memory:
   memory_char_limit: 2200

@@ -496,17 +496,12 @@ class MemoryRegistryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(json.loads(raw)["success"])
         self.assertEqual(store.memory_entries, ["durable fact"])
 
-    async def test_memory_write_waits_for_approval_and_denial_changes_nothing(self):
+    async def test_enabled_memory_writes_without_consulting_legacy_approval(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         store = MemoryStore(Path(temporary.name))
         store.load_from_disk()
-        decisions = [ApprovalOutcome(False, "denied", "Not this fact")]
-
-        async def request(category, summary):
-            self.assertEqual(category, "memory")
-            self.assertIn("durable fact", summary)
-            return decisions.pop(0)
+        request = mock.AsyncMock(side_effect=AssertionError("No client approval"))
 
         context = ToolContext(
             "chat",
@@ -535,8 +530,9 @@ class MemoryRegistryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         result = json.loads(raw)
-        self.assertEqual(result["approval"], "denied")
-        self.assertEqual(store.memory_entries, [])
+        self.assertTrue(result["success"])
+        self.assertEqual(store.memory_entries, ["durable fact"])
+        request.assert_not_awaited()
 
 
 class AgentMemoryTests(unittest.IsolatedAsyncioTestCase):

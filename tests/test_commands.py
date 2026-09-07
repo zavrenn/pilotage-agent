@@ -22,6 +22,7 @@ from pilotage.commands import (
     status_text,
 )
 from pilotage.settings import Settings
+from pilotage.i18n import t
 
 
 class RegistryTests(unittest.TestCase):
@@ -44,6 +45,8 @@ class RegistryTests(unittest.TestCase):
         rendered = help_text()
         for command in COMMAND_REGISTRY:
             self.assertEqual(rendered.count(f"/{command.name} "), 1)
+        for retired in ("/approve", "/deny", "/profile"):
+            self.assertNotIn(retired, rendered)
 
 
 class FormattingTests(unittest.TestCase):
@@ -189,7 +192,7 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             await self.execute("/new"),
-            "A request is still running. Use /stop, then /new.",
+            t("commands.reset_running", "en"),
         )
 
     async def test_arguments_are_rejected_without_resetting(self):
@@ -210,7 +213,7 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
             status="unknown",
             previous_phase="tool_requested",
         )
-        self.assertIn("may have acted", await self.execute("/stop"))
+        self.assertEqual(await self.execute("/stop"), t("commands.stop_unknown", "en"))
         self.agent.stop_outcome = SimpleNamespace(
             status="too_late",
             previous_phase="answer_ready",
@@ -223,29 +226,30 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_info_commands_do_not_touch_the_session(self):
         self.assertIn("/new", await self.execute("/help"))
-        self.assertIn("Profile: work", await self.execute("/profile"))
-        self.assertIn("Pilotage", await self.execute("/status"))
+        self.assertEqual(await self.execute("/profile"), t("capability.unavailable", "en"))
+        self.assertEqual(await self.execute("/status"), t("commands.ready", "en"))
         self.assertEqual(self.agent.forgotten, [])
 
-    async def test_approve_and_deny_resolve_only_this_session(self):
-        self.assertEqual(await self.execute("/approve"), "No approval is waiting.")
-        self.agent.approval_waiting = True
-        self.assertIn("Approved", await self.execute("/approve"))
-        self.agent.approval_waiting = True
-        self.assertIn("Denied", await self.execute("/deny not this change"))
-        self.assertEqual(
-            self.agent.approval_resolutions,
-            [
-                ("wa-chat", True, ""),
-                ("wa-chat", True, ""),
-                ("wa-chat", False, "not this change"),
-            ],
-        )
+    async def test_legacy_commands_never_authorize_or_expose_operator_details(self):
+        for written in ("/approve", "/approve anything", "/deny", "/deny not this change", "/profile"):
+            with self.subTest(command=written):
+                self.agent.approval_waiting = True
+                self.assertEqual(await self.execute(written), t("capability.unavailable", "en"))
+                self.assertTrue(self.agent.approval_waiting)
+        self.assertEqual(self.agent.approval_resolutions, [])
+
+    async def test_status_does_not_read_or_send_operator_configuration(self):
+        with (
+            mock.patch("pilotage.commands.status_text", side_effect=AssertionError("operator only")),
+            mock.patch("pilotage.commands.profile_text", side_effect=AssertionError("operator only")),
+        ):
+            self.assertEqual(await self.execute("/status"), t("commands.ready", "en"))
+            self.assertEqual(await self.execute("/profile"), t("capability.unavailable", "en"))
 
     async def test_command_replies_follow_the_profile_language(self):
         self.config.language = "ar"
-        self.assertIn("لا توجد موافقة", await self.execute("/approve"))
-        self.assertIn("أوامر الإدارة", await self.execute("/help"))
+        self.assertEqual(await self.execute("/approve"), t("capability.unavailable", "ar"))
+        self.assertIn(t("commands.header", "ar"), await self.execute("/help"))
 
 
 class DurableCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -271,6 +275,37 @@ class DurableCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual((first, second), ("reset done", "reset done"))
         execute.assert_awaited_once()
+
+    async def test_cached_profile_reply_keeps_its_fence_without_reaching_the_client(self):
+        content = "Profile: client\nState: /private/client-state\nChatGPT auth: not signed in"
+        for platform in ("whatsapp", "telegram"):
+            with self.subTest(platform=platform):
+                claim_id = f"legacy-{platform}"
+                command_id = main.compute_command_id(platform, claim_id)
+                self.store.begin_command(
+                    command_id=command_id, platform=platform, claim_id=claim_id,
+                    session_key="session", command_name="profile", arguments="",
+                )
+                self.store.complete_command(command_id, content)
+                execute, send, ledger_send = mock.AsyncMock(), mock.AsyncMock(), mock.AsyncMock()
+                for _restart in range(2):
+                    restarted = main.DeliveryStore(self.store.path)
+                    answer = await main._durable_command_result(
+                        restarted, platform=platform, claim_id=claim_id, session_key="session",
+                        invocation=parse_command("/profile"), uncertain_reply="unknown", execute=execute,
+                    )
+                    await main.deliver_final(
+                        restarted, session_key="session", message_ref=claim_id,
+                        platform=platform, chat_id="42", thread_id="", content=answer,
+                        send=send, ledger_send=ledger_send,
+                    )
+                    self.assertTrue(await main._exact_delivery_obligation_exists(
+                        restarted, session_key="session", message_ref=claim_id,
+                        platform=platform, chat_id="42", thread_id="", reply_to="", content=content,
+                    ))
+                execute.assert_not_awaited()
+                send.assert_not_awaited()
+                ledger_send.assert_not_awaited()
 
     async def test_interrupted_command_returns_warning_without_reexecution(self):
         command_id = main.compute_command_id("telegram", "claim-2")

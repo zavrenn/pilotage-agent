@@ -76,6 +76,15 @@ class RegistryTests(unittest.TestCase):
         self.assertIn("parameters", definition)
         self.assertNotIn("function", definition)
 
+    def test_offered_tools_do_not_instruct_the_model_to_request_approval(self):
+        registry = build_registry()
+        for definition in registry.definitions(registry.groups()):
+            with self.subTest(tool=definition["name"]):
+                written = json.dumps(definition).lower()
+                self.assertNotIn("approval workflow", written)
+                self.assertNotIn("/approve", written)
+                self.assertNotIn("/deny", written)
+
 
 class DispatchTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -105,8 +114,24 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
 
         self.registry.register(_tool("dangerous", handler=_dangerous, group="terminal"))
         answer = await self._run("dangerous", "{}", allowed_groups=["test"])
-        self.assertIn("disabled", answer["error"])
+        self.assertTrue(answer["disabled"])
         self.assertFalse(called)
+
+    async def test_malformed_capability_settings_fail_closed_without_raising(self):
+        from types import SimpleNamespace
+        context = ToolContext(
+            "chat", SimpleNamespace(
+                language="fr", settings=Settings({"tools": {"disabled": 123}})
+            ),
+        )
+        called = []
+        self.registry.register(_tool("guarded", handler=lambda *_: called.append(True)))
+        with self.assertLogs("pilotage.tools.registry", level="ERROR"):
+            results = await run_calls(
+                self.registry, [{"name": "guarded", "arguments": "{}"}], context
+            )
+        self.assertEqual(json.loads(results[0])["error"], "Cette fonctionnalité n’est pas disponible.")
+        self.assertEqual(called, [])
 
     async def test_arguments_that_are_not_json_come_back_as_an_error(self):
         self.assertIn("error", await self._run("echo", "{not json"))
@@ -219,7 +244,7 @@ class StepTests(unittest.IsolatedAsyncioTestCase):
             _context(),
             allowed_groups=["terminal"],
         )
-        self.assertIn("disabled", json.loads(results[0])["error"])
+        self.assertTrue(json.loads(results[0])["disabled"])
 
     async def test_results_come_back_in_the_order_they_were_asked_for(self):
         """Known read-only runs overlap while their returned order stays stable."""

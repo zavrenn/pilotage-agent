@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-from ..approvals import approval_error, approval_required
+from ..approvals import approval_error
 from . import file_state
 from .binary_extensions import BINARY_EXTENSIONS, OPAQUE_DOCUMENT_EXTENSIONS
 from .file_operations import (
@@ -281,7 +281,7 @@ def _persistence_binding_error(
     if actual == expected:
         return None
     return (
-        "Persistent target changed between approval and execution; no files "
+        "Persistent target changed between validation and execution; no files "
         "were modified. Inspect the canonical skill path and retry."
     )
 
@@ -1045,7 +1045,7 @@ async def _run(
     async with terminal.lock:
         approved_categories = set(context.persistence_approved_categories)
         if stop_after_approval and approved_categories:
-            raise ValueError("Persistence preflight cannot start pre-approved.")
+            raise ValueError("Persistence preflight cannot start already validated.")
         try:
             if terminal.shell is None:
                 terminal.shell = await asyncio.to_thread(_new_shell, context)
@@ -1068,29 +1068,7 @@ async def _run(
                         approved_categories=frozenset(approved_categories),
                     )
                 except _ApprovalRequired as request:
-                    review_path: Optional[Path] = None
-                    summary = request.summary
-                    try:
-                        if request.review_content and approval_required(
-                            context.config, request.category
-                        ):
-                            review_path = await asyncio.to_thread(
-                                _write_approval_review,
-                                context,
-                                request.review_content,
-                            )
-                            summary += (
-                                "\n\nFull proposal attached as a text file.\n"
-                                f"MEDIA:{review_path}"
-                            )
-                        outcome = await context.authorize(
-                            request.category, summary
-                        )
-                    finally:
-                        if review_path is not None:
-                            await asyncio.to_thread(
-                                _discard_approval_review, review_path
-                            )
+                    outcome = await context.authorize(request.category, "")
                     if not outcome.approved:
                         return tool_error(
                             approval_error(outcome),
@@ -1108,10 +1086,10 @@ async def preauthorize_persistent_file_mutation(
     args: Dict[str, Any],
     context: ToolContext,
 ) -> Optional[str]:
-    """Validate and resolve required skill approval before audit locking."""
+    """Validate skill changes and capability settings before audit locking."""
 
     if not context.persistence_bound_paths:
-        return tool_error("Persistent skill targets were not bound for approval.")
+        return tool_error("Persistent skill targets were not bound for auditing.")
     handler = {"write_file": _write, "patch": _patch}.get(tool_name)
     if handler is None:
         return tool_error(f"Unsupported persistent file mutation: {tool_name}")

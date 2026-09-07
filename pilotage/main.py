@@ -268,6 +268,8 @@ async def _durable_command_result(
         arguments=invocation.arguments,
     )
     if outcome.completed:
+        # Keep the original delivery identity. deliver_final suppresses known
+        # obsolete technical notices before either channel can send them.
         return outcome.response
     response = str(await execute()) if outcome.execute else uncertain_reply
     await asyncio.to_thread(store.complete_command, command_id, response)
@@ -381,27 +383,11 @@ async def _recover_interrupted_turns(
                     ),
                 )
 
-            async def approval_notice(text: str):
-                if channel_name == "telegram":
-                    return await channel.send(
-                        chat_id,
-                        text,
-                        reply_to,
-                        thread_id=thread_id,
-                        deliver_media=False,
-                    )
-                return await channel.send(
-                    chat_id,
-                    text,
-                    reply_to,
-                    deliver_media=False,
-                )
-
             try:
                 result = await agent.recover_turn(
                     active,
                     on_notice=notice,
-                    approval_notify=approval_notice,
+                    approval_notify=None,
                     defer_completion=True,
                 )
             except TurnRecoveryRejected:
@@ -1159,6 +1145,7 @@ async def _run_enabled_channels(
         return 1
 
     cron_config = config if whatsapp_enabled else telegram_config
+    cron_default_job_config = Config.load()
     cron_channel_configs = {}
     if whatsapp_enabled:
         cron_channel_configs["whatsapp"] = config
@@ -1336,8 +1323,10 @@ async def _run_enabled_channels(
             cron_store,
             deliver=scheduled_delivery,
             channel_configs=cron_channel_configs,
+            default_job_config=cron_default_job_config,
         )
-        if cron_config.cron_enabled
+        if cron_default_job_config.cron_enabled
+        or any(item.cron_enabled for item in cron_channel_configs.values())
         else None
     )
     cron_wake = scheduler.wake if scheduler is not None else None
@@ -1383,11 +1372,6 @@ async def _run_enabled_channels(
                         quoted,
                         deliver_media=False,
                     ),
-                )
-
-            async def approval_notice(text: str):
-                return await whatsapp_channel.send(
-                    message.chat_id, text, quoted
                 )
 
             if message.session_id in fenced_turn_sessions:
@@ -1457,7 +1441,7 @@ async def _run_enabled_channels(
                                         "chat_id": message.chat_id,
                                         "reply_to": quoted,
                                     },
-                                    approval_notify=approval_notice,
+                                    approval_notify=None,
                                     claim_ids=message.claim_ids,
                                     defer_completion=True,
                                     prepared_execution=prepared_execution,
@@ -1703,14 +1687,6 @@ async def _run_enabled_channels(
                     ),
                 )
 
-            async def approval_notice(text: str):
-                return await telegram_channel.send(
-                    message.chat_id,
-                    text,
-                    quoted,
-                    thread_id=message.thread_id,
-                )
-
             if message.session_id in fenced_turn_sessions:
                 answer = telegram_interrupted_reply
             else:
@@ -1782,7 +1758,7 @@ async def _run_enabled_channels(
                                     message.attachments,
                                     on_notice=notice,
                                     origin=origin,
-                                    approval_notify=approval_notice,
+                                    approval_notify=None,
                                     claim_ids=message.claim_ids,
                                     defer_completion=True,
                                     prepared_execution=prepared_execution,
@@ -2163,8 +2139,8 @@ async def _run_enabled_channels(
             ),
             name="pilotage-conversation-recovery",
         )
-        # Recovered tool work may still require a fresh approval decision.
-        # Channels expose only approve/deny while ordinary startup intake stays held.
+        # Keep the existing startup control window for queued legacy commands.
+        # They return an unavailable reply; no client can authorize recovered work.
         for running_channel in started:
             enable_approvals = getattr(
                 running_channel,

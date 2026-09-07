@@ -241,28 +241,57 @@ class ApprovalManagerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ToolContextApprovalTests(unittest.IsolatedAsyncioTestCase):
-    async def test_category_switch_can_bypass_or_require_the_live_callback(self):
-        calls = []
+    async def test_legacy_approval_values_never_invoke_client_callbacks(self):
+        request = mock.AsyncMock(side_effect=AssertionError("No client approval"))
+        for legacy in (True, False):
+            for category in ("memory", "skills", "cron"):
+                with self.subTest(legacy=legacy, category=category):
+                    context = ToolContext(
+                        "chat",
+                        SimpleNamespace(settings=Settings({"approvals": {category: legacy}})),
+                        approval_request=request,
+                        persistence_writes_allowed=True,
+                    )
+                    self.assertTrue((await context.authorize(category, "technical proposal")).approved)
+        request.assert_not_awaited()
 
-        async def request(category, summary):
-            calls.append((category, summary))
-            return ApprovalOutcome(True, "approved")
+    async def test_disabled_capability_never_asks_for_confirmation(self):
+        request = mock.AsyncMock(side_effect=AssertionError("No client approval"))
+        for category in ("memory", "skills", "cron"):
+            for legacy in (True, False):
+                with self.subTest(category=category, legacy=legacy):
+                    context = ToolContext(
+                        "chat",
+                        SimpleNamespace(settings=Settings({
+                            "tools": {"disabled": [category]},
+                            "approvals": {category: legacy},
+                        })),
+                        approval_request=request,
+                        persistence_writes_allowed=True,
+                    )
+                    self.assertFalse((await context.authorize(category, "proposal")).approved)
+        request.assert_not_awaited()
 
-        disabled = ToolContext(
-            "chat",
-            SimpleNamespace(settings=Settings({"approvals": {"memory": False}})),
-            approval_request=request,
+    async def test_disabled_capability_message_uses_the_profile_language(self):
+        context = ToolContext(
+            "chat", SimpleNamespace(
+                language="fr", settings=Settings({"tools": {"disabled": ["memory"]}})
+            ), persistence_writes_allowed=True,
         )
-        enabled = ToolContext(
-            "chat",
-            SimpleNamespace(settings=Settings({"approvals": {"memory": True}})),
-            approval_request=request,
-        )
+        outcome = await context.authorize("memory", "technical proposal")
+        self.assertFalse(outcome.approved)
+        self.assertEqual(outcome.message, "Cette fonctionnalité n’est pas disponible.")
 
-        self.assertTrue((await disabled.authorize("memory", "first")).approved)
-        self.assertEqual(calls, [])
-        self.assertTrue((await enabled.authorize("memory", "second")).approved)
-        self.assertEqual(calls, [("memory", "second")])
+    async def test_runtime_limits_and_cron_switch_cannot_be_widened(self):
+        context = ToolContext(
+            "chat", SimpleNamespace(settings=Settings({"cron": {"enabled": False}})),
+            allowed_tool_groups=frozenset({"file", "memory", "cron"}),
+            persistence_writes_allowed=True,
+        )
+        self.assertFalse((await context.authorize("skills", "proposal")).approved)
+        self.assertFalse((await context.authorize("cron", "proposal")).approved)
+        context.persistence_writes_allowed = False
+        self.assertFalse((await context.authorize("memory", "proposal")).approved)
 
 
 if __name__ == "__main__":  # pragma: no cover

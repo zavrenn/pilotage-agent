@@ -220,7 +220,7 @@ TERMINAL_SCHEMA = {
         "Run builds/tests bare: piping them through tail/head/cat or adding an `||` "
         "fallback can mask their real exit status; terminal output is already bounded. "
         "Use write_file/patch for file edits and the memory/cronjob tools for their "
-        "stores; those paths carry the profile's required approval workflow."
+        "stores; those tools enforce the configured access and validation checks."
     ),
     "parameters": {
         "type": "object",

@@ -28,7 +28,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
-from ..approvals import ApprovalOutcome, approval_required
+from ..approvals import ApprovalOutcome
+from ..i18n import DEFAULT_LANGUAGE, t
 from ..persistence import (
     PersistenceAuditError,
     PersistenceChangeRejected,
@@ -210,8 +211,7 @@ class ToolContext:
     # None means the profile's full skill set. Scheduled jobs pass an explicit
     # allowlist, including an empty set.
     allowed_skills: Optional[frozenset[str]] = None
-    # Bound by Agent to this exact conversation and its live messaging reply
-    # surface. A missing callback fails a required write closed.
+    # Retained for embedded callers; capability decisions never invoke it.
     approval_request: Optional[ApprovalRequest] = None
     # Private, profile-local provenance for agent-authored memory and skill
     # changes. Journal contents never enter model instructions or tool results.
@@ -222,19 +222,43 @@ class ToolContext:
     turn_reference: str = ""
     persistence_bound_paths: frozenset[str] = frozenset()
     persistence_approved_categories: frozenset[str] = frozenset()
+    # Exact effective groups bound by dispatch, including channel and run limits.
+    allowed_tool_groups: Optional[frozenset[str]] = None
 
     async def authorize(self, category: str, summary: str) -> ApprovalOutcome:
-        """Apply one category switch, then request live consent when enabled."""
+        """Apply the operator's capability settings without client consent."""
 
-        if not approval_required(self.config, category):
-            return ApprovalOutcome(True, "not required")
-        if self.approval_request is None:
+        required = {
+            "memory": frozenset({"memory"}),
+            "skills": frozenset({"file", "skills"}),
+            "cron": frozenset({"cron"}),
+        }
+        if category not in required:
+            raise ValueError(f"Unknown capability category: {category}")
+        settings = getattr(self.config, "settings", None)
+        groups = self.allowed_tool_groups
+        if groups is None:
+            groups = frozenset({"memory", "file", "skills", "cron"})
+        if settings is not None:
+            groups = groups.intersection(settings.names("tools.enabled", list(groups)))
+            groups = groups.difference(settings.names("tools.disabled"))
+        enabled = required[category].issubset(groups)
+        if category == "cron":
+            cron_enabled = getattr(self.config, "cron_enabled", None)
+            if not isinstance(cron_enabled, bool):
+                cron_enabled = settings.flag("cron.enabled", True) if settings else True
+            enabled = enabled and cron_enabled
+        if not enabled:
             return ApprovalOutcome(
-                False,
-                "unavailable",
-                "This turn has no interactive messaging channel for approval.",
+                False, "disabled", t(
+                    "capability.unavailable", getattr(self.config, "language", DEFAULT_LANGUAGE)
+                ),
             )
-        return await self.approval_request(category, summary)
+        if category in {"memory", "skills"} and not self.persistence_writes_allowed:
+            return ApprovalOutcome(
+                False, "unavailable", "This run cannot change persistent memory or skills."
+            )
+        return ApprovalOutcome(True, "configured")
 
 
 Handler = Callable[..., Any]
@@ -326,8 +350,23 @@ class Registry:
         # The schema sent to the model is not an authorization boundary. A
         # stale, replayed or fabricated call can still name any registered
         # tool, so enforce the agent's allowlist again at execution time.
-        if allowed_groups is not None and tool.group not in set(allowed_groups):
-            return tool_error(f"Tool is disabled: {name}", tool=name)
+        unavailable = t(
+            "capability.unavailable", getattr(context.config, "language", DEFAULT_LANGUAGE)
+        )
+        try:
+            groups = set(self.groups() if allowed_groups is None else allowed_groups)
+            if context.allowed_tool_groups is not None:
+                groups.intersection_update(context.allowed_tool_groups)
+            settings = getattr(context.config, "settings", None)
+            if settings is not None:
+                groups.intersection_update(settings.names("tools.enabled", list(groups)))
+                groups.difference_update(settings.names("tools.disabled"))
+            context = replace(context, allowed_tool_groups=frozenset(groups))
+        except Exception:
+            logger.exception("Tool capability settings failed for %s", name)
+            return tool_error(unavailable, tool=name)
+        if tool.group not in groups:
+            return tool_error(unavailable, tool=name, disabled=True)
 
         try:
             args = json.loads(arguments) if arguments.strip() else {}
@@ -381,26 +420,28 @@ class Registry:
 
                 preflight_result: Optional[str] = None
                 approval_category = "memory" if name == "memory" else "skills"
-                if approval_required(context.config, approval_category):
-                    if name == "memory":
-                        from .memory import preauthorize_memory_mutation
+                permission = await context.authorize(approval_category, "")
+                if not permission.approved:
+                    raise PersistenceChangeRejected(permission.message)
+                if name == "memory":
+                    from .memory import preauthorize_memory_mutation
 
-                        preflight_result = await preauthorize_memory_mutation(
-                            args, mutation_context
-                        )
-                    else:
-                        from .files import preauthorize_persistent_file_mutation
+                    preflight_result = await preauthorize_memory_mutation(
+                        args, mutation_context
+                    )
+                else:
+                    from .files import preauthorize_persistent_file_mutation
 
-                        preflight_result = await preauthorize_persistent_file_mutation(
-                            name, args, mutation_context
-                        )
-                    if preflight_result is None:
-                        mutation_context = replace(
-                            mutation_context,
-                            persistence_approved_categories=frozenset(
-                                {approval_category}
-                            ),
-                        )
+                    preflight_result = await preauthorize_persistent_file_mutation(
+                        name, args, mutation_context
+                    )
+                if preflight_result is None:
+                    mutation_context = replace(
+                        mutation_context,
+                        persistence_approved_categories=frozenset(
+                            {approval_category}
+                        ),
+                    )
 
                 async def invoke_mutation() -> Any:
                     return await invoke_handler(mutation_context)

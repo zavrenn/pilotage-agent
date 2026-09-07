@@ -1027,7 +1027,12 @@ class CronStore:
         age = (now - claimed).total_seconds()
         return age if age >= 0 else float("inf")
 
-    def claim_due_jobs(self, *, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def claim_due_jobs(
+        self,
+        *,
+        limit: Optional[int] = None,
+        can_run: Optional[Callable[[Dict[str, Any]], bool]] = None,
+    ) -> List[Dict[str, Any]]:
         """Claim due jobs before any model or delivery side effect."""
         maximum = None if limit is None else max(0, int(limit))
         with self._locked():
@@ -1091,6 +1096,10 @@ class CronStore:
                     continue
 
                 if not job.get("enabled", True) or job.get("state") != "scheduled":
+                    continue
+                # Check configured availability under the same lock as the
+                # claim, before consuming a due slot or changing repeat state.
+                if can_run is not None and not can_run(job):
                     continue
                 if job.get("paused_at") or job.get("paused_reason"):
                     job["enabled"] = False

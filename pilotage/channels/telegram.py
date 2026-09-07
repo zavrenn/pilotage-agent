@@ -46,6 +46,8 @@ from ..delivery import (
     delivery_fingerprint,
     file_delivery_fingerprint,
 )
+from ..i18n import DEFAULT_PROFILE_LANGUAGE
+from ..legacy_notices import attachment_notice_replacements
 from ..redact import identity_pseudonym, redact_channel_identities
 from ..settings import ConfigError, Settings
 from .dedup import MessageDeduplicator
@@ -2677,21 +2679,21 @@ class TelegramChannel:
         if not chunks and not attachments:
             return SendResult(False, "response had no deliverable content")
 
+        replacements = attachment_notice_replacements(
+            text or "", chunks, to_telegram,
+            getattr(self._config, "language", DEFAULT_PROFILE_LANGUAGE),
+        )
         units = []
         if delivery_ledger is not None:
-            descriptors = [
-                (
-                    "text",
-                    delivery_fingerprint(
-                        "telegram-text-v2",
-                        chunk,
-                        thread_id,
-                        reply_to
-                        if self._reply_kwargs(reply_to, index)
-                        else "",
-                        "no-preview" if self._disable_link_previews else "preview",
-                    ),
+            def text_fingerprint(index: int, chunk: str) -> str:
+                return delivery_fingerprint(
+                    "telegram-text-v2", chunk, thread_id,
+                    reply_to if self._reply_kwargs(reply_to, index) else "",
+                    "no-preview" if self._disable_link_previews else "preview",
                 )
+
+            descriptors = [
+                ("text", text_fingerprint(index, chunk))
                 for index, chunk in enumerate(chunks)
             ]
             for attachment in attachments:
@@ -2707,7 +2709,23 @@ class TelegramChannel:
                     else "",
                 )
                 descriptors.append(("file", fingerprint))
-            units = await delivery_ledger.prepare(descriptors)
+            if replacements:
+                fingerprints = {
+                    index: tuple(text_fingerprint(index, option) for option in options)
+                    for index, options in replacements.items()
+                }
+                units = await delivery_ledger.prepare(
+                    descriptors, legacy_notice_content=text,
+                    notice_fingerprints=fingerprints,
+                )
+                for index, options in replacements.items():
+                    if units[index].fingerprint != descriptors[index][1]:
+                        chunks[index] = options[fingerprints[index].index(units[index].fingerprint)]
+            else:
+                units = await delivery_ledger.prepare(descriptors)
+        else:
+            for index, options in replacements.items():
+                chunks[index] = options[0]
 
         delivery_index = 0
         last_message_id = ""

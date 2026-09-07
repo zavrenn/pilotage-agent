@@ -298,6 +298,42 @@ class CrudTests(StoreCase):
 
 
 class ClaimTests(StoreCase):
+    def test_unavailable_jobs_keep_due_slots_and_repeat_state(self):
+        self.create()
+        self.create(schedule="every 1m", repeat=2)
+        self.clock.advance(seconds=121)
+        before = self.store.jobs_path.read_bytes()
+
+        self.assertEqual(self.store.claim_due_jobs(can_run=lambda job: False), [])
+
+        self.assertEqual(self.store.jobs_path.read_bytes(), before)
+
+    def test_unavailable_job_does_not_take_claim_capacity(self):
+        blocked = self.create()
+        enabled = self.create()
+        before = self.store.resolve_job(blocked["id"])
+
+        claimed = self.store.claim_due_jobs(
+            limit=1, can_run=lambda job: job["id"] == enabled["id"]
+        )
+
+        self.assertEqual([job["id"] for job in claimed], [enabled["id"]])
+        self.assertEqual(self.store.resolve_job(blocked["id"]), before)
+
+    def test_unavailable_scheduling_still_retires_an_abandoned_claim(self):
+        job = self.create()
+        self.store.claim_due_jobs()
+        self.clock.advance(seconds=61)
+        with mock.patch(
+            "pilotage.cron.jobs._claim_owner_is_live", return_value=False
+        ):
+            self.assertEqual(self.store.claim_due_jobs(can_run=lambda job: False), [])
+
+        recovered = self.store.resolve_job(job["id"])
+        self.assertEqual(recovered["state"], "error")
+        self.assertEqual(recovered["last_status"], "unknown")
+        self.assertIsNone(recovered["claim"])
+
     def test_one_shot_is_claimed_once_and_retained(self):
         job = self.create()
         claimed = self.store.claim_due_jobs()

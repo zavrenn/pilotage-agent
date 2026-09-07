@@ -101,6 +101,7 @@ _COMMON_SETTINGS_SCHEMA: Dict[str, Any] = {
         "max_result_chars": _LEAF,
         "max_step_chars": _LEAF,
     },
+    # Parsed for compatibility with existing profiles; no client approval flow.
     "approvals": {
         "memory": _LEAF,
         "skills": _LEAF,

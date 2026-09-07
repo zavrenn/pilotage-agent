@@ -233,7 +233,7 @@ def get_write_denied_error(
     if denial == "instruction":
         return (
             f"{verb} denied: '{path}' is an agent instruction file. "
-            "Changing it requires approval outside this tool and is therefore denied."
+            "This agent cannot change its own instructions."
         )
     return f"{verb} denied: '{path}' is a protected system or credential file."
 

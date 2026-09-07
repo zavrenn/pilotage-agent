@@ -17,6 +17,7 @@ from pilotage.channels import whatsapp
 from pilotage.channels.whatsapp import InboundMessage, WhatsAppChannel
 from pilotage.config import Config, WHATSAPP_MEDIA_NOTE
 from pilotage.delivery import DeliveryStore, DeliveryUnitLedger, compute_obligation_id
+from pilotage.i18n import SUPPORTED_LANGUAGES, t
 
 
 CHAT_ID = "212600000000@s.whatsapp.net"
@@ -138,20 +139,36 @@ class OutboundExtractionTests(unittest.TestCase):
         outside = self.workspace / "old-session.pdf"
         outside.write_bytes(b"old")
 
-        confined = media.confine_outbound(
-            f"Ready\nMEDIA:{current}\nMEDIA:{outside}",
-            (exports,),
-        )
+        for language in SUPPORTED_LANGUAGES:
+            with self.subTest(language=language):
+                confined = media.confine_outbound(
+                    f"Ready\nMEDIA:{current}\nMEDIA:{outside}",
+                    (exports,),
+                    language=language,
+                )
 
-        self.assertIn(f"MEDIA:{current.resolve()}", confined)
-        self.assertNotIn(str(outside), confined)
-        self.assertIn("File delivery blocked", confined)
-        attachments, cleaned = media.extract_outbound(confined, (exports,))
-        self.assertEqual(
-            [attachment.path for attachment in attachments],
-            [current.resolve()],
+                self.assertIn(f"MEDIA:{current.resolve()}", confined)
+                self.assertNotIn(str(outside), confined)
+                attachments, cleaned = media.extract_outbound(confined, (exports,))
+                self.assertEqual(
+                    [attachment.path for attachment in attachments],
+                    [current.resolve()],
+                )
+                self.assertEqual(cleaned, "Ready\n\n" + t("media.delivery_unavailable", language))
+                self.assertNotIn(str(exports), cleaned)
+                self.assertNotIn("restricted", cleaned)
+
+    def test_restricted_filter_does_not_warn_when_all_files_are_deliverable(self):
+        report = self.workspace / "report.pdf"
+        report.write_bytes(b"report")
+
+        confined = media.confine_outbound(
+            f"Ready\nMEDIA:{report}", (self.workspace,), language="fr",
         )
-        self.assertIn("File delivery blocked", cleaned)
+        attachments, cleaned = media.extract_outbound(confined, (self.workspace,))
+
+        self.assertEqual(cleaned, "Ready")
+        self.assertEqual([attachment.path for attachment in attachments], [report.resolve()])
 
 
 class InboundLifecycleTests(unittest.TestCase):
