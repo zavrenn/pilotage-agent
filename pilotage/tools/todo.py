@@ -215,8 +215,11 @@ TODO_SCHEMA = {
         "Each item: {id: string, content: string, "
         "status: pending|in_progress|completed|cancelled}\n"
         "List order is priority. Only ONE item in_progress at a time.\n"
-        "Mark items completed immediately when done. If something fails, "
-        "cancel it and add a revised item.\n\n"
+        "Update the plan at meaningful milestones, marking work completed only "
+        "after verifying its results. When inputs for the next substantive tool "
+        "calls are already known, include the plan update alongside those calls "
+        "in the same response. If something fails, cancel it and add a revised "
+        "item.\n\n"
         "Always returns the full current list."
     ),
     "parameters": {
