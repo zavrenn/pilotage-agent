@@ -596,6 +596,72 @@ class ClientLifecycleTests(unittest.IsolatedAsyncioTestCase):
             ConversationStore(Path(tmp.name) / "conversations.db"),
         )
 
+    async def test_cancellation_logs_activity_without_retrying_or_exposing_content(self):
+        for phase in ("client", "create", "first_event", "after_events"):
+            with self.subTest(phase=phase):
+                waiting = asyncio.Event()
+
+                async def hang():
+                    waiting.set()
+                    await asyncio.Event().wait()
+
+                async def events():
+                    if phase == "after_events":
+                        yield _delta("private answer")
+                        yield SimpleNamespace(type="response.in_progress", secret="private reasoning")
+                    await hang()
+
+                stream = mock.Mock()
+                stream.__aiter__ = mock.Mock(side_effect=events)
+                stream.close = mock.AsyncMock()
+
+                async def create(**_kwargs):
+                    if phase == "create":
+                        await hang()
+                    return stream
+
+                client = SimpleNamespace(responses=SimpleNamespace(create=mock.AsyncMock(side_effect=create)))
+
+                async def ensure_client(**_kwargs):
+                    if phase == "client":
+                        await hang()
+                    return client
+
+                self.agent._ensure_client = mock.AsyncMock(side_effect=ensure_client)
+                self.agent._release_client = mock.AsyncMock()
+                with self.assertLogs("pilotage.agent", level="INFO") as captured:
+                    task = asyncio.create_task(self.agent._call_model(
+                        "private chat id", [{"role": "user", "content": "private prompt"}], None,
+                    ))
+                    try:
+                        await asyncio.wait_for(waiting.wait(), timeout=2.0)
+                    finally:
+                        task.cancel("private cancellation reason")
+                        with self.assertRaises(asyncio.CancelledError) as caught:
+                            await task
+
+                self.assertTrue(task.cancelled())
+                self.assertEqual(caught.exception.args, ("private cancellation reason",))
+                self.agent._ensure_client.assert_awaited_once()
+                if phase != "client":
+                    self.agent._release_client.assert_awaited_once_with(client)
+                    client.responses.create.assert_awaited_once()
+                if phase in ("first_event", "after_events"):
+                    stream.close.assert_awaited_once()
+                written = "\n".join(captured.output)
+                self.assertEqual(written.count("Model stream cancelled"), 1)
+                self.assertNotIn("completed", written)
+                self.assertNotIn("private", written)
+                expected_count = "-" if phase == "client" else ("2" if phase == "after_events" else "0")
+                self.assertIn(f"events={expected_count},", written)
+                for field in ("elapsed=", "first_event=", "max_event_gap=", "silence="):
+                    self.assertIn(field, written)
+                if phase != "client":
+                    timing = caught.exception.timing
+                    self.assertGreaterEqual(timing.elapsed_seconds, 0.0)
+                    self.assertGreaterEqual(timing.last_event_gap_seconds, 0.0)
+                    self.assertEqual(timing.first_event_seconds is None, phase != "after_events")
+
     async def test_stream_creation_itself_is_bounded_by_ttfb(self):
         class HangingResponses:
             async def create(self, **_kwargs):

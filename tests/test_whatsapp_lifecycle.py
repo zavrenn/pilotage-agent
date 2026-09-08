@@ -368,10 +368,31 @@ class BatchLifecycleTests(unittest.IsolatedAsyncioTestCase):
         channel = WhatsAppChannel(config, handler, _command)
         self.addAsyncCleanup(channel.stop)
 
-        channel._enqueue(self._message("one", "m1"))
-        await asyncio.sleep(0.03)
-        channel._enqueue(self._message("two", "m2"))
-        await asyncio.wait_for(handled.wait(), timeout=0.5)
+        timer_started = asyncio.Event()
+        deadline = asyncio.Event()
+        clock = mock.Mock(return_value=100.0)
+        delays = []
+
+        async def sleep_until_deadline(delay):
+            delays.append(delay)
+            timer_started.set()
+            await deadline.wait()
+
+        # Control only the channel's clock and sleep; the real event loop keeps
+        # running normally, regardless of how heavily loaded the machine is.
+        with mock.patch("pilotage.channels.whatsapp.asyncio", wraps=asyncio) as channel_asyncio:
+            channel_asyncio.get_running_loop.return_value = mock.Mock(time=clock)
+            channel_asyncio.sleep.side_effect = sleep_until_deadline
+            channel._enqueue(self._message("one", "m1"))
+            clock.return_value = 100.03
+            channel._enqueue(self._message("two", "m2"))
+            await asyncio.wait_for(timer_started.wait(), timeout=1.0)
+            self.assertEqual(delivered, [])
+            self.assertEqual(len(delays), 1)
+            self.assertAlmostEqual(delays[0], 0.02)
+            clock.return_value = 100.05
+            deadline.set()
+            await asyncio.wait_for(handled.wait(), timeout=1.0)
 
         self.assertEqual(len(delivered), 1)
         self.assertEqual(delivered[0].text, "one\ntwo")

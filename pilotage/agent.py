@@ -2063,6 +2063,7 @@ class Agent:
         session_label = identity_pseudonym(chat_id, "session")
         while True:
             stream_attempt += 1
+            attempt_started_at = time.monotonic()
             logger.info(
                 "Model stream starting for %s "
                 "(attempt=%d, model=%s, estimated_context_tokens=%d, "
@@ -2107,6 +2108,21 @@ class Agent:
                     result.text_delta_match if result.text_delta_match is not None else "unavailable",
                 )
                 return result
+            except asyncio.CancelledError as exc:
+                timing = getattr(exc, "timing", None)
+                logger.info(
+                    "Model stream cancelled for %s "
+                    "(attempt=%d, elapsed=%s, first_event=%s, "
+                    "events=%s, max_event_gap=%s, silence=%s)",
+                    session_label,
+                    stream_attempt,
+                    _seconds(timing.elapsed_seconds if timing else time.monotonic() - attempt_started_at),
+                    _seconds(timing.first_event_seconds if timing else None),
+                    timing.event_count if timing else "-",
+                    _seconds(timing.max_event_gap_seconds if timing else None),
+                    _seconds(timing.last_event_gap_seconds if timing else None),
+                )
+                raise
             except APIStatusError as exc:
                 request_input = request.get("input")
                 if (
@@ -2188,6 +2204,18 @@ class Agent:
                     stream = await asyncio.wait_for(create_stream, timeout=ttfb_timeout)
                 else:
                     stream = await create_stream
+            except asyncio.CancelledError as exc:
+                elapsed = max(0.0, time.monotonic() - request_started_at)
+                raise codex_stream.CodexStreamCancelled(
+                    *exc.args,
+                    timing=codex_stream.StreamTiming(
+                        elapsed_seconds=elapsed,
+                        first_event_seconds=None,
+                        event_count=0,
+                        max_event_gap_seconds=0.0,
+                        last_event_gap_seconds=elapsed,
+                    ),
+                ) from None
             except asyncio.TimeoutError:
                 elapsed = max(0.0, time.monotonic() - request_started_at)
                 raise codex_stream.CodexStreamTimeout(

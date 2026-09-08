@@ -689,7 +689,8 @@ class WebExtractHandlerTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_registry_offers_and_dispatches_web_extract(self):
-        registry = build_registry()
+        with mock.patch.dict(os.environ, {"FIRECRAWL_API_KEY": "test-key"}):
+            registry = build_registry()
         definition = registry.get("web_extract")
         self.assertIsNotNone(definition)
         self.assertEqual(definition.group, "web")
@@ -725,6 +726,36 @@ class WebExtractHandlerTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(json.loads(result)["results"][0]["content"], "body")
+
+
+class WebAvailabilityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_search_remains_usable_without_extraction_configuration(self):
+        with (
+            mock.patch.dict(os.environ, {"FIRECRAWL_API_KEY": " ", "FIRECRAWL_API_URL": " "}),
+            tempfile.TemporaryDirectory() as root,
+            mock.patch.dict(sys.modules, {"ddgs": _fake_ddgs([])[0]}),
+            mock.patch.object(web, "_run_ddgs_search_bounded", return_value=[]),
+        ):
+            registry = build_registry()
+            self.assertEqual([tool["name"] for tool in registry.definitions(["web"])], ["web_search"])
+            context = _tool_context(Path(root))
+            search = await registry.dispatch("web_search", '{"query":"test"}', context, allowed_groups=["web"])
+            self.assertNotIn("error", json.loads(search))
+            extraction = await registry.dispatch("web_extract", '{"urls":["https://example.com"]}', context, allowed_groups=["web"])
+            self.assertIn("error", json.loads(extraction))
+
+    async def test_configured_extraction_still_obeys_group_restrictions(self):
+        for key, url in (("test-key", ""), ("", "http://localhost:3002")):
+            with (
+                self.subTest(key=bool(key), self_hosted=bool(url)),
+                mock.patch.dict(os.environ, {"FIRECRAWL_API_KEY": key, "FIRECRAWL_API_URL": url}),
+                tempfile.TemporaryDirectory() as root,
+            ):
+                registry = build_registry()
+                self.assertEqual([tool["name"] for tool in registry.definitions(["web"])], ["web_extract", "web_search"])
+                self.assertEqual(registry.definitions([]), [])
+                result = await registry.dispatch("web_extract", "{}", _tool_context(Path(root)), allowed_groups=[])
+                self.assertTrue(json.loads(result)["disabled"])
 
 
 class WebExtractSpillTests(unittest.TestCase):

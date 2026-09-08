@@ -76,6 +76,17 @@ class ReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, 0)
 
 
+class WebConfigurationTests(unittest.TestCase):
+    def test_extraction_credentials_are_optional_for_search(self):
+        with mock.patch.dict(os.environ, {"FIRECRAWL_API_KEY": "", "FIRECRAWL_API_URL": ""}):
+            self.assertEqual(doctor._check_web_configuration(), "DDGS search available; optional Firecrawl extraction not configured")
+
+    def test_cloud_and_self_hosted_extraction_are_recognized(self):
+        for key, url in (("test-key", ""), ("", "http://localhost:3002")):
+            with mock.patch.dict(os.environ, {"FIRECRAWL_API_KEY": key, "FIRECRAWL_API_URL": url}):
+                self.assertEqual(doctor._check_web_configuration(), "DDGS and Firecrawl configured")
+
+
 class SecretRenderingTests(unittest.TestCase):
     def test_known_environment_secrets_are_removed_from_failures(self):
         token = "123456:telegram-secret-value"

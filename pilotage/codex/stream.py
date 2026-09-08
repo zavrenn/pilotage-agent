@@ -64,6 +64,14 @@ class StreamTiming:
     last_event_gap_seconds: float
 
 
+class CodexStreamCancelled(asyncio.CancelledError):
+    """Preserve stream timing while propagating task cancellation."""
+
+    def __init__(self, *args: Any, timing: StreamTiming):
+        super().__init__(*args)
+        self.timing = timing
+
+
 class CodexStreamError(RuntimeError):
     """The API sent an error event, or the stream ended without a response."""
 
@@ -463,6 +471,17 @@ async def consume_stream(
                 event = await events.__anext__()
         except StopAsyncIteration:
             break
+        except asyncio.CancelledError as exc:
+            raise CodexStreamCancelled(
+                *exc.args,
+                timing=_stream_timing(
+                    stream_started_at,
+                    first_event_at,
+                    last_event_at,
+                    event_count,
+                    max_event_gap_seconds,
+                ),
+            ) from None
         except asyncio.TimeoutError:
             timing = _stream_timing(
                 stream_started_at,

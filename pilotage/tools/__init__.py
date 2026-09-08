@@ -45,7 +45,7 @@ from .session_search import SESSION_SEARCH_TOOL
 from .skills import SKILLS_TOOLS, build_skills_prompt
 from .terminal import TERMINAL_TOOL
 from .todo import TODO_TOOL
-from .web import WEB_EXTRACT_TOOL, WEB_SEARCH_TOOL
+from .web import WEB_EXTRACT_TOOL, WEB_SEARCH_TOOL, web_extract_configured
 from .vision import VISION_ANALYZE_TOOL
 
 __all__ = [
@@ -85,6 +85,8 @@ ALL_TOOLS: Sequence[Tool] = (
 def build_registry() -> Registry:
     registry = Registry()
     for tool in ALL_TOOLS:
+        if tool is WEB_EXTRACT_TOOL and not web_extract_configured():
+            continue
         registry.register(tool)
     return registry
 

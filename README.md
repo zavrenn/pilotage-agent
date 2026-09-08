@@ -74,7 +74,8 @@ Voice-message transcription requires `VOICE_TOOLS_OPENAI_KEY` in the profile
 
 Full-page web extraction requires `FIRECRAWL_API_KEY` in the profile `.env`, or
 `FIRECRAWL_API_URL` for a self-hosted Firecrawl instance. DDGS search needs no
-key.
+key. Without either Firecrawl setting, the agent offers search only and Doctor
+does not require extraction credentials. Restart after configuring extraction.
 
 `pilotage whatsapp` saves the WhatsApp allowlist and home destination in the
 effective profile environment file, then pairs and enables the channel.

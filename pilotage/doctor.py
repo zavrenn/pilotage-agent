@@ -748,8 +748,10 @@ async def _check_model(config: Any) -> str:
 
 
 def _check_web_configuration() -> str:
-    from .tools.web import _get_direct_firecrawl_config
+    from .tools.web import _get_direct_firecrawl_config, web_extract_configured
 
+    if not web_extract_configured():
+        return "DDGS search available; optional Firecrawl extraction not configured"
     _get_direct_firecrawl_config()
     return "DDGS and Firecrawl configured"
 

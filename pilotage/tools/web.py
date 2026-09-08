@@ -289,6 +289,14 @@ def _web_extract_url(value: Any) -> Optional[str]:
     return value or None
 
 
+def web_extract_configured() -> bool:
+    """Whether this profile opted into cloud or self-hosted extraction."""
+    return bool(
+        os.environ.get("FIRECRAWL_API_KEY", "").strip()
+        or os.environ.get("FIRECRAWL_API_URL", "").strip().rstrip("/")
+    )
+
+
 def _get_direct_firecrawl_config(
 ) -> tuple[Dict[str, str], tuple[str, Optional[str], Optional[str]]]:
     """Resolve direct cloud or self-hosted Firecrawl configuration."""
