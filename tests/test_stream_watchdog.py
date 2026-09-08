@@ -297,6 +297,7 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         async def stream_once(_request, **_kwargs):
             return codex_stream.StreamResult(
                 text="private answer",
+                text_delta_match=False,
                 status="completed",
                 terminal_completed=True,
                 timing=codex_stream.StreamTiming(
@@ -321,6 +322,7 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("first_event=0.50s", written)
         self.assertIn("events=7", written)
         self.assertIn("max_event_gap=1.25s", written)
+        self.assertIn("text_delta_match=False", written)
         self.assertNotIn("private prompt", written)
         self.assertNotIn("private answer", written)
 

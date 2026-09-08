@@ -357,6 +357,8 @@ class StreamResult:
     # A commentary/analysis-only response is the model pausing mid-turn, not an
     # empty final answer. The agent replays it and asks the model to continue.
     needs_continuation: bool = False
+    # Diagnostic only: None means no complete comparison was possible.
+    text_delta_match: Optional[bool] = None
 
 
 def _field(obj: Any, name: str, default: Any = None) -> Any:
@@ -411,6 +413,7 @@ async def consume_stream(
     max_event_gap_seconds = 0.0
 
     text_deltas: List[str] = []
+    indexed_text_deltas: Dict[Tuple[str, int], List[str]] = {}
     output_items: List[Dict[str, Any]] = []
     output_indexes: List[Any] = []
     output_sequences: List[int] = []
@@ -541,6 +544,10 @@ async def consume_stream(
 
         if event_type.endswith("output_text.delta"):
             delta = _field(event, "delta", "") or ""
+            item_id = _field(event, "item_id")
+            content_index = _field(event, "content_index")
+            if isinstance(item_id, str) and item_id and isinstance(content_index, int):
+                indexed_text_deltas.setdefault((item_id, content_index), []).append(str(delta))
             if delta and active_message_phase not in _INTERMEDIATE_MESSAGE_PHASES:
                 text_deltas.append(str(delta))
                 if on_text_delta is not None:
@@ -637,6 +644,8 @@ async def consume_stream(
         output_items = [entry[3] for entry in indexed]
 
     result.message_items = _message_items_from_items(output_items)
+    if result.terminal_completed:
+        result.text_delta_match = _text_delta_match(output_items, indexed_text_deltas)
     message_text = _final_text_from_message_items(result.message_items)
     if message_text:
         result.text = message_text
@@ -746,6 +755,34 @@ def _normalize_message_status(value: Any) -> str:
         if status in _RESPONSE_MESSAGE_STATUSES:
             return status
     return "completed"
+
+
+def _text_delta_match(
+    items: List[Dict[str, Any]],
+    deltas: Dict[Tuple[str, int], List[str]],
+) -> Optional[bool]:
+    """Compare final text blocks exactly; never log or retain their content."""
+    compared = False
+    missing = False
+    for item in items:
+        if (
+            item.get("type") != "message"
+            or _message_phase(item.get("phase")) in _INTERMEDIATE_MESSAGE_PHASES
+            or _normalize_message_status(item.get("status")) != "completed"
+        ):
+            continue
+        for index, block in enumerate(item.get("content") or []):
+            if not isinstance(block, dict) or block.get("type") not in {"output_text", "text"}:
+                continue
+            text = block.get("text")
+            chunks = deltas.get((str(item.get("id") or ""), index))
+            if not isinstance(text, str) or chunks is None:
+                missing = True
+                continue
+            if "".join(chunks) != text:
+                return False
+            compared = True
+    return True if compared and not missing else None
 
 
 def _message_text(item: Dict[str, Any]) -> str:

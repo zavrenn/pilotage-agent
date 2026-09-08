@@ -119,6 +119,69 @@ async def _consume(events, *, on_text_delta=None) -> codex_stream.StreamResult:
     )
 
 
+class TextComparisonTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def delta(item_id, index, text):
+        return SimpleNamespace(
+            type="response.output_text.delta", item_id=item_id,
+            content_index=index, delta=text,
+        )
+
+    async def test_matching_and_changed_text_do_not_change_reply_selection(self):
+        for streamed, matches in [("Café — موعد\n", True), ("Café — garbled\n", False)]:
+            with self.subTest(matches=matches):
+                result = await _consume([
+                    self.delta("final", 0, streamed[:4]),
+                    self.delta("final", 0, streamed[4:]),
+                    _message_done("Café — موعد\n", phase="final_answer", item_id="final"),
+                    _completed(),
+                ])
+                self.assertIs(result.text_delta_match, matches)
+                self.assertEqual(result.text, "Café — موعد")
+
+    async def test_comparison_uses_message_and_block_identity_not_arrival_order(self):
+        final = _message_done("First ", phase="final_answer", item_id="final")
+        final.item["content"].append({"type": "output_text", "text": "second"})
+        result = await _consume([
+            self.delta("comment", 0, "Different commentary"),
+            self.delta("final", 1, "second"),
+            self.delta("final", 0, "First "),
+            _message_done("Commentary", phase="commentary", item_id="comment"),
+            final,
+            _completed(),
+        ])
+        self.assertIs(result.text_delta_match, True)
+        self.assertEqual(result.text, "First second")
+
+    async def test_missing_evidence_is_not_a_match_or_mismatch(self):
+        done = _message_done("Answer", phase="final_answer", item_id="final")
+        for events in [
+            [_delta("Answer"), done, _completed()],  # No chunk identity.
+            [done, _completed()],  # No chunks.
+            [self.delta("final", 0, "Answer"), _completed()],  # No done item.
+            [self.delta("final", 0, "Answer"), done],  # No terminal proof.
+            [_completed()],  # No text at all.
+        ]:
+            with self.subTest(events=events):
+                result = await _consume(events)
+                self.assertIsNone(result.text_delta_match)
+
+    async def test_partial_block_evidence_cannot_report_a_full_match(self):
+        done = _message_done("Answer", phase="final_answer", item_id="final")
+        done.item["content"].append({"type": "output_text", "text": "missing chunks"})
+        result = await _consume([self.delta("final", 0, "Answer"), done, _completed()])
+        self.assertIsNone(result.text_delta_match)
+
+    async def test_whitespace_disagreement_is_visible_without_altering_the_reply(self):
+        result = await _consume([
+            self.delta("final", 0, "Answer "),
+            _message_done("Answer", phase="final_answer", item_id="final"),
+            _completed(),
+        ])
+        self.assertIs(result.text_delta_match, False)
+        self.assertEqual(result.text, "Answer")
+
+
 class CallIdTests(unittest.TestCase):
     def test_the_same_call_always_gets_the_same_id(self):
         first = deterministic_call_id("todo", '{"a": 1}', 0)
