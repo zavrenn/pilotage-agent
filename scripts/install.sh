@@ -74,6 +74,20 @@ if [ -f "$state_dir/config.yaml" ]; then
   chmod 600 "$state_dir/config.yaml"
 fi
 
+bin_dir="$HOME/.local/bin"
+launcher="$bin_dir/pilotage"
+mkdir -p "$bin_dir"
+if [ -e "$launcher" ] || [ -L "$launcher" ]; then
+  [ "$(readlink -f "$launcher")" = "$repo_root/.venv/bin/pilotage" ] \
+    || fail "$launcher already points elsewhere; resolve it before installing the command"
+else
+  ln -s "$repo_root/.venv/bin/pilotage" "$launcher"
+fi
+case ":$PATH:" in
+  *":$bin_dir:"*) ;;
+  *) echo 'Add the command to your shell PATH: export PATH="$HOME/.local/bin:$PATH"' ;;
+esac
+
 echo
 echo "Installed. Next:"
 echo "  1. review $state_dir/config.yaml"

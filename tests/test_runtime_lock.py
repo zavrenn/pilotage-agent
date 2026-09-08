@@ -4,6 +4,8 @@ import contextlib
 import errno
 import io
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -72,6 +74,30 @@ class RuntimeLockTests(unittest.TestCase):
             self.assertRaises(runtime_lock.RuntimeLockError),
         ):
             runtime_lock._try_lock(handle)
+
+    @unittest.skipUnless(runtime_lock.fcntl is not None, "requires POSIX flock inheritance")
+    def test_release_preserves_lock_inherited_by_a_live_child(self):
+        lock = ProfileRuntimeLock(self.root)
+        lock.acquire()
+        self.addCleanup(lock.release)
+        child = subprocess.Popen(
+            [sys.executable, "-B", "-c", "import sys; print('ready', flush=True); sys.stdin.read(1)"],
+            pass_fds=(lock.fileno(),), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            lock.release()
+            self.assertTrue(runtime_lock_is_held(self.root))
+            with self.assertRaises(RuntimeAlreadyRunning):
+                ProfileRuntimeLock(self.root).acquire()
+            child.communicate(timeout=5)
+            self.assertFalse(runtime_lock_is_held(self.root))
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+            child.stdin.close()
+            child.stdout.close()
 
 
 class RuntimeEntryPointTests(unittest.IsolatedAsyncioTestCase):

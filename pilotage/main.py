@@ -2367,7 +2367,15 @@ def main(argv: list[str] | None = None) -> int:
         help="run the complete read-only deployment readiness check",
     )
     service = subparsers.add_parser("service", help="control the installed user service")
-    service.add_argument("service_action", choices=("start", "stop", "status"))
+    service.add_argument("service_action", choices=("start", "stop", "restart", "status"))
+    subparsers.add_parser("restart", help="restart the selected agent service")
+    update = subparsers.add_parser("update", help="update code and dependencies, then restart if running")
+    update.add_argument("--check", action="store_true", help="fetch and check for updates without installing")
+    logs = subparsers.add_parser("logs", help="view the selected service's journal")
+    logs.add_argument("-f", "--follow", action="store_true")
+    logs.add_argument("-n", "--lines", type=int, default=50, help="journal entries to inspect (default: 50)")
+    logs.add_argument("--level", type=str.upper, choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"))
+    logs.add_argument("--since", help="relative time (1h, 30m) or a journal timestamp")
     add_cron_parser(subparsers)
 
     profile = subparsers.add_parser("profile", help="manage agent profiles")
@@ -2396,6 +2404,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "service":
         return run_service_command(args.service_action, profile_name)
+    if args.command == "restart":
+        return run_service_command("restart", profile_name)
+    if args.command == "logs":
+        from .logs import run_logs
+
+        if args.lines < 0:
+            parser.error("--lines must be zero or greater")
+        return run_logs(profile_name, follow=args.follow, lines=args.lines, level=args.level, since=args.since)
+    if args.command == "update":
+        from .update import run_update
+
+        return run_update(profile_name, check=args.check)
 
     external_setup_env = frozenset(
         name for name in CHANNEL_SETUP_ENV_KEYS if name in os.environ

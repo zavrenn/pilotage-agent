@@ -165,12 +165,22 @@ class ProfileRuntimeLock:
             raise
         self._handle = handle
 
+    def fileno(self) -> int:
+        """Descriptor for explicitly passing a held POSIX lock to an installer."""
+        if self._handle is None:
+            raise RuntimeLockError(f"Runtime lock is not held: {self.path}")
+        return self._handle.fileno()
+
     def release(self) -> None:
         handle = self._handle
         if handle is None:
             return
         self._handle = None
-        _unlock(handle)
+        # POSIX flock ownership follows the open file description. Closing our
+        # copy lets an installer that inherited it keep the lock until it exits;
+        # an explicit LOCK_UN would also unlock the installer's copy.
+        if msvcrt is not None:
+            _unlock(handle)
         try:
             handle.close()
         except OSError:

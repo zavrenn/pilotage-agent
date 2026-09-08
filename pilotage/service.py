@@ -8,8 +8,9 @@ import sys
 from typing import Callable, Sequence
 
 
-SERVICE_TIMEOUT_SECONDS = 30
-_ACTIONS = frozenset({"start", "stop", "status"})
+# The installed unit allows up to 90 seconds for graceful shutdown.
+SERVICE_TIMEOUT_SECONDS = 120
+_ACTIONS = frozenset({"start", "stop", "restart", "status"})
 
 
 def unit_name(profile_name: str) -> str:
@@ -32,7 +33,7 @@ def run_service_command(
     *,
     run: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] = _run,
 ) -> int:
-    """Start, stop, or inspect exactly one installed profile service."""
+    """Control or inspect exactly one installed profile service."""
 
     action = str(action or "").strip().lower()
     if action not in _ACTIONS:
@@ -43,7 +44,7 @@ def run_service_command(
         return 1
 
     unit = unit_name(profile_name)
-    if action in {"start", "stop"}:
+    if action in {"start", "stop", "restart"}:
         command = ["systemctl", "--user", action, unit]
     else:
         command = [
@@ -57,7 +58,7 @@ def run_service_command(
     try:
         result = run(command)
     except (OSError, subprocess.SubprocessError) as exc:
-        print(f"Could not inspect {unit}: {exc}", file=sys.stderr)
+        print(f"Could not {action} {unit}: {exc}", file=sys.stderr)
         return 1
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "systemctl failed").strip()
@@ -77,7 +78,7 @@ def run_service_command(
             f"pid={values.get('MainPID', '0')}"
         )
     else:
-        verb = "Started" if action == "start" else "Stopped"
+        verb = {"start": "Started", "stop": "Stopped", "restart": "Restarted"}[action]
         print(f"{verb} {unit}")
     return 0
 

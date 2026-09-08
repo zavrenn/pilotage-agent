@@ -328,15 +328,11 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         async def answer(_session, _prompt):
             return "Saved result"
 
-        await self.scheduler(answer)
-        finished = await wait_until(
-            lambda: (
-                value
-                if (value := self.store.resolve_job(job["id"]))["state"]
-                == "completed"
-                else None
-            )
-        )
+        scheduler, factory = await self.scheduler(answer)
+        await wait_until(lambda: factory.instances)
+        await scheduler.stop(drain_timeout_seconds=3.0)
+        finished = self.store.resolve_job(job["id"])
+        self.assertEqual(finished["state"], "completed")
         self.assertIn("home channel", finished["last_delivery_error"])
         self.assertEqual(self.store.latest_output(job["id"]), "Saved result")
 
@@ -365,14 +361,13 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         async def fail(_session, _prompt):
             raise RuntimeError("backend unavailable")
 
-        await self.scheduler(fail)
-        finished = await wait_until(
-            lambda: (
-                value
-                if (value := self.store.resolve_job(job["id"]))["state"] == "error"
-                else None
-            )
-        )
+        scheduler, factory = await self.scheduler(fail)
+        # Avoid polling the state file during atomic writes on Windows. Wait
+        # for the accepted job to drain before inspecting state and delivery.
+        await wait_until(lambda: factory.instances)
+        await scheduler.stop(drain_timeout_seconds=3.0)
+        finished = self.store.resolve_job(job["id"])
+        self.assertEqual(finished["state"], "error")
         self.assertIn("backend unavailable", finished["last_error"])
         self.assertIn("Cron run failed", self.store.latest_output(job["id"]))
         self.assertEqual(self.deliveries[0][1], t("cron.failure", "fr"))
@@ -395,14 +390,11 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         async def fail(_session, _prompt):
             raise RuntimeError("internal provider failure")
 
-        await self.scheduler(fail, channel_configs={"telegram": telegram_config})
-        finished = await wait_until(
-            lambda: (
-                value
-                if (value := self.store.resolve_job(job["id"]))["state"] == "error"
-                else None
-            )
-        )
+        scheduler, factory = await self.scheduler(fail, channel_configs={"telegram": telegram_config})
+        await wait_until(lambda: factory.instances)
+        await scheduler.stop(drain_timeout_seconds=3.0)
+        finished = self.store.resolve_job(job["id"])
+        self.assertEqual(finished["state"], "error")
 
         self.assertIn("internal provider failure", finished["last_error"])
         self.assertEqual(self.deliveries[0][0], job["origin"])

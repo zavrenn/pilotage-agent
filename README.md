@@ -99,16 +99,41 @@ The deployment is ready only when Doctor reports every required check as ready.
 Useful operator commands:
 
 ```bash
-./.venv/bin/pilotage status
-./.venv/bin/pilotage profile create work
+pilotage status
+pilotage update --check
+pilotage update
+pilotage restart
+pilotage logs -f --level WARNING
+pilotage logs --since 1h -n 100
+pilotage profile create work
 # Edit ~/.pilotage-agent/profiles/work/.env and config.yaml
-./.venv/bin/pilotage --profile work run
+pilotage --profile work run
 bash scripts/install-service.sh --profile work
-./.venv/bin/pilotage --profile work service status
-./.venv/bin/pilotage --profile work service stop
-./.venv/bin/pilotage --profile work service start
-./.venv/bin/pilotage cron list --all
+pilotage --profile work service status
+pilotage --profile work service stop
+pilotage --profile work service start
+pilotage --profile work restart
+pilotage --profile work logs -f
+pilotage cron list --all
 ```
+
+The installer links `pilotage` into `~/.local/bin`; add that directory to your
+shell's `PATH` if needed, or keep using `./.venv/bin/pilotage`.
+`update --check` fetches Git metadata without changing code or restarting anything.
+`update` follows the current branch's configured upstream and refuses local edits
+or commits ahead of upstream. Stop other profiles sharing the installation first.
+It stops the selected service, fast-forwards the checkout, runs the locked installer
+and an import check, then starts the service again only if it was running before.
+An installation failure leaves it stopped; fix the error, rerun `update`, then
+`restart`. These commands use the invoking user's existing permissions and never
+elevate privileges; separating runtime ownership from the agent account remains
+a deployment responsibility.
+
+`logs` reads the selected user service's journal. `-n` limits the journal entries
+inspected before severity filtering; `--level WARNING` includes warnings and more
+severe messages. Stream messages without a severity remain visible, including
+tracebacks and startup errors. `--since` accepts
+relative times such as `30m` or a timestamp such as `"2026-09-08 20:39:00"`.
 
 Each named profile owns its `SOUL.md` identity, configuration, WhatsApp session,
 Telegram credentials, conversations, memory, skills, workspace, cron jobs, and

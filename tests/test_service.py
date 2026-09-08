@@ -33,7 +33,7 @@ class ServiceCommandTests(unittest.TestCase):
 
     def test_start_and_stop_target_only_the_selected_user_unit(self):
         result = subprocess.CompletedProcess([], 0, "", "")
-        for action in ("start", "stop"):
+        for action in ("start", "stop", "restart"):
             with self.subTest(action=action):
                 code, output, error, commands = self.run_command(action, result)
                 self.assertEqual((code, error), (0, ""))
