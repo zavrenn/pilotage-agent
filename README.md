@@ -132,6 +132,13 @@ they are not feature switches. Memory and skill changes still require the
 foreground execution boundary, configuration access, validation and the existing
 rollback journal. Messaging replies contain plain client messages; operator
 diagnostics remain available through the CLI and logs.
+
+`gateway.media_delivery_allow_dirs` is the complete native-file delivery allowlist
+when configured: only those directories are allowed, and `[]` disables file
+delivery. When omitted, the profile workspace remains the default. Existing
+configurations needing that workspace as well must now list it explicitly.
+This controls file paths, not disclosure of copied content or text.
+
 Recovery suppresses recognized obsolete technical notices from earlier versions,
 retaining their delivery records and any evidence of already accepted messages.
 An old attachment warning appended to a business reply is replaced with a plain

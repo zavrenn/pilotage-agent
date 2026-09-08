@@ -19,8 +19,8 @@ What the model can actually take differs by kind:
 Outbound files take the reverse path. The model names a generated file with
 Hermes' ``MEDIA:/absolute/path`` directive; the directive is removed from the
 visible answer and the resolved file is accepted only when it is a regular
-file inside this profile's workspace. The selected channel then hands that
-validated path to its transport as a native attachment.
+file inside the configured delivery roots. The selected channel then hands
+that validated path to its transport as a native attachment.
 """
 
 from __future__ import annotations

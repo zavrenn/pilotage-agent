@@ -734,8 +734,7 @@ class ConfigFileTests(unittest.TestCase):
             f"  media_delivery_allow_dirs: ['{allowed.as_posix()}']\n"
         )
         config = Config.load()
-        self.assertIn(allowed.resolve(), config.outbound_media_roots)
-        self.assertIn(config.workspace_dir.resolve(), config.outbound_media_roots)
+        self.assertEqual(config.outbound_media_roots, (allowed.resolve(),))
 
         for bad in ("relative/path", (self.home / "missing").as_posix()):
             with self.subTest(bad=bad):
@@ -747,6 +746,25 @@ class ConfigFileTests(unittest.TestCase):
                     ConfigError, "media_delivery_allow_dirs"
                 ):
                     Config.load()
+
+    def test_omitted_delivery_roots_keep_default_but_explicit_empty_denies_files(self):
+        self._write("{}\n")
+        config = Config.load()
+        self.assertEqual(config.outbound_media_roots, (config.workspace_dir.resolve(),))
+
+        self._write("gateway:\n  media_delivery_allow_dirs: []\n")
+        self.assertEqual(Config.load().outbound_media_roots, ())
+
+    def test_channel_delivery_roots_replace_the_common_allowlist(self):
+        allowed = self.home / "reports"
+        allowed.mkdir()
+        self._write(
+            "gateway:\n"
+            f"  media_delivery_allow_dirs: ['{allowed.as_posix()}']\n"
+            "channels:\n  telegram:\n    gateway:\n      media_delivery_allow_dirs: []\n"
+        )
+        self.assertEqual(Config.load(channel="whatsapp").outbound_media_roots, (allowed.resolve(),))
+        self.assertEqual(Config.load(channel="telegram").outbound_media_roots, ())
 
     def test_invalid_session_reset_settings_stop_startup(self):
         for body in (

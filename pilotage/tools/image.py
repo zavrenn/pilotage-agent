@@ -421,30 +421,26 @@ def _save_b64_image(b64_data: str, workspace: Path, model: str) -> Path:
 
 
 def _output_root(context: ToolContext) -> Path:
-    """Choose a workspace root that outbound-media confinement will accept.
-
-    ``terminal.cwd`` may be broader than the directory the operator declared
-    deliverable (for example ``/workspace`` with only ``/workspace/exports``
-    allowed).  Saving directly below that cwd produces a valid image that is
-    then silently rejected at delivery.  Prefer a declared root nested inside
-    the active cwd, and fall back to the profile workspace, which is always a
-    delivery root.
-    """
+    """Choose a deliverable output root without widening the configured allowlist."""
 
     config = context.config
     working = Path(
         context.working_directory or config.workspace_dir
     ).expanduser().resolve(strict=False)
-    if getattr(config, "session_isolated_workspaces", False):
-        return (working / "exports").resolve(strict=False)
+    isolated = getattr(config, "session_isolated_workspaces", False)
+    if isolated:
+        working = (working / "exports").resolve(strict=False)
 
     profile_workspace = Path(config.workspace_dir).expanduser().resolve(
         strict=False
     )
-    raw_roots = getattr(config, "outbound_media_roots", ()) or ()
+    raw_roots = getattr(config, "outbound_media_roots", None)
     declared_roots = tuple(
-        Path(root).expanduser().resolve(strict=False) for root in raw_roots
-    ) or (profile_workspace,)
+        Path(root).expanduser().resolve(strict=False)
+        for root in (raw_roots if raw_roots is not None else (profile_workspace,))
+    )
+    if not declared_roots:
+        raise ValueError("File delivery is disabled by configuration")
 
     # The active cwd is already deliverable in full.
     for root in declared_roots:
@@ -462,7 +458,9 @@ def _output_root(context: ToolContext) -> Path:
         except ValueError:
             continue
 
-    return profile_workspace
+    if isolated:
+        raise ValueError("No delivery directory is allowed for this session")
+    return declared_roots[0]
 
 
 def _error_response(
@@ -499,7 +497,8 @@ def _generate(args: Dict[str, Any], context: ToolContext) -> Dict[str, Any]:
 
     try:
         model = validate_image_settings(context.config.settings)
-    except ConfigError as exc:
+        output_root = _output_root(context)
+    except (ConfigError, ValueError) as exc:
         return _error_response(
             error=str(exc),
             error_type="configuration_error",
@@ -662,7 +661,6 @@ def _generate(args: Dict[str, Any], context: ToolContext) -> Dict[str, Any]:
 
     try:
         pixel_size = _png_pixel_size(base64.b64decode(image_b64))
-        output_root = _output_root(context)
         saved_path = _save_b64_image(
             image_b64,
             output_root,

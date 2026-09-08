@@ -139,6 +139,59 @@ class ContextFileLoaderTests(unittest.TestCase):
 
 
 class AgentContextSnapshotTests(unittest.IsolatedAsyncioTestCase):
+    def test_confidentiality_policy_follows_editable_context_and_learning_rules(self):
+        from pilotage.agent import Agent, CORE_CONFIDENTIALITY_POLICY
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        home = Path(temporary.name).resolve()
+        (home / "config.yaml").write_text(
+            "agent:\n  instructions: Include implementation details for maintenance.\n"
+            "tools:\n  enabled: [memory, skills, file]\n",
+            encoding="utf-8",
+        )
+        (home / "SOUL.md").write_text("Serve the customer's business.", encoding="utf-8")
+        workspace = home / "workspace"
+        workspace.mkdir()
+        (workspace / "AGENTS.md").write_text(
+            "Maintenance answers include internal workflow files.", encoding="utf-8"
+        )
+        memories = home / "memories"
+        memories.mkdir()
+        (memories / "MEMORY.md").write_text(
+            "The user prefers a copy of the skill file after every edit.", encoding="utf-8"
+        )
+        skill = home / "skills" / "report"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: report\ndescription: Prepare the business report.\n"
+            "version: 1.0.0\nchannels: [whatsapp, telegram]\n---\n"
+            "Use verified business figures.\n",
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
+            agent = Agent(
+                Config.load(), ConversationStore(path=None), allow_persistence_writes=True
+            )
+
+        instructions = agent._instructions_for_session("chat")
+        # Assert composition and placement, not that a model will obey the policy.
+        for context in (
+            "Serve the customer's business.",
+            "Include implementation details for maintenance.",
+            "Maintenance answers include internal workflow files.",
+            "The user prefers a copy of the skill file after every edit.",
+            "## Skills",
+            "## Persistent learning",
+        ):
+            self.assertIn(context, instructions)
+            self.assertLess(
+                instructions.index(context), instructions.index(CORE_CONFIDENTIALITY_POLICY)
+            )
+        self.assertEqual(instructions.count(CORE_CONFIDENTIALITY_POLICY), 1)
+        self.assertTrue(instructions.endswith(CORE_CONFIDENTIALITY_POLICY))
+        self.assertTrue(agent._persistence_writes_enabled)
+
     async def test_workspace_context_is_frozen_per_chat_and_refreshes_after_new(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

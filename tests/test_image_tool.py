@@ -383,10 +383,7 @@ class GenerationTests(unittest.TestCase):
         profile_workspace.mkdir(parents=True)
         self.context.working_directory = working
         self.context.config.session_isolated_workspaces = False
-        self.context.config.outbound_media_roots = (
-            profile_workspace.resolve(),
-            exports.resolve(),
-        )
+        self.context.config.outbound_media_roots = (exports.resolve(),)
 
         with (
             mock.patch.object(
@@ -411,6 +408,42 @@ class GenerationTests(unittest.TestCase):
             self.context.config.outbound_media_roots,
         )
         self.assertEqual([attachment.path for attachment in attachments], [saved])
+
+    def test_unrelated_delivery_root_is_used_instead_of_default_workspace(self):
+        exports = self.root / "approved-reports"
+        exports.mkdir()
+        self.context.config.outbound_media_roots = (exports.resolve(),)
+        with (
+            mock.patch.object(image, "_resolve_credentials", return_value=_credentials()),
+            mock.patch.object(
+                image, "_collect_image_b64", return_value={"b64": _b64_png(), "source": "final"}
+            ),
+        ):
+            result = image._generate({"prompt": "a warehouse"}, self.context)
+        self.assertTrue(result["success"])
+        self.assertEqual(Path(result["image"]).parent, exports.resolve() / "generated-images")
+
+    def test_empty_delivery_allowlist_stops_generation_before_credentials_or_api(self):
+        self.context.config.outbound_media_roots = ()
+        with (
+            mock.patch.object(image, "_resolve_credentials") as credentials,
+            mock.patch.object(image, "_collect_image_b64") as collect,
+        ):
+            result = image._generate({"prompt": "a warehouse"}, self.context)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_type"], "configuration_error")
+        credentials.assert_not_called()
+        collect.assert_not_called()
+
+    def test_isolated_image_cannot_fall_back_to_another_delivery_root(self):
+        self.context.config.session_isolated_workspaces = True
+        self.context.working_directory = self.root / "session"
+        self.context.config.outbound_media_roots = (self.root / "other-session",)
+        with mock.patch.object(image, "_collect_image_b64") as collect:
+            result = image._generate({"prompt": "a warehouse"}, self.context)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_type"], "configuration_error")
+        collect.assert_not_called()
 
     def test_redirected_output_directory_is_refused(self):
         with mock.patch.object(

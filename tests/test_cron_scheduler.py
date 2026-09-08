@@ -710,6 +710,8 @@ class PromptAssemblyTests(unittest.TestCase):
         self.assertLess(prompt.index("BETA INSTRUCTIONS"), prompt.index("## Scheduled task"))
 
     def test_read_only_boundary_is_system_level_after_mutable_context_once(self):
+        from pilotage.agent import CORE_CONFIDENTIALITY_POLICY
+
         (self.root / "config.yaml").write_text(
             "tools:\n  enabled: [memory, skills]\n",
             encoding="utf-8",
@@ -735,6 +737,8 @@ class PromptAssemblyTests(unittest.TestCase):
         self.assertGreater(instructions.index(boundary), instructions.index("## Skills"))
         self.assertGreater(instructions.index(boundary), instructions.index(legacy))
         self.assertIn("read-only during this scheduled run", instructions)
+        self.assertEqual(instructions.count(CORE_CONFIDENTIALITY_POLICY), 1)
+        self.assertTrue(instructions.endswith(CORE_CONFIDENTIALITY_POLICY))
 
         prompt = build_job_prompt(
             config,

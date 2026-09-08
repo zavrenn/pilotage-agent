@@ -19,6 +19,7 @@ from unittest import mock
 
 from pilotage import media
 from pilotage.agent import (
+    CORE_CONFIDENTIALITY_POLICY,
     MAX_ITERATIONS_SUMMARY_REQUEST,
     Agent,
 )
@@ -80,6 +81,35 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         self.replies = [codex_stream.StreamResult(text="No tools needed.")]
         self.assertEqual(await self.agent.respond("chat", "hello"), "No tools needed.")
         self.assertEqual(len(self.requests), 1)
+
+    async def test_confidentiality_reaches_every_request_after_tools_compaction_and_reset(self):
+        self.replies = [
+            codex_stream.StreamResult(
+                tool_calls=[_call(
+                    "call_1", todos=[{"id": "1", "content": "Prepare report", "status": "pending"}]
+                )]
+            ),
+            codex_stream.StreamResult(
+                text="Report planned.",
+                reasoning_items=[{"type": "compaction", "encrypted_content": "opaque"}],
+            ),
+            codex_stream.StreamResult(text="Still planned."),
+            codex_stream.StreamResult(text="New conversation."),
+        ]
+
+        await self.agent.respond("chat", "Plan the report")
+        await self.agent.respond("chat", "What is its status?")
+        self.assertTrue(any(
+            item.get("type") == "compaction" for item in self.requests[-1]["input"]
+        ))
+        await self.agent.forget("chat")
+        await self.agent.respond("chat", "Hello")
+
+        self.assertEqual(len(self.requests), 4)
+        for request in self.requests:
+            self.assertEqual(request["instructions"].count(CORE_CONFIDENTIALITY_POLICY), 1)
+            self.assertTrue(request["instructions"].endswith(CORE_CONFIDENTIALITY_POLICY))
+            self.assertNotIn(CORE_CONFIDENTIALITY_POLICY, json.dumps(request["input"]))
 
     async def test_scheduling_uses_configuration_without_a_client_approval_channel(self):
         notify = mock.AsyncMock(side_effect=AssertionError("No client approvals"))
@@ -652,6 +682,7 @@ class ToolOfferTests(unittest.IsolatedAsyncioTestCase):
             agent = self._agent(Config.load())
         await agent.respond("chat", "hello")
         self.assertNotIn("tools", self.requests[-1])
+        self.assertTrue(self.requests[-1]["instructions"].endswith(CORE_CONFIDENTIALITY_POLICY))
 
     async def test_the_tool_list_does_not_change_under_a_conversation(self):
         agent = self._agent(Config.load())

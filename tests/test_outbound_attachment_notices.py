@@ -35,14 +35,16 @@ class OutboundAttachmentNoticeTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temporary.name)
         self.counter = 0
 
-    def channel(self, platform, language="en", *, declared_root=False):
+    def channel(self, platform, language="en", *, declared_root=False, deny_files=False):
         self.counter += 1
         home = self.root / str(self.counter)
         home.mkdir()
         reports = home / "reports"
         reports.mkdir()
         settings = f"display:\n  language: {language}\n"
-        if declared_root:
+        if deny_files:
+            settings += "gateway:\n  media_delivery_allow_dirs: []\n"
+        elif declared_root:
             settings += (
                 "gateway:\n"
                 f"  media_delivery_allow_dirs: ['{reports.as_posix()}']\n"
@@ -214,6 +216,61 @@ class OutboundAttachmentNoticeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(await self.send(fixture, f"MEDIA:{report}"))
 
                 self.assertEqual([kind for kind, _ in fixture.calls], ["file"])
+
+    async def test_explicit_allowlist_blocks_default_workspace_on_both_channels(self):
+        for platform in ("whatsapp", "telegram"):
+            with self.subTest(platform=platform):
+                fixture = self.channel(platform, declared_root=True)
+                report = fixture.reports / "report.pdf"
+                report.write_bytes(b"%PDF")
+                internal = fixture.config.workspace_dir / "internal.txt"
+                internal.write_text("Internal mechanism", encoding="utf-8")
+
+                self.assertTrue(await self.send(
+                    fixture, f"Ready\nMEDIA:{internal}\nMEDIA:{report}"
+                ))
+
+                self.assertEqual([kind for kind, _ in fixture.calls], ["text", "file"])
+                self.assertEqual(self.sent_text(fixture), [fixture.format_text(
+                    "Ready\n\n" + t("media.delivery_unavailable", "en")
+                )])
+                file_payload = fixture.calls[-1][1]
+                if platform == "whatsapp":
+                    self.assertEqual(Path(file_payload["filePath"]), report.resolve())
+                else:
+                    self.assertEqual(Path(file_payload["document"].name), report.resolve())
+
+    async def test_empty_allowlist_blocks_files_on_both_channels(self):
+        for platform in ("whatsapp", "telegram"):
+            with self.subTest(platform=platform):
+                fixture = self.channel(platform, deny_files=True)
+                report = fixture.config.workspace_dir / "report.pdf"
+                report.write_bytes(b"%PDF")
+
+                self.assertTrue(await self.send(fixture, f"MEDIA:{report}"))
+
+                self.assertEqual([kind for kind, _ in fixture.calls], ["text"])
+                self.assertEqual(self.sent_text(fixture), [fixture.format_text(
+                    t("media.delivery_unavailable", "en")
+                )])
+
+    async def test_allowed_directory_cannot_link_to_a_denied_workspace_file(self):
+        for platform in ("whatsapp", "telegram"):
+            with self.subTest(platform=platform):
+                fixture = self.channel(platform, declared_root=True)
+                internal = fixture.config.workspace_dir / "internal.txt"
+                internal.write_text("Internal mechanism", encoding="utf-8")
+                link = fixture.reports / "report.txt"
+                try:
+                    link.symlink_to(internal)
+                except OSError as exc:
+                    self.skipTest(f"Symbolic links unavailable: {exc}")
+
+                self.assertTrue(await self.send(fixture, f"MEDIA:{link}"))
+                self.assertEqual([kind for kind, _ in fixture.calls], ["text"])
+                self.assertEqual(self.sent_text(fixture), [fixture.format_text(
+                    t("media.delivery_unavailable", "en")
+                )])
 
     async def test_language_change_retries_attachment_without_repeating_accepted_notice(self):
         for platform in ("whatsapp", "telegram"):

@@ -66,8 +66,7 @@ WHATSAPP_MEDIA_NOTE = (
     "You can send generated files natively on WhatsApp. To deliver a local "
     "file, include MEDIA:/absolute/path/to/file on its own line in your "
     "response. Images (.jpg, .png, .webp) appear as photos; PDFs, spreadsheets "
-    "and other files arrive as downloadable documents. The file must be inside "
-    "this profile's workspace or an operator-declared delivery directory. "
+    "and other files arrive as downloadable documents. "
     "Use MEDIA: for local files, never a markdown "
     "link or sandbox: URL."
 )
@@ -81,8 +80,7 @@ TELEGRAM_FORMATTING_NOTE = (
 TELEGRAM_MEDIA_NOTE = (
     "You can send generated files natively on Telegram. To deliver a local "
     "file, include MEDIA:/absolute/path/to/file on its own line in your "
-    "response. The file must be inside this profile's workspace or an "
-    "operator-declared delivery directory."
+    "response."
 )
 
 # How many times the model may call tools and look at the results before it has
@@ -326,9 +324,11 @@ class Config:
 
     @property
     def outbound_media_roots(self) -> tuple[Path, ...]:
-        """Directories explicitly trusted for native outbound file delivery."""
+        """An explicit allowlist replaces the default; an empty list denies files."""
 
-        roots = [self.workspace_dir.resolve(strict=False)]
+        if self.settings.get("gateway.media_delivery_allow_dirs") is None:
+            return (self.workspace_dir.resolve(strict=False),)
+        roots = []
         for written in self.settings.names("gateway.media_delivery_allow_dirs"):
             resolved = Path(written).expanduser().resolve(strict=False)
             if resolved not in roots:
