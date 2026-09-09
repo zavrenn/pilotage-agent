@@ -270,6 +270,44 @@ class ProfileAuthenticationTests(unittest.TestCase):
         self.assertEqual(auth.read_credentials(self.main_path).refresh_token, "rotated")
         self.assertFalse(self.profile_path.exists())
 
+    def test_cli_login_succeeds_before_telegram_is_configured(self):
+        from pilotage import main
+
+        for name, directory, target in (("default", self.root, self.main_path),
+                                        ("work", self.profile, self.profile_path)):
+            with self.subTest(profile=name):
+                config_path = directory / "config.yaml"
+                written = "telegram:\n  enabled: true\n"
+                config_path.write_text(written, encoding="utf-8")
+                with (
+                    mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.root),
+                                    "HOME": str(self.root / "operator"),
+                                    "USERPROFILE": str(self.root / "operator"),
+                                    "PILOTAGE_ENV_FILE": str(directory / ".env")}, clear=True),
+                    mock.patch.object(main.auth, "device_code_login", return_value=_credentials()),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(main.main(["--profile", name, "login"]), 0)
+                self.assertEqual(auth.read_credentials(target).refresh_token, "refresh")
+                self.assertEqual(config_path.read_text(encoding="utf-8"), written)
+
+    def test_cli_run_still_requires_enabled_channel_credentials(self):
+        from pilotage import main
+
+        (self.root / "config.yaml").write_text("telegram:\n  enabled: true\n", encoding="utf-8")
+        with (
+            mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.root),
+                            "HOME": str(self.root / "operator"),
+                            "USERPROFILE": str(self.root / "operator"),
+                            "PILOTAGE_ENV_FILE": str(self.root / ".env")}, clear=True),
+            mock.patch.object(main, "command_run") as run,
+            self.assertLogs("pilotage", level="ERROR") as messages,
+        ):
+            self.assertEqual(main.main(["run"]), 1)
+        run.assert_not_called()
+        self.assertTrue(any("TELEGRAM_BOT_TOKEN is not configured" in message
+                            for message in messages.output))
+
     def test_login_writes_the_profile_without_replacing_main_auth(self):
         from pilotage import main
 
@@ -284,7 +322,7 @@ class ProfileAuthenticationTests(unittest.TestCase):
                 ),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
-                self.assertEqual(main.command_login(config), 0)
+                self.assertEqual(main.command_login(config.credentials_path), 0)
 
         self.assertEqual(auth.read_credentials(self.profile_path).refresh_token, "profile")
         self.assertEqual(auth.read_credentials(self.main_path).refresh_token, "main")

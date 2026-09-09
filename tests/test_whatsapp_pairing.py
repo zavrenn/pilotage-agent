@@ -264,6 +264,62 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertIn("UNRELATED=kept\n", env_text)
         self.assertIn("PILOTAGE_ALLOWED_SENDERS=212600000000\n", env_text)
 
+    def test_cli_pairs_before_chatgpt_and_telegram_are_configured(self):
+        from pilotage import main
+
+        state = self.config.state_dir
+        state.mkdir()
+        settings = state / "config.yaml"
+        settings.write_text("telegram:\n  enabled: true\n", encoding="utf-8")
+
+        def paired(command, **kwargs):
+            self.session.mkdir(parents=True, exist_ok=True)
+            (self.session / "creds.json").write_text(json.dumps(_qr_credentials()), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(state),
+                            "PILOTAGE_ENV_FILE": str(state / ".env"),
+                            "PILOTAGE_BRIDGE_DIR": str(self.bridge)}, clear=True),
+            mock.patch.object(main.profiles, "activate_for_process", return_value=("default", state)),
+            mock.patch.object(main.Config, "load", side_effect=AssertionError("loaded runtime config")),
+            mock.patch.object(main.auth, "read_credentials", side_effect=AssertionError("required ChatGPT login")),
+            mock.patch("pilotage.main.shutil.which", return_value="node"),
+            mock.patch("pilotage.main.subprocess.run", side_effect=paired),
+            mock.patch("builtins.input", side_effect=["+212 600 000 000", ""]),
+            redirect_stdout(StringIO()), redirect_stderr(StringIO()),
+        ):
+            self.assertEqual(main.main(["whatsapp"]), 0)
+        validate_whatsapp_session(self.session)
+        self.assertIn("telegram:\n  enabled: true", settings.read_text(encoding="utf-8"))
+        self.assertIn("PILOTAGE_ALLOWED_SENDERS=212600000000", (state / ".env").read_text())
+        self.assertFalse((state / "codex-auth.json").exists())
+
+    def test_both_protected_setup_stages_bypass_runtime_configuration(self):
+        from pilotage import deployment, main
+
+        state = self.config.state_dir
+        managed = deployment.Deployment("operator", 1001)
+        for uid, argv, handler in (
+            (1001, ["whatsapp"], "_managed_whatsapp_setup"),
+            (1002, ["whatsapp", "--pair-only"], "command_whatsapp_pair"),
+        ):
+            with (
+                self.subTest(uid=uid),
+                mock.patch.object(deployment, "load", return_value=managed),
+                mock.patch.object(deployment, "STATE", state),
+                mock.patch.object(os, "geteuid", return_value=uid, create=True),
+                mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(state)}, clear=True),
+                mock.patch.object(main.profiles, "activate_for_process", return_value=("default", state)),
+                mock.patch.object(main, "load_env_files", return_value=[]),
+                mock.patch.object(main.Config, "load", side_effect=AssertionError("loaded runtime config")),
+                mock.patch.object(main, handler, return_value=0) as setup,
+            ):
+                self.assertEqual(main.main(argv), 0)
+                self.assertEqual(setup.call_args.args[0].state_dir, state)
+                if uid == 1002:
+                    self.assertTrue(setup.call_args.kwargs["pair_only"])
+
     def test_main_routes_setup_updates_to_the_loaded_override_file(self):
         from pilotage import main as main_module
 
@@ -285,7 +341,7 @@ class WhatsAppPairingTests(unittest.TestCase):
                 "activate_for_process",
                 return_value=("default", self.root),
             ),
-            mock.patch.object(main_module.Config, "load", return_value=self.config),
+            mock.patch.object(main_module.Config, "load", side_effect=AssertionError("loaded runtime config")),
             mock.patch.object(
                 main_module,
                 "command_whatsapp_pair",
@@ -296,7 +352,11 @@ class WhatsAppPairingTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         pair.assert_called_once_with(
-            self.config,
+            main_module._WhatsAppSetupConfig(
+                state_dir=self.root, bridge_dir=main_module.REPO_ROOT / "bridge",
+                allowed_senders=("212600000000",),
+                home_chat_id="212600000000@s.whatsapp.net",
+            ),
             env_path=selected,
             settings_path=self.root / "config.yaml",
             external_env=frozenset(),

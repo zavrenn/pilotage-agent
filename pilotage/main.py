@@ -22,6 +22,7 @@ import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -50,7 +51,7 @@ from .channels.telegram import (
     normalize_telegram_topic_id,
 )
 from .codex import auth
-from .config import Config, ConfigError
+from .config import Config, ConfigError, REPO_ROOT
 from .cron.cli import add_cron_parser, run_cron_command
 from .cron.jobs import CronError, CronStore
 from .cron.scheduler import CronScheduler
@@ -575,7 +576,7 @@ def _configure_logging(verbose: bool) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-def command_login(config: Config) -> int:
+def command_login(credentials_path: Path) -> int:
     print("Signing in to ChatGPT.")
     try:
         credentials = auth.device_code_login()
@@ -583,9 +584,9 @@ def command_login(config: Config) -> int:
         print(f"Login failed: {exc}", file=sys.stderr)
         return 1
     # Signing in replaces the tokens another agent may be refreshing right now.
-    with auth.credentials_lock(config.credentials_path):
-        auth.write_credentials(config.credentials_path, credentials)
-    print(f"Signed in. Credentials stored at {config.credentials_path}.")
+    with auth.credentials_lock(credentials_path):
+        auth.write_credentials(credentials_path, credentials)
+    print(f"Signed in. Credentials stored at {credentials_path}.")
     return 0
 
 
@@ -634,8 +635,36 @@ class _SetupCancelled(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class _WhatsAppSetupConfig:
+    """Only the paths and identities needed to pair, without runtime validation."""
+
+    state_dir: Path
+    bridge_dir: Path
+    allowed_senders: tuple[str, ...]
+    home_chat_id: str
+
+    @property
+    def bridge_script(self) -> Path:
+        return self.bridge_dir / "bridge.js"
+
+    @property
+    def session_dir(self) -> Path:
+        return self.state_dir / "whatsapp"
+
+    @classmethod
+    def load(cls, profile_path: Path) -> "_WhatsAppSetupConfig":
+        written_senders = os.environ.get("PILOTAGE_ALLOWED_SENDERS", "").strip()
+        return cls(
+            state_dir=profile_path,
+            bridge_dir=Path(os.environ.get("PILOTAGE_BRIDGE_DIR", "").strip() or REPO_ROOT / "bridge"),
+            allowed_senders=normalize_whatsapp_allowed_senders(written_senders) if written_senders else (),
+            home_chat_id=os.environ.get("WHATSAPP_HOME_CHANNEL", "").strip(),
+        )
+
+
 def command_whatsapp_pair(
-    config: Config,
+    config: _WhatsAppSetupConfig,
     *,
     env_path: Path | None = None,
     settings_path: Path | None = None,
@@ -1070,7 +1099,7 @@ def _prompt_required_whatsapp_value(
 
 
 def _prompt_whatsapp_configuration(
-    config: Config,
+    config: _WhatsAppSetupConfig,
 ) -> tuple[tuple[str, ...], dict[str, str]]:
     updates: dict[str, str] = {}
     current_senders = tuple(
@@ -2353,7 +2382,7 @@ async def _run_enabled_channels(
 
 
 def _managed_whatsapp_setup(
-    config: Config, profile_name: str, env_path: Path, settings_path: Path,
+    config: _WhatsAppSetupConfig, profile_name: str, env_path: Path, settings_path: Path,
     external_env: frozenset[str],
 ) -> int:
     """The operator saves policy; the unprivileged account handles the session."""
@@ -2496,12 +2525,32 @@ def main(argv: list[str] | None = None) -> int:
     setup_env_path = (
         loaded_env_files[0] if loaded_env_files else candidate_env_files()[0]
     )
+    if args.command == "login":
+        # Authentication must work before channel credentials are configured.
+        return command_login(profile_path / "codex-auth.json")
     if args.command == "telegram":
         return command_telegram_setup(
             profile_path,
             env_path=setup_env_path,
             settings_path=selected_settings_path,
             external_env=external_setup_env,
+        )
+    if args.command == "whatsapp":
+        try:
+            config = _WhatsAppSetupConfig.load(profile_path)
+        except ValueError as exc:
+            logger.error("%s", exc)
+            return 1
+        if managed and not args.pair_only:
+            return _managed_whatsapp_setup(
+                config, profile_name, setup_env_path, selected_settings_path, external_setup_env,
+            )
+        return command_whatsapp_pair(
+            config,
+            env_path=setup_env_path,
+            settings_path=selected_settings_path,
+            external_env=external_setup_env,
+            **({"pair_only": True} if args.pair_only else {}),
         )
     try:
         # Parse the exact view that will run while still inside the guarded
@@ -2526,20 +2575,6 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("%s", exc)
         return 1
 
-    if args.command == "login":
-        return command_login(config)
-    if args.command == "whatsapp":
-        if managed and not args.pair_only:
-            return _managed_whatsapp_setup(
-                config, profile_name, setup_env_path, selected_settings_path, external_setup_env,
-            )
-        return command_whatsapp_pair(
-            config,
-            env_path=setup_env_path,
-            settings_path=selected_settings_path,
-            external_env=external_setup_env,
-            **({"pair_only": True} if args.pair_only else {}),
-        )
     if args.command == "status":
         return command_status(config, profile_name)
     if args.command == "doctor":
