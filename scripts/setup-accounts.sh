@@ -9,10 +9,12 @@ case "$operator" in root|agent) fail "operator must be separate from root and ag
 [ "$#" -le 1 ] || fail "usage: $0 [OPERATOR]"
 command -v sudo >/dev/null || fail "install sudo first"
 if ! id "$operator" >/dev/null 2>&1; then
-  adduser --disabled-password --gecos "Pilotage operator" "$operator"
+  getent group "$operator" >/dev/null || addgroup "$operator"
+  adduser --disabled-password --ingroup "$operator" --gecos "Pilotage operator" "$operator"
 fi
 if ! id agent >/dev/null 2>&1; then
-  adduser --disabled-password --gecos "Pilotage runtime" agent
+  getent group agent >/dev/null || addgroup agent
+  adduser --disabled-password --ingroup agent --gecos "Pilotage runtime" agent
 fi
 [ "$(getent passwd agent | cut -d: -f6)" = /home/agent ] || fail "agent home must be /home/agent"
 [ "$(id -u "$operator")" -ne 0 ] || fail "operator cannot have UID 0"

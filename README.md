@@ -198,7 +198,8 @@ operator account; never run a root installer from the old agent-owned checkout.
 As root (skip account creation if `operator` already exists):
 
 ```bash
-adduser operator
+getent group operator >/dev/null || addgroup operator
+adduser --ingroup operator operator
 install -d -o operator -g operator -m 0755 /opt/pilotage-agent
 runuser -l operator -c 'git clone https://github.com/zavrenn/pilotage-agent.git /opt/pilotage-agent'
 cd /opt/pilotage-agent
