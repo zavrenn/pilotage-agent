@@ -82,6 +82,7 @@ def build_persistence_policy(*, memory: bool, skills: bool) -> str:
             "tasks"
         )
         existing_home = "entry or skill"
+        related_knowledge = "memory entries and skills"
     elif memory:
         eligibility = (
             "when the user explicitly asks to remember or states a durable personal "
@@ -89,6 +90,7 @@ def build_persistence_policy(*, memory: bool, skills: bool) -> str:
             "across distinct tasks"
         )
         existing_home = "entry"
+        related_knowledge = "entries in both memory targets"
     else:
         eligibility = (
             "when the user explicitly asks to create or update a skill, clearly "
@@ -96,6 +98,7 @@ def build_persistence_policy(*, memory: bool, skills: bool) -> str:
             "demonstrated across distinct tasks"
         )
         existing_home = "skill"
+        related_knowledge = "skills"
     homes = []
     if memory:
         homes.append("memory for durable personal facts, preferences, and constraints")
@@ -110,16 +113,28 @@ def build_persistence_policy(*, memory: bool, skills: bool) -> str:
         "## Persistent learning\n"
         "No change is the default. In a foreground conversation only, persist "
         + eligibility
-        + ". Inspect the live target first and update, merge, or remove before "
-        "adding; create only when no existing "
+        + ". An explicit request, durable statement, or clear correction needs no "
+        "repetition. Check for equivalent meaning in supplied instructions, known "
+        "configuration, and relevant "
+        + related_knowledge
+        + ". Inspect the live target and likely matches before writing; use the "
+        "supplied context to avoid unrelated reads. "
+        "If already covered, acknowledge it without writing, even for an explicit "
+        "save request. Restating a supplied language, format, or operating rule "
+        "adds no new knowledge. Otherwise update or merge before adding; create "
+        "only when "
+        "no existing "
         + existing_home
         + " is the right home. Use "
         + " and ".join(homes)
-        + ". Change or remove only what the evidence supersedes. Never persist "
+        + ". Change or remove only what the evidence supersedes; preserve unrelated "
+        "valid content and keep saved content concise and scoped to its evidence. "
+        "Never persist "
         "guesses, generic or rediscoverable facts, one-off task "
         "state, outputs, logs, or temporary workflows. Use only the canonical "
         + " and ".join(tools)
-        + " tools and include a short factual change_reason."
+        + " tools and include a short factual change_reason naming the evidence "
+        "and useful difference."
     )
     if skills:
         policy += (

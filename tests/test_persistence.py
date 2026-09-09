@@ -54,11 +54,16 @@ class PolicyAndTargetTests(unittest.TestCase):
             "explicitly asks or states a durable fact",
             "clearly corrects",
             "across distinct tasks",
-            "Inspect the live target first",
+            "needs no repetition",
+            "Check for equivalent meaning in supplied instructions, known configuration, and relevant memory entries and skills",
+            "Inspect the live target and likely matches before writing",
+            "If already covered, acknowledge it without writing, even for an explicit save request",
             "create only when no existing entry or skill is the right home",
             "memory for durable personal facts",
             "skills for reusable task procedures",
             "Change or remove only what the evidence supersedes",
+            "preserve unrelated valid content",
+            "keep saved content concise and scoped to its evidence",
             "Never persist guesses",
             "one-off task state",
             "rediscoverable facts",
@@ -72,6 +77,7 @@ class PolicyAndTargetTests(unittest.TestCase):
         self.assertIn("same preference", memory_only)
         self.assertIn("no existing entry is the right home", memory_only)
         self.assertIn("canonical memory tools", memory_only)
+        self.assertIn("entries in both memory targets", memory_only)
         self.assertNotIn("skill", memory_only)
         self.assertNotIn("procedure", memory_only)
 

@@ -1122,7 +1122,9 @@ MEMORY_SCHEMA = {
                 "maxLength": 240,
                 "description": (
                     "Required for any mutation: one short factual sentence naming "
-                    "the durable evidence. Omit for action='list'. Never include "
+                    "the durable evidence and useful difference from existing "
+                    "knowledge, including supplied instructions and defaults. "
+                    "Omit for action='list'. Never include "
                     "private reasoning or a raw transcript."
                 ),
             },

@@ -1154,7 +1154,8 @@ WRITE_FILE_SCHEMA = {
                 "maxLength": 240,
                 "description": (
                     "Required only when the target is under the profile skills "
-                    "directory: a short factual evidence statement, not private reasoning."
+                    "directory: a short factual statement naming the evidence and "
+                    "useful difference from existing knowledge, not private reasoning."
                 ),
             },
         },
@@ -1179,7 +1180,8 @@ PATCH_SCHEMA = {
                 "maxLength": 240,
                 "description": (
                     "Required only when any target is under the profile skills "
-                    "directory: a short factual evidence statement, not private reasoning."
+                    "directory: a short factual statement naming the evidence and "
+                    "useful difference from existing knowledge, not private reasoning."
                 ),
             },
         },
