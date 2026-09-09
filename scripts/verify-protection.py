@@ -27,7 +27,10 @@ def main():
     operator = pwd.getpwnam(json.loads(manifest.read_text())["operator"])
     assert agent.pw_uid != operator.pw_uid and agent.pw_uid != 0
     assert os.getgrouplist("agent", agent.pw_gid) == [agent.pw_gid]
-    assert subprocess.run(["sudo", "-l", "-U", "agent"], capture_output=True).returncode != 0
+    subprocess.run(
+        [sys.executable, "-I", "-B", str(Path(__file__).with_name("verify-agent-sudo.py"))],
+        check=True,
+    )
 
     def run(code, *arguments):
         result = subprocess.run(

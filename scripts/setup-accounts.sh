@@ -26,9 +26,7 @@ fi
 for group in $(id -nG agent); do
   [ "$group" = agent ] || fail "remove agent from privileged/unexpected group '$group' first"
 done
-if sudo -l -U agent >/dev/null 2>&1; then
-  fail "agent has sudo permissions; remove those grants first"
-fi
+python3 -I -B "$(dirname "$0")/verify-agent-sudo.py"
 usermod -aG sudo,agent "$operator"
 passwd --lock agent >/dev/null
 operator_home="$(getent passwd "$operator" | cut -d: -f6)"

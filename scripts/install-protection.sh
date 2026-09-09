@@ -28,7 +28,7 @@ done
 for group in $(id -nG agent); do
   [ "$group" = agent ] || fail "agent must belong only to its unprivileged group"
 done
-if sudo -l -U agent >/dev/null 2>&1; then fail "agent still has sudo permissions"; fi
+python3 -I -B "$repo/scripts/verify-agent-sudo.py"
 id -nG "$operator" | tr ' ' '\n' | grep -qx agent || fail "run setup-accounts.sh first"
 id -nG "$operator" | tr ' ' '\n' | grep -qx sudo || fail "operator needs sudo"
 [ -x "$repo/.venv/bin/python" ] || fail "install locked dependencies as the operator first"
