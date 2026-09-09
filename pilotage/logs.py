@@ -10,6 +10,7 @@ import sys
 from datetime import datetime
 
 from .service import unit_name
+from .deployment import system_command
 
 
 LEVELS = {"DEBUG": 7, "INFO": 6, "WARNING": 4, "ERROR": 3, "CRITICAL": 2}
@@ -47,7 +48,7 @@ def run_logs(profile_name: str, *, follow=False, lines=50, level=None, since=Non
         print("journalctl is not installed; logs require Ubuntu systemd.", file=sys.stderr)
         return 1
     command = [
-        "journalctl", "--user", "--unit", unit_name(profile_name),
+        *system_command("journalctl", privileged=True), "--unit", unit_name(profile_name),
         "--no-pager", "--all", "--output=json", "--lines", str(lines),
     ]
     if follow:

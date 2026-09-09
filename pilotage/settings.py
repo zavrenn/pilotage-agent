@@ -24,6 +24,7 @@ import difflib
 import math
 import os
 import re
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -226,6 +227,11 @@ def _validate_known_settings(
 
 def config_path(state_dir: Path) -> Path:
     """Where the configuration file is read from."""
+    from . import deployment
+
+    if deployment.load():
+        deployment.validate_policy_paths(state_dir, os.environ)
+        return state_dir / CONFIG_FILENAME
     override = os.environ.get("PILOTAGE_CONFIG", "").strip()
     if override:
         return Path(override).expanduser()
@@ -360,7 +366,8 @@ def set_channel_enabled(path: Path, channel: str, enabled: bool = True) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         try:
-            os.chmod(temporary, 0o600)
+            mode = (stat.S_IMODE(path.stat().st_mode) & 0o640) if path.exists() else 0o600
+            os.chmod(temporary, mode)
         except OSError:
             pass
         os.replace(temporary, path)

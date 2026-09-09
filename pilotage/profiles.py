@@ -15,6 +15,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
+import subprocess
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -133,6 +136,10 @@ def _active_profile_path() -> Path:
 
 def get_active_profile() -> str:
     """Read the sticky profile, failing closed to default on corrupt state."""
+    from .deployment import load
+
+    if load():
+        return "default"  # Operator commands never trust agent-written selection.
     try:
         written = _active_profile_path().read_text(encoding="utf-8").strip()
     except (FileNotFoundError, UnicodeDecodeError, OSError):
@@ -244,6 +251,42 @@ def _allocate_bridge_port() -> int:
 
 def create_profile(name: str) -> Path:
     """Create one fresh profile without copying another agent's state."""
+    from . import deployment
+
+    managed = deployment.load()
+    with ExitStack() as stack:
+        if managed:
+            managed.require_operator()
+            parent = profiles_root()
+            info = parent.lstat()
+            import grp
+
+            if (parent != deployment.STATE / "profiles" or not stat.S_ISDIR(info.st_mode)
+                    or info.st_uid != managed.operator_uid
+                    or info.st_gid != grp.getgrnam("agent").gr_gid
+                    or stat.S_IMODE(info.st_mode) != 0o2750):
+                raise PermissionError("Protected profiles directory has unexpected ownership or permissions.")
+            # A new profile must not appear while an update holds the known
+            # profiles stopped and replaces their shared dependencies.
+            lock = ProfileRuntimeLock(deployment.CHECKOUT / ".git/pilotage-update")
+            lock.acquire()
+            stack.callback(lock.release)
+        path = _create_profile(name, protected=managed is not None)
+        if managed:
+            from .service import SERVICE_TIMEOUT_SECONDS, unit_name
+
+            unit = unit_name(path.name)
+            result = subprocess.run(
+                [*deployment.system_command("systemctl", privileged=True), "enable", unit],
+                capture_output=True, text=True, timeout=SERVICE_TIMEOUT_SECONDS,
+            )
+            if result.returncode:
+                raise ValueError(f"Profile created, but service enablement failed. Run sudo systemctl enable {unit}: "
+                                 + (result.stderr or result.stdout).strip())
+        return path
+
+
+def _create_profile(name: str, *, protected: bool) -> Path:
     canon = normalize_profile_name(name)
     validate_profile_name(canon)
     if canon == "default":
@@ -256,10 +299,12 @@ def create_profile(name: str) -> Path:
     bridge_port = _allocate_bridge_port()
     created = False
     try:
-        profile_dir.mkdir(parents=True)
+        # Keep the new directory private until every protected inode is ready.
+        profile_dir.mkdir(mode=0o700, parents=True)
         created = True
-        for subdir in _PROFILE_DIRS:
-            (profile_dir / subdir).mkdir()
+        if not protected:
+            for subdir in _PROFILE_DIRS:
+                (profile_dir / subdir).mkdir()
 
         # A blank file is intentional: it prevents a named profile from silently
         # loading the repository .env. Real process environment still wins, as it
@@ -284,11 +329,23 @@ def create_profile(name: str) -> Path:
             "  enabled: false\n",
             encoding="utf-8",
         )
-        for protected in (env_path, config_path):
-            try:
-                os.chmod(protected, 0o600)
-            except OSError:
-                pass
+        for policy in (env_path, config_path):
+            if protected:
+                policy.chmod(0o640)
+            else:
+                try:
+                    policy.chmod(0o600)
+                except OSError:
+                    pass
+        if protected:
+            for filename, mode in (("SOUL.md", 0o640), (".runtime.lock", 0o660)):
+                policy = profile_dir / filename
+                policy.touch()
+                policy.chmod(mode)
+            # The runtime creates its own data folders as agent, on first use.
+            # setgid inherits the protected parent's agent group; sticky keeps
+            # operator-owned policy files safe from unlink and replacement.
+            profile_dir.chmod(0o3770)
     except BaseException:
         if created:
             shutil.rmtree(profile_dir, ignore_errors=True)

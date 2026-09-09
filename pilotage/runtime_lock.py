@@ -10,9 +10,12 @@ from __future__ import annotations
 import errno
 import json
 import os
+import stat
 import threading
 from pathlib import Path
 from typing import IO, Optional
+
+from .deployment import protected_lock
 
 try:  # pragma: no cover - selected by platform
     import fcntl
@@ -36,6 +39,25 @@ class RuntimeLockError(RuntimeError):
 
 class RuntimeAlreadyRunning(RuntimeLockError):
     """Another process already owns the selected profile."""
+
+
+def _open_lock(path: Path, *, create: bool) -> IO[str]:
+    if not protected_lock(path):
+        return open(path, "a+" if create else "r+", encoding="utf-8")
+    # The installer owns the sticky parent and provisions this inode. Never
+    # create a replacement, follow a link, or chmod away the shared access.
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        from .deployment import load
+
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != load().operator_uid or stat.S_IMODE(info.st_mode) != 0o660):
+            raise RuntimeLockError("Protected runtime lock ownership or permissions changed.")
+        return os.fdopen(fd, "r+", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def _try_lock(handle: IO[str]) -> bool:
@@ -85,8 +107,10 @@ def runtime_lock_is_held(state_dir: Path) -> bool:
         if key in _PROCESS_LOCKS:
             return True
     try:
-        handle = open(path, "r+", encoding="utf-8")
+        handle = _open_lock(path, create=False)
     except FileNotFoundError:
+        if protected_lock(path):
+            raise RuntimeLockError(f"Missing protected runtime lock: {path}")
         return False
     except OSError as exc:
         raise RuntimeLockError(f"Cannot open runtime lock {path}: {exc}") from exc
@@ -126,7 +150,7 @@ class ProfileRuntimeLock:
                     f"Another Pilotage runtime is already using {self.state_dir}."
                 )
             try:
-                handle = open(self.path, "a+", encoding="utf-8")
+                handle = _open_lock(self.path, create=True)
             except OSError as exc:
                 raise RuntimeLockError(f"Cannot open runtime lock {self.path}: {exc}") from exc
             try:
@@ -154,7 +178,8 @@ class ProfileRuntimeLock:
             except OSError:
                 pass
             try:
-                os.chmod(self.path, 0o600)
+                if not protected_lock(self.path):
+                    os.chmod(self.path, 0o600)
             except OSError:
                 pass
         except BaseException:

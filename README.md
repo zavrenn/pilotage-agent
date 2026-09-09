@@ -45,6 +45,11 @@ It is still evolving and has no stable public API or compatibility guarantee.
 
 ## Install on Ubuntu
 
+For a fresh protected LXC deployment, follow
+[Pilotage Deploy](https://github.com/zavrenn/pilotage-deploy). The original
+single-account installation remains available for development and existing
+deployments; `pilotage update` does not silently migrate them.
+
 Clone the repository as the unprivileged service user:
 
 ```bash
@@ -175,9 +180,74 @@ DOCX/XLSX reading caps both the input file and the total expanded XML read at
 50 MiB and supports stored or DEFLATE-compressed XML. Excessive expansion and
 unsupported XML compression are rejected with a plain message.
 
+## Protected LXC deployment
+
+The `operator` account has sudo and owns a clean runtime checkout at
+`/opt/pilotage-agent`. The `agent` account has no sudo. Its workspace, memory,
+skills, cron data, channel sessions and authentication refresh remain writable.
+Runtime code, `config.yaml`, `.env`, `SOUL.md`, and the system service are
+protected from agent edits, including replacement of their containing folders.
+Operator Git credentials stay in the private operator home.
+Protected deployments reject alternate `PILOTAGE_CONFIG` and `PILOTAGE_ENV_FILE`
+paths. Keep these files directly in the selected profile.
+
+The [Pilotage Deploy bootstrap](https://github.com/zavrenn/pilotage-deploy)
+prepares this layout automatically for new containers.
+For an existing container, first prepare a **fresh trusted checkout** under the
+operator account; never run a root installer from the old agent-owned checkout.
+As root (skip account creation if `operator` already exists):
+
+```bash
+adduser operator
+install -d -o operator -g operator -m 0755 /opt/pilotage-agent
+runuser -l operator -c 'git clone https://github.com/zavrenn/pilotage-agent.git /opt/pilotage-agent'
+cd /opt/pilotage-agent
+bash scripts/setup-accounts.sh operator
+```
+
+As `operator`, install the dependencies:
+
+```bash
+cd /opt/pilotage-agent
+bash scripts/install.sh --dependencies-only
+```
+
+During a planned cutover, stop the old services and agent login sessions, and
+relocate/revoke any deployment Git credentials left under `/home/agent`.
+Then run as root from the new checkout:
+
+```bash
+bash scripts/install-protection.sh operator
+./.venv/bin/python -I -B scripts/verify-protection.py
+```
+
+The installer preserves existing agent data and registered profiles, disables
+the legacy user-service autostart, and installs **stopped** system services.
+It refuses running agent processes, unexpected privileges and linked protected
+files. As the operator, use `pilotage profile create NAME` to add another
+protected profile after setup; its service is enabled but stays stopped.
+Select profiles with `--profile NAME` (there is no mutable sticky selection).
+
+Use `pilotage login`, `whatsapp`, `telegram`, `restart`, `doctor`, `update`, and
+`logs -f --level WARNING` from the operator account. State operations run as
+`agent`; administration uses the operator's normal sudo authentication.
+Log in again after account setup to pick up the new group membership.
+Run `restart` before `doctor`, which checks the live deployment.
+Every `pilotage update` restores runtime read/execute permissions and verifies
+the updated import as `agent` before restarting.
+
+Keep each agent's Git repository in the operator home. Copy its configuration
+and identity into the protected profile as the operator, and copy skills as
+`agent`. Do not clone or overlay a Git repository into `/home/agent`.
+
+This prevents runtime/configuration modification. It does not conceal the
+instructions or runtime credentials that the executing agent must read.
+The folder protection uses Linux's [sticky-directory ownership checks](https://man7.org/linux/man-pages/man2/unlink.2.html).
+
 ## Verify changes
 
-After installing the locked environments:
+Run tests in a separate development checkout, never in the protected live
+installation. After installing the locked environments there:
 
 ```bash
 ./.venv/bin/python -m unittest discover -s tests

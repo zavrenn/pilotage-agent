@@ -1,0 +1,34 @@
+[Unit]
+Description=Pilotage Agent (%i)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=agent
+Group=agent
+WorkingDirectory=/opt/pilotage-agent
+Environment=HOME=/home/agent
+Environment=PILOTAGE_HOME=/home/agent/.pilotage-agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/opt/pilotage-agent/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/pilotage-agent/.venv/bin/python -I -B -m pilotage.main --profile %i run
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/home/agent
+InaccessiblePaths=/opt/pilotage-agent/.git
+PrivateTmp=yes
+Restart=always
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=90
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

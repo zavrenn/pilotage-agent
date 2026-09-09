@@ -1,4 +1,4 @@
-"""Small operator controls for the installed Pilotage user service."""
+"""Small operator controls for the installed Pilotage service."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import sys
 from typing import Callable, Sequence
+
+from .deployment import system_command
 
 
 # The installed unit allows up to 90 seconds for graceful shutdown.
@@ -45,11 +47,10 @@ def run_service_command(
 
     unit = unit_name(profile_name)
     if action in {"start", "stop", "restart"}:
-        command = ["systemctl", "--user", action, unit]
+        command = [*system_command("systemctl", privileged=True), action, unit]
     else:
         command = [
-            "systemctl",
-            "--user",
+            *system_command("systemctl"),
             "show",
             unit,
             "--no-pager",

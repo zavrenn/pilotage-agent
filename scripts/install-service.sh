@@ -22,6 +22,9 @@ esac
 [ "${#profile}" -le 64 ] || fail "profile name is longer than 64 characters"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ "$repo_root" = /opt/pilotage-agent ] && [ -e /etc/pilotage-agent.json ]; then
+  fail "protected deployments use the system service; use pilotage restart"
+fi
 pilotage_bin="$repo_root/.venv/bin/pilotage"
 [ -x "$pilotage_bin" ] || fail "run scripts/install.sh first"
 command -v systemctl >/dev/null 2>&1 || fail "systemctl is not installed"

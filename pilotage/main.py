@@ -640,6 +640,7 @@ def command_whatsapp_pair(
     env_path: Path | None = None,
     settings_path: Path | None = None,
     external_env: frozenset[str] = frozenset(),
+    pair_only: bool = False,
 ) -> int:
     """Configure and pair WhatsApp without starting the agent runtime."""
 
@@ -667,7 +668,10 @@ def command_whatsapp_pair(
             return 1
         selected_settings_path = settings_path or config_path(config.state_dir)
         try:
-            allowed_senders, updates = _prompt_whatsapp_configuration(config)
+            allowed_senders, updates = (
+                (config.allowed_senders, {}) if pair_only
+                else _prompt_whatsapp_configuration(config)
+            )
         except _SetupCancelled:
             print("WhatsApp setup cancelled.", file=sys.stderr)
             return 1
@@ -711,13 +715,13 @@ def command_whatsapp_pair(
                 return 1
             if not repair:
                 if paired:
-                    if not _save_channel_enabled(
+                    if not pair_only and not _save_channel_enabled(
                         selected_settings_path, "whatsapp", True
                     ):
                         return 1
                     print("WhatsApp configuration is saved; existing pairing kept.")
                     return 0
-                if not _save_channel_enabled(
+                if not pair_only and not _save_channel_enabled(
                     selected_settings_path, "whatsapp", False
                 ):
                     return 1
@@ -726,7 +730,7 @@ def command_whatsapp_pair(
 
         # A failed or interrupted pairing must not leave an unusable channel
         # selected for the resident runtime.
-        if not _save_channel_enabled(selected_settings_path, "whatsapp", False):
+        if not pair_only and not _save_channel_enabled(selected_settings_path, "whatsapp", False):
             return 1
         if credentials_path.is_file():
             try:
@@ -773,7 +777,7 @@ def command_whatsapp_pair(
                 file=sys.stderr,
             )
             return 1
-        if not _save_channel_enabled(selected_settings_path, "whatsapp", True):
+        if not pair_only and not _save_channel_enabled(selected_settings_path, "whatsapp", True):
             return 1
         print("WhatsApp is connected and its profile credentials are saved.")
         return 0
@@ -2347,6 +2351,34 @@ async def _run_enabled_channels(
             return 1
     return 0
 
+
+def _managed_whatsapp_setup(
+    config: Config, profile_name: str, env_path: Path, settings_path: Path,
+    external_env: frozenset[str],
+) -> int:
+    """The operator saves policy; the unprivileged account handles the session."""
+    from . import deployment
+
+    lock = ProfileRuntimeLock(config.state_dir)
+    try:
+        lock.acquire()
+        _, updates = _prompt_whatsapp_configuration(config)
+        if updates.keys() & external_env:
+            raise ValueError("Change externally supplied channel values at their deployment source.")
+        update_env_values(env_path, updates)
+        if not _save_channel_enabled(settings_path, "whatsapp", False):
+            return 1
+    except (RuntimeLockError, OSError, ValueError, _SetupCancelled) as exc:
+        print(f"WhatsApp setup failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        lock.release()
+    code = deployment.as_agent(["--profile", profile_name, "whatsapp", "--pair-only"])
+    if code == 0 and not _save_channel_enabled(settings_path, "whatsapp", True):
+        return 1
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pilotage", description="Pilotage Agent")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -2355,9 +2387,10 @@ def main(argv: list[str] | None = None) -> int:
 
     subparsers.add_parser("login", help="authenticate against ChatGPT")
     subparsers.add_parser("run", help="answer enabled messaging channels until stopped")
-    subparsers.add_parser(
+    whatsapp_parser = subparsers.add_parser(
         "whatsapp", help="configure allowed numbers, home chat, and QR pairing"
     )
+    whatsapp_parser.add_argument("--pair-only", action="store_true", help=argparse.SUPPRESS)
     subparsers.add_parser(
         "telegram", help="configure allowed users, home chat, and bot token"
     )
@@ -2366,7 +2399,7 @@ def main(argv: list[str] | None = None) -> int:
         "doctor",
         help="run the complete read-only deployment readiness check",
     )
-    service = subparsers.add_parser("service", help="control the installed user service")
+    service = subparsers.add_parser("service", help="control the installed service")
     service.add_argument("service_action", choices=("start", "stop", "restart", "status"))
     subparsers.add_parser("restart", help="restart the selected agent service")
     update = subparsers.add_parser("update", help="update code and dependencies, then restart if running")
@@ -2392,6 +2425,38 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
+
+    from . import deployment
+
+    try:
+        managed = deployment.load()
+        if managed:
+            written_home = os.environ.get("PILOTAGE_HOME", "").strip()
+            if written_home:
+                selected_root = Path(written_home).expanduser()
+                if selected_root.parent.name == "profiles":
+                    selected_root = selected_root.parent.parent
+                if selected_root != deployment.STATE:
+                    raise ValueError("Protected commands use the installed state. Run isolated tests from a separate checkout.")
+            os.environ["PILOTAGE_HOME"] = str(deployment.STATE)
+            if args.command == "profile" and args.profile_command not in {"list", "show"}:
+                managed.require_operator()
+                if args.profile_command != "create":
+                    raise ValueError("Use --profile NAME to select protected profiles; remove deployed profiles during operator maintenance.")
+            operator_command = args.command in {"update", "restart", "service", "logs", "telegram"}
+            if args.command == "whatsapp" and not args.pair_only:
+                operator_command = True
+            if operator_command:
+                managed.require_operator()
+            if os.geteuid() == 0:
+                raise PermissionError(f"Use the {managed.operator} operator account, not root.")
+            if os.geteuid() == managed.operator_uid and args.command in {"run", "login", "status", "doctor", "cron"}:
+                return deployment.as_agent(list(argv if argv is not None else sys.argv[1:]))
+        if getattr(args, "pair_only", False) and (not managed or os.geteuid() == managed.operator_uid):
+            raise ValueError("--pair-only is reserved for the unprivileged pairing subprocess.")
+    except (OSError, ValueError, KeyError) as exc:
+        logger.error("%s", exc)
+        return 1
 
     if args.command == "profile":
         return _command_profile(args)
@@ -2420,13 +2485,17 @@ def main(argv: list[str] | None = None) -> int:
     external_setup_env = frozenset(
         name for name in CHANNEL_SETUP_ENV_KEYS if name in os.environ
     )
-    loaded_env_files = load_env_files()
+    try:
+        loaded_env_files = load_env_files()
+        selected_settings_path = config_path(profile_path)
+    except (OSError, ValueError) as exc:
+        logger.error("%s", exc)
+        return 1
     for path in loaded_env_files:
         logger.info("Read environment from %s", path)
     setup_env_path = (
         loaded_env_files[0] if loaded_env_files else candidate_env_files()[0]
     )
-    selected_settings_path = config_path(profile_path)
     if args.command == "telegram":
         return command_telegram_setup(
             profile_path,
@@ -2460,11 +2529,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "login":
         return command_login(config)
     if args.command == "whatsapp":
+        if managed and not args.pair_only:
+            return _managed_whatsapp_setup(
+                config, profile_name, setup_env_path, selected_settings_path, external_setup_env,
+            )
         return command_whatsapp_pair(
             config,
             env_path=setup_env_path,
             settings_path=selected_settings_path,
             external_env=external_setup_env,
+            **({"pair_only": True} if args.pair_only else {}),
         )
     if args.command == "status":
         return command_status(config, profile_name)
@@ -2510,7 +2584,7 @@ def _command_profile(args: argparse.Namespace) -> int:
         path = profiles.delete_profile(canon)
         print(f"Deleted profile at {path}")
         return 0
-    except (FileExistsError, FileNotFoundError, OSError, ValueError) as exc:
+    except (OSError, ValueError, RuntimeLockError, subprocess.SubprocessError) as exc:
         logger.error("%s", exc)
         return 1
 

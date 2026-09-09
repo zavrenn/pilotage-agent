@@ -50,12 +50,14 @@ class UpdateTests(unittest.TestCase):
         self.git(self.upstream, "add", "version.txt")
         self.git(self.upstream, "commit", "-m", message)
 
-    def run_update(self, *, check=False, running=True, install_code=0, extra_profiles=()):
+    def run_update(self, *, check=False, running=True, install_code=0, extra_profiles=(),
+                   protected=False, verify_code=0, permission_error=False):
         def run(command, **kwargs):
             if command[0] == "git":
                 return self.real_run(command, **kwargs)
             self.events.append("verify")
-            return subprocess.CompletedProcess(command, 0)
+            self.verify_command = command
+            return subprocess.CompletedProcess(command, verify_code)
 
         def install(root, *, lock_fds):
             self.events.append("install")
@@ -70,8 +72,17 @@ class UpdateTests(unittest.TestCase):
             self.events.append(action)
             return 0
 
+        def permissions(root):
+            self.events.append("permissions")
+            if permission_error:
+                raise PermissionError("Cannot repair runtime permissions")
+
         self.output, self.errors = io.StringIO(), io.StringIO()
         with ExitStack() as stack:
+            if protected:
+                stack.enter_context(mock.patch.object(update.deployment, "load", return_value=update.deployment.Deployment("operator", 1001)))
+                stack.enter_context(mock.patch.object(os, "geteuid", return_value=1001, create=True))
+                stack.enter_context(mock.patch.object(update.deployment, "make_runtime_readable", side_effect=permissions))
             stack.enter_context(mock.patch.object(update, "__file__", str(self.checkout / "pilotage" / "update.py")))
             stack.enter_context(mock.patch.object(update, "sys", SimpleNamespace(platform="linux", stderr=self.errors)))
             stack.enter_context(mock.patch.object(update.shutil, "which", return_value="available"))
@@ -94,6 +105,19 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.run_update(), 0)
         self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.new_head)
         self.assertEqual(self.events, ["stop", "install", "verify", "start"])
+
+    def test_protected_update_checks_runtime_access_as_agent_after_permissions_repair(self):
+        self.assertEqual(self.run_update(protected=True), 0)
+        self.assertEqual(self.events, ["stop", "install", "permissions", "verify", "start"])
+        self.assertEqual(self.verify_command[:6], ["sudo", "-H", "-u", "agent", "--", "/usr/bin/env"])
+        self.assertEqual(self.verify_command[-4:], ["-I", "-B", "-c", "import pilotage.main"])
+
+    def test_protected_update_never_restarts_after_permission_or_agent_import_failure(self):
+        self.assertEqual(self.run_update(protected=True, permission_error=True), 1)
+        self.assertEqual(self.events, ["stop", "install", "permissions"])
+        self.events.clear()
+        self.assertEqual(self.run_update(protected=True, verify_code=1), 1)
+        self.assertEqual(self.events, ["stop", "install", "permissions", "verify"])
 
     def test_local_edits_are_preserved_and_service_is_not_stopped(self):
         (self.checkout / "version.txt").write_text("local edit\n")

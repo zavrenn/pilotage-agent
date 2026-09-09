@@ -94,6 +94,26 @@ class WhatsAppPairingTests(unittest.TestCase):
             home_chat_id="",
         )
 
+    def test_unprivileged_pairing_only_writes_session_data(self):
+        def run(command, **kwargs):
+            self.session.mkdir(parents=True, exist_ok=True)
+            (self.session / "creds.json").write_text(json.dumps(_qr_credentials()), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0)
+
+        self.config.allowed_senders = frozenset({"212600000000"})
+        with (
+            mock.patch("pilotage.main.shutil.which", return_value="node"),
+            mock.patch("pilotage.main.subprocess.run", side_effect=run),
+            mock.patch("pilotage.main._prompt_whatsapp_configuration", side_effect=AssertionError("prompted for policy")),
+            mock.patch("pilotage.main.update_env_values", side_effect=AssertionError("changed environment")),
+            mock.patch("pilotage.main._save_channel_enabled", side_effect=AssertionError("changed policy")),
+            redirect_stdout(StringIO()),
+        ):
+            self.assertEqual(command_whatsapp_pair(self.config, pair_only=True), 0)
+        validate_whatsapp_session(self.session)
+        self.assertFalse((self.config.state_dir / "config.yaml").exists())
+        self.assertFalse((self.config.state_dir / ".env").exists())
+
     def test_pair_only_bridge_saves_credentials_and_releases_profile(self):
         commands = []
 

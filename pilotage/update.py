@@ -10,7 +10,7 @@ import sys
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
-from . import profiles
+from . import deployment, profiles
 from .process_tree import terminate_process_tree
 from .runtime_lock import ProfileRuntimeLock, RuntimeLockError, runtime_lock_is_held
 from .service import SERVICE_TIMEOUT_SECONDS, run_service_command, unit_name
@@ -50,7 +50,9 @@ def _update_signals():
 
 def _install(root: Path, *, lock_fds: tuple[int, ...]) -> int:
     process = subprocess.Popen(
-        ["bash", str(root / "scripts" / "install.sh")], cwd=root, start_new_session=True,
+        ["bash", str(root / "scripts" / "install.sh"),
+         *(["--dependencies-only"] if deployment.load() else [])],
+        cwd=root, start_new_session=True,
         # A killed updater cannot release these locks while installation is
         # still changing shared dependencies. Bash and its children retain them.
         pass_fds=lock_fds,
@@ -77,7 +79,7 @@ def _git(root: Path, *arguments: str) -> str:
 
 def _service_running(profile_name: str) -> bool:
     result = subprocess.run(
-        ["systemctl", "--user", "show", unit_name(profile_name),
+        [*deployment.system_command("systemctl"), "show", unit_name(profile_name),
          "--property=LoadState,ActiveState", "--no-pager"],
         capture_output=True, text=True, timeout=SERVICE_TIMEOUT_SECONDS,
     )
@@ -96,6 +98,9 @@ def run_update(profile_name: str, *, check: bool = False) -> int:
     root = Path(__file__).resolve().parent.parent
     stopped = False
     try:
+        managed = deployment.load()
+        if managed:
+            managed.require_operator()
         if sys.platform != "linux":
             raise UpdateError("Updates run on the Ubuntu deployment; use Git locally")
         for command in (("git",) if check else ("git", "bash", "systemctl")):
@@ -151,8 +156,13 @@ def run_update(profile_name: str, *, check: bool = False) -> int:
                 print("Refreshing locked dependencies...", flush=True)
                 if _install(root, lock_fds=tuple(lock.fileno() for lock in install_locks)):
                     raise UpdateError("Dependency installation failed; fix the error and rerun pilotage update")
+                if managed:
+                    deployment.make_runtime_readable(root)
+                    verify_command = deployment.agent_python(["-c", "import pilotage.main"])
+                else:
+                    verify_command = [str(root / ".venv" / "bin" / "python"), "-B", "-c", "import pilotage.main"]
                 result = subprocess.run(
-                    [str(root / ".venv" / "bin" / "python"), "-B", "-c", "import pilotage.main"],
+                    verify_command,
                     cwd=root, timeout=60,
                 )
                 if result.returncode:

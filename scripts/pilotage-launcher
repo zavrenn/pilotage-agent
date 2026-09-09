@@ -1,0 +1,4 @@
+#!/bin/sh
+# Root-owned entry point; the actual CLI routes state work to the agent user.
+export PATH=/opt/pilotage-agent/.venv/bin:/usr/local/bin:/usr/bin:/bin
+exec /opt/pilotage-agent/.venv/bin/python -I -B -m pilotage.main "$@"

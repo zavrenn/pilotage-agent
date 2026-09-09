@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -22,6 +23,11 @@ _ENV_ASSIGNMENT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 
 
 def candidate_env_files() -> List[Path]:
+    from . import deployment
+
+    if deployment.load():
+        deployment.validate_policy_paths(state_dir(), os.environ)
+        return [state_dir() / ".env"]
     override = os.environ.get("PILOTAGE_ENV_FILE", "").strip()
     if override:
         return [Path(override).expanduser()]
@@ -39,23 +45,36 @@ def load_env_files() -> List[Path]:
     return loaded
 
 
-def _load(path: Path) -> None:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
+def read_env_values(path: Path) -> dict[str, str]:
+    """Parse assignments without changing the caller's environment."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    values: dict[str, str] = {}
     for line in lines:
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
-        if not key or key in os.environ:
+        if not key or key in values:
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
-        os.environ[key] = value
+        values[key] = value
+    return values
+
+
+def _load(path: Path) -> None:
+    try:
+        values = read_env_values(path)
+    except OSError:
+        return
+    from . import deployment
+
+    if deployment.load():
+        deployment.validate_policy_paths(state_dir(), {**values, **os.environ})
+    for key, value in values.items():
+        os.environ.setdefault(key, value)
 
 
 def update_env_values(path: Path, values: Mapping[str, str]) -> None:
@@ -105,7 +124,8 @@ def update_env_values(path: Path, values: Mapping[str, str]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         try:
-            os.chmod(temporary, 0o600)
+            mode = (stat.S_IMODE(path.stat().st_mode) & 0o640) if path.exists() else 0o600
+            os.chmod(temporary, mode)
         except OSError:
             pass
         os.replace(temporary, path)

@@ -13,6 +13,13 @@ cd "$repo_root"
 
 fail() { echo "error: $*" >&2; exit 1; }
 
+dependencies_only=false
+if [ "${1:-}" = "--dependencies-only" ]; then
+  dependencies_only=true
+  shift
+fi
+[ "$#" -eq 0 ] || fail "usage: $0 [--dependencies-only]"
+
 command -v python3 >/dev/null 2>&1 || fail "python3 is not installed."
 command -v uv >/dev/null 2>&1 || fail "uv is not installed."
 command -v node >/dev/null 2>&1 || fail "node is not installed (Node 20 or newer)."
@@ -53,6 +60,11 @@ bash scripts/setup-runtime-environments.sh
 
 echo "==> WhatsApp bridge"
 (cd bridge && npm ci --silent --no-fund --no-audit)
+
+if $dependencies_only; then
+  echo "Installed locked runtime dependencies."
+  exit 0
+fi
 
 state_dir="${PILOTAGE_HOME:-$HOME/.pilotage-agent}"
 umask 077
