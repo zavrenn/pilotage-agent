@@ -15,6 +15,8 @@ fi
 if ! id agent >/dev/null 2>&1; then
   getent group agent >/dev/null || addgroup agent
   adduser --disabled-password --ingroup agent --gecos "Pilotage runtime" agent
+  # Ubuntu may add supplementary groups (such as users) to new accounts.
+  usermod -G "" agent
 fi
 [ "$(getent passwd agent | cut -d: -f6)" = /home/agent ] || fail "agent home must be /home/agent"
 [ "$(id -u "$operator")" -ne 0 ] || fail "operator cannot have UID 0"
