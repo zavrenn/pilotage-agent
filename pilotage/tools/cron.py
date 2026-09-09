@@ -14,7 +14,7 @@ from .registry import Tool, ToolContext, tool_error
 
 logger = logging.getLogger(__name__)
 
-_ACTIONS = {"create", "list", "update", "pause", "resume", "remove", "run"}
+_ACTIONS = {"create", "list", "get", "update", "pause", "resume", "remove", "run"}
 _ACTION_ARGUMENTS = {
     "create": {
         "action",
@@ -28,6 +28,7 @@ _ACTION_ARGUMENTS = {
         "deliver",
     },
     "list": {"action", "include_disabled"},
+    "get": {"action", "job_id"},
     "update": {
         "action",
         "job_id",
@@ -72,6 +73,7 @@ def _format_job(job: Dict[str, Any], store: CronStore) -> Dict[str, Any]:
         "schedule": job.get("schedule_display"),
         "repeat": _repeat_display(job),
         "deliver": job.get("deliver", "local"),
+        "origin": job.get("origin"),
         "next_run_at": job.get("next_run_at"),
         "last_run_at": job.get("last_run_at"),
         "last_status": job.get("last_status"),
@@ -252,7 +254,10 @@ def execute_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
                 for job in store.list_jobs(include_disabled=include_disabled)
             ]
             return json.dumps(
-                {"success": True, "count": len(jobs), "jobs": jobs},
+                {
+                    "success": True, "count": len(jobs), "jobs": jobs,
+                    "current_origin": context.origin,
+                },
                 ensure_ascii=False,
             )
 
@@ -276,6 +281,14 @@ def execute_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
         if job is None:
             return _missing(reference)
         job_id = str(job["id"])
+
+        if action == "get":
+            details = _format_job(job, store)
+            details["prompt"] = job.get("prompt", "")
+            return json.dumps(
+                {"success": True, "job": details, "current_origin": context.origin},
+                ensure_ascii=False,
+            )
 
         if requires_scheduling:
             if not scheduling_enabled(context.config, job.get("origin")):
@@ -346,8 +359,17 @@ async def handle_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
 CRONJOB_SCHEMA = {
     "name": "cronjob",
     "description": (
-        "Manage this profile's scheduled AI jobs. Use create, list, update, "
-        "pause, resume, remove, or run. Jobs execute in a fresh isolated "
+        "Manage this profile's scheduled AI jobs. Only create, change, pause, "
+        "resume, run, or remove a job when the current user explicitly requested "
+        "that change. List jobs before creating or removing; never guess an ID. "
+        "List returns task previews and origins alongside the current chat origin. "
+        "Use get for full instructions when a likely match's preview is truncated, "
+        "and before updating a job. If an active job already "
+        "covers the same task, timing, recurrence, and destination, acknowledge "
+        "it without writing unless the user requested a separate job. Similar "
+        "names alone do not establish equivalence. Send only changed fields "
+        "requested by the user; when replacing a prompt, preserve all unrelated "
+        "instructions. Jobs execute in a fresh isolated "
         "conversation and normally deliver back to the messaging chat that "
         "created them. A declared WhatsApp or Telegram home channel may be used "
         "for unattended operator jobs; local jobs save output without sending. "
@@ -356,10 +378,7 @@ CRONJOB_SCHEMA = {
         "Scheduled runs may read existing memory and skills, but cannot create, "
         "change, or delete them. Do not create or update a job that requires "
         "those persistent changes; explain the limitation instead. Never make "
-        "the change immediately when the user requested it only for later. "
-        "Only create, change, pause, resume, run, or remove a job when the "
-        "current user explicitly requested that change. Always list before "
-        "removing a job; never guess an ID."
+        "the change immediately when the user requested it only for later."
     ),
     "parameters": {
         "type": "object",
@@ -371,7 +390,7 @@ CRONJOB_SCHEMA = {
             },
             "job_id": {
                 "type": "string",
-                "description": "Job ID or exact unique name for non-create actions.",
+                "description": "Job ID or exact unique name for get, update, pause, resume, remove, or run.",
             },
             "prompt": {
                 "type": "string",
@@ -383,8 +402,13 @@ CRONJOB_SCHEMA = {
             },
             "name": {"type": "string", "description": "Optional readable name."},
             "repeat": {
-                "type": "integer",
-                "description": "Optional run count; omit for the schedule default.",
+                "type": ["integer", "null"],
+                "minimum": 1,
+                "description": (
+                    "Set a positive integer only for a requested finite run count, "
+                    "or null to remove an existing limit. Otherwise omit: one-shot "
+                    "jobs run once and recurring jobs run indefinitely."
+                ),
             },
             "skills": {
                 "type": "array",

@@ -73,12 +73,15 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_registry_exposes_one_cron_tool_in_the_cron_group(self):
         self.assertEqual(self.registry.names(["cron"]), ["cronjob"])
-        blocked = json.loads(await self.registry.dispatch(
-            "cronjob", '{"action":"list"}', self.context,
-            allowed_groups=["memory"],
-        ))
-        self.assertEqual(blocked["error"], t("capability.unavailable", "fr"))
-        self.assertIs(blocked["disabled"], True)
+        for arguments in (
+            {"action": "list"}, {"action": "get", "job_id": "missing"},
+        ):
+            blocked = json.loads(await self.registry.dispatch(
+                "cronjob", json.dumps(arguments), self.context,
+                allowed_groups=["memory"],
+            ))
+            self.assertEqual(blocked["error"], t("capability.unavailable", "fr"))
+            self.assertIs(blocked["disabled"], True)
 
     async def test_enabled_create_ignores_legacy_approval_switch(self):
         result = await self.create()
@@ -135,6 +138,8 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
         job = self.store.create_job(prompt="Send the status", schedule="every 1h")
         self.context.config.cron_enabled = False
         self.assertEqual((await self.call(action="list"))["count"], 1)
+        inspected = await self.call(action="get", job_id=job["id"])
+        self.assertEqual(inspected["job"]["prompt"], "Send the status")
         renamed = await self.call(action="update", job_id=job["id"], name="Renamed")
         self.assertTrue(renamed["success"])
         paused = await self.call(action="pause", job_id=job["id"])
@@ -465,8 +470,64 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
         self.store.save_output(job_id, "x" * 700)
         listed = await self.call(action="list")
         self.assertEqual(listed["count"], 1)
+        self.assertEqual(listed["current_origin"], self.context.origin)
+        self.assertEqual(listed["jobs"][0]["origin"], persisted["origin"])
         self.assertLessEqual(len(listed["jobs"][0]["last_output_preview"]), 503)
         self.assertEqual(self.wakes, 1)
+
+    async def test_get_reads_the_full_task_and_origin_without_mutating(self):
+        prompt = "Summarize the daily report. " * 30 + "Keep amounts in MAD."
+        workdir = self.root / "project"
+        workdir.mkdir()
+        for origin in (
+            self.context.origin,
+            {"channel": "telegram", "chat_id": "42", "thread_id": "7"},
+            None,
+        ):
+            with self.subTest(origin=origin):
+                job = self.store.create_job(
+                    name="Detailed report", prompt=prompt, schedule="every 2h",
+                    repeat=5, skills=["report"], enabled_toolsets=["web"],
+                    workdir=str(workdir), origin=origin,
+                )
+                self.store.pause_job(job["id"], reason="Wait for the operator")
+                before = self.store.jobs_path.read_bytes()
+                for reference in (job["id"], job["name"]):
+                    result = await self.call(action="get", job_id=reference)
+                    self.assertTrue(result["success"], result)
+                    self.assertEqual(result["current_origin"], self.context.origin)
+                    details = result["job"]
+                    self.assertEqual(details["job_id"], job["id"])
+                    self.assertEqual(details["prompt"], prompt)
+                    self.assertEqual(details["origin"], origin)
+                    self.assertEqual(details["deliver"], "origin" if origin else "local")
+                    self.assertEqual(details["schedule"], job["schedule_display"])
+                    self.assertEqual(details["repeat"], "5 times")
+                    self.assertEqual(details["skills"], ["report"])
+                    self.assertEqual(details["enabled_toolsets"], ["web"])
+                    self.assertEqual(details["workdir"], str(workdir.resolve()))
+                    self.assertEqual(details["state"], "paused")
+                    self.assertEqual(details["paused_reason"], "Wait for the operator")
+                    self.assertEqual(self.store.jobs_path.read_bytes(), before)
+                    self.assertEqual(self.wakes, 0)
+                listed = await self.call(action="list", include_disabled=True)
+                self.assertEqual(listed["current_origin"], self.context.origin)
+                self.assertEqual(listed["jobs"][0]["origin"], origin)
+                self.assertNotIn("prompt", listed["jobs"][0])
+                self.assertEqual(listed["jobs"][0]["prompt_preview"], prompt[:100] + "...")
+                self.store.remove_job(job["id"])
+
+    async def test_get_rejects_missing_or_ambiguous_references_without_mutating(self):
+        for name in ("same", "SAME"):
+            self.store.create_job(name=name, prompt="Send the status", schedule="1h")
+        before = self.store.jobs_path.read_bytes()
+        for reference in ("missing", "same"):
+            result = await self.call(action="get", job_id=reference)
+            self.assertFalse(result["success"], result)
+            if reference == "same":
+                self.assertEqual(len(result["matches"]), 2)
+            self.assertEqual(self.store.jobs_path.read_bytes(), before)
+            self.assertEqual(self.wakes, 0)
 
     async def test_create_persists_workdir_and_tool_limits(self):
         workdir = self.root / "project"
@@ -539,6 +600,19 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["success"])
         self.assertEqual(len(result["matches"]), 2)
 
+    async def test_repeat_limit_can_be_cleared_without_replacing_the_job(self):
+        for schedule, expected_times in (("every 1h", None), ("1h", 1)):
+            with self.subTest(schedule=schedule):
+                created = await self.create(schedule=schedule, repeat=3)
+                job_id = created["job"]["job_id"]
+                before = self.store.resolve_job(job_id)
+                result = await self.call(action="update", job_id=job_id, repeat=None)
+                self.assertTrue(result["success"], result)
+                self.assertEqual(
+                    self.store.resolve_job(job_id),
+                    dict(before, repeat={"times": expected_times, "completed": 0}),
+                )
+
     async def test_bad_shapes_and_unsupported_delivery_are_rejected(self):
         for arguments in (
             {"action": "create", "prompt": "x"},
@@ -546,6 +620,8 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
             {"action": "create", "schedule": "1h", "prompt": "x", "deliver": "all"},
             {"action": "create", "schedule": "1h", "prompt": "x", "job_id": "ignored"},
             {"action": "list", "prompt": "must not be ignored"},
+            {"action": "get"},
+            {"action": "get", "job_id": "missing", "prompt": "must not be ignored"},
             {"action": "update", "job_id": "missing"},
         ):
             with self.subTest(arguments=arguments):
