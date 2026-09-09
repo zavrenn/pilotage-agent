@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import shutil
 import stat
 import subprocess
 import sys
@@ -32,10 +33,11 @@ def main():
         check=True,
     )
 
-    def run(code, *arguments):
+    def run(code, *arguments, account=agent):
         result = subprocess.run(
             [sys.executable, "-I", "-B", "-c", code, *map(str, arguments)],
-            user=agent.pw_uid, group=agent.pw_gid, extra_groups=[],
+            user=account.pw_uid, group=account.pw_gid,
+            extra_groups=[] if account == agent else [agent.pw_gid],
             cwd="/", capture_output=True, text=True,
         )
         if result.returncode:
@@ -43,7 +45,43 @@ def main():
 
     home = Path("/home/agent")
     state = home / ".pilotage-agent"
-    assert home.stat().st_uid == 0 and not home.stat().st_mode & 0o022
+    assert home.stat().st_uid == operator.pw_uid and not home.stat().st_mode & 0o022
+    metadata = home / ".git"
+    if metadata.exists() or metadata.is_symlink():
+        info = metadata.lstat()
+        assert stat.S_ISDIR(info.st_mode) and info.st_uid == operator.pw_uid
+        assert stat.S_IMODE(info.st_mode) == 0o700
+        run("import os,sys; assert not os.access(sys.argv[1], os.R_OK | os.X_OK)", metadata)
+        # Inherited skill access must survive either account's restrictive umask.
+        probe = Path(tempfile.mkdtemp(prefix=".checkout-check-", dir=state / "skills"))
+        os.chown(probe, operator.pw_uid, agent.pw_gid)
+        probe.chmod(0o770)  # Restore the inherited ACL mask after mkdtemp's 0700.
+        try:
+            for creator, reviewer in ((agent, operator), (operator, agent)):
+                nested = probe / creator.pw_name
+                run('''
+import os, pathlib, subprocess, sys
+from pilotage.tools.file_operations import ShellFileOperations
+os.umask(0o077)
+p = pathlib.Path(sys.argv[1])
+class Terminal:
+    cwd = str(p.parent)
+    def execute(self, command, cwd=None, stdin_data=None, **kwargs):
+        result = subprocess.run(["bash", "-c", command], cwd=cwd,
+                                input=stdin_data, text=True, capture_output=True)
+        return {"returncode": result.returncode, "output": result.stdout + result.stderr}
+result = ShellFileOperations(Terminal())._atomic_write(str(p / "change.txt"), "created")
+assert result.exit_code == 0, result.stdout
+''', nested, account=creator)
+                run('''
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]) / "change.txt"
+assert p.read_text() == "created"
+p.write_text("reviewed")
+p.unlink()
+''', nested, account=reviewer)
+        finally:
+            shutil.rmtree(probe)
     profile_root = state / "profiles"
     assert profile_root.stat().st_uid == operator.pw_uid
     assert profile_root.stat().st_gid == agent.pw_gid
@@ -69,6 +107,17 @@ def main():
         os.fchmod(fd, 0o640)
         os.close(fd)
         try:
+            if profile == state and metadata.exists():
+                # A Git-style replacement must remain protected even when the
+                # operator's shell has a group-writable default umask.
+                run('''
+import os, pathlib, sys
+os.umask(0o002)
+p = pathlib.Path(sys.argv[1])
+p.unlink()
+p.write_text("")
+assert p.stat().st_mode & 0o777 == 0o640
+''', probe, account=operator)
             run('''
 import os, pathlib, sys
 p = pathlib.Path(sys.argv[1])

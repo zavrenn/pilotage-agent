@@ -106,8 +106,9 @@ done
 
 # A root-owned sticky, setgid directory lets the agent create database journals
 # and working data, but it cannot unlink/rename operator-owned configuration.
-# Protect /home/agent too, otherwise it could replace the entire state directory.
-chown root:root /home/agent
+# The operator owns /home/agent for the live asset checkout; agent cannot
+# replace the state directory or Git metadata.
+chown "$operator":agent /home/agent
 chmod 755 /home/agent
 for directory in .cache .local .config .npm workspace; do
   if [ ! -e "/home/agent/$directory" ]; then

@@ -1214,15 +1214,10 @@ class ShellFileOperations(FileOperations):
         #    `stat` (GNU `-c%a` or BSD `-f%Lp`) and `chmod` it explicitly;
         #    silent best-effort — a perms-copy failure must not abort the
         #    write (the file then lands at mktemp's 0600, same as pre-fix).
-        #  - brand-new targets get `chmod "=rw"` — the POSIX who-less
-        #    symbolic form, which sets rw minus the process umask (e.g.
-        #    0644 under umask 022) instead of mktemp's hardcoded 0600
-        #    (#70856).  Deliberately NOT shell arithmetic on `$(umask)`:
-        #    zsh (reachable via _find_bash's $SHELL fallback) parses
-        #    leading-zero constants as decimal and silently computes a
-        #    garbage mode, while `chmod "=rw"` is spec-identical in
-        #    bash/dash/ash/zsh and degrades to 0600 (pre-fix behavior)
-        #    if an exotic chmod rejects it.
+        #  - new files inherit the parent default ACL, when present. mktemp's
+        #    0600 masks shared access, so restore that ACL after writing and
+        #    remove execute bits (the equivalent of creating a 0666 file).
+        #    Without a default ACL, retain the usual umask-based permissions.
         #  - `trap ... EXIT` guarantees the temp is removed on every error
         #    path (cat failure, mv failure, signal) but NOT after a
         #    successful mv (the temp no longer exists by then).
@@ -1256,10 +1251,17 @@ class ShellFileOperations(FileOperations):
             '[ -n "$m" ] && chmod "$m" "$tmp" 2>/dev/null || true; '
             "fi; "
             'cat > "$tmp"; '
-            # new file: umask-default perms instead of mktemp's 0600 (#70856).
-            # Runs AFTER cat so a write-masking umask can't EACCES the stream;
-            # quoted "=rw" so zsh doesn't =word-expand it.
-            'if [ ! -e "$t" ]; then chmod "=rw" "$tmp" 2>/dev/null || true; fi; '
+            # Restore inherited sharing for new files without widening existing ones.
+            'if [ ! -e "$t" ]; then '
+            'acl=""; '
+            'if command -v getfacl >/dev/null 2>&1; then '
+            'acl="$(getfacl -cp -- "$d" 2>/dev/null | sed -n "s/^default://p")"; '
+            'fi; '
+            'if [ -n "$acl" ]; then '
+            'printf "%s\\n" "$acl" | setfacl --set-file=- -- "$tmp"; '
+            'chmod a-x "$tmp"; '
+            'else chmod "=rw" "$tmp" 2>/dev/null || true; fi; '
+            'fi; '
             'mv -f "$tmp" "$t"; '
             "trap - EXIT"
         )

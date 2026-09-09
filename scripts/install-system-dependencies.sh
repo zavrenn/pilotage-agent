@@ -23,6 +23,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
 apt-get install -y \
+  acl \
   build-essential \
   ca-certificates \
   catdoc \

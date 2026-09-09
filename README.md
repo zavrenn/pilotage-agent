@@ -237,9 +237,30 @@ Run `restart` before `doctor`, which checks the live deployment.
 Every `pilotage update` restores runtime read/execute permissions and verifies
 the updated import as `agent` before restarting.
 
-Keep each agent's Git repository in the operator home. Copy its configuration
-and identity into the protected profile as the operator, and copy skills as
-`agent`. Do not clone or overlay a Git repository into `/home/agent`.
+Install the agent asset repository once into the live `/home/agent` checkout.
+After a fresh bootstrap, run as the operator (replace the URL with your agent):
+
+```bash
+sudo /opt/pilotage-agent/.venv/bin/python -I -B /opt/pilotage-agent/scripts/install-agent-checkout.py https://github.com/zavrenn/demo-agent.git
+cd /home/agent
+git status
+```
+
+The installer preserves runtime state and `.env`, replaces bootstrap config and
+identity, and refuses existing asset conflicts or an existing checkout. Git runs
+as the operator, with its authentication in the operator home. `/home/agent`
+and `.git` belong to the operator; `.git` is private. Skills have inherited ACLs
+so both accounts can edit them without granting agent access to Git or settings.
+The only retained asset checkout is `/home/agent`; there is no copy step.
+
+Review agent edits using `git status` and `git diff` as the operator. Stop the
+service, review and commit edits you want to keep, then use `git pull --no-rebase`
+to merge upstream updates while keeping those commits. If there are conflicts,
+keep the service stopped, resolve them and finish the merge before restarting.
+Use `git merge --abort` to cancel an unfinished merge. Do not run Git as root or
+agent, or make the entire home agent-writable.
+The checkout installer requires the current fresh bootstrap and the `acl`
+system package; it does not migrate an existing deployed agent.
 
 This prevents runtime/configuration modification. It does not conceal the
 instructions or runtime credentials that the executing agent must read.
