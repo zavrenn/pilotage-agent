@@ -153,6 +153,8 @@ class WhatsAppPairingTests(unittest.TestCase):
                 "--pair-only",
                 "--session",
                 str(self.session),
+                "--media",
+                str(self.config.state_dir / "media"),
                 "--log-key",
                 str(self.config.state_dir / "log-identity.key"),
             ],

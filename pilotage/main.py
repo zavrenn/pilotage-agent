@@ -780,6 +780,8 @@ def command_whatsapp_pair(
                     "--pair-only",
                     "--session",
                     str(config.session_dir),
+                    "--media",
+                    str(config.state_dir / "media"),
                     "--log-key",
                     str(identity_key_path(config.state_dir)),
                 ],
