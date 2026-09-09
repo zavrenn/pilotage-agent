@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import builtins
+import io
 import os
 from pathlib import Path
 import runpy
@@ -62,6 +64,47 @@ class CheckoutAssetsTests(unittest.TestCase):
         self.assertEqual(state.stat().st_mode, before)
         self.assertEqual((state / "config.yaml").read_text(), "model: demo\n")
         self.assertEqual((state / "skills/example/SKILL.md").read_text(), "Demo skill\n")
+
+    def test_existing_settings_are_updated_without_create_or_inode_replacement(self):
+        settings = {self.home / ".pilotage-agent" / name for name in ("config.yaml", "SOUL.md")}
+        for target in settings:
+            target.write_text("Old setting with a longer body that must be truncated\n")
+        inodes = {p: p.stat().st_ino for p in settings}
+        builtin_open, io_open = builtins.open, io.open
+
+        def guarded(open_function):
+            def open_file(file, mode="r", *args, **kwargs):
+                if not isinstance(file, int) and Path(file) in settings and any(c in mode for c in "wax"):
+                    raise PermissionError("protected_regular rejects O_CREAT")
+                return open_function(file, mode, *args, **kwargs)
+            return open_file
+
+        paths = asset_paths(self.source, self.home)
+        with patch("builtins.open", guarded(builtin_open)), patch("io.open", guarded(io_open)), patch("os.chown", create=True):
+            install_assets(self.source, self.home, paths, 1000, 1001)
+        for target in settings:
+            self.assertEqual(target.read_bytes(), (self.source / target.relative_to(self.home)).read_bytes())
+            self.assertEqual(target.stat().st_ino, inodes[target])
+        self.assertEqual((self.home / ".pilotage-agent/.env").read_text(), "KEEP=secret\n")
+
+    @unittest.skipUnless(os.name == "posix" and hasattr(os, "geteuid") and os.geteuid() == 0,
+                         "Requires Linux root")
+    def test_install_with_kernel_sticky_directory_protection(self):
+        setting = Path("/proc/sys/fs/protected_regular")
+        if not setting.exists() or setting.read_text().strip() != "2":
+            self.skipTest("Requires fs.protected_regular=2; do not change the host setting")
+        state = self.home / ".pilotage-agent"
+        state.chmod(0o3770)
+        for name in ("config.yaml", "SOUL.md"):
+            os.chown(state / name, 61000, 61001)
+        # Reproduce the previous copy failure before exercising the installer.
+        with self.assertRaises(PermissionError):
+            shutil.copyfile(self.source / ".pilotage-agent/SOUL.md", state / "SOUL.md")
+        install_assets(self.source, self.home, asset_paths(self.source, self.home), 61000, 61001)
+        for name in ("config.yaml", "SOUL.md"):
+            self.assertEqual((state / name).read_bytes(), (self.source / ".pilotage-agent" / name).read_bytes())
+            self.assertEqual((state / name).stat().st_uid, 61000)
+            self.assertEqual((state / name).stat().st_mode & 0o777, 0o640)
 
     @unittest.skipUnless(shutil.which("git"), "Git is unavailable")
     def test_relocated_checkout_tracks_edits_to_live_assets(self):

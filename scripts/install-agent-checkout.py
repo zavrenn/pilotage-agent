@@ -77,7 +77,15 @@ def install_assets(source, home, paths, operator_uid, agent_gid):
             target.mkdir()
             mode = 0o750
         else:
-            shutil.copyfile(origin, target)
+            if target.exists():
+                # Linux protected_regular rejects O_CREAT on another user's
+                # file in this sticky directory, even for root. Open the
+                # validated bootstrap setting without recreating its inode.
+                with origin.open("rb") as source_file, target.open("r+b") as target_file:
+                    shutil.copyfileobj(source_file, target_file)
+                    target_file.truncate()
+            else:
+                shutil.copyfile(origin, target)
             mode = 0o750 if origin.stat().st_mode & 0o111 else 0o640
         os.chown(target, operator_uid, agent_gid)
         target.chmod(mode)
