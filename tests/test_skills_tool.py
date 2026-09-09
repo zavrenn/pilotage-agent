@@ -186,7 +186,7 @@ class PromptAndListTests(SkillCase):
         self.assertIn("reporting", prompt)
         self.assertIn("d" * 57 + "...", prompt)
         self.assertNotIn("PRIVATE WORKFLOW BODY", prompt)
-        self.assertLess(prompt.count("d"), 70)
+        self.assertNotIn(description, prompt)
 
     async def test_skills_list_creates_the_profile_directory_and_filters_category(self):
         empty = await self.call(handle_skills_list, {})

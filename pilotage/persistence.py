@@ -106,7 +106,7 @@ def build_persistence_policy(*, memory: bool, skills: bool) -> str:
         tools.append("memory")
     if skills:
         tools.append("file")
-    return (
+    policy = (
         "## Persistent learning\n"
         "No change is the default. In a foreground conversation only, persist "
         + eligibility
@@ -121,6 +121,15 @@ def build_persistence_policy(*, memory: bool, skills: bool) -> str:
         + " and ".join(tools)
         + " tools and include a short factual change_reason."
     )
+    if skills:
+        policy += (
+            " When creating a skill, use <skills_directory>/<lowercase-name>/SKILL.md. "
+            "Begin with valid YAML frontmatter delimited by --- containing a lowercase "
+            "name, a quoted description, version, and channels (whatsapp and/or "
+            "telegram); then write the reusable instructions after the closing --- "
+            "line. Use the current channel unless broader applicability is requested."
+        )
+    return policy
 
 
 def normalize_change_reason(value: Any) -> str:

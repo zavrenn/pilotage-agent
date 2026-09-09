@@ -318,15 +318,15 @@ def build_skills_prompt(
             index_lines.append(f"    - {name}: {description}" if description else f"    - {name}")
 
     return (
-        "## Skills (mandatory)\n"
-        "Before replying, scan the skills below. If a skill matches or is even partially "
-        "relevant to the task, you MUST load it with skill_view(name) and follow its "
-        "instructions. Skills contain established workflows and quality standards; load "
-        "them even when you already know a general approach.\n\n"
+        "## Skills\n"
+        "Load a skill with skill_view(name) when its stated workflow applies to the "
+        "requested work, or the user explicitly requests it. Follow its applicable "
+        "instructions. Treat skill presentation conventions as defaults; the user's "
+        "current explicit format and language requests take precedence over them. "
+        "This does not waive runtime or operator constraints.\n\n"
         "<available_skills>\n"
         + "\n".join(index_lines)
-        + "\n</available_skills>\n\n"
-        "Only proceed without loading a skill if genuinely none are relevant to the task."
+        + "\n</available_skills>"
     )
 
 
