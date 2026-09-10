@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .redact import identity_pseudonym
+from .codex.models import EFFORTS
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,8 @@ CREATE INDEX IF NOT EXISTS turns_by_session ON turns (chat_id, session, id);
 CREATE TABLE IF NOT EXISTS chats (
     chat_id     TEXT PRIMARY KEY,
     session     INTEGER NOT NULL,
-    last_active REAL    NOT NULL DEFAULT 0
+    last_active REAL    NOT NULL DEFAULT 0,
+    reasoning_effort TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS history_meta (
@@ -92,6 +94,7 @@ CREATE TABLE IF NOT EXISTS active_turns (
     answer_content TEXT  NOT NULL DEFAULT '',
     answer_replay TEXT   NOT NULL DEFAULT '[]',
     terminal_completed INTEGER NOT NULL DEFAULT 0,
+    reasoning_effort TEXT NOT NULL DEFAULT '',
     updated_at   REAL    NOT NULL,
     PRIMARY KEY (chat_id, session)
 );
@@ -161,6 +164,7 @@ class ActiveTurn:
     answer_replay: List[Dict[str, str]]
     terminal_completed: bool
     updated_at: float
+    reasoning_effort: str = ""
 
 
 @dataclass(frozen=True)
@@ -292,6 +296,10 @@ class ConversationStore:
                         "ALTER TABLE chats"
                         " ADD COLUMN last_active REAL NOT NULL DEFAULT 0"
                     )
+                if "reasoning_effort" not in chat_columns:
+                    connection.execute(
+                        "ALTER TABLE chats ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT ''"
+                    )
                 active_columns = {
                     row[1]
                     for row in connection.execute("PRAGMA table_info(active_turns)")
@@ -312,6 +320,7 @@ class ConversationStore:
                     ("answer_content", "TEXT NOT NULL DEFAULT ''"),
                     ("answer_replay", "TEXT NOT NULL DEFAULT '[]'"),
                     ("terminal_completed", "INTEGER NOT NULL DEFAULT 0"),
+                    ("reasoning_effort", "TEXT NOT NULL DEFAULT ''"),
                 ):
                     if column not in active_columns:
                         connection.execute(
@@ -460,7 +469,7 @@ class ConversationStore:
                 if reason is not None:
                     connection.execute(
                         "UPDATE chats"
-                        " SET session = session + 1, last_active = ?"
+                        " SET session = session + 1, last_active = ?, reasoning_effort = ''"
                         " WHERE chat_id = ?",
                         (current_time, chat_id),
                     )
@@ -481,6 +490,36 @@ class ConversationStore:
                 "Could not durably prepare session for "
                 f"{identity_pseudonym(chat_id, 'session')}"
             ) from exc
+
+    def session_effort(self, chat_id: str, value: Optional[str] = None) -> str:
+        """Read or durably select the effort for the current conversation."""
+        if value is not None and value not in EFFORTS:
+            raise ValueError("Unsupported session reasoning effort")
+        if self._path is None:
+            if value is not None:
+                raise ConversationError("Session effort requires durable conversation storage")
+            return ""
+        try:
+            with self._connect() as connection:
+                if value is not None:
+                    connection.execute("BEGIN IMMEDIATE")
+                    connection.execute(
+                        "INSERT INTO chats (chat_id, session, last_active, reasoning_effort)"
+                        " VALUES (?, 1, ?, ?) ON CONFLICT (chat_id) DO UPDATE"
+                        " SET reasoning_effort = excluded.reasoning_effort,"
+                        " last_active = excluded.last_active",
+                        (chat_id, time.time(), value),
+                    )
+                row = connection.execute(
+                    "SELECT reasoning_effort FROM chats WHERE chat_id = ?", (chat_id,)
+                ).fetchone()
+                effort = row[0] if row else ""
+                if effort and effort not in EFFORTS:
+                    raise ConversationError("Stored session effort is invalid")
+                return effort
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning("Could not read or save the session effort", exc_info=True)
+            raise ConversationError("Could not read or save the session effort") from exc
 
     def load(self, chat_id: str, limit: int) -> List[StoredTurn]:
         """The last *limit* turns of the chat's current session, oldest first."""
@@ -603,9 +642,12 @@ class ConversationStore:
         origin: Optional[Dict[str, str]] = None,
         claim_ids: Sequence[str] = (),
         image_manifest: Sequence[Dict[str, Any]] = (),
+        reasoning_effort: str = "",
     ) -> int:
         """Durably accept one user turn before the model can act on it."""
 
+        if reasoning_effort and reasoning_effort not in EFFORTS:
+            raise ConversationError("Invalid turn reasoning effort")
         if self._path is None:
             return 1
         now = time.time()
@@ -649,8 +691,8 @@ class ConversationStore:
                 connection.execute(
                     "INSERT INTO active_turns"
                     " (chat_id, session, user_content, trajectory, phase,"
-                    " iteration, origin, claim_ids, image_manifest, updated_at)"
-                    " VALUES (?, ?, ?, '[]', 'started', 0, ?, ?, ?, ?)",
+                    " iteration, origin, claim_ids, image_manifest, reasoning_effort, updated_at)"
+                    " VALUES (?, ?, ?, '[]', 'started', 0, ?, ?, ?, ?, ?)",
                     (
                         chat_id,
                         session,
@@ -658,6 +700,7 @@ class ConversationStore:
                         encoded_origin,
                         encoded_claims,
                         encoded_images,
+                        reasoning_effort,
                         now,
                     ),
                 )
@@ -892,7 +935,7 @@ class ConversationStore:
                     "SELECT a.chat_id, a.session, a.user_content, a.trajectory,"
                     " a.phase, a.iteration, a.origin, a.claim_ids,"
                     " a.image_manifest, a.answer_content, a.answer_replay,"
-                    " a.terminal_completed, a.updated_at, c.session AS current_session"
+                    " a.terminal_completed, a.reasoning_effort, a.updated_at, c.session AS current_session"
                     " FROM active_turns a"
                     " LEFT JOIN chats c ON c.chat_id = a.chat_id"
                     " ORDER BY a.updated_at, a.chat_id"
@@ -942,6 +985,9 @@ class ConversationStore:
                 }:
                     raise ValueError(f"unsupported active-turn phase: {phase}")
                 iteration = int(row["iteration"])
+                reasoning_effort = row["reasoning_effort"]
+                if reasoning_effort and reasoning_effort not in EFFORTS:
+                    raise ValueError("active-turn reasoning effort is invalid")
                 if iteration < 0:
                     raise ValueError("active-turn iteration is negative")
                 terminal_completed = int(row["terminal_completed"])
@@ -974,6 +1020,7 @@ class ConversationStore:
                         answer_replay=answer_replay,
                         terminal_completed=bool(terminal_completed),
                         updated_at=updated_at,
+                        reasoning_effort=reasoning_effort,
                     )
                 )
             return active
@@ -1298,7 +1345,8 @@ class ConversationStore:
                     "INSERT INTO chats (chat_id, session, last_active)"
                     " VALUES (?, 2, ?)"
                     " ON CONFLICT (chat_id) DO UPDATE"
-                    " SET session = session + 1, last_active = excluded.last_active",
+                    " SET session = session + 1, last_active = excluded.last_active,"
+                    " reasoning_effort = ''",
                     (chat_id, time.time()),
                 )
                 connection.execute(

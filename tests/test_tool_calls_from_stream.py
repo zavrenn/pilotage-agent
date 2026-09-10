@@ -212,7 +212,7 @@ class CallIdTests(unittest.TestCase):
 class ReplayedFunctionNameTests(unittest.TestCase):
     def _request(self, name, *, tool_name="live_tool"):
         return codex_stream.build_request(
-            model="gpt-5.6-sol",
+            model="gpt-6-astra",
             instructions="test",
             input_items=[
                 {

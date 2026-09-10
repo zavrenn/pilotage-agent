@@ -8,6 +8,7 @@ available or behaving correctly.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -30,6 +31,7 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
     CommandDef("help", "Show the available actions", "Info", aliases=("commands",)),
     CommandDef("new", "Start a fresh conversation", "Session", aliases=("reset",)),
     CommandDef("stop", "Stop the active request", "Session"),
+    CommandDef("effort", "Check or change this session's reasoning effort", "Session"),
     CommandDef("status", "Check availability", "Info"),
 )
 
@@ -129,6 +131,45 @@ def status_text(config: Any) -> str:
     )
 
 
+async def _effort_command(value: str, agent: Any, config: Any, session_id: str) -> str:
+    from .codex import auth, models
+    from .history import ConversationError
+
+    language = str(getattr(config, "language", DEFAULT_LANGUAGE))
+    if not value:
+        try:
+            current = await agent.session_effort(session_id)
+        except ConversationError:
+            return t("commands.effort_failure", language)
+    try:
+        # Use the same account check as pilotage model, outside the session
+        # transaction. Failed or rejected choices must not reset a session.
+        available = await asyncio.to_thread(models.available_efforts, config.credentials_path)
+    except (models.ModelError, auth.AuthError, OSError):
+        if not value:
+            return t("commands.effort_status_unavailable", language, effort=current)
+        return t("commands.effort_options_failure", language)
+    options = ", ".join(available)
+    if not value:
+        return t(
+            "commands.effort_status", language, effort=current, options=options,
+            example=current if current in available else available[0],
+        )
+    if value not in available:
+        return t("commands.effort_usage", language, options=options)
+    resets = []
+    try:
+        effort = await agent.session_effort(session_id, value, on_reset=resets.append)
+        reply = t("commands.effort_set", language, effort=effort)
+    except ConversationError:
+        reply = t("commands.effort_failure", language)
+    # Selecting an effort after a scheduled boundary targets the new session.
+    # Include its normal reset notice even if the subsequent effort save fails.
+    if resets and resets[0].had_activity and getattr(config, "session_reset_notify", True):
+        reply = t(f"session.auto_reset_{resets[0].reason}", language) + "\n\n" + reply
+    return reply
+
+
 async def execute_command(
     invocation: CommandInvocation,
     *,
@@ -143,6 +184,8 @@ async def execute_command(
     language = str(getattr(config, "language", DEFAULT_LANGUAGE))
     if name in _RETIRED_COMMANDS:
         return t("capability.unavailable", language)
+    if name == "effort":
+        return await _effort_command(invocation.arguments.strip().lower(), agent, config, session_id)
     if invocation.arguments:
         return t("commands.usage", language, command=name)
     if name == "help":
@@ -168,4 +211,3 @@ async def execute_command(
     if name == "status":
         return t("commands.ready", language)
     return t("commands.unknown", language, command=name)
-

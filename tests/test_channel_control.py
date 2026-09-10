@@ -115,6 +115,166 @@ def _tg_inbound(
 
 
 class ChannelControlTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_bypasses_slow_effort_checks_without_releasing_followup_early(self):
+        for platform in ("whatsapp", "telegram"):
+            for queued_new, last_completion in (
+                (False, "effort"), (True, "effort"),
+                (False, "stop"), (True, "stop"),
+            ):
+                with self.subTest(platform=platform, queued_new=queued_new, last=last_completion):
+                    active = asyncio.Event()
+                    stopped = asyncio.Event()
+                    selecting = asyncio.Event()
+                    selected = asyncio.Event()
+                    release_selection = asyncio.Event()
+                    release_stop_reply = asyncio.Event()
+                    if last_completion == "effort":
+                        release_stop_reply.set()
+                    followup = asyncio.Event()
+
+                    async def handler(message):
+                        if message.text == "active":
+                            active.set()
+                            await stopped.wait()
+                        else:
+                            self.assertTrue(selected.is_set())
+                            followup.set()
+
+                    async def command(*args):
+                        invocation = args[3] if platform == "whatsapp" else args[4]
+                        if invocation.command.name == "effort":
+                            selecting.set()
+                            await release_selection.wait()
+                            selected.set()
+                        elif invocation.command.name == "stop":
+                            stopped.set()
+                            await release_stop_reply.wait()
+                        else:
+                            self.assertEqual(invocation.command.name, "new")
+                            self.assertTrue(selected.is_set())
+
+                    if platform == "whatsapp":
+                        channel = self._whatsapp(handler, command)
+                        channel._queue_turn(_wa_message("active", "m1"))
+                    else:
+                        channel = self._telegram(handler, command)
+                        channel._queue_turn(_tg_inbound("active", 1))
+                    self.addAsyncCleanup(channel.stop)
+
+                    async def accept(text, number):
+                        if platform == "whatsapp":
+                            channel._accept(_wa_event(f"m{number}", text, str(number)))
+                        else:
+                            await channel._accept_message(_tg_message(text, number), [])
+
+                    try:
+                        await asyncio.wait_for(active.wait(), 1)
+                        await accept("/effort max", 2)
+                        await asyncio.wait_for(selecting.wait(), 1)
+                        if queued_new:
+                            await accept("/new", 3)
+                        await accept("/stop", 4)
+                        await asyncio.wait_for(stopped.wait(), 0.5)
+                        if last_completion == "stop":
+                            release_selection.set()
+                            await asyncio.wait_for(selected.wait(), 1)
+                        if platform == "whatsapp":
+                            channel._queue_turn(_wa_message("followup", "m5"))
+                        else:
+                            channel._queue_turn(_tg_inbound("followup", 5))
+                        await asyncio.sleep(0)
+                        await asyncio.sleep(0)
+                        self.assertFalse(followup.is_set())
+                    finally:
+                        stopped.set()
+                        release_selection.set()
+                        release_stop_reply.set()
+                    await asyncio.wait_for(followup.wait(), 1)
+                    await channel.stop()
+
+    async def test_shutdown_during_effort_and_stop_retires_all_gates(self):
+        for platform in ("whatsapp", "telegram"):
+            with self.subTest(platform=platform):
+                selecting = asyncio.Event()
+                stopped = asyncio.Event()
+                followup = mock.AsyncMock()
+
+                async def command(*args):
+                    invocation = args[3] if platform == "whatsapp" else args[4]
+                    if invocation.command.name == "effort":
+                        selecting.set()
+                        await asyncio.Event().wait()
+                    else:
+                        stopped.set()
+
+                if platform == "whatsapp":
+                    channel = self._whatsapp(followup, command)
+                    channel._accept(_wa_event("m1", "/effort max", "a"))
+                else:
+                    channel = self._telegram(followup, command)
+                    await channel._accept_message(_tg_message("/effort max", 1), [])
+                self.addAsyncCleanup(channel.stop)
+                await asyncio.wait_for(selecting.wait(), 1)
+                if platform == "whatsapp":
+                    channel._accept(_wa_event("m2", "/stop", "b"))
+                    channel._queue_turn(_wa_message("followup", "m3"))
+                    tasks = set(channel._pending_tasks_background)
+                else:
+                    await channel._accept_message(_tg_message("/stop", 2), [])
+                    channel._queue_turn(_tg_inbound("followup", 3))
+                    tasks = set(channel._background_tasks)
+                await asyncio.wait_for(stopped.wait(), 1)
+                await channel.stop()
+                followup.assert_not_awaited()
+                self.assertEqual(channel._control_tasks, {})
+                self.assertEqual(channel._effort_tasks, {})
+                self.assertTrue(all(task.done() for task in tasks))
+
+    async def test_effort_preserves_pending_input_and_orders_followup_on_both_channels(self):
+        for platform in ("whatsapp", "telegram"):
+            with self.subTest(platform=platform):
+                selecting = asyncio.Event()
+                release = asyncio.Event()
+                answered = asyncio.Event()
+                seen = []
+
+                async def handler(message):
+                    seen.append(message.text)
+                    answered.set()
+
+                async def command(*args):
+                    invocation = args[3] if platform == "whatsapp" else args[4]
+                    self.assertEqual(invocation.command.name, "effort")
+                    selecting.set()
+                    await release.wait()
+
+                if platform == "whatsapp":
+                    channel = self._whatsapp(handler, command)
+                    channel._accept(_wa_event("m1", "pending question", "a"))
+                    pending = dict(channel._pending)
+                    channel._accept(_wa_event("m2", "/effort high", "b"))
+                else:
+                    channel = self._telegram(handler, command)
+                    await channel._accept_message(_tg_message("pending question", 1), [])
+                    pending = dict(channel._pending)
+                    await channel._accept_message(_tg_message("/effort high", 2), [])
+                self.addAsyncCleanup(channel.stop)
+                try:
+                    await asyncio.wait_for(selecting.wait(), 1)
+                    self.assertTrue(pending)
+                    self.assertEqual(channel._pending, pending)
+                    if platform == "whatsapp":
+                        channel._queue_turn(_wa_message("followup", "m3"))
+                    else:
+                        channel._queue_turn(_tg_inbound("followup", 3))
+                    await asyncio.sleep(0)
+                    self.assertFalse(answered.is_set())
+                finally:
+                    release.set()
+                await asyncio.wait_for(answered.wait(), 1)
+                self.assertEqual(seen[0], "followup")
+                await channel.stop()
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

@@ -117,8 +117,8 @@ class LoadingTests(unittest.TestCase):
 
     def test_duplicate_keys_are_refused_at_every_depth(self):
         for body in (
-            "agent:\n  model: gpt-5.6-sol\nagent:\n  model: gpt-5.6-terra\n",
-            "agent:\n  model: gpt-5.6-sol\n  model: gpt-5.6-terra\n",
+            "agent:\n  model: gpt-6-astra\nagent:\n  model: gpt-6-astra\n",
+            "agent:\n  model: gpt-6-astra\n  model: gpt-6-astra\n",
         ):
             with self.subTest(body=body):
                 with self.assertRaisesRegex(ConfigError, "duplicate key"):
@@ -297,16 +297,16 @@ class ConfigFileTests(unittest.TestCase):
         self.assertGreater(config.max_tool_iterations, 0)
 
     def test_the_file_sets_the_model(self):
-        self._write("agent:\n  model: gpt-5.6-terra\n")
-        self.assertEqual(Config.load().model, "gpt-5.6-terra")
+        self._write("agent:\n  model: gpt-6-astra\n")
+        self.assertEqual(Config.load().model, "gpt-6-astra")
 
     def test_behavior_comes_from_the_file_not_the_environment(self):
-        self._write("agent:\n  model: gpt-5.6-terra\n")
+        self._write("agent:\n  model: gpt-6-astra\n")
         with mock.patch.dict(os.environ, {"PILOTAGE_MODEL": "gpt-from-env"}):
-            self.assertEqual(Config.load().model, "gpt-5.6-terra")
+            self.assertEqual(Config.load().model, "gpt-6-astra")
 
-    def test_only_the_three_production_models_are_accepted(self):
-        for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+    def test_only_astra_is_accepted(self):
+        for model in ("gpt-6-astra",):
             with self.subTest(model=model):
                 self._write(f"agent:\n  model: {model}\n")
                 self.assertEqual(Config.load().model, model)
@@ -319,7 +319,7 @@ class ConfigFileTests(unittest.TestCase):
         self._write("agent:\n  history_turns: 5\n")
         with mock.patch.dict(os.environ, {"PILOTAGE_MODEL": "gpt-from-env"}):
             config = Config.load()
-        self.assertEqual(config.model, "gpt-5.6-sol")
+        self.assertEqual(config.model, "gpt-6-astra")
         self.assertEqual(config.history_turns, 5)
 
     def test_sensitive_allowed_senders_come_from_the_environment(self):
@@ -385,7 +385,7 @@ class ConfigFileTests(unittest.TestCase):
         template = Path(__file__).resolve().parent.parent / "config.yaml.example"
         with mock.patch.dict(os.environ, {"PILOTAGE_CONFIG": str(template)}):
             config = Config.load(channel="whatsapp")
-        self.assertEqual(config.model, "gpt-5.6-sol")
+        self.assertEqual(config.model, "gpt-6-astra")
         self.assertFalse(config.settings.flag("whatsapp.enabled", True))
         self.assertFalse(config.settings.flag("telegram.enabled", True))
         self.assertEqual(
@@ -564,15 +564,15 @@ class ConfigFileTests(unittest.TestCase):
     def test_a_channel_can_be_loaded_on_its_own(self):
         self._write(
             "agent:\n"
-            "  model: gpt-5.6-sol\n"
+            "  reasoning_effort: medium\n"
             "channels:\n"
             "  whatsapp:\n"
             "    agent:\n"
-            "      model: gpt-5.6-terra\n"
+            "      reasoning_effort: high\n"
         )
-        self.assertEqual(Config.load().model, "gpt-5.6-sol")
-        self.assertEqual(Config.load(channel="whatsapp").model, "gpt-5.6-terra")
-        self.assertEqual(Config.load().for_channel("whatsapp").model, "gpt-5.6-terra")
+        self.assertEqual(Config.load().reasoning_effort, "medium")
+        self.assertEqual(Config.load(channel="whatsapp").reasoning_effort, "high")
+        self.assertEqual(Config.load().for_channel("whatsapp").reasoning_effort, "high")
 
     def test_a_broken_file_stops_the_agent_rather_than_defaulting(self):
         self._write("agent:\n  model: [unclosed\n")
@@ -584,11 +584,11 @@ class ConfigFileTests(unittest.TestCase):
 
         self._write(
             "agent:\n"
-            "  model: gpt-5.6-sol\n"
+            "  reasoning_effort: medium\n"
             "channels:\n"
             "  whatsapp:\n"
             "    agent:\n"
-            "      model: gpt-5.6-terra\n"
+            "      reasoning_effort: high\n"
         )
         seen = {}
 
@@ -600,7 +600,7 @@ class ConfigFileTests(unittest.TestCase):
             self.assertEqual(main.main(["status"]), 0)
 
         self.assertEqual(seen["config"].settings.channel, "whatsapp")
-        self.assertEqual(seen["config"].model, "gpt-5.6-terra")
+        self.assertEqual(seen["config"].reasoning_effort, "high")
 
     def test_status_uses_telegram_view_when_it_is_only_enabled(self):
         from pilotage import main
@@ -613,7 +613,7 @@ class ConfigFileTests(unittest.TestCase):
             "channels:\n"
             "  telegram:\n"
             "    agent:\n"
-            "      model: gpt-5.6-luna\n"
+            "      reasoning_effort: high\n"
         )
         seen = {}
 
@@ -636,7 +636,7 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(
             seen["config"].settings.channel, "telegram"
         )
-        self.assertEqual(seen["config"].model, "gpt-5.6-luna")
+        self.assertEqual(seen["config"].reasoning_effort, "high")
 
     def test_a_broken_file_exits_instead_of_starting(self):
         from pilotage import main
@@ -650,7 +650,7 @@ class ConfigFileTests(unittest.TestCase):
 
         self._write(
             "agent:\n"
-            "  model: gpt-5.6-sol\n"
+            "  model: gpt-6-astra\n"
             "channels:\n"
             "  whatsapp:\n"
             "    tools:\n"

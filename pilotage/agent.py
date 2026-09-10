@@ -33,6 +33,7 @@ from .codex import (
     auth,
     client as codex_client,
     compaction,
+    models,
     stream as codex_stream,
 )
 from .config import Config
@@ -42,6 +43,7 @@ from .history import (
     ActiveTurn,
     ConversationError,
     ConversationStore,
+    SessionReset,
     StopCheckpoint,
     session_workspace_path,
 )
@@ -222,6 +224,8 @@ class _ActiveExecution:
     """Identity guard shared by the model owner and concurrent /stop."""
 
     session: int
+    reasoning_effort: str = ""
+    session_reset: Optional[SessionReset] = None
     claim_ids: tuple[str, ...] = ()
     task: Optional[asyncio.Task] = None
     owner_task: Optional[asyncio.Task] = None
@@ -301,6 +305,8 @@ class Agent:
         # One turn at a time per chat, so two fast messages cannot interleave
         # their history writes.
         self._chat_locks: Dict[str, asyncio.Lock] = {}
+        # Brief session-setting/reset transactions never wait for a model turn.
+        self._session_locks: Dict[str, asyncio.Lock] = {}
         # Channel turns keep their exact answer fenced until the delivery
         # obligation (and WhatsApp input identity) are durable.
         self._ready_turns: Dict[
@@ -806,11 +812,65 @@ class Agent:
                     return False
                 # Record the boundary before changing live state. If this fails,
                 # /new reports failure and the old conversation remains intact.
-                await asyncio.to_thread(self._store.new_session, chat_id)
-                self._clear_live_session(chat_id)
+                async with self._session_locks.setdefault(chat_id, asyncio.Lock()):
+                    await asyncio.to_thread(self._store.new_session, chat_id)
+                    self._clear_live_session(chat_id)
                 return True
         finally:
             self._approvals.unblock(chat_id)
+
+    async def _prepare_session(self, chat_id: str) -> Optional[SessionReset]:
+        """Apply automatic boundaries while holding the short session lock."""
+        mode = getattr(self._config, "session_reset_mode", "none")
+        if mode == "none":
+            return None
+        reset = await asyncio.to_thread(
+            self._store.prepare_session, chat_id, mode=mode,
+            idle_minutes=getattr(self._config, "session_reset_idle_minutes", 1440),
+            at_hour=getattr(self._config, "session_reset_at_hour", 4),
+            tzinfo=timezone_for_name(getattr(self._config, "timezone", "")),
+        )
+        if reset is not None:
+            self._clear_live_session(chat_id)
+        return reset
+
+    async def session_effort(
+        self,
+        chat_id: str,
+        value: Optional[str] = None,
+        *,
+        on_reset: Optional[Callable[[SessionReset], None]] = None,
+    ) -> str:
+        """An effort command changes only future turns in this session."""
+        if value is not None and value not in models.EFFORTS:
+            raise ValueError("Unsupported session reasoning effort")
+        task = asyncio.create_task(self._session_effort_transaction(chat_id, value, on_reset))
+        self._observe_task(task)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Cancelling a waiter cannot cancel a SQLite worker. Let the whole
+            # transaction keep its lock until it has updated live session state.
+            await asyncio.shield(task)
+            raise
+
+    async def _session_effort_transaction(
+        self,
+        chat_id: str,
+        value: Optional[str],
+        on_reset: Optional[Callable[[SessionReset], None]],
+    ) -> str:
+        async with self._session_locks.setdefault(chat_id, asyncio.Lock()):
+            # Honor an elapsed session boundary before accepting a new choice.
+            # A check never changes the session or its activity timestamp.
+            # A running/preparing turn keeps both its session and effort.
+            lock = self._chat_locks.get(chat_id)
+            if value is not None and chat_id not in self._active_executions and not (lock and lock.locked()):
+                reset = await self._prepare_session(chat_id)
+                if reset is not None and on_reset is not None:
+                    on_reset(reset)
+            effort = await asyncio.to_thread(self._store.session_effort, chat_id, value)
+            return effort or self._config.reasoning_effort
 
     def _begin_completion_fence(self, chat_id: str) -> None:
         current = self._completion_fences.get(chat_id)
@@ -872,6 +932,10 @@ class Agent:
         execution.before_preparation_stop = before_stop
         execution.preparing = True
         try:
+            async with self._session_locks.setdefault(chat_id, asyncio.Lock()):
+                execution.session_reset = await self._prepare_session(chat_id)
+                effort = await asyncio.to_thread(self._store.session_effort, chat_id)
+                execution.reasoning_effort = effort or self._config.reasoning_effort
             yield execution
         except TurnStopped:
             raise
@@ -1260,24 +1324,16 @@ class Agent:
 
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
-            reset_mode = getattr(self._config, "session_reset_mode", "none")
-            reset = None
-            if reset_mode != "none":
-                reset = await asyncio.to_thread(
-                    self._store.prepare_session,
-                    chat_id,
-                    mode=reset_mode,
-                    idle_minutes=getattr(
-                        self._config, "session_reset_idle_minutes", 1440
-                    ),
-                    at_hour=getattr(self._config, "session_reset_at_hour", 4),
-                    tzinfo=timezone_for_name(
-                        getattr(self._config, "timezone", "")
-                    ),
-                )
+            if prepared_execution is not None:
+                reset = prepared_execution.session_reset
+                turn_effort = prepared_execution.reasoning_effort
+            else:
+                async with self._session_locks.setdefault(chat_id, asyncio.Lock()):
+                    reset = await self._prepare_session(chat_id)
+                    effort = await asyncio.to_thread(self._store.session_effort, chat_id)
+                    turn_effort = effort or self._config.reasoning_effort
             reset_note = ""
             if reset is not None:
-                self._clear_live_session(chat_id)
                 reason_text = (
                     "the daily reset schedule"
                     if reset.reason == "daily"
@@ -1386,6 +1442,7 @@ class Agent:
                             origin=origin,
                             claim_ids=claim_ids,
                             image_manifest=image_manifest,
+                            reasoning_effort=turn_effort,
                         )
                         execution.session = turn_session
                         execution.claim_ids = tuple(
@@ -1400,6 +1457,7 @@ class Agent:
                         origin=origin,
                         claim_ids=claim_ids,
                         image_manifest=image_manifest,
+                        reasoning_effort=turn_effort,
                     )
                 turn_begun = True
                 if execution is None:
@@ -1408,6 +1466,7 @@ class Agent:
                         turn_session,
                         claim_ids=claim_ids,
                     )
+                execution.reasoning_effort = turn_effort
                 execution.owner_task = asyncio.current_task()
                 result = await self._run_owned_turn(
                     chat_id,
@@ -1533,6 +1592,7 @@ class Agent:
                 active.session,
                 claim_ids=active.claim_ids,
             )
+            execution.reasoning_effort = active.reasoning_effort or self._config.reasoning_effort
             execution.owner_task = asyncio.current_task()
             try:
                 await self._stop_barrier(execution)
@@ -2036,12 +2096,14 @@ class Agent:
         tools: Optional[List[Dict[str, Any]]],
     ) -> codex_stream.StreamResult:
         """One call to the model, retried when the connection rather than the request fails."""
+        execution = self._active_executions.get(chat_id)
+        effort = (execution.reasoning_effort if execution else "") or self._config.reasoning_effort
         request = codex_stream.build_request(
             model=self._config.model,
             instructions=self._instructions_for_session(chat_id),
             input_items=input_items,
             session_id=chat_id,
-            reasoning_effort=self._config.reasoning_effort,
+            reasoning_effort=effort,
             tools=tools,
             native_compaction_enabled=self._config.codex_native_compaction,
             compact_threshold=self._config.codex_compact_threshold,

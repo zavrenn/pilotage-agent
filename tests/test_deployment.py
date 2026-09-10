@@ -63,7 +63,7 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(command[-1:], ["doctor"])
 
     def test_runtime_cannot_invoke_operator_commands(self):
-        for command in ("restart", "update", "logs", "telegram", "whatsapp"):
+        for command in ("restart", "update", "logs", "telegram", "whatsapp", "model"):
             with (
                 self.subTest(command=command),
                 mock.patch.object(deployment, "load", return_value=self.managed),

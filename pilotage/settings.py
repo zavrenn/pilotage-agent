@@ -349,6 +349,73 @@ def set_channel_enabled(path: Path, channel: str, enabled: bool = True) -> None:
         or parsed[channel].get("enabled") is not enabled
     ):
         raise ConfigError(f"Could not prove {channel}.enabled was updated in {path}")
+    _write_settings(path, text, updated)
+
+
+def set_agent_model(path: Path, model: str, effort: str) -> None:
+    """Update the two agent defaults atomically, preserving unrelated YAML."""
+    import copy
+    import yaml
+    from yaml.nodes import MappingNode, ScalarNode
+    from yaml.tokens import AliasToken, AnchorToken
+    from .codex.models import EFFORTS, MODEL
+
+    if model != MODEL or effort not in EFFORTS:
+        raise ConfigError("Unsupported model or reasoning effort")
+    path = Path(path)
+    if path.is_symlink():
+        raise ConfigError(f"Refusing to replace symbolic-link configuration: {path}")
+    try:
+        original = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        original = ""
+    before = _load_yaml(original, path)
+    if before is None:
+        before = {}
+    _validate_known_settings(before, _SETTINGS_SCHEMA, path=path)
+    # YAML aliases can make a seemingly local edit change another section.
+    if any(isinstance(token, (AliasToken, AnchorToken)) for token in yaml.scan(original)):
+        raise ConfigError("Expand YAML anchors and aliases before using pilotage model.")
+    values = {"model": model, "reasoning_effort": effort}
+    expected = copy.deepcopy(before)
+    expected.setdefault("agent", {}).update(values)
+    updated = original
+    for key, value in values.items():
+        root = yaml.compose(updated)
+        agent = next((v for k, v in root.value if k.value == "agent"), None) if root else None
+        if agent is None:
+            block = "agent:\n" + "".join(f"  {k}: {v}\n" for k, v in values.items())
+            if root is not None and root.flow_style:
+                if root.value:
+                    raise ConfigError("Cannot safely add agent settings to flow-style YAML.")
+                updated = updated[:root.start_mark.index] + block.rstrip("\n") + updated[root.end_mark.index:]
+            else:
+                updated += ("\n" if updated and not updated.endswith("\n") else "") + block
+            break
+        if not isinstance(agent, MappingNode):
+            raise ConfigError("agent must be a settings block")
+        node = next((v for k, v in agent.value if k.value == key), None)
+        if node is not None:
+            if not isinstance(node, ScalarNode):
+                raise ConfigError(f"agent.{key} must be a scalar value")
+            updated = updated[:node.start_mark.index] + value + updated[node.end_mark.index:]
+        elif not agent.flow_style and agent.value:
+            first = agent.value[0][0]
+            index = first.start_mark.index - first.start_mark.column
+            updated = updated[:index] + " " * first.start_mark.column + f"{key}: {value}\n" + updated[index:]
+        elif not agent.value:
+            block = "\n" + "".join(f"  {k}: {v}\n" for k, v in values.items())
+            updated = updated[:agent.start_mark.index] + block.rstrip("\n") + updated[agent.end_mark.index:]
+            break
+        else:
+            raise ConfigError(f"Cannot safely add agent.{key} to flow-style YAML.")
+    if _load_yaml(updated, path) != expected:
+        raise ConfigError("Could not prove that only the model defaults changed.")
+    _write_settings(path, original, updated)
+
+
+def _write_settings(path: Path, text: str, updated: str) -> None:
+    """Keep policy-file permissions while replacing a verified document."""
     if updated == text:
         return
 

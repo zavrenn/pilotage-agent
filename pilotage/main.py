@@ -1,6 +1,7 @@
 """Command line entry point.
 
     pilotage login          authenticate against ChatGPT (device code)
+    pilotage model          choose the default Astra reasoning effort
     pilotage whatsapp       configure, pair, and enable WhatsApp
     pilotage telegram       configure, verify, and enable Telegram
     pilotage run            answer enabled messaging channels until stopped
@@ -2412,6 +2413,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("login", help="authenticate against ChatGPT")
+    subparsers.add_parser("model", help="interactively choose the default Astra effort")
     subparsers.add_parser("run", help="answer enabled messaging channels until stopped")
     whatsapp_parser = subparsers.add_parser(
         "whatsapp", help="configure allowed numbers, home chat, and QR pairing"
@@ -2451,7 +2453,7 @@ def main(argv: list[str] | None = None) -> int:
                 if selected_root != deployment.STATE:
                     raise ValueError("Protected commands use the installed state. Run isolated tests from a separate checkout.")
             os.environ["PILOTAGE_HOME"] = str(deployment.STATE)
-            operator_command = args.command in {"update", "restart", "service", "logs", "telegram"}
+            operator_command = args.command in {"update", "restart", "service", "logs", "telegram", "model"}
             if args.command == "whatsapp" and not args.pair_only:
                 operator_command = True
             if operator_command:
@@ -2503,6 +2505,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "login":
         # Authentication must work before channel credentials are configured.
         return command_login(agent_path / "codex-auth.json")
+    if args.command == "model":
+        from .model_setup import run_model_setup
+
+        return run_model_setup(agent_path, selected_settings_path)
     if args.command == "telegram":
         return command_telegram_setup(
             agent_path,

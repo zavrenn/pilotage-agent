@@ -38,7 +38,7 @@ not to pursue framework completeness.
 ## Status
 
 Pilotage Agent is an early V1 focused on ChatGPT subscription authentication,
-GPT-5.6, WhatsApp and Telegram, persistent context and memory, selected tools
+GPT-6 Astra, WhatsApp and Telegram, persistent context and memory, selected tools
 and skills, and scheduled work.
 
 It is still evolving and has no stable public API or compatibility guarantee.
@@ -69,6 +69,7 @@ Then return to the unprivileged service user:
 bash scripts/install.sh
 # Review ~/.pilotage-agent/config.yaml and add required integration credentials to .env
 ./.venv/bin/pilotage login
+./.venv/bin/pilotage model     # confirm Astra access and choose its default effort
 ./.venv/bin/pilotage whatsapp  # optional: configure, pair, and enable WhatsApp
 ./.venv/bin/pilotage telegram  # optional: configure, verify, and enable Telegram
 ./.venv/bin/pilotage run
@@ -105,6 +106,7 @@ Useful operator commands:
 
 ```bash
 pilotage status
+pilotage model
 pilotage update --check
 pilotage update
 pilotage restart
@@ -118,6 +120,26 @@ pilotage cron list --all
 
 The installer links `pilotage` into `~/.local/bin`; add that directory to your
 shell's `PATH` if needed, or keep using `./.venv/bin/pilotage`.
+
+`pilotage model` is an interactive menu. It checks Astra availability using this
+agent's ChatGPT login, then saves the chosen default effort (`high` initially).
+It accepts no model names or effort flags. Restart with `pilotage restart` to
+apply saved defaults.
+Protected installations run this command as the operator; credentials are checked
+by the unprivileged runtime account. No model fallback is selected if Astra is
+unavailable.
+
+In WhatsApp or Telegram, `/effort` reads the session's effort without resetting
+the conversation or updating its activity. It checks the same account options as
+`pilotage model`; `/effort high` selects an available level from `low`, `medium`,
+`high`, `xhigh`, or `max`. Unavailable levels are rejected. If the account check
+fails, the current effort can still be read, and changes are refused.
+The choice applies to the next request, survives restarts, and is cleared by
+`/new` or an automatic session reset. An active or recovered turn keeps its
+starting effort. Other conversations and scheduled jobs keep their own configured
+effort. Existing channel-specific effort overrides still take precedence over the
+agent default.
+
 `update --check` fetches Git metadata without changing code or restarting anything.
 `update` follows the current branch's configured upstream and refuses local edits
 or commits ahead of upstream.

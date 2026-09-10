@@ -1027,9 +1027,10 @@ class TelegramChannel:
         self._pending_tasks: Dict[str, asyncio.Task] = {}
         self._queued: Dict[str, InboundMessage] = {}
         self._turn_tasks: Dict[str, asyncio.Task] = {}
-        # The newest task is one serialized tail for all session-control
-        # commands. Follow-up delivery stays fenced until that tail completes.
+        # The newest task keeps follow-up input waiting until earlier controls
+        # settle, including any effort check that /stop bypasses.
         self._control_tasks: Dict[str, asyncio.Task] = {}
+        self._effort_tasks: Dict[str, asyncio.Task] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._intake_tasks: set[asyncio.Task] = set()
         self._startup_updates: List[tuple[str, Any, Any]] = []
@@ -1413,6 +1414,7 @@ class TelegramChannel:
         self._queued.clear()
         self._turn_tasks.clear()
         self._control_tasks.clear()
+        self._effort_tasks.clear()
         self._background_tasks.clear()
         self._intake_tasks.clear()
         self._startup_updates.clear()
@@ -2002,8 +2004,18 @@ class TelegramChannel:
                 invocation.command.name in {"new", "stop"}
                 and not invocation.arguments
             )
+            ordered_command = control_command or invocation.command.name == "effort"
+            previous_control = self._control_tasks.get(session_id)
+            effort_task = self._effort_tasks.get(session_id)
+            stop_during_effort = (
+                control_command and invocation.command.name == "stop"
+                and previous_control is not None
+                and effort_task is not None and not effort_task.done()
+            )
+            dropped_claims = []
             if control_command:
                 dropped_claims = self._drop_pending_session(session_id)
+            if ordered_command:
                 active_turn = self._turn_tasks.get(session_id)
                 task = asyncio.create_task(
                     self._run_control_command_after_fence(
@@ -2017,7 +2029,7 @@ class TelegramChannel:
                         yield_before=bool(
                             active_turn is not None and not active_turn.done()
                         ),
-                        previous_control=self._control_tasks.get(session_id),
+                        previous_control=None if stop_during_effort else previous_control,
                     )
                 )
             else:
@@ -2033,9 +2045,18 @@ class TelegramChannel:
                 )
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
-            if control_command:
-                self._control_tasks[session_id] = task
-                task.add_done_callback(
+            if ordered_command:
+                control_task = task
+                if stop_during_effort:
+                    # Stop immediately while a catalog check is pending, but
+                    # keep later input behind both the check and the stop reply.
+                    control_task = asyncio.create_task(asyncio.wait((previous_control, task)))
+                    self._background_tasks.add(control_task)
+                    control_task.add_done_callback(self._background_tasks.discard)
+                if invocation.command.name == "effort":
+                    self._effort_tasks[session_id] = task
+                self._control_tasks[session_id] = control_task
+                control_task.add_done_callback(
                     lambda completed, key=session_id: self._finish_control_task(
                         key,
                         completed,
@@ -2542,6 +2563,8 @@ class TelegramChannel:
         key: str,
         task: asyncio.Task,
     ) -> None:
+        if self._effort_tasks.get(key) is task:
+            self._effort_tasks.pop(key, None)
         if self._control_tasks.get(key) is not task:
             return
         self._control_tasks.pop(key, None)

@@ -21,16 +21,15 @@ from pathlib import Path
 
 from .approvals import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from .codex.compaction import DEFAULT_COMPACT_THRESHOLD
+from .codex.models import DEFAULT_EFFORT, EFFORTS, MODEL
 from .i18n import DEFAULT_AGENT_LANGUAGE, normalize_language, t
 from .settings import ConfigError, Settings, config_path
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gpt-5.6-sol"
-SUPPORTED_MODELS = frozenset(
-    {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
-)
-DEFAULT_REASONING_EFFORT = "medium"
+DEFAULT_MODEL = MODEL
+SUPPORTED_MODELS = frozenset({MODEL})
+DEFAULT_REASONING_EFFORT = DEFAULT_EFFORT
 
 # Hermes's conservative context-file floor; agent identities should normally
 # remain far smaller than this.
@@ -356,7 +355,7 @@ class Config:
     def for_channel(self, channel: str) -> "Config":
         """The same agent as seen from one channel.
 
-        A channel may run with fewer tools or a different model than the
+        A channel may run with fewer tools or a different effort than the
         agent's common settings — a group chat on WhatsApp is not the console.
         """
         if not channel:
@@ -541,6 +540,12 @@ class Config:
                 "agent.model must be one of "
                 f"{', '.join(sorted(SUPPORTED_MODELS))}, not {model!r}"
             )
+        reasoning_effort = settings.text("agent.reasoning_effort", DEFAULT_REASONING_EFFORT)
+        if reasoning_effort not in EFFORTS:
+            raise ConfigError(
+                f"agent.reasoning_effort must be one of {', '.join(EFFORTS)}, "
+                f"not {reasoning_effort!r}"
+            )
         native_compaction = settings.flag(
             "compression.codex_responses_native", True
         )
@@ -573,7 +578,7 @@ class Config:
 
         return cls(
             model=model,
-            reasoning_effort=settings.text("agent.reasoning_effort", DEFAULT_REASONING_EFFORT),
+            reasoning_effort=reasoning_effort,
             instructions=_instructions(settings, home, channel),
             language=language,
             timezone=timezone_name,

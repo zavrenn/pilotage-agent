@@ -586,9 +586,10 @@ class WhatsAppChannel:
         # session. This bounds work even when messages arrive faster than replies.
         self._queued: Dict[str, InboundMessage] = {}
         self._turn_tasks: Dict[str, asyncio.Task] = {}
-        # The newest task is one serialized tail for all session-control
-        # commands. Follow-up delivery stays fenced until that tail completes.
+        # The newest task keeps follow-up input waiting until earlier controls
+        # settle, including any effort check that /stop bypasses.
         self._control_tasks: Dict[str, asyncio.Task] = {}
+        self._effort_tasks: Dict[str, asyncio.Task] = {}
         # Read receipts run detached; hold a reference so they are not
         # garbage-collected mid-flight.
         self._pending_tasks_background: set[asyncio.Task] = set()
@@ -714,6 +715,7 @@ class WhatsAppChannel:
         self._pending_tasks_background.clear()
         self._turn_tasks.clear()
         self._control_tasks.clear()
+        self._effort_tasks.clear()
         self._pending.clear()
         self._pending_started.clear()
         self._queued.clear()
@@ -1180,6 +1182,14 @@ class WhatsAppChannel:
                 invocation.command.name in {"new", "stop"}
                 and not invocation.arguments
             )
+            ordered_command = control_command or invocation.command.name == "effort"
+            previous_control = self._control_tasks.get(session_id)
+            effort_task = self._effort_tasks.get(session_id)
+            stop_during_effort = (
+                control_command and invocation.command.name == "stop"
+                and previous_control is not None
+                and effort_task is not None and not effort_task.done()
+            )
             if control_command:
                 # Drop a half-written batch on the spot. Sending it after /new
                 # or /stop would answer work the person explicitly abandoned.
@@ -1207,7 +1217,7 @@ class WhatsAppChannel:
                 # command in one synchronous batch. Defer the control body by
                 # one scheduler cycle so the older handler can publish its
                 # preparation owner before /stop or /new inspects the Agent.
-            if control_command:
+            if ordered_command:
                 task = asyncio.create_task(
                     self._run_control_command_after_yield(
                         chat_id,
@@ -1216,7 +1226,7 @@ class WhatsAppChannel:
                         claim_id,
                         invocation,
                         [claim_id],
-                        previous_control=self._control_tasks.get(session_id),
+                        previous_control=None if stop_during_effort else previous_control,
                     )
                 )
             else:
@@ -1231,9 +1241,18 @@ class WhatsAppChannel:
                     )
                 )
             self._pending_tasks_background.add(task)
-            if control_command:
-                self._control_tasks[session_id] = task
-                task.add_done_callback(
+            if ordered_command:
+                control_task = task
+                if stop_during_effort:
+                    # Stop immediately while a catalog check is pending, but
+                    # keep later input behind both the check and the stop reply.
+                    control_task = asyncio.create_task(asyncio.wait((previous_control, task)))
+                    self._pending_tasks_background.add(control_task)
+                    control_task.add_done_callback(self._pending_tasks_background.discard)
+                if invocation.command.name == "effort":
+                    self._effort_tasks[session_id] = task
+                self._control_tasks[session_id] = control_task
+                control_task.add_done_callback(
                     lambda completed, key=session_id: self._finish_control_task(
                         key,
                         completed,
@@ -1576,6 +1595,8 @@ class WhatsAppChannel:
     ) -> None:
         """Release post-control input only after the command response settles."""
 
+        if self._effort_tasks.get(key) is task:
+            self._effort_tasks.pop(key, None)
         if self._control_tasks.get(key) is not task:
             return
         self._control_tasks.pop(key, None)

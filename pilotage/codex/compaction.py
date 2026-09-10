@@ -10,16 +10,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from .models import MODEL
+
 DEFAULT_COMPACT_THRESHOLD = 200_000
 RETAINED_USER_MESSAGE_TOKEN_BUDGET = 64_000
 
-_ELIGIBLE_MODEL_MARKER = "gpt-5.6"
 _OPAQUE_REPLAY_TYPES = frozenset({"reasoning", "compaction"})
 
 
 def is_native_compaction_model(model: Optional[str]) -> bool:
-    """Return whether Hermes has verified native compaction for this model."""
-    return _ELIGIBLE_MODEL_MARKER in (model or "").lower()
+    """Astra supports the native compaction used by this runtime."""
+    return (model or "").lower() == MODEL
 
 
 def context_management(

@@ -10,17 +10,17 @@ from pilotage.codex import stream as codex_stream
 
 
 class ModelGateTests(unittest.TestCase):
-    def test_only_the_verified_gpt_56_family_is_eligible(self):
-        for model in ("gpt-5.6", "gpt-5.6-sol", "GPT-5.6-2026-07-15"):
+    def test_only_astra_is_eligible(self):
+        for model in ("gpt-6-astra", "GPT-6-ASTRA"):
             with self.subTest(model=model):
                 self.assertTrue(compaction.is_native_compaction_model(model))
-        for model in ("gpt-5.1", "gpt-5.2", "gpt-5.3-codex", "gpt-4o", ""):
+        for model in ("gpt-5.6-sol", "gpt-5.1", "gpt-5.2", "gpt-5.3-codex", "gpt-4o", "", "other-gpt-6-astra"):
             with self.subTest(model=model):
                 self.assertFalse(compaction.is_native_compaction_model(model))
 
     def test_eligible_request_gets_the_configured_directive(self):
         request = codex_stream.build_request(
-            model="gpt-5.6-sol",
+            model="gpt-6-astra",
             instructions="test",
             input_items=[{"role": "user", "content": "hello"}],
             session_id="chat",
@@ -34,7 +34,7 @@ class ModelGateTests(unittest.TestCase):
         )
 
     def test_disabled_or_ineligible_request_omits_the_directive(self):
-        for model, enabled in (("gpt-5.6-sol", False), ("gpt-5.2", True)):
+        for model, enabled in (("gpt-6-astra", False), ("gpt-5.2", True)):
             with self.subTest(model=model, enabled=enabled):
                 request = codex_stream.build_request(
                     model=model,
@@ -97,7 +97,7 @@ class CheckpointReplayTests(unittest.TestCase):
 
     def test_current_eligibility_gates_checkpoint_replay_and_pruning(self):
         active = codex_stream.build_request(
-            model="gpt-5.6-sol",
+            model="gpt-6-astra",
             instructions="test",
             input_items=self._items(),
             session_id="chat",
