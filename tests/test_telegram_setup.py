@@ -276,9 +276,9 @@ class TelegramSetupTests(unittest.TestCase):
                 clear=True,
             ),
             mock.patch.object(
-                main.profiles,
-                "activate_for_process",
-                return_value=("default", self.root),
+                main,
+                "state_dir",
+                return_value=self.root,
             ),
             mock.patch.object(
                 main.Config,

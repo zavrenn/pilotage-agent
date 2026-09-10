@@ -264,7 +264,7 @@ async def _download_image(
 def _cache_dir(context: ToolContext) -> Path:
     state_dir = getattr(context.config, "state_dir", None)
     if state_dir is None:
-        raise ImageResolutionError("Vision requires a configured profile state directory")
+        raise ImageResolutionError("Vision requires a configured agent state directory")
     path = Path(state_dir) / "cache" / "vision"
     path.mkdir(parents=True, exist_ok=True)
     return path

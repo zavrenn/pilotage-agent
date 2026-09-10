@@ -592,9 +592,8 @@ class ConfigFileTests(unittest.TestCase):
         )
         seen = {}
 
-        def status(config, profile_name):
+        def status(config):
             seen["config"] = config
-            seen["profile"] = profile_name
             return 0
 
         with mock.patch.object(main, "command_status", status):
@@ -602,7 +601,6 @@ class ConfigFileTests(unittest.TestCase):
 
         self.assertEqual(seen["config"].settings.channel, "whatsapp")
         self.assertEqual(seen["config"].model, "gpt-5.6-terra")
-        self.assertEqual(seen["profile"], "default")
 
     def test_status_uses_telegram_view_when_it_is_only_enabled(self):
         from pilotage import main
@@ -619,9 +617,8 @@ class ConfigFileTests(unittest.TestCase):
         )
         seen = {}
 
-        def status(config, profile_name):
+        def status(config):
             seen["config"] = config
-            seen["profile"] = profile_name
             return 0
 
         environment = {
@@ -640,7 +637,6 @@ class ConfigFileTests(unittest.TestCase):
             seen["config"].settings.channel, "telegram"
         )
         self.assertEqual(seen["config"].model, "gpt-5.6-luna")
-        self.assertEqual(seen["profile"], "default")
 
     def test_a_broken_file_exits_instead_of_starting(self):
         from pilotage import main
@@ -947,7 +943,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(main, "WhatsAppChannel") as channel,
             mock.patch("sys.stderr", new_callable=StringIO) as error,
         ):
-            code = await main._run_enabled_channels(channel_config, "default")
+            code = await main._run_enabled_channels(channel_config)
 
         self.assertEqual(code, 1)
         channel.assert_not_called()
@@ -988,7 +984,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(main, "WhatsAppChannel") as channel,
             mock.patch("sys.stderr", new_callable=StringIO),
         ):
-            code = await main._run_enabled_channels(channel_config, "default")
+            code = await main._run_enabled_channels(channel_config)
 
         self.assertEqual(code, 1)
         channel.assert_not_called()

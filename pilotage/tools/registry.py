@@ -2,7 +2,7 @@
 
 A tool is a name, a schema the model reads, and a handler. Tools belong to a
 group — `todo`, `web`, `file` — and the operator switches whole groups on and
-off in the configuration file, per profile and per channel. Nothing is
+off in the configuration file, per agent and per channel. Nothing is
 discovered, imported dynamically or overridden at runtime: the set of tools an
 agent has is decided when it starts and does not change under it.
 
@@ -193,14 +193,14 @@ class ToolContext:
     chat_id: str
     config: Any
     state: Dict[str, Any] = field(default_factory=dict)
-    # Profile-wide durable conversation history. Explicit so session search
-    # cannot discover or cross into another profile's database.
+    # Agent-wide durable conversation history. Explicit so session search
+    # cannot discover or cross into another agent's database.
     conversation_store: Any = None
-    # Profile-wide curated memory. Explicit because it is shared by chats;
+    # Agent-wide curated memory. Explicit because it is shared by chats;
     # putting it in per-chat state would create divergent stores.
     memory_store: Any = None
-    # Profile-wide durable scheduling state. It is explicit for the same
-    # separation reason as memory; no tool discovers another profile's root.
+    # Agent-wide durable scheduling state. It is explicit for the same
+    # separation reason as memory; no tool discovers another agent's root.
     cron_store: Any = None
     # The delivery location that created a job, never a model-selected target.
     origin: Optional[Dict[str, str]] = None
@@ -208,12 +208,12 @@ class ToolContext:
     # Turn-scoped logical cwd. Cron jobs use this instead of mutating process
     # environment, so concurrent jobs cannot leak directories into each other.
     working_directory: Optional[Path] = None
-    # None means the profile's full skill set. Scheduled jobs pass an explicit
+    # None means the agent's full skill set. Scheduled jobs pass an explicit
     # allowlist, including an empty set.
     allowed_skills: Optional[frozenset[str]] = None
     # Retained for embedded callers; capability decisions never invoke it.
     approval_request: Optional[ApprovalRequest] = None
-    # Private, profile-local provenance for agent-authored memory and skill
+    # Private, agent-local provenance for agent-authored memory and skill
     # changes. Journal contents never enter model instructions or tool results.
     persistence_audit: Any = None
     # Interactive foreground turns may learn. Cron and any future unattended

@@ -15,8 +15,8 @@ SERVICE_TIMEOUT_SECONDS = 120
 _ACTIONS = frozenset({"start", "stop", "restart", "status"})
 
 
-def unit_name(profile_name: str) -> str:
-    return f"pilotage-agent@{profile_name}.service"
+def unit_name() -> str:
+    return "pilotage-agent.service"
 
 
 def _run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -31,11 +31,10 @@ def _run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
 
 def run_service_command(
     action: str,
-    profile_name: str,
     *,
     run: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] = _run,
 ) -> int:
-    """Control or inspect exactly one installed profile service."""
+    """Control or inspect exactly one installed agent service."""
 
     action = str(action or "").strip().lower()
     if action not in _ACTIONS:
@@ -45,7 +44,7 @@ def run_service_command(
         print("systemctl is not installed; service control requires Ubuntu systemd.", file=sys.stderr)
         return 1
 
-    unit = unit_name(profile_name)
+    unit = unit_name()
     if action in {"start", "stop", "restart"}:
         command = [*system_command("systemctl", privileged=True), action, unit]
     else:

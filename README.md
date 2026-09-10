@@ -74,16 +74,16 @@ bash scripts/install.sh
 ./.venv/bin/pilotage run
 ```
 
-Voice-message transcription requires `VOICE_TOOLS_OPENAI_KEY` in the profile
+Voice-message transcription requires `VOICE_TOOLS_OPENAI_KEY` in the agent
 `.env`; ChatGPT login does not authorize the OpenAI audio API.
 
-Full-page web extraction requires `FIRECRAWL_API_KEY` in the profile `.env`, or
+Full-page web extraction requires `FIRECRAWL_API_KEY` in the agent `.env`, or
 `FIRECRAWL_API_URL` for a self-hosted Firecrawl instance. DDGS search needs no
 key. Without either Firecrawl setting, the agent offers search only and Doctor
 does not require extraction credentials. Restart after configuring extraction.
 
 `pilotage whatsapp` saves the WhatsApp allowlist and home destination in the
-effective profile environment file, then pairs and enables the channel.
+effective agent environment file, then pairs and enables the channel.
 `pilotage telegram` securely collects and verifies the bot token, allowed user
 IDs, and home destination, then enables Telegram. Run either or both setup
 commands; a fresh install enables neither channel.
@@ -110,15 +110,9 @@ pilotage update
 pilotage restart
 pilotage logs -f --level WARNING
 pilotage logs --since 1h -n 100
-pilotage profile create work
-# Edit ~/.pilotage-agent/profiles/work/.env and config.yaml
-pilotage --profile work run
-bash scripts/install-service.sh --profile work
-pilotage --profile work service status
-pilotage --profile work service stop
-pilotage --profile work service start
-pilotage --profile work restart
-pilotage --profile work logs -f
+pilotage service status
+pilotage service stop
+pilotage service start
 pilotage cron list --all
 ```
 
@@ -126,8 +120,8 @@ The installer links `pilotage` into `~/.local/bin`; add that directory to your
 shell's `PATH` if needed, or keep using `./.venv/bin/pilotage`.
 `update --check` fetches Git metadata without changing code or restarting anything.
 `update` follows the current branch's configured upstream and refuses local edits
-or commits ahead of upstream. Stop other profiles sharing the installation first.
-It stops the selected service, fast-forwards the checkout, runs the locked installer
+or commits ahead of upstream.
+It stops the service, fast-forwards the checkout, runs the locked installer
 and an import check, then starts the service again only if it was running before.
 An installation failure leaves it stopped; fix the error, rerun `update`, then
 `restart`. These commands use the invoking user's existing permissions and never
@@ -140,15 +134,20 @@ severe messages. Stream messages without a severity remain visible, including
 tracebacks and startup errors. `--since` accepts
 relative times such as `30m` or a timestamp such as `"2026-09-08 20:39:00"`.
 
-Each named profile owns its `SOUL.md` identity, configuration, WhatsApp session,
-Telegram credentials, conversations, memory, skills, workspace, cron jobs, and
-an automatically assigned bridge port. Only one live runtime may own a profile.
-A profile's `display.language` selects English, French, or Arabic for static
+Each container runs one agent with its own `SOUL.md` identity, configuration,
+ChatGPT authentication, channel sessions, conversations, memory, skills,
+workspace, and cron jobs. These remain under `~/.pilotage-agent`.
+There is no profile manager, state selection, or authentication fallback.
+Only one live runtime may own the agent state directory.
+`display.language` selects English, French, or Arabic for static
 runtime messages; the agent's own language and register remain in `SOUL.md`.
 The top-level `timezone` is shared by cron and daily conversation resets.
-A named profile may fall back only to the default profile's ChatGPT
-authentication. An optional `AGENTS.md` in
+An optional `AGENTS.md` in
 the working directory supplies workspace instructions to each new conversation.
+
+The system service is `pilotage-agent.service` and starts with `pilotage run`.
+Chats and participants have separate conversation state within the agent;
+the container provides the filesystem security boundary.
 
 Capabilities are controlled by `tools.enabled` and `tools.disabled`, including
 channel overrides; disabled groups cannot be enabled by a client response.
@@ -156,9 +155,9 @@ channel overrides; disabled groups cannot be enabled by a client response.
 Chat-created jobs keep their originating channel's execution settings even when
 their delivery destination changes. Disabling that channel also blocks job
 activation and execution until it is enabled again. Jobs without a chat origin
-use the common profile settings, matching the operator CLI.
+use the common agent settings, matching the operator CLI.
 Enabled requests run without a client approval step. Legacy `approvals.*`
-settings remain accepted for existing profiles but no longer affect execution;
+settings remain accepted for existing installations but no longer affect execution;
 they are not feature switches. Memory and skill changes still require the
 foreground execution boundary, configuration access, validation and the existing
 rollback journal. Messaging replies contain plain client messages; operator
@@ -166,7 +165,7 @@ diagnostics remain available through the CLI and logs.
 
 `gateway.media_delivery_allow_dirs` is the complete native-file delivery allowlist
 when configured: only those directories are allowed, and `[]` disables file
-delivery. When omitted, the profile workspace remains the default. Existing
+delivery. When omitted, the agent workspace remains the default. Existing
 configurations needing that workspace as well must now list it explicitly.
 This controls file paths, not disclosure of copied content or text.
 
@@ -189,7 +188,7 @@ Runtime code, `config.yaml`, `.env`, `SOUL.md`, and the system service are
 protected from agent edits, including replacement of their containing folders.
 Operator Git credentials stay in the private operator home.
 Protected deployments reject alternate `PILOTAGE_CONFIG` and `PILOTAGE_ENV_FILE`
-paths. Keep these files directly in the selected profile.
+paths. Keep these files directly in the agent state directory.
 
 The [Pilotage Deploy bootstrap](https://github.com/zavrenn/pilotage-deploy)
 prepares this layout automatically for new containers.
@@ -222,12 +221,10 @@ bash scripts/install-protection.sh operator
 ./.venv/bin/python -I -B scripts/verify-protection.py
 ```
 
-The installer preserves existing agent data and registered profiles, disables
-the legacy user-service autostart, and installs **stopped** system services.
+The installer preserves existing agent data, disables
+the legacy user-service autostart, and installs a **stopped** system service.
 It refuses running agent processes, unexpected privileges and linked protected
-files. As the operator, use `pilotage profile create NAME` to add another
-protected profile after setup; its service is enabled but stays stopped.
-Select profiles with `--profile NAME` (there is no mutable sticky selection).
+files. Provision a separate container for each additional agent.
 
 Use `pilotage login`, `whatsapp`, `telegram`, `restart`, `doctor`, `update`, and
 `logs -f --level WARNING` from the operator account. State operations run as

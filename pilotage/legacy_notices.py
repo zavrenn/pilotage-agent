@@ -32,35 +32,9 @@ _FIXED_NOTICES = frozenset({
 })
 
 
-def _diagnostic_patterns() -> tuple[re.Pattern[str], ...]:
-    patterns = [re.compile(r"Scheduled job (?:'[^\n]*'|\"[^\n]*\") failed\. Check the agent logs\.")]
-    for language in SUPPORTED_LANGUAGES:
-        def field(key: str, **values: str) -> str:
-            # Values of these diagnostic fields occupy one complete line.
-            return re.escape(t(key, language, **values)).replace("VALUE", r"[^\n]+")
-
-        auth = re.escape(t("commands.auth", language, scope="SCOPE")).replace(
-            "SCOPE",
-            "(?:" + "|".join(
-                re.escape(t(f"commands.auth_{scope}", language))
-                for scope in ("profile", "shared", "missing")
-            ) + ")",
-        )
-        profile = field("commands.profile", profile="VALUE")
-        patterns.append(re.compile("\n".join((
-            profile, field("commands.state", state="VALUE"), auth,
-        ))))
-        patterns.append(re.compile("\n".join((
-            r"Pilotage [^\n]+", profile,
-            field("commands.model", model="VALUE"),
-            field("commands.channel", channel="VALUE"),
-            field("commands.tools", tools="VALUE"),
-            field("commands.cron", state="VALUE", timezone="VALUE"), auth,
-        ))))
-    return tuple(patterns)
-
-
-_DIAGNOSTIC_PATTERNS = _diagnostic_patterns()
+_DIAGNOSTIC_PATTERNS = (
+    re.compile(r"Scheduled job (?:'[^\n]*'|\"[^\n]*\") failed\. Check the agent logs\."),
+)
 _LEGACY_HELP_HEADERS = {
     "en": "Management commands:",
     "fr": "Commandes de gestion :",
@@ -73,7 +47,6 @@ _LEGACY_COMMANDS = (
     ("approve", "Allow the oldest pending change once", ""),
     ("deny", "Refuse the oldest pending change", ""),
     ("status", "Show the running agent's essential status", ""),
-    ("profile", "Show the active profile and state directory", ""),
 )
 _LEGACY_HELP = frozenset(
     "\n".join([

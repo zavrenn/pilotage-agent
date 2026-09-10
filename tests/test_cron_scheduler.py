@@ -425,15 +425,11 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         async def unproved_silence(_session, _prompt):
             return TurnResult(text="[SILENT]", terminal_completed=False)
 
-        await self.scheduler(unproved_silence)
-        finished = await wait_until(
-            lambda: (
-                value
-                if (value := self.store.resolve_job(job["id"]))["state"] == "error"
-                else None
-            )
-        )
-
+        scheduler, factory = await self.scheduler(unproved_silence)
+        # Reading jobs.json during replacement can deny the writer on Windows.
+        await wait_until(lambda: factory.instances and not scheduler._active)
+        finished = self.store.resolve_job(job["id"])
+        self.assertEqual(finished["state"], "error")
         self.assertEqual(finished["last_status"], "error")
         self.assertIn("terminal completion proof", finished["last_error"])
 
@@ -524,14 +520,11 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         async def broken_delivery(_origin, _text, _message_ref):
             raise OSError("bridge down")
 
-        await self.scheduler(answer, deliver=broken_delivery)
-        finished = await wait_until(
-            lambda: (
-                value
-                if (value := self.store.resolve_job(job["id"]))["state"] == "completed"
-                else None
-            )
-        )
+        scheduler, factory = await self.scheduler(answer, deliver=broken_delivery)
+        # Observe task completion before reading the atomically replaced file.
+        await wait_until(lambda: factory.instances and not scheduler._active)
+        finished = self.store.resolve_job(job["id"])
+        self.assertEqual(finished["state"], "completed")
         self.assertEqual(finished["last_status"], "ok")
         self.assertIn("bridge down", finished["last_delivery_error"])
 

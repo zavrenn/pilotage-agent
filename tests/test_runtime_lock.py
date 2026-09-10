@@ -15,7 +15,7 @@ from unittest import mock
 from pilotage import main, runtime_lock
 from pilotage.config import Config
 from pilotage.runtime_lock import (
-    ProfileRuntimeLock,
+    RuntimeLock,
     RuntimeAlreadyRunning,
     runtime_lock_is_held,
 )
@@ -28,8 +28,8 @@ class RuntimeLockTests(unittest.TestCase):
         self.root = Path(temporary.name)
 
     def test_only_one_runtime_can_own_a_profile(self):
-        first = ProfileRuntimeLock(self.root)
-        second = ProfileRuntimeLock(self.root)
+        first = RuntimeLock(self.root)
+        second = RuntimeLock(self.root)
         first.acquire()
         self.addCleanup(first.release)
 
@@ -41,7 +41,7 @@ class RuntimeLockTests(unittest.TestCase):
         second.release()
 
     def test_lock_record_identifies_the_owner(self):
-        lock = ProfileRuntimeLock(self.root)
+        lock = RuntimeLock(self.root)
         lock.acquire()
         self.addCleanup(lock.release)
 
@@ -54,7 +54,7 @@ class RuntimeLockTests(unittest.TestCase):
         path.write_text("{}", encoding="utf-8")
         self.assertFalse(runtime_lock_is_held(self.root))
 
-        lock = ProfileRuntimeLock(self.root)
+        lock = RuntimeLock(self.root)
         lock.acquire()
         self.addCleanup(lock.release)
         self.assertTrue(runtime_lock_is_held(self.root))
@@ -77,7 +77,7 @@ class RuntimeLockTests(unittest.TestCase):
 
     @unittest.skipUnless(runtime_lock.fcntl is not None, "requires POSIX flock inheritance")
     def test_release_preserves_lock_inherited_by_a_live_child(self):
-        lock = ProfileRuntimeLock(self.root)
+        lock = RuntimeLock(self.root)
         lock.acquire()
         self.addCleanup(lock.release)
         child = subprocess.Popen(
@@ -89,7 +89,7 @@ class RuntimeLockTests(unittest.TestCase):
             lock.release()
             self.assertTrue(runtime_lock_is_held(self.root))
             with self.assertRaises(RuntimeAlreadyRunning):
-                ProfileRuntimeLock(self.root).acquire()
+                RuntimeLock(self.root).acquire()
             child.communicate(timeout=5)
             self.assertFalse(runtime_lock_is_held(self.root))
         finally:
@@ -111,7 +111,7 @@ class RuntimeEntryPointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_second_run_stops_before_touching_whatsapp(self):
         config = Config.load(channel="whatsapp")
-        owner = ProfileRuntimeLock(self.root)
+        owner = RuntimeLock(self.root)
         owner.acquire()
         self.addCleanup(owner.release)
 
@@ -136,7 +136,7 @@ class RuntimeEntryPointTests(unittest.IsolatedAsyncioTestCase):
         ):
             await main.command_run(config)
 
-        lock = ProfileRuntimeLock(self.root)
+        lock = RuntimeLock(self.root)
         lock.acquire()
         lock.release()
 

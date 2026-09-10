@@ -196,7 +196,6 @@ class CheckResult:
 
 @dataclass
 class DoctorReport:
-    profile: str
     checks: list[CheckResult] = field(default_factory=list)
 
     @property
@@ -437,18 +436,18 @@ def _check_prepared_environment(config: Any, environment: str) -> str:
     return f"{len(_SMOKE_ARTIFACTS[environment])} artifact(s)"
 
 
-def _check_profile_state(config: Any) -> str:
+def _check_agent_state(config: Any) -> str:
     state = Path(config.state_dir)
     workspace = Path(config.workspace_dir)
     if not state.is_dir():
-        raise DoctorError(f"profile state directory is missing: {state}")
+        raise DoctorError(f"agent state directory is missing: {state}")
     configured_cwd = config.settings.text("terminal.cwd", "")
     if configured_cwd:
         workspace = Path(configured_cwd).expanduser()
     if not workspace.is_dir():
         raise DoctorError(f"session workspace is missing: {workspace}")
     if not os.access(state, os.R_OK | os.W_OK | os.X_OK):
-        raise DoctorError(f"profile state is not accessible: {state}")
+        raise DoctorError(f"agent state is not accessible: {state}")
     return "state and workspace accessible"
 
 
@@ -528,15 +527,15 @@ def _check_runtime(config: Any) -> str:
         pid = int(record["pid"])
         recorded_state = Path(str(record["state_dir"])).resolve(strict=False)
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise DoctorError("profile runtime is not running") from exc
+        raise DoctorError("agent runtime is not running") from exc
     if recorded_state != Path(config.state_dir).resolve(strict=False):
-        raise DoctorError("runtime lock belongs to a different profile path")
+        raise DoctorError("runtime lock belongs to a different agent path")
     try:
         held = runtime_lock_is_held(config.state_dir)
     except RuntimeLockError as exc:
         raise DoctorError(str(exc)) from exc
     if not held:
-        raise DoctorError("profile runtime does not own its operating-system lock")
+        raise DoctorError("agent runtime does not own its operating-system lock")
     return f"pid {pid}"
 
 
@@ -626,7 +625,7 @@ def _check_home_channel(
     whatsapp_enabled: bool,
     telegram_enabled: bool,
 ) -> str:
-    """Prove the profile has a destination for unsolicited output."""
+    """Prove the agent has a destination for unsolicited output."""
 
     configured = []
     if whatsapp_enabled and isinstance(
@@ -719,7 +718,6 @@ def _check_sql_connection() -> str:
 def _check_auth(config: Any) -> str:
     credentials = auth.read_credentials(
         config.credentials_path,
-        fallback_path=config.main_credentials_path,
     )
     if not credentials.access_token or not credentials.refresh_token:
         raise DoctorError("Codex OAuth credentials are incomplete")
@@ -766,8 +764,8 @@ def _check_stt_configuration() -> str:
     return "OpenAI voice key and ffmpeg configured"
 
 
-async def collect_report(config: Any, profile_name: str) -> DoctorReport:
-    report = DoctorReport(profile=profile_name)
+async def collect_report(config: Any) -> DoctorReport:
+    report = DoctorReport()
     registry = build_registry()
     groups = set(enabled_groups(config.settings, registry))
     telegram_config = (
@@ -806,8 +804,8 @@ async def collect_report(config: Any, profile_name: str) -> DoctorReport:
 
     await _probe(
         report,
-        "Profile state",
-        lambda: _check_profile_state(config),
+        "Agent state",
+        lambda: _check_agent_state(config),
     )
     await _probe(
         report,
@@ -884,12 +882,11 @@ async def collect_report(config: Any, profile_name: str) -> DoctorReport:
 
 async def run_doctor(
     config: Any,
-    profile_name: str,
     *,
     print_fn: Callable[[str], None] = print,
 ) -> int:
-    report = await collect_report(config, profile_name)
-    print_fn(f"Pilotage doctor - {profile_name}")
+    report = await collect_report(config)
+    print_fn("Pilotage doctor")
     for check in report.checks:
         marker = "PASS" if check.ok else "FAIL"
         suffix = f" - {check.detail}" if check.detail else ""

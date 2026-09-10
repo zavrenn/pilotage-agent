@@ -1,4 +1,4 @@
-"""Hermes-derived, profile-scoped cron job storage and lifecycle."""
+"""Hermes-derived, agent-scoped cron job storage and lifecycle."""
 
 from __future__ import annotations
 
@@ -321,7 +321,7 @@ def _advance_recurring_run(job: Dict[str, Any], now: datetime) -> Optional[str]:
     )
 
 
-def validate_prompt(prompt: str, *, current_profile: str = "default") -> str:
+def validate_prompt(prompt: str) -> str:
     """Hermes' strict persisted-cron-prompt boundary."""
     # Lazy to keep cron storage independent of the tool registry import graph.
     from pilotage.tools.command_guard import find_embedded_self_lifecycle
@@ -334,7 +334,7 @@ def validate_prompt(prompt: str, *, current_profile: str = "default") -> str:
     if threat:
         raise ValueError(f"Blocked unsafe cron prompt: {threat}")
     lifecycle = find_embedded_self_lifecycle(
-        written, current_profile=current_profile
+        written
     )
     if lifecycle:
         raise ValueError(f"Blocked unsafe cron prompt: {lifecycle.message}")
@@ -487,7 +487,7 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 class CronStore:
-    """One profile's durable job database."""
+    """One agent's durable job database."""
 
     def __init__(
         self,
@@ -523,7 +523,7 @@ class CronStore:
             path.resolve(strict=False).relative_to(self.state_dir)
         except ValueError as exc:
             raise CronError(
-                f"Cron {label} escaped its profile directory: {path}"
+                f"Cron {label} escaped its agent directory: {path}"
             ) from exc
 
     def ensure_dirs(self) -> None:
@@ -775,11 +775,8 @@ class CronStore:
         origin: Optional[Dict[str, Any]] = None,
         deliver: Optional[str] = None,
     ) -> Dict[str, Any]:
-        from pilotage.tools.command_guard import profile_name_for_state_dir
-
         prompt_text = validate_prompt(
             prompt,
-            current_profile=profile_name_for_state_dir(self.state_dir),
         )
         skill_names = _normalize_skills(skills)
         normalized_toolsets = _normalize_enabled_toolsets(enabled_toolsets)
@@ -869,11 +866,8 @@ class CronStore:
                     raise ValueError("name cannot be empty")
                 job["name"] = name[:MAX_NAME_CHARS]
             if "prompt" in updates:
-                from pilotage.tools.command_guard import profile_name_for_state_dir
-
                 job["prompt"] = validate_prompt(
                     updates["prompt"],
-                    current_profile=profile_name_for_state_dir(self.state_dir),
                 )
             if "skills" in updates:
                 job["skills"] = _normalize_skills(updates["skills"])

@@ -1,4 +1,4 @@
-"""Profile-local durable scheduling."""
+"""Agent-local durable scheduling."""
 
 from .jobs import CronError, CronStore
 

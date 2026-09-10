@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from pilotage import process_tree, update
-from pilotage.runtime_lock import ProfileRuntimeLock, RuntimeAlreadyRunning, runtime_lock_is_held
+from pilotage.runtime_lock import RuntimeLock, RuntimeAlreadyRunning, runtime_lock_is_held
 
 
 @unittest.skipUnless(shutil.which("git"), "Git required")
@@ -37,7 +37,6 @@ class UpdateTests(unittest.TestCase):
         self.commit("two")
         self.new_head = self.git(self.upstream, "rev-parse", "HEAD")
         self.state = self.root / "state"
-        self.profile = SimpleNamespace(name="default", path=self.state)
         self.events = []
 
     def git(self, root, *args):
@@ -50,7 +49,7 @@ class UpdateTests(unittest.TestCase):
         self.git(self.upstream, "add", "version.txt")
         self.git(self.upstream, "commit", "-m", message)
 
-    def run_update(self, *, check=False, running=True, install_code=0, extra_profiles=(),
+    def run_update(self, *, check=False, running=True, install_code=0,
                    protected=False, verify_code=0, permission_error=False):
         def run(command, **kwargs):
             if command[0] == "git":
@@ -61,14 +60,14 @@ class UpdateTests(unittest.TestCase):
 
         def install(root, *, lock_fds):
             self.events.append("install")
-            self.assertEqual(len(lock_fds), 2 + len(extra_profiles))
+            self.assertEqual(len(lock_fds), 2)
             for fd in lock_fds:
                 os.fstat(fd)  # Every inherited descriptor must still be open.
             if isinstance(install_code, BaseException):
                 raise install_code
             return install_code
 
-        def service(action, profile):
+        def service(action):
             self.events.append(action)
             return 0
 
@@ -90,10 +89,10 @@ class UpdateTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(update, "_install", side_effect=install))
             stack.enter_context(mock.patch.object(update, "_service_running", return_value=running))
             stack.enter_context(mock.patch.object(update, "run_service_command", side_effect=service))
-            stack.enter_context(mock.patch.object(update.profiles, "list_profiles", return_value=[self.profile, *extra_profiles]))
+            stack.enter_context(mock.patch.object(update, "state_dir", return_value=self.state))
             stack.enter_context(redirect_stdout(self.output))
             stack.enter_context(redirect_stderr(self.errors))
-            return update.run_update("default", check=check)
+            return update.run_update(check=check)
 
     def test_check_fetches_without_changing_checkout_or_service(self):
         self.assertEqual(self.run_update(check=True), 0)
@@ -125,6 +124,7 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((self.checkout / "version.txt").read_text(), "local edit\n")
         self.assertEqual(self.events, [])
 
+
     def test_diverged_branch_is_not_reset_or_merged(self):
         (self.checkout / "local.txt").write_text("local\n")
         self.git(self.checkout, "add", "local.txt")
@@ -142,14 +142,6 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.run_update(running=False), 0)
         self.assertEqual(self.events, ["install", "verify"])
 
-    def test_another_running_profile_blocks_the_update(self):
-        other = SimpleNamespace(name="work", path=self.root / "other")
-        lock = ProfileRuntimeLock(other.path)
-        lock.acquire()
-        self.addCleanup(lock.release)
-        self.assertEqual(self.run_update(extra_profiles=[other]), 1)
-        self.assertEqual(self.events, [])
-        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.old_head)
 
     def test_signaled_install_leaves_the_service_stopped(self):
         self.assertEqual(self.run_update(install_code=update.UpdateInterrupted(signal.SIGTERM)), 143)
@@ -158,7 +150,7 @@ class UpdateTests(unittest.TestCase):
         self.assertIn("stopped", self.errors.getvalue())
 
     def test_foreground_runtime_blocks_dependency_mutation(self):
-        lock = ProfileRuntimeLock(self.state)
+        lock = RuntimeLock(self.state)
         lock.acquire()
         self.addCleanup(lock.release)
         self.assertEqual(self.run_update(running=False), 1)
@@ -217,9 +209,9 @@ class ServicePreflightTests(unittest.TestCase):
             with mock.patch.object(update.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output, "")):
                 if expected is None:
                     with self.assertRaises(update.UpdateError):
-                        update._service_running("default")
+                        update._service_running()
                 else:
-                    self.assertEqual(update._service_running("default"), expected)
+                    self.assertEqual(update._service_running(), expected)
 
 
 @unittest.skipUnless(sys.platform == "linux" and shutil.which("bash"), "requires Linux and bash")
@@ -243,11 +235,11 @@ import sys
 from contextlib import ExitStack
 from pathlib import Path
 from pilotage import update
-from pilotage.runtime_lock import ProfileRuntimeLock
+from pilotage.runtime_lock import RuntimeLock
 root = Path(sys.argv[1])
 try:
     with update._update_signals(), ExitStack() as stack:
-        locks = [ProfileRuntimeLock(root / name) for name in ('git-lock', 'profile')]
+        locks = [RuntimeLock(root / name) for name in ('git-lock', 'profile')]
         for lock in locks:
             lock.acquire()
             stack.callback(lock.release)
@@ -297,7 +289,7 @@ except update.UpdateInterrupted as exc:
         for state in self.states:
             self.assertTrue(runtime_lock_is_held(state))
             with self.assertRaises(RuntimeAlreadyRunning):
-                ProfileRuntimeLock(state).acquire()
+                RuntimeLock(state).acquire()
         (self.root / "release").touch()
         self.wait_until(lambda: all(not runtime_lock_is_held(state) for state in self.states))
 

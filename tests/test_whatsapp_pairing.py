@@ -18,7 +18,7 @@ from pilotage.channels.whatsapp import (
     validate_whatsapp_session,
 )
 from pilotage.main import command_whatsapp_pair
-from pilotage.runtime_lock import ProfileRuntimeLock
+from pilotage.runtime_lock import RuntimeLock
 
 
 def _qr_credentials() -> dict[str, object]:
@@ -179,7 +179,7 @@ class WhatsAppPairingTests(unittest.TestCase):
             (self.config.state_dir / "config.yaml").read_text(encoding="utf-8")
             .startswith("whatsapp:\n  enabled: true\n")
         )
-        lock = ProfileRuntimeLock(self.config.state_dir)
+        lock = RuntimeLock(self.config.state_dir)
         lock.acquire()
         lock.release()
 
@@ -283,7 +283,7 @@ class WhatsAppPairingTests(unittest.TestCase):
             mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(state),
                             "PILOTAGE_ENV_FILE": str(state / ".env"),
                             "PILOTAGE_BRIDGE_DIR": str(self.bridge)}, clear=True),
-            mock.patch.object(main.profiles, "activate_for_process", return_value=("default", state)),
+            mock.patch.object(main, "state_dir", return_value=state),
             mock.patch.object(main.Config, "load", side_effect=AssertionError("loaded runtime config")),
             mock.patch.object(main.auth, "read_credentials", side_effect=AssertionError("required ChatGPT login")),
             mock.patch("pilotage.main.shutil.which", return_value="node"),
@@ -312,7 +312,7 @@ class WhatsAppPairingTests(unittest.TestCase):
                 mock.patch.object(deployment, "STATE", state),
                 mock.patch.object(os, "geteuid", return_value=uid, create=True),
                 mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(state)}, clear=True),
-                mock.patch.object(main.profiles, "activate_for_process", return_value=("default", state)),
+                mock.patch.object(main, "state_dir", return_value=state),
                 mock.patch.object(main, "load_env_files", return_value=[]),
                 mock.patch.object(main.Config, "load", side_effect=AssertionError("loaded runtime config")),
                 mock.patch.object(main, handler, return_value=0) as setup,
@@ -339,9 +339,9 @@ class WhatsAppPairingTests(unittest.TestCase):
                 clear=True,
             ),
             mock.patch.object(
-                main_module.profiles,
-                "activate_for_process",
-                return_value=("default", self.root),
+                main_module,
+                "state_dir",
+                return_value=self.root,
             ),
             mock.patch.object(main_module.Config, "load", side_effect=AssertionError("loaded runtime config")),
             mock.patch.object(

@@ -27,7 +27,6 @@ from .ansi_strip import strip_ansi
 from .command_guard import (
     find_blocked_python_source,
     find_persistence_store_reference,
-    profile_name_for_state_dir,
 )
 from .registry import Tool, ToolContext, tool_error
 from .subprocess_env import build_subprocess_env
@@ -274,9 +273,6 @@ def _execute(
     ) or find_blocked_python_source(
         code,
         cwd=str(working_dir),
-        current_profile=profile_name_for_state_dir(
-            getattr(context.config, "state_dir", None)
-        ),
     )
     if finding:
         return tool_error(finding.message)

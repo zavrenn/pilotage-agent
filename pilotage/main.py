@@ -28,7 +28,7 @@ from typing import Any, TypeVar
 
 import httpx
 
-from . import media, profiles, transcription
+from . import media, transcription
 from .agent import Agent, StopStatus, TurnRecoveryRejected, TurnStopped
 from .commands import CommandInvocation, execute_command, status_text
 from .channels.whatsapp import (
@@ -51,7 +51,7 @@ from .channels.telegram import (
     normalize_telegram_topic_id,
 )
 from .codex import auth
-from .config import Config, ConfigError, REPO_ROOT
+from .config import Config, ConfigError, REPO_ROOT, state_dir
 from .cron.cli import add_cron_parser, run_cron_command
 from .cron.jobs import CronError, CronStore
 from .cron.scheduler import CronScheduler
@@ -79,7 +79,7 @@ from .redact import (
     identity_key_path,
     identity_pseudonym,
 )
-from .runtime_lock import ProfileRuntimeLock, RuntimeLockError
+from .runtime_lock import RuntimeLock, RuntimeLockError
 from .service import run_service_command
 from .settings import config_path, set_channel_enabled
 from .tools import build_registry, enabled_groups
@@ -590,13 +590,12 @@ def command_login(credentials_path: Path) -> int:
     return 0
 
 
-def command_status(config: Config, profile_name: str) -> int:
+def command_status(config: Config) -> int:
     """Report configuration and verify the selected authentication source."""
-    print(status_text(config, profile_name))
+    print(status_text(config))
     try:
         auth.read_credentials(
             config.credentials_path,
-            fallback_path=config.main_credentials_path,
         )
     except auth.AuthError as exc:
         print(f"Health check failed: {exc}", file=sys.stderr)
@@ -604,8 +603,8 @@ def command_status(config: Config, profile_name: str) -> int:
     return 0
 
 
-async def command_run(config: Config, profile_name: str = "default") -> int:
-    runtime_lock = ProfileRuntimeLock(config.state_dir)
+async def command_run(config: Config) -> int:
+    runtime_lock = RuntimeLock(config.state_dir)
     try:
         runtime_lock.acquire()
     except RuntimeLockError as exc:
@@ -617,7 +616,7 @@ async def command_run(config: Config, profile_name: str = "default") -> int:
         except (OSError, ValueError) as exc:
             print(f"Could not initialize private log identities: {exc}", file=sys.stderr)
             return 1
-        return await _command_run_locked(config, profile_name)
+        return await _command_run_locked(config)
     finally:
         runtime_lock.release()
 
@@ -653,10 +652,10 @@ class _WhatsAppSetupConfig:
         return self.state_dir / "whatsapp"
 
     @classmethod
-    def load(cls, profile_path: Path) -> "_WhatsAppSetupConfig":
+    def load(cls, agent_path: Path) -> "_WhatsAppSetupConfig":
         written_senders = os.environ.get("PILOTAGE_ALLOWED_SENDERS", "").strip()
         return cls(
-            state_dir=profile_path,
+            state_dir=agent_path,
             bridge_dir=Path(os.environ.get("PILOTAGE_BRIDGE_DIR", "").strip() or REPO_ROOT / "bridge"),
             allowed_senders=normalize_whatsapp_allowed_senders(written_senders) if written_senders else (),
             home_chat_id=os.environ.get("WHATSAPP_HOME_CHANNEL", "").strip(),
@@ -683,7 +682,7 @@ def command_whatsapp_pair(
         print("WhatsApp bridge dependencies are not installed.", file=sys.stderr)
         return 1
 
-    lock = ProfileRuntimeLock(config.state_dir)
+    lock = RuntimeLock(config.state_dir)
     try:
         lock.acquire()
     except RuntimeLockError as exc:
@@ -733,7 +732,7 @@ def command_whatsapp_pair(
                 print(f"Existing WhatsApp session is invalid: {exc}", file=sys.stderr)
                 paired = False
             else:
-                print("WhatsApp is already paired for this profile.")
+                print("WhatsApp is already paired for this agent.")
                 paired = True
             try:
                 repair = _prompt_yes_no(
@@ -810,7 +809,7 @@ def command_whatsapp_pair(
             return 1
         if not pair_only and not _save_channel_enabled(selected_settings_path, "whatsapp", True):
             return 1
-        print("WhatsApp is connected and its profile credentials are saved.")
+        print("WhatsApp is connected and its credentials are saved.")
         return 0
     finally:
         lock.release()
@@ -1020,9 +1019,9 @@ def command_telegram_setup(
     settings_path: Path | None = None,
     external_env: frozenset[str] = frozenset(),
 ) -> int:
-    """Configure, verify, and enable Telegram for one profile."""
+    """Configure, verify, and enable Telegram for one agent."""
 
-    lock = ProfileRuntimeLock(state_dir)
+    lock = RuntimeLock(state_dir)
     try:
         lock.acquire()
     except RuntimeLockError as exc:
@@ -1164,14 +1163,14 @@ def _prompt_whatsapp_configuration(
     return allowed_senders, updates
 
 
-async def _command_run_locked(config: Config, profile_name: str = "default") -> int:
-    return await _run_enabled_channels(config, profile_name)
+async def _command_run_locked(config: Config) -> int:
+    return await _run_enabled_channels(config)
 
 
 async def _run_enabled_channels(
-    config: Config, profile_name: str
+    config: Config
 ) -> int:
-    """Run the enabled first-class messaging channels for one profile."""
+    """Run the enabled first-class messaging channels for one agent."""
     whatsapp_enabled = config.settings.flag("whatsapp.enabled", False)
     telegram_config = config.for_channel("telegram")
     telegram_enabled = telegram_config.settings.flag("telegram.enabled", False)
@@ -1599,7 +1598,6 @@ async def _run_enabled_channels(
                         invocation,
                         agent=whatsapp_agent,
                         config=config,
-                        profile_name=profile_name,
                         session_id=session_id,
                         reset_reply=whatsapp_reset_reply,
                     )
@@ -1919,7 +1917,6 @@ async def _run_enabled_channels(
                         invocation,
                         agent=telegram_agent,
                         config=telegram_config,
-                        profile_name=profile_name,
                         session_id=session_id,
                         reset_reply=telegram_reset_reply,
                     )
@@ -2011,7 +2008,6 @@ async def _run_enabled_channels(
     try:
         auth.read_credentials(
             cron_config.credentials_path,
-            fallback_path=cron_config.main_credentials_path,
         )
     except auth.AuthError as exc:
         print(f"{exc}", file=sys.stderr)
@@ -2264,7 +2260,7 @@ async def _run_enabled_channels(
         ):
             session_workspace_roots.append(workspace_root)
 
-    async def maintain_profile_state() -> None:
+    async def maintain_agent_state() -> None:
         while True:
             if getattr(cron_config, "session_auto_prune", False):
                 try:
@@ -2292,8 +2288,8 @@ async def _run_enabled_channels(
             await asyncio.sleep(SESSION_MAINTENANCE_INTERVAL_SECONDS)
 
     maintenance_task = asyncio.create_task(
-        maintain_profile_state(),
-        name="pilotage-profile-maintenance",
+        maintain_agent_state(),
+        name="pilotage-state-maintenance",
     )
 
     live_recovery_task = asyncio.create_task(
@@ -2384,13 +2380,13 @@ async def _run_enabled_channels(
 
 
 def _managed_whatsapp_setup(
-    config: _WhatsAppSetupConfig, profile_name: str, env_path: Path, settings_path: Path,
+    config: _WhatsAppSetupConfig, env_path: Path, settings_path: Path,
     external_env: frozenset[str],
 ) -> int:
     """The operator saves policy; the unprivileged account handles the session."""
     from . import deployment
 
-    lock = ProfileRuntimeLock(config.state_dir)
+    lock = RuntimeLock(config.state_dir)
     try:
         lock.acquire()
         _, updates = _prompt_whatsapp_configuration(config)
@@ -2404,7 +2400,7 @@ def _managed_whatsapp_setup(
         return 1
     finally:
         lock.release()
-    code = deployment.as_agent(["--profile", profile_name, "whatsapp", "--pair-only"])
+    code = deployment.as_agent(["whatsapp", "--pair-only"])
     if code == 0 and not _save_channel_enabled(settings_path, "whatsapp", True):
         return 1
     return code
@@ -2413,7 +2409,6 @@ def _managed_whatsapp_setup(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pilotage", description="Pilotage Agent")
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("-p", "--profile", help="run one named agent profile")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("login", help="authenticate against ChatGPT")
@@ -2425,34 +2420,22 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser(
         "telegram", help="configure allowed users, home chat, and bot token"
     )
-    subparsers.add_parser("status", help="show the selected agent's essential status")
+    subparsers.add_parser("status", help="show the agent's essential status")
     subparsers.add_parser(
         "doctor",
         help="run the complete read-only deployment readiness check",
     )
     service = subparsers.add_parser("service", help="control the installed service")
     service.add_argument("service_action", choices=("start", "stop", "restart", "status"))
-    subparsers.add_parser("restart", help="restart the selected agent service")
+    subparsers.add_parser("restart", help="restart the agent service")
     update = subparsers.add_parser("update", help="update code and dependencies, then restart if running")
     update.add_argument("--check", action="store_true", help="fetch and check for updates without installing")
-    logs = subparsers.add_parser("logs", help="view the selected service's journal")
+    logs = subparsers.add_parser("logs", help="view the service's journal")
     logs.add_argument("-f", "--follow", action="store_true")
     logs.add_argument("-n", "--lines", type=int, default=50, help="journal entries to inspect (default: 50)")
     logs.add_argument("--level", type=str.upper, choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"))
     logs.add_argument("--since", help="relative time (1h, 30m) or a journal timestamp")
     add_cron_parser(subparsers)
-
-    profile = subparsers.add_parser("profile", help="manage agent profiles")
-    profile_commands = profile.add_subparsers(dest="profile_command", required=True)
-    profile_commands.add_parser("list", help="list profiles")
-    profile_commands.add_parser("show", help="show the active profile")
-    create = profile_commands.add_parser("create", help="create a fresh profile")
-    create.add_argument("name")
-    use = profile_commands.add_parser("use", help="make a profile the default")
-    use.add_argument("name")
-    delete = profile_commands.add_parser("delete", help="delete a named profile")
-    delete.add_argument("name")
-    delete.add_argument("--yes", action="store_true", help="skip typed confirmation")
 
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
@@ -2465,15 +2448,9 @@ def main(argv: list[str] | None = None) -> int:
             written_home = os.environ.get("PILOTAGE_HOME", "").strip()
             if written_home:
                 selected_root = Path(written_home).expanduser()
-                if selected_root.parent.name == "profiles":
-                    selected_root = selected_root.parent.parent
                 if selected_root != deployment.STATE:
                     raise ValueError("Protected commands use the installed state. Run isolated tests from a separate checkout.")
             os.environ["PILOTAGE_HOME"] = str(deployment.STATE)
-            if args.command == "profile" and args.profile_command not in {"list", "show"}:
-                managed.require_operator()
-                if args.profile_command != "create":
-                    raise ValueError("Use --profile NAME to select protected profiles; remove deployed profiles during operator maintenance.")
             operator_command = args.command in {"update", "restart", "service", "logs", "telegram"}
             if args.command == "whatsapp" and not args.pair_only:
                 operator_command = True
@@ -2489,36 +2466,32 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("%s", exc)
         return 1
 
-    if args.command == "profile":
-        return _command_profile(args)
-
-    try:
-        profile_name, profile_path = profiles.activate_for_process(args.profile)
-    except (FileNotFoundError, ValueError) as exc:
-        logger.error("%s", exc)
-        return 1
-
     if args.command == "service":
-        return run_service_command(args.service_action, profile_name)
+        return run_service_command(args.service_action)
     if args.command == "restart":
-        return run_service_command("restart", profile_name)
+        return run_service_command("restart")
     if args.command == "logs":
         from .logs import run_logs
 
         if args.lines < 0:
             parser.error("--lines must be zero or greater")
-        return run_logs(profile_name, follow=args.follow, lines=args.lines, level=args.level, since=args.since)
+        return run_logs(follow=args.follow, lines=args.lines, level=args.level, since=args.since)
     if args.command == "update":
         from .update import run_update
 
-        return run_update(profile_name, check=args.check)
+        return run_update(check=args.check)
+
+    agent_path = state_dir()
+    # Pin the selected deployment root before .env loading, as service injection
+    # does. A value inside .env must not redirect configuration or authentication.
+    os.environ["PILOTAGE_HOME"] = str(agent_path)
 
     external_setup_env = frozenset(
         name for name in CHANNEL_SETUP_ENV_KEYS if name in os.environ
     )
     try:
         loaded_env_files = load_env_files()
-        selected_settings_path = config_path(profile_path)
+        selected_settings_path = config_path(agent_path)
     except (OSError, ValueError) as exc:
         logger.error("%s", exc)
         return 1
@@ -2529,23 +2502,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.command == "login":
         # Authentication must work before channel credentials are configured.
-        return command_login(profile_path / "codex-auth.json")
+        return command_login(agent_path / "codex-auth.json")
     if args.command == "telegram":
         return command_telegram_setup(
-            profile_path,
+            agent_path,
             env_path=setup_env_path,
             settings_path=selected_settings_path,
             external_env=external_setup_env,
         )
     if args.command == "whatsapp":
         try:
-            config = _WhatsAppSetupConfig.load(profile_path)
+            config = _WhatsAppSetupConfig.load(agent_path)
         except ValueError as exc:
             logger.error("%s", exc)
             return 1
         if managed and not args.pair_only:
             return _managed_whatsapp_setup(
-                config, profile_name, setup_env_path, selected_settings_path, external_setup_env,
+                config, setup_env_path, selected_settings_path, external_setup_env,
             )
         return command_whatsapp_pair(
             config,
@@ -2578,52 +2551,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.command == "status":
-        return command_status(config, profile_name)
+        return command_status(config)
     if args.command == "doctor":
         from .doctor import run_doctor
 
-        return asyncio.run(run_doctor(config, profile_name))
+        return asyncio.run(run_doctor(config))
     if args.command == "cron":
         return run_cron_command(args, config)
-    return asyncio.run(command_run(config, profile_name))
-
-
-def _command_profile(args: argparse.Namespace) -> int:
-    try:
-        if args.profile_command == "list":
-            for info in profiles.list_profiles():
-                marker = "*" if info.is_active else " "
-                print(f"{marker} {info.name}\t{info.path}")
-            return 0
-        if args.profile_command == "show":
-            name = profiles.get_active_profile()
-            print(f"{name}\t{profiles.get_profile_dir(name)}")
-            return 0
-        if args.profile_command == "create":
-            path = profiles.create_profile(args.name)
-            print(f"Created profile at {path}")
-            return 0
-        if args.profile_command == "use":
-            profiles.set_active_profile(args.name)
-            print(f"Active profile: {profiles.normalize_profile_name(args.name)}")
-            return 0
-
-        canon = profiles.normalize_profile_name(args.name)
-        if not args.yes:
-            try:
-                confirmation = input(f"Type '{canon}' to delete this profile: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("Cancelled.")
-                return 1
-            if confirmation != canon:
-                print("Cancelled.")
-                return 1
-        path = profiles.delete_profile(canon)
-        print(f"Deleted profile at {path}")
-        return 0
-    except (OSError, ValueError, RuntimeLockError, subprocess.SubprocessError) as exc:
-        logger.error("%s", exc)
-        return 1
+    return asyncio.run(command_run(config))
 
 
 if __name__ == "__main__":

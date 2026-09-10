@@ -3,11 +3,11 @@
 This is the production-used Hermes session_search behavior adapted to
 Genesis' smaller conversation store. It keeps Hermes' FTS5 retrieval and four
 calling shapes (discover, scroll, read, browse), but not Hermes' broader
-session lineage, generated titles, UI links, or cross-profile lookup.
+session lineage, generated titles, UI links, or cross-agent lookup.
 
-The store is supplied explicitly by the active Agent, so a profile can search
-only its own durable history. Profiles serving several unrelated users can
-disable this tool group, as the FLConnect operations profile does in production.
+The store is supplied explicitly by the active Agent, so an agent can search
+only its own durable history. Agents serving several unrelated users can
+disable this tool group, as the FLConnect operations agent does in production.
 """
 
 from __future__ import annotations
@@ -437,7 +437,7 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
 SESSION_SEARCH_SCHEMA = {
     "name": "session_search",
     "description": (
-        "Search past conversations stored in this profile's local SQLite "
+        "Search past conversations stored in this agent's local SQLite "
         "history, or read and scroll inside one. FTS5-backed; makes no LLM "
         "calls and returns actual stored messages. Use this as historical "
         "context, not as proof of a current external source. Four shapes: "

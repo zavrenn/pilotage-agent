@@ -43,12 +43,12 @@ def entry_priority(entry: dict) -> int | None:
         return None
 
 
-def run_logs(profile_name: str, *, follow=False, lines=50, level=None, since=None) -> int:
+def run_logs(*, follow=False, lines=50, level=None, since=None) -> int:
     if shutil.which("journalctl") is None:
         print("journalctl is not installed; logs require Ubuntu systemd.", file=sys.stderr)
         return 1
     command = [
-        *system_command("journalctl", privileged=True), "--unit", unit_name(profile_name),
+        *system_command("journalctl", privileged=True), "--unit", unit_name(),
         "--no-pager", "--all", "--output=json", "--lines", str(lines),
     ]
     if follow:

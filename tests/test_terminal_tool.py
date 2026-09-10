@@ -197,7 +197,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             "rm -rf /",
             "mkfs.ext4 /dev/sda1",
             "pilotage service stop",
-            "systemctl --user restart pilotage-agent@default.service",
+            "systemctl --user restart pilotage-agent.service",
         ):
             with self.subTest(command=command):
                 result = await self._run({"command": command})

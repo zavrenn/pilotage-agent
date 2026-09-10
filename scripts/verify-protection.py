@@ -82,35 +82,29 @@ p.unlink()
 ''', nested, account=reviewer)
         finally:
             shutil.rmtree(probe)
-    profile_root = state / "profiles"
-    assert profile_root.stat().st_uid == operator.pw_uid
-    assert profile_root.stat().st_gid == agent.pw_gid
-    assert stat.S_IMODE(profile_root.stat().st_mode) == 0o2750
-    profiles = [state, *sorted(profile_root.iterdir())]
-    for profile in profiles:
-        info = profile.lstat()
-        assert stat.S_ISDIR(info.st_mode) and info.st_uid in {0, operator.pw_uid}
+    info = state.lstat()
+    assert stat.S_ISDIR(info.st_mode) and info.st_uid in {0, operator.pw_uid}
+    assert info.st_gid == agent.pw_gid
+    assert stat.S_IMODE(info.st_mode) == 0o3770
+    for name in ("config.yaml", ".env", "SOUL.md", ".runtime.lock"):
+        target = state / name
+        info = target.lstat()
+        assert stat.S_ISREG(info.st_mode) and info.st_uid == operator.pw_uid and info.st_nlink == 1
+        assert stat.S_IMODE(info.st_mode) == (0o660 if name == ".runtime.lock" else 0o640)
         assert info.st_gid == agent.pw_gid
-        assert stat.S_IMODE(info.st_mode) == 0o3770
-        for name in ("config.yaml", ".env", "SOUL.md", ".runtime.lock"):
-            target = profile / name
-            info = target.lstat()
-            assert stat.S_ISREG(info.st_mode) and info.st_uid == operator.pw_uid and info.st_nlink == 1
-            assert stat.S_IMODE(info.st_mode) == (0o660 if name == ".runtime.lock" else 0o640)
-            assert info.st_gid == agent.pw_gid
-        validate_policy_paths(profile, read_env_values(profile / ".env"))
-        # Opening the shared lock must work even with fs.protected_regular=2.
-        run("import os,sys; os.close(os.open(sys.argv[1], os.O_RDWR|os.O_NOFOLLOW))", profile / ".runtime.lock")
-        fd, written = tempfile.mkstemp(prefix=".protection-probe-", dir=profile)
-        probe = Path(written)
-        os.fchown(fd, operator.pw_uid, agent.pw_gid)
-        os.fchmod(fd, 0o640)
-        os.close(fd)
-        try:
-            if profile == state and metadata.exists():
-                # A Git-style replacement must remain protected even when the
-                # operator's shell has a group-writable default umask.
-                run('''
+    validate_policy_paths(state, read_env_values(state / ".env"))
+    # Opening the shared lock must work even with fs.protected_regular=2.
+    run("import os,sys; os.close(os.open(sys.argv[1], os.O_RDWR|os.O_NOFOLLOW))", state / ".runtime.lock")
+    fd, written = tempfile.mkstemp(prefix=".protection-probe-", dir=state)
+    probe = Path(written)
+    os.fchown(fd, operator.pw_uid, agent.pw_gid)
+    os.fchmod(fd, 0o640)
+    os.close(fd)
+    try:
+        if metadata.exists():
+            # A Git-style replacement must remain protected even when the
+            # operator's shell has a group-writable default umask.
+            run('''
 import os, pathlib, sys
 os.umask(0o002)
 p = pathlib.Path(sys.argv[1])
@@ -118,7 +112,7 @@ p.unlink()
 p.write_text("")
 assert p.stat().st_mode & 0o777 == 0o640
 ''', probe, account=operator)
-            run('''
+        run('''
 import os, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 for action in (lambda: p.write_text("changed"), lambda: p.unlink(),
@@ -131,10 +125,10 @@ for action in (lambda: p.write_text("changed"), lambda: p.unlink(),
     raise AssertionError("Agent changed protected configuration or its parent")
 assert p.read_text() == ""
 ''', probe)
-        finally:
-            probe.unlink(missing_ok=True)
-            probe.with_suffix(".renamed").unlink(missing_ok=True)
-        run('''
+    finally:
+        probe.unlink(missing_ok=True)
+        probe.with_suffix(".renamed").unlink(missing_ok=True)
+    run('''
 import pathlib, sqlite3, sys, tempfile
 root = pathlib.Path(sys.argv[1])
 for name in ("workspace", "memories", "skills", "cron"):
@@ -151,13 +145,13 @@ with tempfile.TemporaryDirectory(prefix=".database-check-", dir=root) as tempora
         db.execute("pragma journal_mode=wal")
         db.execute("create table probe(value)")
         db.execute("insert into probe values (1)")
-''', profile)
+''', state)
 
     run('''
 import os, pathlib, sys
 repo = pathlib.Path("/opt/pilotage-agent")
 for p in (repo, repo / "pilotage", repo / "pilotage/agent.py", repo / ".venv",
-          repo / "scripts/install.sh", pathlib.Path("/etc/systemd/system/pilotage-agent@.service"),
+          repo / "scripts/install.sh", pathlib.Path("/etc/systemd/system/pilotage-agent.service"),
           pathlib.Path("/usr/local/bin/pilotage"), pathlib.Path("/etc/pilotage-agent.json")):
     assert not os.access(p, os.W_OK), f"Agent can modify {p}"
 assert not os.access(repo / ".git", os.R_OK)

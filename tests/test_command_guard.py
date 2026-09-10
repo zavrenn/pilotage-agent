@@ -439,12 +439,14 @@ class HardlineCommandTests(unittest.TestCase):
 class SelfLifecycleTests(unittest.TestCase):
     def test_active_service_lifecycle_commands_are_blocked(self):
         commands = (
+            "pilotage restart",
+            "pilotage -vv restart",
+            "pilotage --verb service stop",
             "pilotage service stop",
             "/usr/local/bin/pilotage service restart",
-            "pilotage -p default service stop",
-            "pilotage --profile=default service restart",
-            "systemctl --user stop pilotage-agent@default.service",
-            "sudo systemctl --user restart pilotage-agent@default",
+            "systemctl --user stop pilotage-agent.service",
+            "sudo systemctl --user restart pilotage-agent",
+            "systemctl restart pilotage-*.service",
             "pkill -f pilotage-agent",
             'bash -c "pilotage service stop"',
             "python -c 'import os; os.system(\"pilotage service stop\")'",
@@ -452,24 +454,23 @@ class SelfLifecycleTests(unittest.TestCase):
         )
         for command in commands:
             with self.subTest(command=command):
-                finding = find_blocked_command(command, current_profile="default")
+                finding = find_blocked_command(command)
                 self.assertIsNotNone(finding)
                 self.assertEqual(finding.category, "self_lifecycle")
 
-    def test_sibling_profiles_and_non_lifecycle_commands_are_allowed(self):
+    def test_unrelated_services_and_non_lifecycle_commands_are_allowed(self):
         commands = (
             "pilotage service start",
             "pilotage service status",
-            "pilotage -p sibling service stop",
-            "systemctl --user restart pilotage-agent@sibling.service",
-            "systemctl --user status pilotage-agent@default.service",
+            "systemctl --user restart other-worker.service",
+            "systemctl --user status pilotage-agent.service",
             'echo "pilotage service stop"',
             "pkill python",
         )
         for command in commands:
             with self.subTest(command=command):
                 self.assertIsNone(
-                    find_blocked_command(command, current_profile="default")
+                    find_blocked_command(command)
                 )
 
     def test_referenced_shell_scripts_are_scanned(self):
@@ -484,37 +485,37 @@ class SelfLifecycleTests(unittest.TestCase):
 
             self.assertIsNotNone(
                 find_blocked_command(
-                    "bash blocked.sh", cwd=str(root), current_profile="default"
+                    "bash blocked.sh", cwd=str(root)
                 )
             )
             self.assertIsNone(
                 find_blocked_command(
-                    ". ./safe.sh", cwd=str(root), current_profile="default"
+                    ". ./safe.sh", cwd=str(root)
                 )
             )
             self.assertIsNone(
                 find_blocked_command(
-                    "bash long-safe.sh", cwd=str(root), current_profile="default"
+                    "bash long-safe.sh", cwd=str(root)
                 )
             )
 
     def test_embedded_cron_command_shape_is_blocked_but_sibling_is_allowed(self):
         self.assertIsNotNone(
+            find_embedded_self_lifecycle("At midnight, run pilotage restart")
+        )
+        self.assertIsNotNone(
             find_embedded_self_lifecycle(
                 "At midnight, run pilotage service stop",
-                current_profile="default",
             )
         )
         self.assertIsNone(
             find_embedded_self_lifecycle(
-                "At midnight, run pilotage -p sibling service stop",
-                current_profile="default",
+                "At midnight, run systemctl restart other-worker.service",
             )
         )
         self.assertIsNone(
             find_embedded_self_lifecycle(
                 "x" * 5_000,
-                current_profile="default",
             )
         )
 
@@ -530,7 +531,7 @@ class PythonSourceTests(unittest.TestCase):
     def test_literal_process_launches_are_guarded(self):
         sources = (
             'import subprocess\nsubprocess.run(["pilotage", "service", "stop"])',
-            'import os\nos.system("systemctl --user restart pilotage-agent@default.service")',
+            'import os\nos.system("systemctl --user restart pilotage-agent.service")',
             'import subprocess\nsubprocess.Popen(["mkfs.ext4", "/dev/sda1"])',
             'import subprocess\ncommand = "reboot"\nsubprocess.run(command)',
             (
@@ -548,14 +549,14 @@ class PythonSourceTests(unittest.TestCase):
         for source in sources:
             with self.subTest(source=source):
                 self.assertIsNotNone(
-                    find_blocked_python_source(source, current_profile="default")
+                    find_blocked_python_source(source)
                 )
 
     def test_non_executed_prose_and_sibling_service_are_allowed(self):
         sources = (
             'print("reboot")',
             'notes = "pilotage service stop"\nprint(notes)',
-            'import subprocess\nsubprocess.run(["pilotage", "-p", "sibling", "service", "stop"])',
+            'import subprocess\nsubprocess.run(["systemctl", "restart", "other-worker.service"])',
             (
                 'class Report:\n'
                 '    def run(self, label):\n        return label\n'
@@ -566,7 +567,7 @@ class PythonSourceTests(unittest.TestCase):
         for source in sources:
             with self.subTest(source=source):
                 self.assertIsNone(
-                    find_blocked_python_source(source, current_profile="default")
+                    find_blocked_python_source(source)
                 )
 
 

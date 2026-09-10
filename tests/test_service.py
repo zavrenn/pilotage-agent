@@ -1,4 +1,4 @@
-"""Operator start, stop, and inspection of one installed profile service."""
+"""Operator start, stop, and inspection of the installed agent service."""
 
 from __future__ import annotations
 
@@ -25,13 +25,13 @@ class ServiceCommandTests(unittest.TestCase):
             redirect_stdout(stdout),
             redirect_stderr(stderr),
         ):
-            code = run_service_command(action, "work", run=run)
+            code = run_service_command(action, run=run)
         return code, stdout.getvalue(), stderr.getvalue(), commands
 
-    def test_unit_name_is_profile_scoped(self):
-        self.assertEqual(unit_name("work"), "pilotage-agent@work.service")
+    def test_unit_name_is_fixed(self):
+        self.assertEqual(unit_name(), "pilotage-agent.service")
 
-    def test_start_and_stop_target_only_the_selected_user_unit(self):
+    def test_start_and_stop_target_the_fixed_unit(self):
         result = subprocess.CompletedProcess([], 0, "", "")
         for action in ("start", "stop", "restart"):
             with self.subTest(action=action):
@@ -40,7 +40,7 @@ class ServiceCommandTests(unittest.TestCase):
                 self.assertIn(action.title(), output)
                 self.assertEqual(
                     commands,
-                    [["systemctl", "--user", action, "pilotage-agent@work.service"]],
+                    [["systemctl", "--user", action, "pilotage-agent.service"]],
                 )
 
     def test_status_reports_active_state_and_pid(self):
@@ -55,7 +55,7 @@ class ServiceCommandTests(unittest.TestCase):
         self.assertEqual((code, error), (0, ""))
         self.assertIn("active (running)", output)
         self.assertIn("pid=123", output)
-        self.assertEqual(commands[0][:4], ["systemctl", "--user", "show", "pilotage-agent@work.service"])
+        self.assertEqual(commands[0][:4], ["systemctl", "--user", "show", "pilotage-agent.service"])
 
     def test_missing_systemd_fails_clearly(self):
         stderr = StringIO()
@@ -63,7 +63,7 @@ class ServiceCommandTests(unittest.TestCase):
             mock.patch("pilotage.service.shutil.which", return_value=None),
             redirect_stderr(stderr),
         ):
-            code = run_service_command("status", "default")
+            code = run_service_command("status")
         self.assertEqual(code, 1)
         self.assertIn("requires Ubuntu systemd", stderr.getvalue())
 

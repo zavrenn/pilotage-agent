@@ -24,7 +24,6 @@ from ..redact import redact_sensitive_text, redact_terminal_output
 from .command_guard import (
     find_blocked_command,
     find_persistence_store_reference,
-    profile_name_for_state_dir,
 )
 from .registry import Tool, ToolContext, tool_error
 from .shell import DEFAULT_TIMEOUT_SECONDS, Shell
@@ -65,7 +64,7 @@ def _setting(context: ToolContext, name: str, default: Any) -> Any:
 
 
 def shell_cwd(context: ToolContext) -> str:
-    """Resolve the terminal root without letting profiles share process cwd."""
+    """Resolve the terminal root without letting agents share process cwd."""
     scoped = getattr(context, "working_directory", None)
     if scoped is not None:
         return str(Path(scoped).expanduser())
@@ -81,7 +80,7 @@ def shell_cwd(context: ToolContext) -> str:
 
 
 def shell_env(context: ToolContext) -> Dict[str, str]:
-    """Expose the active profile/session to reused Hermes skill scripts."""
+    """Expose the active agent/session to reused Hermes skill scripts."""
     env = {"HERMES_SESSION_ID": str(context.chat_id)}
     state_dir = getattr(context.config, "state_dir", None)
     if state_dir is not None:
@@ -150,9 +149,6 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
         ) or find_blocked_command(
             command,
             cwd=guard_cwd,
-            current_profile=profile_name_for_state_dir(
-                getattr(context.config, "state_dir", None)
-            ),
         )
         if finding:
             return tool_error(finding.message)

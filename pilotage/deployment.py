@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import stat
 import subprocess
 import sys
@@ -81,7 +80,7 @@ def validate_policy_paths(state: Path, values: Mapping[str, str]) -> None:
     """Protected installs use exactly the files whose ownership we provision.
 
     Also called by the installer before the deployment manifest exists. This
-    checks values without putting profile-controlled variables into its process.
+    checks values without putting agent-controlled variables into its process.
     """
     for key, filename in (("PILOTAGE_CONFIG", "config.yaml"), ("PILOTAGE_ENV_FILE", ".env")):
         override = values.get(key, "").strip()
@@ -123,7 +122,4 @@ def make_runtime_readable(root: Path) -> None:
 def protected_lock(path: Path) -> bool:
     if load() is None or path.name != ".runtime.lock":
         return False
-    return path.parent == STATE or (
-        path.parent.parent == STATE / "profiles"
-        and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", path.parent.name) is not None
-    )
+    return path.parent == STATE

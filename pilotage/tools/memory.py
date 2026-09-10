@@ -1,10 +1,10 @@
-"""Bounded, profile-scoped curated memory.
+"""Bounded, agent-scoped curated memory.
 
 The store and tool behavior are extracted from Hermes' production memory
 implementation. Pilotage keeps only the built-in file store: no external
 providers. The small approval queue lives outside the store so direct storage
 integrity tests remain deterministic; the model-facing handler applies the
-per-profile gate. Each Agent supplies the selected profile's memory directory
+per-agent gate. Each Agent supplies the agent's memory directory
 explicitly.
 """
 

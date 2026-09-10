@@ -1,34 +1,17 @@
 """The upgrade filter recognizes complete runtime notices, not business text."""
 
-from pathlib import Path
-from types import SimpleNamespace
 import unittest
 
-from pilotage.commands import help_text, profile_text, status_text
+from pilotage.commands import help_text
 from pilotage.channels.whatsapp import split_whatsapp_message, to_whatsapp
 from pilotage.channels.telegram_formatting import split_telegram_message, to_telegram
 from pilotage.i18n import SUPPORTED_LANGUAGES, t
 from pilotage.legacy_notices import (
     LEGACY_ATTACHMENT_NOTICE, attachment_notice_replacements, is_legacy_technical_reply,
 )
-from pilotage.settings import Settings
 
 
 class LegacyNoticeTests(unittest.TestCase):
-    def test_old_diagnostics_are_recognized_in_every_profile_language(self):
-        config = SimpleNamespace(
-            credentials_path=Path("unavailable-primary-auth"),
-            main_credentials_path=Path("unavailable-shared-auth"),
-            state_dir=Path("/private/client-state"), settings=Settings({}),
-            model="operator-model", cron_enabled=True, cron_timezone="UTC",
-        )
-        for language in SUPPORTED_LANGUAGES:
-            config.language = language
-            for content in (profile_text(config, "client"), status_text(config, "client")):
-                with self.subTest(language=language, content=content):
-                    self.assertTrue(is_legacy_technical_reply(content))
-                    self.assertFalse(is_legacy_technical_reply("Business report:\n" + content))
-                    self.assertFalse(is_legacy_technical_reply(content + "\nRevenue: 400 MAD"))
 
     def test_only_complete_old_failures_are_recognized(self):
         for content in (
@@ -92,8 +75,7 @@ class LegacyNoticeTests(unittest.TestCase):
             "/stop — Stop the active request\n"
             "/approve — Allow the oldest pending change once\n"
             "/deny — Refuse the oldest pending change\n"
-            "/status — Show the running agent's essential status\n"
-            "/profile — Show the active profile and state directory"
+            "/status — Show the running agent's essential status"
         )
         self.assertTrue(is_legacy_technical_reply(content))
         self.assertFalse(is_legacy_technical_reply(content + "\nRevenue: 400 MAD"))

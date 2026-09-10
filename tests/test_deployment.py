@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from contextlib import redirect_stderr
 from unittest import mock
 
-from pilotage import deployment, env, main, profiles, runtime_lock, settings, update
+from pilotage import deployment, env, main, runtime_lock, settings, update
 
 
 class DeploymentTests(unittest.TestCase):
@@ -56,11 +56,11 @@ class DeploymentTests(unittest.TestCase):
             mock.patch.object(os, "geteuid", return_value=1001, create=True),
             mock.patch.object(deployment.subprocess, "call", return_value=0) as run,
         ):
-            self.assertEqual(deployment.as_agent(["--profile", "work", "doctor"]), 0)
+            self.assertEqual(deployment.as_agent(["doctor"]), 0)
             command = run.call_args.args[0]
             self.assertEqual(command[:6], ["sudo", "-H", "-u", "agent", "--", "/usr/bin/env"])
             self.assertIn("-I", command)
-            self.assertEqual(command[-3:], ["--profile", "work", "doctor"])
+            self.assertEqual(command[-1:], ["doctor"])
 
     def test_runtime_cannot_invoke_operator_commands(self):
         for command in ("restart", "update", "logs", "telegram", "whatsapp"):
@@ -82,8 +82,8 @@ class DeploymentTests(unittest.TestCase):
             mock.patch.object(deployment, "as_agent", return_value=7) as run,
             mock.patch.object(main, "load_env_files", side_effect=AssertionError("loaded secrets")),
         ):
-            self.assertEqual(main.main(["--profile", "work", "status"]), 7)
-            run.assert_called_once_with(["--profile", "work", "status"])
+            self.assertEqual(main.main(["status"]), 7)
+            run.assert_called_once_with(["status"])
 
     def test_isolated_state_is_never_silently_replaced_by_production_state(self):
         with (
@@ -93,14 +93,8 @@ class DeploymentTests(unittest.TestCase):
             redirect_stderr(io.StringIO()),
         ):
             self.assertEqual(main.main(["status"]), 1)
-            self.assertEqual(profiles.default_state_root(), Path("/isolated-test-state"))
+            self.assertEqual(main.state_dir(), Path("/isolated-test-state"))
 
-    def test_managed_selection_ignores_agent_written_sticky_profile(self):
-        with (
-            mock.patch.object(deployment, "load", return_value=self.managed),
-            mock.patch.object(profiles, "_active_profile_path", side_effect=AssertionError("read mutable selection")),
-        ):
-            self.assertEqual(profiles.get_active_profile(), "default")
 
     def test_protected_config_and_env_overrides_are_rejected_before_loading(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary:
@@ -123,9 +117,9 @@ class DeploymentTests(unittest.TestCase):
                         env.load_env_files()
                     self.assertNotIn("UNTRUSTED_VALUE", os.environ)
 
-    def test_protected_policy_uses_selected_profile_and_never_repo_env_fallback(self):
+    def test_protected_policy_never_uses_repo_env_fallback(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary:
-            state = Path(temporary) / "profiles/work"
+            state = Path(temporary) / "state"
             state.mkdir(parents=True)
             with (
                 mock.patch.object(deployment, "load", return_value=self.managed),
@@ -148,23 +142,11 @@ class DeploymentTests(unittest.TestCase):
                 deployment.validate_policy_paths(path.parent, values)
             self.assertEqual(dict(os.environ), before)
 
-    def test_profile_creation_is_available_only_to_operator(self):
-        for uid, expected in ((1001, 0), (1002, 1)):
-            with (
-                self.subTest(uid=uid),
-                mock.patch.object(deployment, "load", return_value=self.managed),
-                mock.patch.object(os, "geteuid", return_value=uid, create=True),
-                mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(deployment.STATE)}),
-                mock.patch.object(profiles, "create_profile", return_value=Path("/work")) as create,
-                redirect_stderr(io.StringIO()),
-            ):
-                self.assertEqual(main.main(["profile", "create", "work"]), expected)
-                self.assertEqual(create.call_count, int(uid == 1001))
 
     def test_only_profile_locks_use_shared_protected_inode(self):
         with mock.patch.object(deployment, "load", return_value=self.managed):
             self.assertTrue(deployment.protected_lock(deployment.STATE / ".runtime.lock"))
-            self.assertTrue(deployment.protected_lock(deployment.STATE / "profiles/work/.runtime.lock"))
+            self.assertFalse(deployment.protected_lock(deployment.STATE / "profiles/work/.runtime.lock"))
             self.assertFalse(deployment.protected_lock(Path("/opt/pilotage-agent/.git/pilotage-update/.runtime.lock")))
             self.assertFalse(deployment.protected_lock(deployment.STATE / "workspace/.runtime.lock"))
 
@@ -182,19 +164,19 @@ class DeploymentTests(unittest.TestCase):
     def test_whatsapp_policy_written_by_operator_and_session_work_delegated(self):
         config = mock.Mock(state_dir=Path("/state"))
         with (
-            mock.patch.object(main, "ProfileRuntimeLock"),
+            mock.patch.object(main, "RuntimeLock"),
             mock.patch.object(main, "_prompt_whatsapp_configuration", return_value=([], {"PILOTAGE_ALLOWED_SENDERS": "123"})),
             mock.patch.object(main, "update_env_values") as save_env,
             mock.patch.object(main, "_save_channel_enabled", return_value=True) as save_enabled,
             mock.patch.object(deployment, "as_agent", return_value=0) as run,
         ):
-            self.assertEqual(main._managed_whatsapp_setup(config, "work", Path("/env"), Path("/config"), frozenset()), 0)
+            self.assertEqual(main._managed_whatsapp_setup(config, Path("/env"), Path("/config"), frozenset()), 0)
             save_env.assert_called_once_with(Path("/env"), {"PILOTAGE_ALLOWED_SENDERS": "123"})
-            run.assert_called_once_with(["--profile", "work", "whatsapp", "--pair-only"])
+            run.assert_called_once_with(["whatsapp", "--pair-only"])
             self.assertEqual([call.args[-1] for call in save_enabled.call_args_list], [False, True])
             run.return_value = 1
             save_enabled.reset_mock()
-            self.assertEqual(main._managed_whatsapp_setup(config, "work", Path("/env"), Path("/config"), frozenset()), 1)
+            self.assertEqual(main._managed_whatsapp_setup(config, Path("/env"), Path("/config"), frozenset()), 1)
             save_enabled.assert_called_once_with(Path("/config"), "whatsapp", False)
 
 
@@ -228,50 +210,6 @@ class LinuxDeploymentTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(secret.stat().st_mode), 0o600)
             self.assertEqual(stat.S_IMODE(linked.stat().st_mode), 0o600)
 
-    def test_operator_can_create_protected_profile_with_readable_policy_and_shared_lock(self):
-        import grp
-
-        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary:
-            state = Path(temporary)
-            parent = state / "profiles"
-            parent.mkdir()
-            parent.chmod(0o2750)
-            checkout = state / "checkout"
-            managed = deployment.Deployment("operator", os.geteuid())
-            with (
-                mock.patch.object(deployment, "load", return_value=managed),
-                mock.patch.object(deployment, "STATE", state),
-                mock.patch.object(deployment, "CHECKOUT", checkout),
-                mock.patch.object(grp, "getgrnam", return_value=SimpleNamespace(gr_gid=os.getgid())),
-                mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(state)}, clear=True),
-                mock.patch.object(profiles.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run,
-            ):
-                work = profiles.create_profile("work")
-                self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o3770)
-                self.assertEqual(work.stat().st_uid, managed.operator_uid)
-                for name in (".env", "config.yaml", "SOUL.md"):
-                    self.assertEqual(stat.S_IMODE((work / name).stat().st_mode), 0o640)
-                    self.assertEqual((work / name).stat().st_gid, os.getgid())
-                self.assertFalse((work / "workspace").exists())
-                lock = runtime_lock.ProfileRuntimeLock(work)
-                lock.acquire()
-                lock.release()
-                self.assertEqual(stat.S_IMODE((work / ".runtime.lock").stat().st_mode), 0o660)
-                run.assert_called_once()
-                self.assertEqual(run.call_args.args[0], ["sudo", "--", "systemctl", "enable", "pilotage-agent@work.service"])
-                self.assertFalse(settings.Settings.load(work / "config.yaml").flag("whatsapp.enabled", True))
-                self.assertEqual(profiles._configured_bridge_port(work), 8766)
-                second = profiles.create_profile("personal")
-                self.assertEqual(profiles._configured_bridge_port(second), 8767)
-                # Runtime updates and provisioning use the same operator lock.
-                updating = runtime_lock.ProfileRuntimeLock(checkout / ".git/pilotage-update")
-                updating.acquire()
-                try:
-                    with self.assertRaises(runtime_lock.RuntimeAlreadyRunning):
-                        profiles.create_profile("blocked")
-                finally:
-                    updating.release()
-                self.assertFalse((parent / "blocked").exists())
 
     def test_operator_settings_updates_keep_runtime_read_access(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -296,7 +234,7 @@ class LinuxDeploymentTests(unittest.TestCase):
                 mock.patch.object(runtime_lock, "protected_lock", return_value=True),
                 mock.patch.object(deployment, "load", return_value=managed),
             ):
-                lock = runtime_lock.ProfileRuntimeLock(path.parent)
+                lock = runtime_lock.RuntimeLock(path.parent)
                 lock.acquire()
                 self.assertTrue(runtime_lock.runtime_lock_is_held(path.parent))
                 lock.release()

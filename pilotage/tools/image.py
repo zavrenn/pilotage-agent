@@ -1,6 +1,6 @@
 """Image generation through ChatGPT/Codex OAuth, adapted from Hermes.
 
-Genesis needs the one provider and tier its production profiles use:
+Genesis needs the one provider and tier its production agents use:
 ``openai-codex`` with ``gpt-image-2-high``.  Hermes' working request shape,
 SSE parser, image-input validation, bounded error reporting, and result
 contract are kept.  Its provider registry and unrelated image backends are
@@ -399,7 +399,6 @@ def _collect_image_b64(
 def _resolve_credentials(config: Any, *, force_refresh: bool = False) -> auth.Credentials:
     return auth.resolve_credentials(
         Path(config.credentials_path),
-        fallback_path=Path(config.main_credentials_path),
         force_refresh=force_refresh,
     )
 
@@ -431,13 +430,13 @@ def _output_root(context: ToolContext) -> Path:
     if isolated:
         working = (working / "exports").resolve(strict=False)
 
-    profile_workspace = Path(config.workspace_dir).expanduser().resolve(
+    agent_workspace = Path(config.workspace_dir).expanduser().resolve(
         strict=False
     )
     raw_roots = getattr(config, "outbound_media_roots", None)
     declared_roots = tuple(
         Path(root).expanduser().resolve(strict=False)
-        for root in (raw_roots if raw_roots is not None else (profile_workspace,))
+        for root in (raw_roots if raw_roots is not None else (agent_workspace,))
     )
     if not declared_roots:
         raise ValueError("File delivery is disabled by configuration")

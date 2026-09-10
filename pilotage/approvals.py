@@ -41,7 +41,7 @@ class _PendingApproval:
 
 
 def approval_required(config: Any, category: str) -> bool:
-    """Read one category's per-profile switch, defaulting safely to on."""
+    """Read one category's per-agent switch, defaulting safely to on."""
 
     if category not in APPROVAL_CATEGORIES:
         raise ValueError(f"Unknown approval category: {category}")

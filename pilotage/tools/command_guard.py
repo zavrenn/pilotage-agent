@@ -34,7 +34,7 @@ _FORK_BOMB = re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:")
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PILOTAGE_EMBEDDED = re.compile(
     r"(?i)(?<![/\w.\-])pilotage\b(?P<flags>[^\n;|&]{0,256}?)"
-    r"\bservice\s+(?P<action>stop|restart)\b"
+    r"\b(?:service\s+(?:stop|restart)|restart)\b"
 )
 
 _TRANSPARENT_PREFIXES = frozenset(
@@ -81,17 +81,6 @@ class CommandGuardFinding:
         return f"Blocked Pilotage self-lifecycle command: {self.description}."
 
 
-def profile_name_for_state_dir(state_dir: Any) -> str:
-    """Derive the selected profile from Pilotage's existing path contract."""
-    try:
-        path = Path(state_dir).expanduser().resolve(strict=False)
-    except (OSError, RuntimeError, TypeError, ValueError):
-        return "default"
-    if path.parent.name == "profiles" and path.name:
-        return path.name.lower()
-    return "default"
-
-
 def _path_is_within(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -116,7 +105,7 @@ def find_persistence_store_reference(
     """
 
     if state_dir is None:
-        # Direct handler tests and embedders may omit profile state entirely.
+        # Direct handler tests and embedders may omit agent state entirely.
         # Production Config always supplies it; without a root there is no
         # canonical store path this guard can resolve.
         return None
@@ -124,7 +113,7 @@ def find_persistence_store_reference(
         state = Path(state_dir).expanduser().resolve(strict=False)
     except (OSError, RuntimeError, TypeError, ValueError):
         return CommandGuardFinding(
-            "persistence", "the active profile state path is unavailable"
+            "persistence", "the active agent state path is unavailable"
         )
 
     protected_roots = tuple(
@@ -851,54 +840,31 @@ def _systemctl_action_and_units(arguments: Sequence[str]) -> tuple[str, list[str
     return arguments[index].lower(), list(arguments[index + 1 :])
 
 
-def _unit_targets_current(unit: str, current_profile: Optional[str]) -> bool:
-    if not current_profile:
-        return False
+def _unit_targets_current(unit: str) -> bool:
     written = unit.lower()
-    expected = f"pilotage-agent@{current_profile.lower()}.service"
+    expected = "pilotage-agent.service"
     if not written.endswith(".service"):
         written += ".service"
     return written == expected or fnmatch.fnmatchcase(expected, written)
 
 
-def _pilotage_lifecycle(
-    arguments: Sequence[str], current_profile: Optional[str]
-) -> bool:
-    selected: Optional[str] = None
-    positional: list[str] = []
-    index = 0
-    while index < len(arguments):
-        token = arguments[index]
-        if token in {"-p", "--profile"}:
-            if index + 1 >= len(arguments):
-                return False
-            selected = arguments[index + 1].strip("\"'").lower()
-            index += 2
-            continue
-        if token.startswith("--profile="):
-            selected = token.split("=", 1)[1].strip("\"'").lower()
-            index += 1
-            continue
-        if token.startswith("-") and not positional:
-            index += 1
-            continue
-        positional.append(token.lower())
-        index += 1
-    if len(positional) < 2 or positional[:1] != ["service"]:
-        return False
-    if positional[1] not in {"stop", "restart"}:
-        return False
-    return selected is None or (
-        current_profile is not None and selected == current_profile.lower()
+def _pilotage_lifecycle(arguments: Sequence[str]) -> bool:
+    positional = list(arguments)
+    while positional and positional[0].startswith("-"):
+        positional.pop(0)
+    return positional == ["restart"] or (
+        len(positional) >= 2
+        and positional[0] == "service"
+        and positional[1] in {"stop", "restart"}
     )
 
 
 def _self_lifecycle_finding(
-    segment: Sequence[str], index: int, current_profile: Optional[str]
+    segment: Sequence[str], index: int
 ) -> Optional[CommandGuardFinding]:
     name = _executable_name(segment[index])
     arguments = list(segment[index + 1 :])
-    if name == "pilotage" and _pilotage_lifecycle(arguments, current_profile):
+    if name == "pilotage" and _pilotage_lifecycle(arguments):
         return CommandGuardFinding(
             "self_lifecycle",
             "the agent cannot stop or restart its own service",
@@ -906,7 +872,7 @@ def _self_lifecycle_finding(
     if name == "systemctl":
         action, units = _systemctl_action_and_units(arguments)
         if action in {"start", "stop", "restart"} and any(
-            _unit_targets_current(unit, current_profile) for unit in units
+            _unit_targets_current(unit) for unit in units
         ):
             return CommandGuardFinding(
                 "self_lifecycle",
@@ -1023,7 +989,6 @@ def _scan_script(
     candidate: str,
     *,
     cwd: Optional[str],
-    current_profile: Optional[str],
     depth: int,
     visited: set[Path],
 ) -> Optional[CommandGuardFinding]:
@@ -1050,7 +1015,6 @@ def _scan_script(
     return _find_blocked_command(
         text,
         cwd=str(path.parent),
-        current_profile=current_profile,
         scan_referenced_scripts=True,
         hardline=False,
         depth=depth + 1,
@@ -1087,7 +1051,6 @@ def _carrier_or_script_finding(
     index: int,
     *,
     cwd: Optional[str],
-    current_profile: Optional[str],
     scan_referenced_scripts: bool,
     hardline: bool,
     depth: int,
@@ -1109,7 +1072,6 @@ def _carrier_or_script_finding(
                     return _find_blocked_command(
                         arguments[position + 1],
                         cwd=cwd,
-                        current_profile=current_profile,
                         scan_referenced_scripts=scan_referenced_scripts,
                         hardline=hardline,
                         depth=depth + 1,
@@ -1127,7 +1089,6 @@ def _carrier_or_script_finding(
             return _scan_script(
                 arguments[position],
                 cwd=cwd,
-                current_profile=current_profile,
                 depth=depth,
                 visited=visited,
             )
@@ -1137,14 +1098,12 @@ def _carrier_or_script_finding(
             return _find_blocked_python_source(
                 payload,
                 cwd=cwd,
-                current_profile=current_profile,
                 hardline=hardline,
             )
     if name == "eval" and arguments:
         return _find_blocked_command(
             " ".join(arguments),
             cwd=cwd,
-            current_profile=current_profile,
             scan_referenced_scripts=scan_referenced_scripts,
             hardline=hardline,
             depth=depth + 1,
@@ -1154,7 +1113,6 @@ def _carrier_or_script_finding(
         return _scan_script(
             arguments[0],
             cwd=cwd,
-            current_profile=current_profile,
             depth=depth,
             visited=visited,
         )
@@ -1162,7 +1120,6 @@ def _carrier_or_script_finding(
         return _scan_script(
             segment[index],
             cwd=cwd,
-            current_profile=current_profile,
             depth=depth,
             visited=visited,
         )
@@ -1173,7 +1130,6 @@ def _find_blocked_command(
     text: str,
     *,
     cwd: Optional[str],
-    current_profile: Optional[str],
     scan_referenced_scripts: bool,
     hardline: bool,
     depth: int,
@@ -1191,7 +1147,6 @@ def _find_blocked_command(
         finding = _find_blocked_command(
             payload,
             cwd=cwd,
-            current_profile=current_profile,
             scan_referenced_scripts=scan_referenced_scripts,
             hardline=hardline,
             depth=depth + 1,
@@ -1211,7 +1166,6 @@ def _find_blocked_command(
                 finding = _find_blocked_command(
                     split_command,
                     cwd=cwd,
-                    current_profile=current_profile,
                     scan_referenced_scripts=scan_referenced_scripts,
                     hardline=hardline,
                     depth=depth + 1,
@@ -1230,14 +1184,13 @@ def _find_blocked_command(
             finding = _hardline_finding(segment, index)
             if finding:
                 return finding
-        finding = _self_lifecycle_finding(segment, index, current_profile)
+        finding = _self_lifecycle_finding(segment, index)
         if finding:
             return finding
         finding = _carrier_or_script_finding(
             segment,
             index,
             cwd=cwd,
-            current_profile=current_profile,
             scan_referenced_scripts=scan_referenced_scripts,
             hardline=hardline,
             depth=depth,
@@ -1252,14 +1205,12 @@ def find_blocked_command(
     text: str,
     *,
     cwd: Optional[str] = None,
-    current_profile: Optional[str] = "default",
     scan_referenced_scripts: bool = True,
 ) -> Optional[CommandGuardFinding]:
     """Return the first unconditional terminal guard finding, if any."""
     return _find_blocked_command(
         text,
         cwd=cwd,
-        current_profile=current_profile,
         scan_referenced_scripts=scan_referenced_scripts,
         hardline=True,
         depth=0,
@@ -1268,14 +1219,13 @@ def find_blocked_command(
 
 
 def find_embedded_self_lifecycle(
-    text: str, *, current_profile: Optional[str] = "default"
+    text: str
 ) -> Optional[CommandGuardFinding]:
     """Scan a cron prompt for concrete Pilotage lifecycle command shapes."""
     normalized = _normalize(text)
     direct = _find_blocked_command(
         normalized,
         cwd=None,
-        current_profile=current_profile,
         scan_referenced_scripts=False,
         hardline=False,
         depth=0,
@@ -1285,7 +1235,7 @@ def find_embedded_self_lifecycle(
         return direct
     for match in _PILOTAGE_EMBEDDED.finditer(normalized):
         tokens = _tokenize(match.group(0)) or []
-        if tokens and _pilotage_lifecycle(tokens[1:], current_profile):
+        if tokens and _pilotage_lifecycle(tokens[1:]):
             return CommandGuardFinding(
                 "self_lifecycle",
                 "the scheduled agent cannot stop or restart its own service",
@@ -1296,7 +1246,7 @@ def find_embedded_self_lifecycle(
         for segment in _iter_segments(match.group(0)):
             index = _command_index(segment)
             if index is not None:
-                finding = _self_lifecycle_finding(segment, index, current_profile)
+                finding = _self_lifecycle_finding(segment, index)
                 if finding:
                     return finding
     return None
@@ -1396,11 +1346,9 @@ class _PythonCommandVisitor(ast.NodeVisitor):
         self,
         *,
         cwd: Optional[str],
-        current_profile: Optional[str],
         hardline: bool,
     ) -> None:
         self.cwd = cwd
-        self.current_profile = current_profile
         self.hardline = hardline
         self.finding: Optional[CommandGuardFinding] = None
         self.scopes = [_PythonBindings(constants={}, aliases={})]
@@ -1580,7 +1528,6 @@ class _PythonCommandVisitor(ast.NodeVisitor):
             self.finding = _find_blocked_command(
                 command,
                 cwd=self.cwd,
-                current_profile=self.current_profile,
                 scan_referenced_scripts=False,
                 hardline=self.hardline,
                 depth=0,
@@ -1594,7 +1541,6 @@ def _find_blocked_python_source(
     code: str,
     *,
     cwd: Optional[str],
-    current_profile: Optional[str],
     hardline: bool,
 ) -> Optional[CommandGuardFinding]:
     try:
@@ -1603,7 +1549,6 @@ def _find_blocked_python_source(
         return None
     visitor = _PythonCommandVisitor(
         cwd=cwd,
-        current_profile=current_profile,
         hardline=hardline,
     )
     visitor.visit(tree)
@@ -1614,13 +1559,11 @@ def find_blocked_python_source(
     code: str,
     *,
     cwd: Optional[str] = None,
-    current_profile: Optional[str] = "default",
 ) -> Optional[CommandGuardFinding]:
     """Inspect literal commands handed to Python process-launching APIs."""
     return _find_blocked_python_source(
         code,
         cwd=cwd,
-        current_profile=current_profile,
         hardline=True,
     )
 
@@ -1631,5 +1574,4 @@ __all__ = [
     "find_blocked_python_source",
     "find_embedded_self_lifecycle",
     "find_persistence_store_reference",
-    "profile_name_for_state_dir",
 ]

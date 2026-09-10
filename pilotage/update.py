@@ -10,9 +10,10 @@ import sys
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
-from . import deployment, profiles
+from . import deployment
+from .config import state_dir
 from .process_tree import terminate_process_tree
-from .runtime_lock import ProfileRuntimeLock, RuntimeLockError, runtime_lock_is_held
+from .runtime_lock import RuntimeLock, RuntimeLockError
 from .service import SERVICE_TIMEOUT_SECONDS, run_service_command, unit_name
 
 
@@ -77,9 +78,9 @@ def _git(root: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def _service_running(profile_name: str) -> bool:
+def _service_running() -> bool:
     result = subprocess.run(
-        [*deployment.system_command("systemctl"), "show", unit_name(profile_name),
+        [*deployment.system_command("systemctl"), "show", unit_name(),
          "--property=LoadState,ActiveState", "--no-pager"],
         capture_output=True, text=True, timeout=SERVICE_TIMEOUT_SECONDS,
     )
@@ -94,7 +95,7 @@ def _service_running(profile_name: str) -> bool:
     return state == "active"
 
 
-def run_update(profile_name: str, *, check: bool = False) -> int:
+def run_update(*, check: bool = False) -> int:
     root = Path(__file__).resolve().parent.parent
     stopped = False
     try:
@@ -114,7 +115,7 @@ def run_update(profile_name: str, *, check: bool = False) -> int:
         _git(root, "rev-parse", "--verify", "@{upstream}")
         git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir"))
         with _update_signals(), ExitStack() as update_stack:
-            update_lock = ProfileRuntimeLock(git_dir / "pilotage-update")
+            update_lock = RuntimeLock(git_dir / "pilotage-update")
             update_lock.acquire()
             update_stack.callback(update_lock.release)
             if not check and _git(root, "status", "--porcelain", "--untracked-files=normal"):
@@ -130,23 +131,19 @@ def run_update(profile_name: str, *, check: bool = False) -> int:
                 return 0
             if ahead:
                 raise UpdateError("Local commits differ from upstream; reconcile the branch before updating")
-            known_profiles = profiles.list_profiles()
-            for profile in known_profiles:
-                if profile.name != profile_name and runtime_lock_is_held(profile.path):
-                    raise UpdateError(f"Stop profile {profile.name!r} first; profiles share this installation")
-            running = _service_running(profile_name)
+            agent_state = state_dir()
+            running = _service_running()
             if running:
-                if run_service_command("stop", profile_name):
+                if run_service_command("stop"):
                     raise UpdateError("Could not stop the service; no code was changed")
                 stopped = True
             with ExitStack() as runtime_stack:
                 # These same locks gate foreground and service startup.
                 install_locks = [update_lock]
-                for profile in known_profiles:
-                    lock = ProfileRuntimeLock(profile.path)
-                    lock.acquire()
-                    runtime_stack.callback(lock.release)
-                    install_locks.append(lock)
+                lock = RuntimeLock(agent_state)
+                lock.acquire()
+                runtime_stack.callback(lock.release)
+                install_locks.append(lock)
                 if _git(root, "status", "--porcelain", "--untracked-files=normal"):
                     raise UpdateError("Local changes appeared during preflight; update refused")
                 if _git(root, "rev-parse", "HEAD") != head:
@@ -168,7 +165,7 @@ def run_update(profile_name: str, *, check: bool = False) -> int:
                 if result.returncode:
                     raise UpdateError("Updated runtime failed its import check")
             if running:
-                if run_service_command("start", profile_name):
+                if run_service_command("start"):
                     raise UpdateError("Update installed, but service startup failed; inspect pilotage logs")
                 stopped = False
             print("Update complete." + (" Agent restarted." if running else " Agent remains stopped."))

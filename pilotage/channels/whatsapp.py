@@ -33,7 +33,7 @@ from ..delivery import (
     delivery_fingerprint,
     file_delivery_fingerprint,
 )
-from ..i18n import DEFAULT_PROFILE_LANGUAGE, t
+from ..i18n import DEFAULT_AGENT_LANGUAGE, t
 from ..legacy_notices import attachment_notice_replacements
 from ..redact import identity_key_path, identity_pseudonym
 from .dedup import MessageDeduplicator
@@ -60,7 +60,7 @@ CLAIM_SETTLE_ATTEMPTS = 6
 CLAIM_SETTLE_BACKOFF_SECONDS = 1.0
 COMPLETED_CLAIM_MAX_ENTRIES = 100_000
 # The Node bridge needs process basics, not the agent's model, database,
-# transcription, search, Telegram, or profile credentials.
+# transcription, search, Telegram, or agent credentials.
 BRIDGE_INHERITED_ENV = frozenset(
     {
         "APPDATA",
@@ -762,7 +762,7 @@ class WhatsAppChannel:
                 validate_whatsapp_session(self._config.session_dir)
             except WhatsAppSessionError as exc:
                 raise ChannelError(
-                    f"{exc}. Run `pilotage whatsapp` to re-pair this profile."
+                    f"{exc}. Run `pilotage whatsapp` to re-pair this agent."
                 ) from exc
         # A missing file is deliberate: the resident bridge must surface the
         # first-connection QR flow required by the product contract.
@@ -1738,7 +1738,7 @@ class WhatsAppChannel:
         if deliver_media:
             notice = t(
                 "media.delivery_unavailable",
-                getattr(self._config, "language", DEFAULT_PROFILE_LANGUAGE),
+                getattr(self._config, "language", DEFAULT_AGENT_LANGUAGE),
             )
             if delivery_ledger is not None and "MEDIA:" in (text or ""):
                 notice = await delivery_ledger.attachment_notice(text, notice)
@@ -1758,7 +1758,7 @@ class WhatsAppChannel:
 
         replacements = attachment_notice_replacements(
             text or "", chunks, to_whatsapp,
-            getattr(self._config, "language", DEFAULT_PROFILE_LANGUAGE),
+            getattr(self._config, "language", DEFAULT_AGENT_LANGUAGE),
         )
         units = []
         if delivery_ledger is not None:

@@ -1,7 +1,7 @@
 """What this agent is and how it behaves.
 
 Behaviour settings live in a configuration file the operator can diff against
-another machine; profile identity lives in its small ``SOUL.md`` file. The
+another machine; agent identity lives in its small ``SOUL.md`` file. The
 environment carries secrets, channel identities, and the few things that are
 properties of the box rather than of the agent. Each concern has one canonical
 home.
@@ -21,8 +21,7 @@ from pathlib import Path
 
 from .approvals import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from .codex.compaction import DEFAULT_COMPACT_THRESHOLD
-from .i18n import DEFAULT_PROFILE_LANGUAGE, normalize_language, t
-from .profiles import default_state_root
+from .i18n import DEFAULT_AGENT_LANGUAGE, normalize_language, t
 from .settings import ConfigError, Settings, config_path
 
 logger = logging.getLogger(__name__)
@@ -33,7 +32,7 @@ SUPPORTED_MODELS = frozenset(
 )
 DEFAULT_REASONING_EFFORT = "medium"
 
-# Hermes's conservative context-file floor; profile identities should normally
+# Hermes's conservative context-file floor; agent identities should normally
 # remain far smaller than this.
 SOUL_FILENAME = "SOUL.md"
 SOUL_MAX_CHARS = 20_000
@@ -128,7 +127,7 @@ def state_dir() -> Path:
 
 
 def _load_soul(home: Path) -> str:
-    """Load exactly this profile's optional Hermes-compatible identity file."""
+    """Load exactly this agent's optional Hermes-compatible identity file."""
     path = home / SOUL_FILENAME
     try:
         content = path.read_text(encoding="utf-8")
@@ -156,7 +155,7 @@ def _load_soul(home: Path) -> str:
 
 
 def _instructions(settings: Settings, home: Path, channel: str = "") -> str:
-    """Assemble profile identity, optional operator overlay, and channel rules."""
+    """Assemble agent identity, optional operator overlay, and channel rules."""
     written = settings.text("agent.instructions", "")
     soul = _load_soul(home)
     if channel == "telegram":
@@ -207,9 +206,9 @@ class Config:
     reasoning_effort: str
     instructions: str
     # Runtime-owned static messages.  The model's language and register remain
-    # part of the profile's SOUL.md identity.
+    # part of the agent's SOUL.md identity.
     language: str
-    # One profile timezone, inherited by cron and automatic daily resets.
+    # One agent timezone, inherited by cron and automatic daily resets.
     timezone: str
     # Who the agent answers. Empty means nobody: an agent wired to a real phone
     # number must never answer whoever finds it. Entries are phone numbers in
@@ -228,7 +227,7 @@ class Config:
     text_batch_hard_cap_seconds: float
     # Turns of history kept per chat, in memory and on disk.
     history_turns: int
-    # Current Hermes' messaging reset policy, profile-wide.
+    # Current Hermes' messaging reset policy, agent-wide.
     session_reset_mode: str
     session_reset_idle_minutes: int
     session_reset_at_hour: int
@@ -241,16 +240,16 @@ class Config:
     # Hermes-native server compaction on the fixed ChatGPT Codex route.
     codex_native_compaction: bool
     codex_compact_threshold: int
-    # Profile-wide curated notes injected as a frozen per-session snapshot.
+    # Agent-wide curated notes injected as a frozen per-session snapshot.
     memory_char_limit: int
     user_memory_char_limit: int
-    # Legacy fields accepted for existing profiles. They no longer govern
+    # Legacy fields accepted for existing agents. They no longer govern
     # execution: capabilities are enforced by tool groups and cron.enabled.
     approval_memory: bool
     approval_skills: bool
     approval_cron: bool
     approval_timeout_seconds: float
-    # Profile-local durable scheduled work.
+    # Agent-local durable scheduled work.
     cron_enabled: bool
     cron_timezone: str
     cron_tick_seconds: float
@@ -277,7 +276,7 @@ class Config:
     # settings without this dataclass growing a field for every one of them.
     settings: Settings = field(default_factory=Settings, compare=False, repr=False)
     # Current Hermes' home-channel contract, narrowed to Pilotage's two
-    # platforms. Channel identities stay in the profile .env, not YAML.
+    # platforms. Channel identities stay in the agent .env, not YAML.
     channel: str = "whatsapp"
     home_chat_id: str = ""
     home_thread_id: str = ""
@@ -319,7 +318,7 @@ class Config:
 
     @property
     def workspace_dir(self) -> Path:
-        """The profile-local default root for terminal and file tools."""
+        """The agent-local default root for terminal and file tools."""
         return self.state_dir / "workspace"
 
     @property
@@ -349,11 +348,6 @@ class Config:
     @property
     def credentials_path(self) -> Path:
         return self.state_dir / "codex-auth.json"
-
-    @property
-    def main_credentials_path(self) -> Path:
-        """The only state a named profile may borrow from the main agent."""
-        return default_state_root() / "codex-auth.json"
 
     @property
     def bridge_script(self) -> Path:
@@ -488,7 +482,7 @@ class Config:
                 _path_is_within(resolved_cwd, root) for root in trusted_roots
             ):
                 raise ConfigError(
-                    "terminal.cwd must be inside the profile workspace or a "
+                    "terminal.cwd must be inside the agent workspace or a "
                     "gateway.media_delivery_allow_dirs path when "
                     "sessions.isolated_workspaces is enabled"
                 )
@@ -513,7 +507,7 @@ class Config:
                 f"not {session_reset_mode!r}"
             )
         language_written = settings.text(
-            "display.language", DEFAULT_PROFILE_LANGUAGE
+            "display.language", DEFAULT_AGENT_LANGUAGE
         )
         try:
             language = normalize_language(language_written)

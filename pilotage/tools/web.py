@@ -1,6 +1,6 @@
 """Web search and extraction, adapted from Hermes.
 
-Pilotage needs the one backend its production profiles already use, not
+Pilotage needs the one backend its production agents already use, not
 Hermes' provider registry or runtime installer. The load-bearing behavior is
 kept: normalized results, a hard 30-second wall-clock bound, and a disposable
 worker process because ``ddgs``/``primp`` can block in native code while
@@ -290,7 +290,7 @@ def _web_extract_url(value: Any) -> Optional[str]:
 
 
 def web_extract_configured() -> bool:
-    """Whether this profile opted into cloud or self-hosted extraction."""
+    """Whether this agent opted into cloud or self-hosted extraction."""
     return bool(
         os.environ.get("FIRECRAWL_API_KEY", "").strip()
         or os.environ.get("FIRECRAWL_API_URL", "").strip().rstrip("/")
@@ -305,7 +305,7 @@ def _get_direct_firecrawl_config(
     if not api_key and not api_url:
         raise WebConfigurationError(
             "Web extraction is not configured. Set FIRECRAWL_API_KEY in the "
-            "profile .env for cloud Firecrawl, or FIRECRAWL_API_URL for a "
+            "agent .env for cloud Firecrawl, or FIRECRAWL_API_URL for a "
             "self-hosted Firecrawl instance."
         )
 
@@ -524,7 +524,7 @@ def convert_base64_images_to_links(text: str) -> str:
 
 
 def _store_full_text(context: ToolContext, url: str, content: str) -> Optional[str]:
-    """Store one bounded full-text copy in this profile's web cache."""
+    """Store one bounded full-text copy in this agent's web cache."""
     try:
         state_dir = Path(context.config.state_dir)
         cache_dir = ensure_spill_dir(state_dir / "cache" / "web", private=True)
@@ -877,7 +877,7 @@ WEB_EXTRACT_SCHEMA = {
                 "type": "integer",
                 "description": (
                     "Optional per-page character budget. Defaults to the "
-                    "profile's web.extract_char_limit setting (15000). The "
+                    "agent's web.extract_char_limit setting (15000). The "
                     "returned previews shrink automatically when needed to fit "
                     "tools.max_result_chars; full text remains cached."
                 ),

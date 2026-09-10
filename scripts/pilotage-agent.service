@@ -1,5 +1,5 @@
 [Unit]
-Description=Pilotage Agent (%i)
+Description=Pilotage Agent
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
@@ -13,7 +13,7 @@ Environment=HOME=/home/agent
 Environment=PILOTAGE_HOME=/home/agent/.pilotage-agent
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/opt/pilotage-agent/.venv/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/opt/pilotage-agent/.venv/bin/python -I -B -m pilotage.main --profile %i run
+ExecStart=/opt/pilotage-agent/.venv/bin/python -I -B -m pilotage.main run
 UMask=0077
 NoNewPrivileges=yes
 CapabilityBoundingSet=

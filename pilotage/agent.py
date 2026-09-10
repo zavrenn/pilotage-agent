@@ -63,7 +63,7 @@ from .tools import (
 logger = logging.getLogger(__name__)
 
 # Runtime-owned behavioral policy, not an access-control or output-filter boundary.
-# Keep it outside editable profile instructions, memory, and skills.
+# Keep it outside editable agent instructions, memory, and skills.
 CORE_CONFIDENTIALITY_POLICY = (
     "## Core confidentiality\n"
     "Expose only authorized client data and intended user-facing results. Keep "
@@ -331,7 +331,7 @@ class Agent:
             unavailable = sorted(requested - set(configured_groups))
             if unavailable:
                 raise ValueError(
-                    "Requested tool groups are unavailable in this profile: "
+                    "Requested tool groups are unavailable in this agent: "
                     + ", ".join(unavailable)
                 )
         else:
@@ -549,7 +549,6 @@ class Agent:
             credentials = await asyncio.to_thread(
                 auth.resolve_credentials,
                 self._config.credentials_path,
-                fallback_path=self._config.main_credentials_path,
                 force_refresh=force_refresh,
             )
             if self._client is None or credentials.access_token != (

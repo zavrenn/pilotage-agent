@@ -14,7 +14,7 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 from pilotage.agent import Agent
 from pilotage.config import Config
 from pilotage.history import ConversationStore
-from pilotage.i18n import DEFAULT_PROFILE_LANGUAGE, t
+from pilotage.i18n import DEFAULT_AGENT_LANGUAGE, t
 
 from .jobs import (
     CronStore,
@@ -157,7 +157,7 @@ def _bounded(value: Any, limit: int) -> str:
 
 
 class CronScheduler:
-    """Claim, execute, save, and deliver one profile's jobs."""
+    """Claim, execute, save, and deliver one agent's jobs."""
 
     def __init__(
         self,
@@ -239,7 +239,7 @@ class CronScheduler:
             if channel in self._channel_configs:
                 return self._channel_configs[channel]
             return self.config
-        # Operator-created jobs have no chat origin. Their common profile view
+        # Operator-created jobs have no chat origin. Their common agent view
         # matches CLI admission, independently of the enabled delivery channels.
         return self._default_job_config
 
@@ -555,7 +555,7 @@ class CronScheduler:
             else:
                 public = t(
                     "cron.failure",
-                    getattr(self._config_for_job(job), "language", DEFAULT_PROFILE_LANGUAGE),
+                    getattr(self._config_for_job(job), "language", DEFAULT_AGENT_LANGUAGE),
                 )
                 delivery_error = await self._deliver_text(job, public)
         finally:

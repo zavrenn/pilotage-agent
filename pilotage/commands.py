@@ -35,7 +35,7 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
 
 # Recognize old commands so a stale client cannot send them into the model as
 # a new request. They no longer expose operator details or authorize changes.
-_RETIRED_COMMANDS = ("approve", "deny", "profile")
+_RETIRED_COMMANDS = ("approve", "deny")
 
 
 def _build_command_lookup() -> dict[str, CommandDef]:
@@ -91,7 +91,7 @@ def help_text(language: str = DEFAULT_LANGUAGE) -> str:
 
 
 def configured_tool_names(config: Any) -> tuple[str, ...]:
-    """Return exactly the tools enabled by this profile/channel view."""
+    """Return exactly the tools enabled by this agent/channel view."""
 
     from .tools import build_registry, enabled_groups
 
@@ -100,31 +100,7 @@ def configured_tool_names(config: Any) -> tuple[str, ...]:
     return tuple(registry.names(groups))
 
 
-def _auth_scope(config: Any) -> str:
-    primary = Path(config.credentials_path)
-    fallback = Path(config.main_credentials_path)
-    if primary.exists():
-        return "profile"
-    try:
-        distinct = primary.resolve(strict=False) != fallback.resolve(strict=False)
-    except OSError:
-        distinct = primary != fallback
-    if distinct and fallback.exists():
-        return "shared"
-    return "missing"
-
-
-def profile_text(config: Any, profile_name: str) -> str:
-    language = str(getattr(config, "language", DEFAULT_LANGUAGE))
-    auth_scope = t(f"commands.auth_{_auth_scope(config)}", language)
-    return (
-        f"{t('commands.profile', language, profile=profile_name)}\n"
-        f"{t('commands.state', language, state=config.state_dir)}\n"
-        f"{t('commands.auth', language, scope=auth_scope)}"
-    )
-
-
-def status_text(config: Any, profile_name: str) -> str:
+def status_text(config: Any) -> str:
     language = str(getattr(config, "language", DEFAULT_LANGUAGE))
     tools = configured_tool_names(config)
     channel = str(getattr(config.settings, "channel", "") or "local")
@@ -139,10 +115,12 @@ def status_text(config: Any, profile_name: str) -> str:
         or t("commands.system_local", language)
     )
     tool_text = ", ".join(tools) if tools else t("commands.none", language)
-    auth_scope = t(f"commands.auth_{_auth_scope(config)}", language)
+    auth_scope = t(
+        "commands.auth_local" if Path(config.credentials_path).exists() else "commands.auth_missing",
+        language,
+    )
     return (
         f"Pilotage {__version__}\n"
-        f"{t('commands.profile', language, profile=profile_name)}\n"
         f"{t('commands.model', language, model=config.model)}\n"
         f"{t('commands.channel', language, channel=channel)}\n"
         f"{t('commands.tools', language, tools=tool_text)}\n"
@@ -156,7 +134,6 @@ async def execute_command(
     *,
     agent: Any,
     config: Any,
-    profile_name: str,
     session_id: str,
     reset_reply: str,
 ) -> str:

@@ -5,11 +5,10 @@ short-lived JWT; the refresh token is single-use and rotates on every refresh.
 That is why we keep our own store and never share ``~/.codex/auth.json``: two
 processes refreshing the same refresh token invalidate each other.
 
-Our own store is shared, though. A profile without its own ChatGPT sign-in uses
-the main agent's credentials, so two agents can reach this file at once. Every
-read-refresh-write therefore happens under a cross-process lock, and the token
-is re-read inside it: whoever waited uses the refresh the other one just did
-instead of spending a token that is already dead.
+Each agent signs in independently and uses only its own credential store.
+Runtime and operator processes can still reach that store concurrently. Every
+read-refresh-write happens under a cross-process lock, and the token is re-read
+inside it so a waiting process uses the refreshed token.
 
 The login flow is device-code, not a loopback redirect, because agents run
 headless in LXC containers with no browser and no reachable localhost.
@@ -158,21 +157,8 @@ def credentials_lock(
                 pass
 
 
-def credentials_source_path(path: Path, fallback_path: Path | None = None) -> Path:
-    """Choose profile credentials first, then the main profile credentials.
-
-    Existence is enough to shadow the fallback. A malformed profile file must
-    fail closed rather than silently changing which ChatGPT identity is used.
-    """
-    if path.exists():
-        return path
-    if fallback_path is not None and fallback_path != path and fallback_path.exists():
-        return fallback_path
-    return path
-
-
-def read_credentials(path: Path, *, fallback_path: Path | None = None) -> Credentials:
-    source_path = credentials_source_path(path, fallback_path)
+def read_credentials(path: Path) -> Credentials:
+    source_path = path
     if not source_path.exists():
         raise AuthError(
             f"No Codex credentials at {source_path}. Run `pilotage login` first.",
@@ -373,11 +359,10 @@ def _refresh_error(response: httpx.Response) -> AuthError:
 def resolve_credentials(
     path: Path,
     *,
-    fallback_path: Path | None = None,
     force_refresh: bool = False,
 ) -> Credentials:
     """Read the stored credentials, refreshing them if the access token is stale."""
-    source_path = credentials_source_path(path, fallback_path)
+    source_path = path
     credentials = read_credentials(source_path)
     if not force_refresh and not access_token_is_expiring(credentials.access_token):
         return credentials

@@ -176,7 +176,7 @@ def identity_key_path(state_dir: Path) -> Path:
 
 
 def configure_identity_pseudonyms(state_dir: Path) -> Path:
-    """Load or create the profile-local key used for stable log aliases."""
+    """Load or create the agent-local key used for stable log aliases."""
 
     global _identity_key
     target = identity_key_path(state_dir)

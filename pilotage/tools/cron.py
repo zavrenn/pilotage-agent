@@ -1,4 +1,4 @@
-"""One Hermes-shaped tool for profile-local scheduled work."""
+"""One Hermes-shaped tool for agent-local scheduled work."""
 
 from __future__ import annotations
 
@@ -132,7 +132,7 @@ def _enabled_toolsets(value: Any, context: ToolContext):
     )
     if unavailable:
         raise ValueError(
-            "Tool groups are disabled for this profile/channel: "
+            "Tool groups are disabled for this agent/channel: "
             + ", ".join(unavailable)
         )
     if "cron" in names:
@@ -359,7 +359,7 @@ async def handle_cronjob(args: Dict[str, Any], context: ToolContext) -> str:
 CRONJOB_SCHEMA = {
     "name": "cronjob",
     "description": (
-        "Manage this profile's scheduled AI jobs. Only create, change, pause, "
+        "Manage this agent's scheduled AI jobs. Only create, change, pause, "
         "resume, run, or remove a job when the current user explicitly requested "
         "that change. List jobs before creating or removing; never guess an ID. "
         "List returns task previews and origins alongside the current chat origin. "
@@ -413,14 +413,14 @@ CRONJOB_SCHEMA = {
             "skills": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Ordered profile-local skills; [] clears them on update.",
+                "description": "Ordered agent-local skills; [] clears them on update.",
             },
             "enabled_toolsets": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
                     "Optional tool-group allowlist for this job, such as "
-                    '["web", "file"]. Omit for the profile defaults; [] clears '
+                    '["web", "file"]. Omit for the agent defaults; [] clears '
                     "the restriction on update."
                 ),
             },

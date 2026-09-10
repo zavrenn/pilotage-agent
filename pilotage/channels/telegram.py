@@ -46,7 +46,7 @@ from ..delivery import (
     delivery_fingerprint,
     file_delivery_fingerprint,
 )
-from ..i18n import DEFAULT_PROFILE_LANGUAGE, t
+from ..i18n import DEFAULT_AGENT_LANGUAGE, t
 from ..legacy_notices import attachment_notice_replacements
 from ..redact import identity_pseudonym, redact_channel_identities
 from ..settings import ConfigError, Settings
@@ -537,7 +537,7 @@ def _update_sender_is_allowed(update: Any, allowed_users: Collection[str]) -> bo
 
 
 class _TelegramInboundStore:
-    """Profile-local write-ahead spool for Telegram updates."""
+    """Agent-local write-ahead spool for Telegram updates."""
 
     _SCHEMA = """
     CREATE TABLE IF NOT EXISTS telegram_updates (
@@ -2660,7 +2660,7 @@ class TelegramChannel:
         if deliver_media:
             notice = t(
                 "media.delivery_unavailable",
-                getattr(self._config, "language", DEFAULT_PROFILE_LANGUAGE),
+                getattr(self._config, "language", DEFAULT_AGENT_LANGUAGE),
             )
             if delivery_ledger is not None and "MEDIA:" in (text or ""):
                 notice = await delivery_ledger.attachment_notice(text, notice)
@@ -2688,7 +2688,7 @@ class TelegramChannel:
 
         replacements = attachment_notice_replacements(
             text or "", chunks, to_telegram,
-            getattr(self._config, "language", DEFAULT_PROFILE_LANGUAGE),
+            getattr(self._config, "language", DEFAULT_AGENT_LANGUAGE),
         )
         units = []
         if delivery_ledger is not None:

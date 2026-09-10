@@ -101,14 +101,14 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn("run this script as root", source)
         self.assertIn("unprivileged service user", source)
 
-    def test_service_is_profile_scoped_and_preflighted(self):
+    def test_service_is_single_agent_and_preflighted(self):
         source = (ROOT / "scripts" / "install-service.sh").read_text(encoding="utf-8")
 
         for expected in (
-            "pilotage-agent@.service",
-            "--profile %i run",
+            "pilotage-agent.service",
+            'ExecStart="$escaped_bin" run',
             'PILOTAGE_HOME="$state_root"',
-            '--profile "$profile" status',
+            '"$pilotage_bin" status',
             "realpath -m",
             "Restart=always",
             "KillMode=mixed",

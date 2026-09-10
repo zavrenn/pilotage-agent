@@ -14,12 +14,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 from pilotage import doctor
-from pilotage.runtime_lock import ProfileRuntimeLock
+from pilotage.runtime_lock import RuntimeLock
 
 
 class ReportTests(unittest.IsolatedAsyncioTestCase):
     async def test_one_failed_probe_does_not_stop_later_probes(self):
-        report = doctor.DoctorReport("work")
+        report = doctor.DoctorReport()
 
         def fail():
             raise RuntimeError("missing")
@@ -35,7 +35,6 @@ class ReportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_doctor_returns_nonzero_and_prints_all_failures(self):
         report = doctor.DoctorReport(
-            "work",
             [
                 doctor.CheckResult("Python", True, "ready"),
                 doctor.CheckResult("SQL", False, "not connected"),
@@ -49,7 +48,6 @@ class ReportTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await doctor.run_doctor(
                 object(),
-                "work",
                 print_fn=lines.append,
             )
 
@@ -60,7 +58,6 @@ class ReportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_doctor_returns_zero_only_when_every_check_passes(self):
         report = doctor.DoctorReport(
-            "work",
             [doctor.CheckResult("Everything", True, "ready")],
         )
         with mock.patch.object(
@@ -70,7 +67,6 @@ class ReportTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await doctor.run_doctor(
                 object(),
-                "work",
                 print_fn=lambda _line: None,
             )
         self.assertEqual(result, 0)
@@ -453,7 +449,7 @@ class RuntimeTests(unittest.TestCase):
     def test_runtime_lock_must_name_this_live_profile(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory).resolve()
-            lock = ProfileRuntimeLock(state)
+            lock = RuntimeLock(state)
             lock.acquire()
             try:
                 config = SimpleNamespace(state_dir=state)

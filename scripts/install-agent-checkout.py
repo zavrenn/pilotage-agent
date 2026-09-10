@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from pilotage.deployment import CHECKOUT, STATE, load
 
 
-PROFILE_FILES = {"config.yaml", "SOUL.md", ".env.example"}
+STATE_FILES = {"config.yaml", "SOUL.md", ".env.example"}
 ROOT_FILES = {"README.md", ".gitignore", ".gitattributes"}
 
 
@@ -41,7 +41,7 @@ def asset_paths(source: Path, home: Path) -> list[Path]:
             or (parts[0] == ".pilotage-agent" and (
                 len(parts) == 1
                 or parts[1] == "skills"
-                or (len(parts) == 2 and parts[1] in PROFILE_FILES and path.is_file())
+                or (len(parts) == 2 and parts[1] in STATE_FILES and path.is_file())
             ))
         )
         if not allowed:
@@ -73,7 +73,7 @@ def install_assets(source, home, paths, operator_uid, agent_gid):
         origin, target = source / relative, home / relative
         if origin.is_dir():
             if target.exists():
-                continue  # Preserve the protected profile and existing data directories.
+                continue  # Preserve the protected state and existing data directories.
             target.mkdir()
             mode = 0o750
         else:
@@ -93,7 +93,7 @@ def install_assets(source, home, paths, operator_uid, agent_gid):
 
 def share_skills(skills, operator_uid, agent_uid):
     """Keep new settings read-only to agent; share new and existing skills."""
-    # Git replaces files on pull. The profile's setgid group is agent, so an
+    # Git replaces files on pull. The state directory's setgid group is agent, so an
     # operator umask of 0002 alone would make replacement settings writable.
     subprocess.run([
         "setfacl", "-d", "--set", "u::rwx,g::r-x,o::---", str(skills.parent),
@@ -127,16 +127,14 @@ def main():
         raise SystemExit("Agent home must belong to the operator; use the current bootstrap.")
     if shutil.which("setfacl") is None:
         raise SystemExit("Install the acl system dependency first.")
-    # This also validates the profile roots, settings and lack of agent sudo access.
+    # This also validates the agent state, settings and lack of agent sudo access.
     subprocess.run([sys.executable, "-I", "-B", str(CHECKOUT / "scripts/verify-protection.py")], check=True)
-    units = ["default", *(p.name for p in (STATE / "profiles").iterdir())]
-    for name in units:
-        result = subprocess.run(
-            ["systemctl", "show", f"pilotage-agent@{name}.service", "--property=ActiveState", "--value"],
-            check=True, capture_output=True, text=True,
-        )
-        if result.stdout.strip() not in {"inactive", "failed"}:
-            raise SystemExit(f"Stop pilotage-agent@{name}.service first.")
+    result = subprocess.run(
+        ["systemctl", "show", "pilotage-agent.service", "--property=ActiveState", "--value"],
+        check=True, capture_output=True, text=True,
+    )
+    if result.stdout.strip() not in {"inactive", "failed"}:
+        raise SystemExit("Stop pilotage-agent.service first.")
     processes = subprocess.run(["pgrep", "-u", str(agent.pw_uid)], capture_output=True)
     if processes.returncode != 1:
         raise SystemExit("Stop agent processes and login sessions before installing assets.")

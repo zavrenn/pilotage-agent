@@ -214,7 +214,7 @@ def _skill_target(value: Any, context: Any) -> Optional[str]:
     resolved_skill = _within(resolved, resolved_root)
     if lexical_skill and not resolved_skill:
         raise PersistenceChangeRejected(
-            "Skill changes cannot escape the profile skills directory through a link."
+            "Skill changes cannot escape the agent skills directory through a link."
         )
     if not resolved_skill:
         return None
@@ -295,7 +295,7 @@ async def _finish_in_thread(
 
 
 class PersistenceAuditStore:
-    """One profile's minimal prepared/committed persistence journal."""
+    """One agent's minimal prepared/committed persistence journal."""
 
     def __init__(self, state_dir: Path):
         self.state_dir = Path(state_dir).expanduser().resolve(strict=False)

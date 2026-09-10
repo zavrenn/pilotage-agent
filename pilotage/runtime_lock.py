@@ -1,7 +1,7 @@
-"""One live runtime per agent profile.
+"""One live runtime per agent state directory.
 
 This is Hermes' gateway runtime-lock mechanism reduced to Pilotage's one-process,
-one-profile contract. The operating system owns the advisory lock, so a crash
+one-agent contract. The operating system owns the advisory lock, so a crash
 releases it without trusting a reusable PID or deleting a stale sentinel.
 """
 
@@ -34,11 +34,11 @@ _PROCESS_LOCKS_GUARD = threading.Lock()
 
 
 class RuntimeLockError(RuntimeError):
-    """The selected profile's runtime lock cannot be used."""
+    """The selected agent's runtime lock cannot be used."""
 
 
 class RuntimeAlreadyRunning(RuntimeLockError):
-    """Another process already owns the selected profile."""
+    """Another process already owns the selected agent."""
 
 
 def _open_lock(path: Path, *, create: bool) -> IO[str]:
@@ -123,8 +123,8 @@ def runtime_lock_is_held(state_dir: Path) -> bool:
         handle.close()
 
 
-class ProfileRuntimeLock:
-    """Hold one profile's cross-process singleton lock until ``release``."""
+class RuntimeLock:
+    """Hold one agent's cross-process singleton lock until ``release``."""
 
     def __init__(self, state_dir: Path):
         self.state_dir = Path(state_dir).expanduser().resolve(strict=False)
@@ -215,7 +215,7 @@ class ProfileRuntimeLock:
 
 
 __all__ = [
-    "ProfileRuntimeLock",
+    "RuntimeLock",
     "RuntimeAlreadyRunning",
     "RuntimeLockError",
     "runtime_lock_is_held",

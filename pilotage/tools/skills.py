@@ -3,9 +3,9 @@
 The discovery, frontmatter, sorting, linked-file and path-containment behavior
 comes from ``tmp/hermes-agent/tools/skills_tool.py`` and
 ``tmp/hermes-agent/agent/prompt_builder.py``. Pilotage keeps one trusted,
-profile-local skills directory. Plugin skills, external trees, marketplaces,
+agent-local skills directory. Plugin skills, external trees, marketplaces,
 syncing and a separate mutation API are deliberately not carried over.
-Profile-local skill writes use Pilotage's approval-gated file tools. Hermes'
+Agent-local skill writes use Pilotage's approval-gated file tools. Hermes'
 small, optional SKILL.md preprocessor is retained for compatibility.
 """
 
@@ -50,7 +50,7 @@ def _json(value: Dict[str, Any]) -> str:
 
 
 def skills_directory(config: Any) -> Path:
-    """The current profile's only skill root."""
+    """The current agent's only skill root."""
     return Path(config.state_dir) / "skills"
 
 
@@ -208,7 +208,7 @@ def _metadata(skill_md: Path, root: Path, config: Any) -> Optional[Dict[str, Any
 
 
 def discover_skills(config: Any) -> List[Dict[str, Any]]:
-    """Return the profile's channel-compatible skill metadata."""
+    """Return the agent's channel-compatible skill metadata."""
     root = skills_directory(config)
     if not root.exists():
         return []

@@ -17,7 +17,6 @@ from pilotage.commands import (
     execute_command,
     help_text,
     parse_command,
-    profile_text,
     resolve_command,
     status_text,
 )
@@ -36,6 +35,7 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(invocation.command.name, "status")
         self.assertIsNone(parse_command("what does /status mean?"))
         self.assertIsNone(parse_command("/not-a-command"))
+        self.assertIsNone(parse_command("/profile"))
 
     def test_arguments_are_preserved_for_usage_validation(self):
         invocation = parse_command("/new unexpected")
@@ -45,7 +45,7 @@ class RegistryTests(unittest.TestCase):
         rendered = help_text()
         for command in COMMAND_REGISTRY:
             self.assertEqual(rendered.count(f"/{command.name} "), 1)
-        for retired in ("/approve", "/deny", "/profile"):
+        for retired in ("/approve", "/deny"):
             self.assertNotIn(retired, rendered)
 
 
@@ -54,7 +54,7 @@ class FormattingTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.profile = self.root / "profiles" / "work"
+        self.profile = self.root / "agent"
         self.profile.mkdir(parents=True)
         self.config = SimpleNamespace(
             settings=Settings(
@@ -67,28 +67,25 @@ class FormattingTests(unittest.TestCase):
             main_credentials_path=self.root / "codex-auth.json",
         )
 
-    def test_status_reports_the_actual_profile_channel_model_tools_and_shared_auth(self):
+    def test_status_reports_local_configuration_without_shared_auth(self):
         self.config.main_credentials_path.write_text("{}", encoding="utf-8")
-        rendered = status_text(self.config, "work")
-        self.assertIn("Profile: work", rendered)
+        rendered = status_text(self.config)
+        self.assertNotIn("Profile:", rendered)
         self.assertIn("Model: gpt-test", rendered)
         self.assertIn("Channel: whatsapp", rendered)
         self.assertIn("Tools: todo", rendered)
-        self.assertIn("shared from default profile", rendered)
+        self.assertIn("not signed in", rendered)
 
-    def test_profile_auth_shadows_shared_auth_in_status(self):
+    def test_status_uses_only_this_agents_auth(self):
         self.config.main_credentials_path.write_text("{}", encoding="utf-8")
         self.config.credentials_path.write_text("{}", encoding="utf-8")
-        self.assertIn("ChatGPT auth: this profile", status_text(self.config, "work"))
+        self.assertIn("ChatGPT auth: this agent", status_text(self.config))
 
-    def test_profile_command_reports_the_isolated_state_root(self):
-        rendered = profile_text(self.config, "work")
-        self.assertIn(f"State: {self.profile}", rendered)
 
     def test_static_status_labels_follow_the_profile_language(self):
         self.config.language = "fr"
-        rendered = status_text(self.config, "work")
-        self.assertIn("Profil : work", rendered)
+        rendered = status_text(self.config)
+        self.assertNotIn("Profil :", rendered)
         self.assertIn("Modèle : gpt-test", rendered)
         self.assertIn("Outils : todo", rendered)
 
@@ -118,9 +115,9 @@ class StatusHealthTests(unittest.TestCase):
             contextlib.redirect_stdout(output),
             contextlib.redirect_stderr(errors),
         ):
-            self.assertEqual(main.command_status(self.config, "work"), 1)
+            self.assertEqual(main.command_status(self.config), 1)
 
-        self.assertIn("Profile: work", output.getvalue())
+        self.assertNotIn("Profile:", output.getvalue())
         self.assertIn("broken credentials", errors.getvalue())
 
     def test_status_succeeds_after_authentication_verification(self):
@@ -128,11 +125,10 @@ class StatusHealthTests(unittest.TestCase):
             mock.patch.object(main.auth, "read_credentials") as read,
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            self.assertEqual(main.command_status(self.config, "work"), 0)
+            self.assertEqual(main.command_status(self.config), 0)
 
         read.assert_called_once_with(
             self.config.credentials_path,
-            fallback_path=self.config.main_credentials_path,
         )
 
 
@@ -178,7 +174,6 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
             parse_command(text),
             agent=self.agent,
             config=self.config,
-            profile_name="work",
             session_id="wa-chat",
             reset_reply="reset done",
         )
@@ -226,12 +221,11 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_info_commands_do_not_touch_the_session(self):
         self.assertIn("/new", await self.execute("/help"))
-        self.assertEqual(await self.execute("/profile"), t("capability.unavailable", "en"))
         self.assertEqual(await self.execute("/status"), t("commands.ready", "en"))
         self.assertEqual(self.agent.forgotten, [])
 
     async def test_legacy_commands_never_authorize_or_expose_operator_details(self):
-        for written in ("/approve", "/approve anything", "/deny", "/deny not this change", "/profile"):
+        for written in ("/approve", "/approve anything", "/deny", "/deny not this change"):
             with self.subTest(command=written):
                 self.agent.approval_waiting = True
                 self.assertEqual(await self.execute(written), t("capability.unavailable", "en"))
@@ -241,12 +235,10 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_status_does_not_read_or_send_operator_configuration(self):
         with (
             mock.patch("pilotage.commands.status_text", side_effect=AssertionError("operator only")),
-            mock.patch("pilotage.commands.profile_text", side_effect=AssertionError("operator only")),
         ):
             self.assertEqual(await self.execute("/status"), t("commands.ready", "en"))
-            self.assertEqual(await self.execute("/profile"), t("capability.unavailable", "en"))
 
-    async def test_command_replies_follow_the_profile_language(self):
+    async def test_command_replies_follow_the_agent_language(self):
         self.config.language = "ar"
         self.assertEqual(await self.execute("/approve"), t("capability.unavailable", "ar"))
         self.assertIn(t("commands.header", "ar"), await self.execute("/help"))
@@ -276,15 +268,15 @@ class DurableCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((first, second), ("reset done", "reset done"))
         execute.assert_awaited_once()
 
-    async def test_cached_profile_reply_keeps_its_fence_without_reaching_the_client(self):
-        content = "Profile: client\nState: /private/client-state\nChatGPT auth: not signed in"
+    async def test_cached_failure_reply_keeps_its_fence_without_reaching_the_client(self):
+        content = "Codex response remained incomplete after 3 continuation attempts"
         for platform in ("whatsapp", "telegram"):
             with self.subTest(platform=platform):
                 claim_id = f"legacy-{platform}"
                 command_id = main.compute_command_id(platform, claim_id)
                 self.store.begin_command(
                     command_id=command_id, platform=platform, claim_id=claim_id,
-                    session_key="session", command_name="profile", arguments="",
+                    session_key="session", command_name="status", arguments="",
                 )
                 self.store.complete_command(command_id, content)
                 execute, send, ledger_send = mock.AsyncMock(), mock.AsyncMock(), mock.AsyncMock()
@@ -292,7 +284,7 @@ class DurableCommandTests(unittest.IsolatedAsyncioTestCase):
                     restarted = main.DeliveryStore(self.store.path)
                     answer = await main._durable_command_result(
                         restarted, platform=platform, claim_id=claim_id, session_key="session",
-                        invocation=parse_command("/profile"), uncertain_reply="unknown", execute=execute,
+                        invocation=parse_command("/status"), uncertain_reply="unknown", execute=execute,
                     )
                     await main.deliver_final(
                         restarted, session_key="session", message_ref=claim_id,

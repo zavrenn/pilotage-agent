@@ -12,7 +12,7 @@ timezone: ""
 agent:
   model: gpt-5.6-sol
   reasoning_effort: medium
-  # Identity is read from the profile-local SOUL.md file.
+  # Identity is read from the agent-local SOUL.md file.
   # instructions: Optional runtime overlay applied after SOUL.md.
   history_turns: 20
   request_timeout: 300
@@ -42,8 +42,8 @@ sessions:
   isolated_workspaces: false
 
 gateway:
-  # Extra absolute directories from which MEDIA: files may be delivered.
-  # The profile workspace is always included.
+  # Complete allowlist of directories from which MEDIA: files may be delivered.
+  # [] disables file delivery. Omit the setting to use the agent workspace.
   media_delivery_allow_dirs: []
 
 whatsapp:
@@ -77,7 +77,7 @@ tools:
     - vision
     - file
     - skills
-    # Profile-wide; disable where unrelated users share one profile.
+    # Agent-wide; disable where unrelated users share one agent.
     - session_search
     - memory
     - cron
@@ -98,7 +98,7 @@ image_gen:
   model: gpt-image-2-high
 
 web:
-  # Full-page extraction uses Firecrawl. Set FIRECRAWL_API_KEY in the profile
+  # Full-page extraction uses Firecrawl. Set FIRECRAWL_API_KEY in the agent
   # .env, or FIRECRAWL_API_URL for a self-hosted Firecrawl instance.
   # This is a per-page target; returned previews shrink when the combined
   # result must fit tools.max_result_chars. Full text remains cached.
@@ -115,7 +115,7 @@ stt:
 
 cron:
   enabled: true
-  # Optional override; otherwise this inherits the profile timezone above.
+  # Optional override; otherwise this inherits the agent timezone above.
   # timezone: Africa/Casablanca
   tick_seconds: 1
   claim_ttl_seconds: 1800
@@ -123,18 +123,18 @@ cron:
   output_retention: 50
 
 terminal:
-  # Defaults to this profile's isolated workspace directory.
+  # Defaults to this agent's isolated workspace directory.
   # Its AGENTS.md instructions are loaded when each conversation starts.
   # Relative file-tool paths follow the terminal session's current directory.
   # cwd: /srv/agents/my-agent
   timeout: 120
 
 code_execution:
-  # Shared across profiles. Relative paths resolve from the installation root.
+  # Prepared environments. Relative paths resolve from the installation root.
   root: .pilotage-envs
   timeout: 300
 
 skills:
-  # Skills are installed per profile under ~/.pilotage-agent/skills.
+  # Skills are installed per agent under ~/.pilotage-agent/skills.
   template_vars: true
   # disabled: [skill-name]

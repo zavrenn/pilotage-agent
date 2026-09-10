@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 SUPPORTED_LANGUAGES: Final = ("en", "fr", "ar")
 DEFAULT_LANGUAGE: Final = "en"
 # Preserve the existing Pilotage runtime's French static replies when an older
-# profile has not yet gained ``display.language``.  New installs write this
+# agent has not yet gained ``display.language``.  New installs write this
 # choice explicitly in config.yaml.
-DEFAULT_PROFILE_LANGUAGE: Final = "fr"
+DEFAULT_AGENT_LANGUAGE: Final = "fr"
 
 _CATALOGS: Final[dict[str, dict[str, str]]] = {
     "en": {
@@ -81,7 +81,6 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "then /new to start a new conversation."
         ),
         "commands.unknown": "Unknown command: /{command}",
-        "commands.profile": "Profile: {profile}",
         "commands.state": "State: {state}",
         "commands.auth": "ChatGPT auth: {scope}",
         "commands.model": "Model: {model}",
@@ -92,8 +91,7 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
         "commands.disabled": "disabled",
         "commands.none": "none",
         "commands.system_local": "system local",
-        "commands.auth_profile": "this profile",
-        "commands.auth_shared": "shared from default profile",
+        "commands.auth_local": "this agent",
         "commands.auth_missing": "not signed in",
     },
     "fr": {
@@ -156,7 +154,6 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "puis /new pour commencer une nouvelle conversation."
         ),
         "commands.unknown": "Commande inconnue : /{command}",
-        "commands.profile": "Profil : {profile}",
         "commands.state": "État : {state}",
         "commands.auth": "Authentification ChatGPT : {scope}",
         "commands.model": "Modèle : {model}",
@@ -167,8 +164,7 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
         "commands.disabled": "désactivé",
         "commands.none": "aucun",
         "commands.system_local": "heure locale du système",
-        "commands.auth_profile": "ce profil",
-        "commands.auth_shared": "partagée depuis le profil par défaut",
+        "commands.auth_local": "cet agent",
         "commands.auth_missing": "non connecté",
     },
     "ar": {
@@ -227,7 +223,6 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "ثم /new لبدء محادثة جديدة."
         ),
         "commands.unknown": "أمر غير معروف: /{command}",
-        "commands.profile": "الملف الشخصي: {profile}",
         "commands.state": "الحالة: {state}",
         "commands.auth": "مصادقة ChatGPT: {scope}",
         "commands.model": "النموذج: {model}",
@@ -238,8 +233,7 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
         "commands.disabled": "مُعطّل",
         "commands.none": "لا شيء",
         "commands.system_local": "توقيت النظام المحلي",
-        "commands.auth_profile": "هذا الملف الشخصي",
-        "commands.auth_shared": "مشتركة من الملف الشخصي الافتراضي",
+        "commands.auth_local": "هذا المساعد",
         "commands.auth_missing": "غير مسجّل الدخول",
     },
 }
@@ -288,7 +282,7 @@ def t(key: str, language: str = DEFAULT_LANGUAGE, **values: object) -> str:
 
 __all__ = [
     "DEFAULT_LANGUAGE",
-    "DEFAULT_PROFILE_LANGUAGE",
+    "DEFAULT_AGENT_LANGUAGE",
     "SUPPORTED_LANGUAGES",
     "normalize_language",
     "t",

@@ -258,7 +258,7 @@ def iter_skill_index_files(skills_dir: Path, filename: str = "SKILL.md"):
     """Walk *skills_dir* yielding sorted active skill files.
 
     This preserves Hermes' pruning rules. Pilotage does not follow directory
-    symlinks because its one profile directory is the complete trusted root;
+    symlinks because its one agent directory is the complete trusted root;
     linked external skill trees are not a product requirement.
     """
     matches: list[str] = []

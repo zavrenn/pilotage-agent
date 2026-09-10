@@ -88,7 +88,7 @@ class _ApprovalRequired(RuntimeError):
 def _write_approval_review(context: ToolContext, content: str) -> Path:
     root = getattr(context.config, "workspace_dir", None) or shell_cwd(context)
     if not root:
-        raise ValueError("The approval review has no profile workspace.")
+        raise ValueError("The approval review has no agent workspace.")
     workspace = Path(root).expanduser().resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     descriptor, raw_path = tempfile.mkstemp(
@@ -1153,7 +1153,7 @@ WRITE_FILE_SCHEMA = {
                 "type": "string",
                 "maxLength": 240,
                 "description": (
-                    "Required only when the target is under the profile skills "
+                    "Required only when the target is under the agent skills "
                     "directory: a short factual statement naming the evidence and "
                     "useful difference from existing knowledge, not private reasoning."
                 ),
@@ -1179,7 +1179,7 @@ PATCH_SCHEMA = {
                 "type": "string",
                 "maxLength": 240,
                 "description": (
-                    "Required only when any target is under the profile skills "
+                    "Required only when any target is under the agent skills "
                     "directory: a short factual statement naming the evidence and "
                     "useful difference from existing knowledge, not private reasoning."
                 ),

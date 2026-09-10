@@ -166,7 +166,7 @@ class DeliveryUnit:
 
 
 class DeliveryStore:
-    """Profile-local delivery obligations with bounded restart recovery."""
+    """Agent-local delivery obligations with bounded restart recovery."""
 
     def __init__(self, path: Path):
         self.path = Path(path)

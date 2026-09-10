@@ -201,7 +201,7 @@ class CrudTests(StoreCase):
         with self.assertRaisesRegex(ValueError, "self-lifecycle"):
             self.store.update_job(
                 job["id"],
-                {"prompt": "systemctl --user restart pilotage-agent@default.service"},
+                {"prompt": "systemctl --user restart pilotage-agent.service"},
             )
 
     def test_sibling_profile_lifecycle_prompt_is_not_self_targeting(self):

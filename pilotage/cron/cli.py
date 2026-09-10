@@ -1,4 +1,4 @@
-"""Model-independent operator controls for profile cron jobs."""
+"""Model-independent operator controls for agent cron jobs."""
 
 from __future__ import annotations
 

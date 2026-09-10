@@ -34,14 +34,14 @@ class LogTests(unittest.TestCase):
             mock.patch.object(logs.subprocess, "Popen", return_value=process) as launch,
             redirect_stdout(output),
         ):
-            self.assertEqual(logs.run_logs("work", follow=True, lines=100, level="WARNING", since="1h"), 0)
+            self.assertEqual(logs.run_logs(follow=True, lines=100, level="WARNING", since="1h"), 0)
         written = output.getvalue()
         for expected in ("failed", "Traceback", "failing_call", "ValueError", "kernel warning"):
             self.assertIn(expected, written)
         for unwanted in ("ordinary message", "another process", "normal journal event", "recovered"):
             self.assertNotIn(unwanted, written)
         command = launch.call_args.args[0]
-        self.assertIn("pilotage-agent@work.service", command)
+        self.assertIn("pilotage-agent.service", command)
         self.assertIn("--follow", command)
         self.assertEqual(command[-2:], ["--since", "1 hours ago"])
         self.assertNotIn("--priority", command)
@@ -69,7 +69,7 @@ class LogTests(unittest.TestCase):
                 mock.patch.object(logs.subprocess, "Popen", return_value=process),
                 redirect_stdout(output),
             ):
-                self.assertEqual(logs.run_logs("default", level=level), 0)
+                self.assertEqual(logs.run_logs(level=level), 0)
             self.assertNotIn(messages[0], output.getvalue())
             for message in messages[1:]:
                 self.assertIn(message, output.getvalue())
@@ -87,7 +87,7 @@ class LogTests(unittest.TestCase):
             mock.patch.object(logs.shutil, "which", return_value="journalctl"),
             mock.patch.object(logs.subprocess, "Popen", return_value=process),
         ):
-            self.assertEqual(logs.run_logs("default", follow=True), 130)
+            self.assertEqual(logs.run_logs(follow=True), 130)
         process.terminate.assert_called_once()
         process.wait.assert_called_once_with(timeout=5)
 
@@ -100,4 +100,4 @@ class LogTests(unittest.TestCase):
             mock.patch.object(logs.subprocess, "Popen", return_value=process),
             redirect_stderr(io.StringIO()),
         ):
-            self.assertEqual(logs.run_logs("default"), 1)
+            self.assertEqual(logs.run_logs(), 1)
