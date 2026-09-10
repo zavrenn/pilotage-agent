@@ -1863,10 +1863,6 @@ class Agent:
         limit = max(1, self._config.max_tool_iterations)
 
         def _finish(text: str, *, terminal_completed: bool = False) -> TurnResult:
-            text = text or t(
-                "runtime.failure",
-                getattr(self._config, "language", DEFAULT_LANGUAGE),
-            )
             isolated = getattr(
                 self._config, "session_isolated_workspaces", False
             )
@@ -1895,6 +1891,12 @@ class Agent:
                     finished_text,
                     outbound_roots,
                     language=getattr(self._config, "language", DEFAULT_LANGUAGE),
+                )
+            # Valid generated media can be the entire answer.
+            if not finished_text.strip():
+                finished_text = t(
+                    "runtime.failure",
+                    getattr(self._config, "language", DEFAULT_LANGUAGE),
                 )
             return TurnResult(
                 text=finished_text,

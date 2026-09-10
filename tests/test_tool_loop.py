@@ -82,6 +82,18 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.agent.respond("chat", "hello"), "No tools needed.")
         self.assertEqual(len(self.requests), 1)
 
+    async def test_empty_completed_response_without_media_keeps_failure_reply(self):
+        for text in ("", " \n"):
+            with self.subTest(text=text):
+                self.replies = [
+                    codex_stream.StreamResult(text=text, terminal_completed=True)
+                ]
+
+                result = await self.agent.respond_result("chat", "hello")
+
+                self.assertEqual(result.text, t("runtime.failure", self.agent._config.language))
+                self.assertTrue(result.terminal_completed)
+
     async def test_confidentiality_reaches_every_request_after_tools_compaction_and_reset(self):
         self.replies = [
             codex_stream.StreamResult(
@@ -519,12 +531,44 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
             },
             handler=fake_image,
         )
-        replies = [
-            codex_stream.StreamResult(
-                tool_calls=[_call("image_1", name="image_generate", prompt="cat")]
-            ),
-            codex_stream.StreamResult(text="Here it is."),
-        ]
+        async def stream_once(
+            _request, *, force_refresh, ttfb_timeout, idle_timeout
+        ):
+            return replies.pop(0)
+
+        agent._stream_once = stream_once
+        cases = (
+            ("Here it is.", True, "Here it is."),
+            ("", True, ""),
+            (" \n", True, ""),
+            ("", False, t("runtime.incomplete_response", config.language)),
+        )
+        for index, (text, completed, expected_text) in enumerate(cases):
+            with self.subTest(text=text, completed=completed):
+                replies = [
+                    codex_stream.StreamResult(
+                        tool_calls=[_call("image_1", name="image_generate", prompt="cat")],
+                        terminal_completed=True,
+                    ),
+                    codex_stream.StreamResult(text=text, terminal_completed=completed),
+                ]
+
+                result = await agent.respond_result(f"chat-{index}", "make an image")
+
+                attachments, visible = media.extract_outbound(result.text, config.outbound_media_roots)
+                self.assertEqual(visible, expected_text)
+                self.assertEqual([item.path for item in attachments], [generated.resolve()])
+                self.assertEqual(result.text.count(f"MEDIA:{generated.resolve()}"), 1)
+                self.assertEqual(result.terminal_completed, completed)
+                self.assertEqual(agent._store.load(f"chat-{index}", 2)[-1], ("assistant", result.text))
+
+    async def test_empty_image_reply_keeps_failure_for_undeliverable_media(self):
+        with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.root / "image-state")}):
+            config = Config.load()
+        config.workspace_dir.mkdir(parents=True)
+        outside = self.root / "outside.png"
+        outside.write_bytes(b"png")
+        agent = Agent(config, ConversationStore(self.root / "image-failures.db"))
 
         async def stream_once(
             _request, *, force_refresh, ttfb_timeout, idle_timeout
@@ -532,10 +576,22 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
             return replies.pop(0)
 
         agent._stream_once = stream_once
-        answer = await agent.respond("chat", "make an image")
+        for index, generated in enumerate((config.workspace_dir / "missing.png", outside)):
+            with self.subTest(generated=generated.name):
+                replies = [
+                    codex_stream.StreamResult(
+                        tool_calls=[_call("image_1", name="image_generate", prompt="cat")],
+                        terminal_completed=True,
+                    ),
+                    codex_stream.StreamResult(text="", terminal_completed=True),
+                ]
+                with mock.patch("pilotage.tools.image._generate", return_value={
+                    "success": True, "image": str(generated.resolve()),
+                }):
+                    result = await agent.respond_result(f"chat-{index}", "make an image")
 
-        self.assertIn("Here it is.", answer)
-        self.assertEqual(answer.count(f"MEDIA:{generated.resolve()}"), 1)
+                self.assertEqual(result.text, t("runtime.failure", config.language))
+                self.assertTrue(result.terminal_completed)
 
     async def test_model_supplied_media_tag_is_not_duplicated(self):
         home = self.root / "profile-dedup"
