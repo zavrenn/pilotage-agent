@@ -2,6 +2,7 @@
 # Explicit protection install gate. Run from the operator's trusted checkout.
 # Existing data is kept; no credentials are copied from an old runtime checkout.
 set -euo pipefail
+export PATH="/opt/pilotage-python/bin:$PATH"
 shopt -s nullglob dotglob
 fail() { echo "error: $*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || fail "run as root"

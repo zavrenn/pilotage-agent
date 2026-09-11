@@ -2,6 +2,7 @@
 # Build the four shared, deployment-time Python environments.
 
 set -euo pipefail
+export PATH="/opt/pilotage-python/bin:$PATH"
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 env_root="$repo_root/.pilotage-envs"

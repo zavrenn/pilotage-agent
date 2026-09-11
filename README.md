@@ -10,9 +10,9 @@ A lightweight runtime for focused, long-lived AI agents.
 > Pilotage Agent is a personal, opinionated runtime built for a specific,
 > controlled deployment. It is shared publicly for reuse and study, not as a
 > general-purpose agent framework or supported product. Its capabilities and
-> integrations are deliberately limited to concrete needs. Ubuntu Server 24.04
-> on amd64 is the documented deployment target; other compatible environments
-> may work, but are not currently validated.
+> integrations are deliberately limited to concrete needs. The installer targets
+> Ubuntu on amd64 with systemd. Compatibility depends on available system
+> dependencies, rather than an allowlist of Ubuntu releases.
 
 Pilotage Agent prioritizes clarity, control, and reliability over breadth.
 
@@ -45,12 +45,14 @@ It is still evolving and has no stable public API or compatibility guarantee.
 
 ## Install on Ubuntu
 
-Install directly on an existing Ubuntu Server 24.04 amd64 environment using
+Install directly on an existing Ubuntu amd64 environment with systemd using
 the scripts in this repository. The runtime installers do not require LXC/LXD
 or the separate Pilotage Deploy repository.
 
 Skills and SQL Server are optional. The runtime works without either; Doctor
-checks a SQL connection only when connection settings are supplied.
+checks a SQL connection only when connection settings are supplied. The installer
+adds Microsoft's SQL tools when available for your Ubuntu release; otherwise it
+reports that they were skipped. Install them before configuring a SQL connection.
 
 [Pilotage Deploy](https://github.com/zavrenn/pilotage-deploy) is optional: it
 automates creating and preparing a fresh protected LXC, including separate
@@ -59,7 +61,7 @@ the [protected deployment](#protected-deployment) manually.
 
 ### One-command installation
 
-For a fresh installation on Ubuntu Server 24.04 amd64 with systemd, run as root
+For a fresh installation on Ubuntu amd64 with systemd, run as root
 or a user with sudo. The command requires `curl`:
 
 ```bash
@@ -72,6 +74,15 @@ the permission boundary. Agent state lives in `/home/agent/.pilotage-agent`.
 It then offers interactive ChatGPT login, model setup, and WhatsApp and/or
 Telegram configuration. Starting the service and enabling it at boot is a
 separate choice; readiness is checked with `pilotage doctor`.
+
+The installer supplies its own Python 3.13 under `/opt/pilotage-python`, leaving
+Ubuntu's system Python unchanged. It checks Ubuntu, amd64, APT, and a running
+systemd; it does not reject a machine solely because of its Ubuntu release
+number. Required packages must be available from working repositories.
+
+Installation, account permissions, and local tool checks have been verified on
+Ubuntu 24.04 and 26.04 amd64. ChatGPT login and messaging configuration are
+separate setup steps.
 
 The installer reads prompts from the terminal, so piping the script into Bash
 does not consume setup input. Without a terminal, or with `--skip-setup`, it

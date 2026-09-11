@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run from a trusted checkout as root. Does not grant the agent sudo access.
 set -euo pipefail
+export PATH="/opt/pilotage-python/bin:$PATH"
 fail() { echo "error: $*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || fail "run as root"
 operator="${1:-operator}"

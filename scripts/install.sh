@@ -3,10 +3,11 @@
 # Install the agent's own dependencies. Run once after cloning, and again after
 # pulling changes.
 #
-# Python 3.11-3.13, uv, and Node 20+ are expected to be on the machine already — they
-# belong to the host environment, not to the agent.
+# The system dependency installer supplies Python, uv, and Node. Existing manual
+# installations can still use a compatible Python from PATH.
 
 set -euo pipefail
+export PATH="/opt/pilotage-python/bin:$PATH"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"

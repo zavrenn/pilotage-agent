@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from pilotage import doctor
+from pilotage.agent import TurnResult
 from pilotage.runtime_lock import RuntimeLock
 
 
@@ -70,6 +71,45 @@ class ReportTests(unittest.IsolatedAsyncioTestCase):
                 print_fn=lambda _line: None,
             )
         self.assertEqual(result, 0)
+
+
+class ModelReadinessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_only_a_completed_nonempty_response_is_ready(self):
+        for text, completed, error in (
+            ("OK", True, None),
+            ("The model request failed. Try again later.", False, "did not complete"),
+            ("Partial answer", False, "did not complete"),
+            ("", True, "no assistant text"),
+        ):
+            with self.subTest(text=text, completed=completed):
+                agent = mock.Mock(
+                    respond_result=mock.AsyncMock(return_value=TurnResult(text=text, terminal_completed=completed)),
+                    close=mock.AsyncMock(),
+                )
+                with (
+                    mock.patch.object(doctor, "Agent", return_value=agent),
+                    mock.patch.object(doctor, "ConversationStore"),
+                ):
+                    config = SimpleNamespace(request_timeout_seconds=1)
+                    if error:
+                        with self.assertRaisesRegex(doctor.DoctorError, error):
+                            await doctor._check_model(config)
+                    else:
+                        self.assertEqual(await doctor._check_model(config), "response received")
+                agent.close.assert_awaited_once()
+
+    async def test_model_failure_still_closes_the_client(self):
+        agent = mock.Mock(
+            respond_result=mock.AsyncMock(side_effect=RuntimeError("connection failed")),
+            close=mock.AsyncMock(),
+        )
+        with (
+            mock.patch.object(doctor, "Agent", return_value=agent),
+            mock.patch.object(doctor, "ConversationStore"),
+            self.assertRaisesRegex(RuntimeError, "connection failed"),
+        ):
+            await doctor._check_model(SimpleNamespace(request_timeout_seconds=1))
+        agent.close.assert_awaited_once()
 
 
 class WebConfigurationTests(unittest.TestCase):

@@ -733,8 +733,8 @@ async def _check_model(config: Any) -> str:
         disabled_tool_groups=build_registry().groups(),
     )
     try:
-        answer = await asyncio.wait_for(
-            agent.respond(
+        result = await asyncio.wait_for(
+            agent.respond_result(
                 "pilotage-doctor",
                 "Reply with the single word OK. This is a deployment readiness probe.",
             ),
@@ -742,7 +742,9 @@ async def _check_model(config: Any) -> str:
         )
     finally:
         await agent.close()
-    if not isinstance(answer, str) or not answer.strip():
+    if not result.terminal_completed:
+        raise DoctorError("Codex response did not complete successfully")
+    if not isinstance(result.text, str) or not result.text.strip():
         raise DoctorError("Codex returned no assistant text")
     return "response received"
 

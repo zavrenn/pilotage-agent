@@ -11,13 +11,13 @@ pilotage_fail() {
 }
 
 pilotage_platform() {
-  [[ "$(uname -s)" == Linux ]] || pilotage_fail "Ubuntu Server 24.04 amd64 is required."
+  [[ "$(uname -s)" == Linux ]] || pilotage_fail "Ubuntu Linux is required."
   local release_file="${1:-/etc/os-release}"
   [[ -r "$release_file" ]] || pilotage_fail "Cannot identify this operating system."
-  local ID="" VERSION_ID=""
+  local ID=""
   . "$release_file"
-  [[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]] \
-    || pilotage_fail "Ubuntu Server 24.04 amd64 is required."
+  [[ "$ID" == ubuntu ]] || pilotage_fail "Ubuntu Linux is required."
+  command -v apt-get >/dev/null || pilotage_fail "APT is required to install system dependencies."
   [[ "$(dpkg --print-architecture)" == amd64 ]] \
     || pilotage_fail "The installer requires amd64."
   command -v systemctl >/dev/null \
@@ -222,7 +222,7 @@ pilotage_main() {
       --resume) resume=true ;;
       --skip-setup) skip_setup=true ;;
       -h|--help)
-        printf 'Install Pilotage on an existing Ubuntu Server 24.04 amd64 system.\n'
+        printf 'Install Pilotage on an existing Ubuntu amd64 system with systemd.\n'
         printf 'Usage: install.sh [--resume] [--skip-setup]\n'
         printf 'Run as root or a user with sudo. LXC/LXD is not required.\n'
         printf '  --resume      Retry an interrupted installation before protection.\n'

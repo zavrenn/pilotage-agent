@@ -108,9 +108,8 @@ pilotage_setup() { printf 'setup\n' >> "$trace"; }
     def test_platform_rejects_wrong_os_architecture_and_missing_systemd(self):
         release = self.root / "os-release"
         for system, distribution, version, architecture, systemd, message in (
-            ("Darwin", "ubuntu", "24.04", "amd64", 0, "Ubuntu Server"),
-            ("Linux", "debian", "12", "amd64", 0, "Ubuntu Server"),
-            ("Linux", "ubuntu", "22.04", "amd64", 0, "Ubuntu Server"),
+            ("Darwin", "ubuntu", "24.04", "amd64", 0, "Ubuntu Linux"),
+            ("Linux", "debian", "12", "amd64", 0, "Ubuntu Linux"),
             ("Linux", "ubuntu", "24.04", "arm64", 0, "amd64"),
             ("Linux", "ubuntu", "24.04", "amd64", 1, "systemd"),
         ):
@@ -119,6 +118,7 @@ pilotage_setup() { printf 'setup\n' >> "$trace"; }
                 result = self.shell(
                     f"uname() {{ printf '%s\\n' {shlex.quote(system)}; }}\n"
                     f"dpkg() {{ printf '%s\\n' {shlex.quote(architecture)}; }}\n"
+                    "apt-get() { exit 90; }\n"
                     f"systemctl() {{ return {systemd}; }}\n"
                     f"pilotage_platform {shlex.quote(release.as_posix())}\n"
                 )
@@ -127,15 +127,18 @@ pilotage_setup() { printf 'setup\n' >> "$trace"; }
 
     def test_platform_accepts_ubuntu_without_container_tools(self):
         release = self.root / "os-release"
-        release.write_text('ID=ubuntu\nVERSION_ID="24.04"\n', encoding="utf-8", newline="\n")
-        result = self.shell(
-            "uname() { printf 'Linux\\n'; }\n"
-            "dpkg() { printf 'amd64\\n'; }\n"
-            "systemctl() { return 0; }\n"
-            "lxc() { exit 91; }; lxd() { exit 92; }\n"
-            f"pilotage_platform {shlex.quote(release.as_posix())}\n"
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        for version in ("20.04", "22.04", "24.04", "25.10", "26.04", "99.04"):
+            with self.subTest(version=version):
+                release.write_text(f'ID=ubuntu\nVERSION_ID="{version}"\n', encoding="utf-8", newline="\n")
+                result = self.shell(
+                    "uname() { printf 'Linux\\n'; }\n"
+                    "dpkg() { printf 'amd64\\n'; }\n"
+                    "apt-get() { exit 90; }\n"
+                    "systemctl() { return 0; }\n"
+                    "lxc() { exit 91; }; lxd() { exit 92; }\n"
+                    f"pilotage_platform {shlex.quote(release.as_posix())}\n"
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_protection_and_verification_precede_setup(self):
         result = self.shell(self.main_stubs() + 'pilotage_main --skip-setup\n')
@@ -150,6 +153,16 @@ pilotage_setup() { printf 'setup\n' >> "$trace"; }
             "root:/opt/pilotage-agent/.venv/bin/python -I -B /opt/pilotage-agent/scripts/verify-protection.py",
             "setup",
         ])
+
+    def test_platform_reports_missing_apt(self):
+        release = self.root / "os-release"
+        release.write_text('ID=ubuntu\nVERSION_ID="26.04"\n', encoding="utf-8", newline="\n")
+        result = self.shell(
+            "PATH=/nonexistent\nuname() { printf 'Linux\\n'; }\n"
+            f"pilotage_platform {shlex.quote(release.as_posix())}\n"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("APT is required", result.stderr)
 
     def test_failed_dependency_install_never_protects_or_starts_service(self):
         result = self.shell(self.main_stubs() + r'''

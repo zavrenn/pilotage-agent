@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build the Ubuntu 24.04 runtime before running scripts/install.sh as the
+# Build the Ubuntu runtime before running scripts/install.sh as the
 # unprivileged Pilotage service user. This script is intentionally root-only;
 # the resident agent never installs packages.
 
@@ -13,13 +13,17 @@ fail() {
   exit 1
 }
 
-[ "$(id -u)" -eq 0 ] || fail "run this script as root on Ubuntu 24.04"
+[ "$(id -u)" -eq 0 ] || fail "run this script as root on Ubuntu"
 
 . /etc/os-release
-[ "${ID:-}" = "ubuntu" ] || fail "Ubuntu 24.04 is required"
-[ "${VERSION_ID:-}" = "24.04" ] || fail "Ubuntu 24.04 is required"
+[ "${ID:-}" = "ubuntu" ] || fail "Ubuntu is required"
+command -v apt-get >/dev/null || fail "APT is required to install system dependencies"
+# Chrome is supplied as a native amd64 package, not an Ubuntu snap wrapper.
+[ "$(dpkg --print-architecture)" = amd64 ] \
+  || fail "automatic headless Chrome installation currently supports amd64 only"
 
 export DEBIAN_FRONTEND=noninteractive
+umask 022
 
 apt-get update
 apt-get install -y \
@@ -57,8 +61,6 @@ apt-get install -y \
   p7zip-full \
   pandoc \
   poppler-utils \
-  python3-dev \
-  python3-venv \
   qpdf \
   ripgrep \
   shared-mime-info \
@@ -90,13 +92,6 @@ if [ "$node_major_installed" -lt "$NODE_MAJOR" ]; then
   apt-get install -y nodejs
 fi
 
-# Google publishes a native amd64 package. Other architectures must supply a
-# working Chromium binary explicitly; failing here is safer than installing an
-# Ubuntu snap wrapper that is unsuitable for the unprivileged LXC target.
-architecture="$(dpkg --print-architecture)"
-if [ "$architecture" != "amd64" ]; then
-  fail "automatic headless Chrome installation currently supports amd64 only"
-fi
 install -d -m 0755 /etc/apt/keyrings
 chrome_key="$(mktemp /tmp/pilotage-google-linux-signing-key.XXXXXX.pub)"
 trap 'rm -f -- "$chrome_key"' EXIT
@@ -112,33 +107,50 @@ echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.
 apt-get update
 apt-get install -y google-chrome-stable
 
-if ! dpkg-query -W -f='${Status}' packages-microsoft-prod 2>/dev/null \
-  | grep -q '^install ok installed$'; then
-  microsoft_repo="$(mktemp /tmp/pilotage-microsoft-prod.XXXXXX.deb)"
-  trap 'rm -f -- "$microsoft_repo"' EXIT
-  curl -fsSLo "$microsoft_repo" \
-    https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
-  dpkg -i "$microsoft_repo"
-  rm -f -- "$microsoft_repo"
-  trap - EXIT
-  apt-get update
-fi
-
-ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
-if [ ! -e /usr/local/bin/sqlcmd ]; then
-  ln -s /opt/mssql-tools18/bin/sqlcmd /usr/local/bin/sqlcmd
-fi
-if [ ! -e /usr/local/bin/bcp ]; then
-  ln -s /opt/mssql-tools18/bin/bcp /usr/local/bin/bcp
-fi
-
-# Keep the resolver itself outside the agent runtime and pin it at image build.
-python3 -m venv /opt/pilotage-uv
-/opt/pilotage-uv/bin/pip install \
-  --disable-pip-version-check \
-  --no-cache-dir \
-  "uv==$UV_VERSION"
+# Keep Python independent of Ubuntu's system interpreter and accessible to both
+# accounts. The resident agent cannot modify these root-owned installations.
+uv_installer="$(mktemp /tmp/pilotage-uv.XXXXXX.sh)"
+trap 'rm -f -- "$uv_installer"' EXIT
+curl -fsSLo "$uv_installer" "https://astral.sh/uv/$UV_VERSION/install.sh"
+UV_UNMANAGED_INSTALL=/opt/pilotage-uv/bin sh "$uv_installer"
+rm -f -- "$uv_installer"
+trap - EXIT
 ln -sfn /opt/pilotage-uv/bin/uv /usr/local/bin/uv
+install -d -m 0755 /opt/pilotage-python/bin
+UV_PYTHON_INSTALL_DIR=/opt/pilotage-python \
+  UV_PYTHON_BIN_DIR=/opt/pilotage-python/bin \
+  /opt/pilotage-uv/bin/uv python install 3.13
+ln -sfn python3.13 /opt/pilotage-python/bin/python3
+/opt/pilotage-python/bin/python3 --version
+
+install_sql_tools() {
+  if ! dpkg-query -W -f='${Status}' packages-microsoft-prod 2>/dev/null \
+    | grep -q '^install ok installed$'; then
+    local microsoft_repo
+    microsoft_repo="$(mktemp /tmp/pilotage-microsoft-prod.XXXXXX.deb)"
+    if ! curl -fsSLo "$microsoft_repo" \
+      "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb"; then
+      rm -f -- "$microsoft_repo"
+      echo "Optional SQL tools skipped: Microsoft repository unavailable for Ubuntu ${VERSION_ID}."
+      return 0
+    fi
+    dpkg -i "$microsoft_repo"
+    rm -f -- "$microsoft_repo"
+    apt-get update
+  fi
+  if ! apt-cache policy mssql-tools18 | grep -Eq 'Candidate: [0-9]'; then
+    echo "Optional SQL tools skipped: mssql-tools18 is unavailable in the configured repositories."
+    return 0
+  fi
+  ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
+  if [ ! -e /usr/local/bin/sqlcmd ]; then
+    ln -s /opt/mssql-tools18/bin/sqlcmd /usr/local/bin/sqlcmd
+  fi
+  if [ ! -e /usr/local/bin/bcp ]; then
+    ln -s /opt/mssql-tools18/bin/bcp /usr/local/bin/bcp
+  fi
+}
+install_sql_tools
 
 fc-cache -f
 
