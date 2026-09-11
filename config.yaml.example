@@ -107,7 +107,8 @@ web:
   extract_char_limit: 15000
 
 stt:
-  enabled: true
+  # Optional: enable after setting VOICE_TOOLS_OPENAI_KEY in the agent .env.
+  enabled: false
   provider: openai
   echo_transcripts: true
   openai:

@@ -49,10 +49,65 @@ Install directly on an existing Ubuntu Server 24.04 amd64 environment using
 the scripts in this repository. The runtime installers do not require LXC/LXD
 or the separate Pilotage Deploy repository.
 
+Skills and SQL Server are optional. The runtime works without either; Doctor
+checks a SQL connection only when connection settings are supplied.
+
 [Pilotage Deploy](https://github.com/zavrenn/pilotage-deploy) is optional: it
 automates creating and preparing a fresh protected LXC, including separate
 operator and agent accounts, the runtime, and dependencies. You can also set up
-the [protected deployment](#protected-lxc-deployment) manually.
+the [protected deployment](#protected-deployment) manually.
+
+### One-command installation
+
+For a fresh installation on Ubuntu Server 24.04 amd64 with systemd, run as root
+or a user with sudo. The command requires `curl`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zavrenn/pilotage-agent/main/install.sh | bash
+```
+
+The installer creates the protected `operator` and `agent` accounts, clones
+the runtime into `/opt/pilotage-agent`, installs its dependencies, and verifies
+the permission boundary. Agent state lives in `/home/agent/.pilotage-agent`.
+It then offers interactive ChatGPT login, model setup, and WhatsApp and/or
+Telegram configuration. Starting the service and enabling it at boot is a
+separate choice; readiness is checked with `pilotage doctor`.
+
+The installer reads prompts from the terminal, so piping the script into Bash
+does not consume setup input. Without a terminal, or with `--skip-setup`, it
+installs the runtime with the service stopped and disabled at boot, then prints
+the remaining steps:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zavrenn/pilotage-agent/main/install.sh | bash -s -- --skip-setup
+```
+
+For later administration, enter the operator account with `sudo -iu operator`
+(or `su - operator` as root). If setup was skipped, set its password as root
+with `passwd operator`. To finish setup later, run the needed commands as
+operator:
+
+```bash
+pilotage login
+pilotage model
+pilotage whatsapp  # or pilotage telegram
+sudo systemctl enable --now pilotage-agent.service
+pilotage doctor
+```
+
+Review `config.yaml`, `.env`, and `SOUL.md` to customize the runtime. Fresh
+installations use text messaging; voice transcription is disabled by default.
+
+Do not interrupt package and account installation. If installation fails before
+protection, correct the error and rerun the command with `bash -s -- --resume`.
+It reuses the clean checkout without
+overwriting local edits. A failure during protection prints the exact manual
+recovery commands instead. Existing accounts or installation paths also require
+`--resume`; use it only for an interrupted installation you have inspected.
+Once installed, use the setup commands above to finish configuration and
+`pilotage update` for software updates.
+
+### Manual single-account installation
 
 The single-account installation below remains available for development and
 existing deployments; `pilotage update` does not silently migrate them.
@@ -82,8 +137,9 @@ bash scripts/install.sh
 ./.venv/bin/pilotage run
 ```
 
-Voice-message transcription requires `VOICE_TOOLS_OPENAI_KEY` in the agent
-`.env`; ChatGPT login does not authorize the OpenAI audio API.
+To enable voice-message transcription, set `VOICE_TOOLS_OPENAI_KEY` in the agent
+`.env` and `enabled: true` in the `stt` section of `config.yaml`, then restart.
+ChatGPT login does not authorize the OpenAI audio API.
 
 Full-page web extraction requires `FIRECRAWL_API_KEY` in the agent `.env`, or
 `FIRECRAWL_API_URL` for a self-hosted Firecrawl instance. DDGS search needs no
@@ -208,7 +264,7 @@ DOCX/XLSX reading caps both the input file and the total expanded XML read at
 50 MiB and supports stored or DEFLATE-compressed XML. Excessive expansion and
 unsupported XML compression are rejected with a plain message.
 
-## Protected LXC deployment
+## Protected deployment
 
 The `operator` account has sudo and owns a clean runtime checkout at
 `/opt/pilotage-agent`. The `agent` account has no sudo. Its workspace, memory,
@@ -219,8 +275,10 @@ Operator Git credentials stay in the private operator home.
 Protected deployments reject alternate `PILOTAGE_CONFIG` and `PILOTAGE_ENV_FILE`
 paths. Keep these files directly in the agent state directory.
 
-The [Pilotage Deploy bootstrap](https://github.com/zavrenn/pilotage-deploy)
-prepares this layout automatically for new containers.
+The one-command installer above prepares this layout on an existing Ubuntu
+system. The optional
+[Pilotage Deploy bootstrap](https://github.com/zavrenn/pilotage-deploy) also
+creates the LXC container.
 For an existing container, first prepare a **fresh trusted checkout** under the
 operator account; never run a root installer from the old agent-owned checkout.
 As root (skip account creation if `operator` already exists):

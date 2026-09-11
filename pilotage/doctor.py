@@ -678,6 +678,8 @@ def _truthy_env(name: str) -> bool:
 
 
 def _check_sql_connection() -> str:
+    if not any(os.environ.get(name, "").strip() for name in _SQL_ENV_NAMES):
+        return "not configured (optional)"
     missing = [name for name in _SQL_ENV_NAMES if not os.environ.get(name, "").strip()]
     if missing:
         raise DoctorError(

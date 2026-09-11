@@ -197,6 +197,18 @@ class CronReadinessTests(unittest.TestCase):
 
 
 class SqlReadinessTests(unittest.TestCase):
+    def test_unconfigured_sql_needs_no_client_or_connection(self):
+        for environment in ({}, {name: " " for name in doctor._SQL_ENV_NAMES}):
+            with (
+                self.subTest(environment=environment),
+                mock.patch.dict(os.environ, environment, clear=True),
+                mock.patch.object(doctor, "_sqlcmd_path") as client,
+                mock.patch.object(doctor, "_run") as run,
+            ):
+                self.assertEqual(doctor._check_sql_connection(), "not configured (optional)")
+                client.assert_not_called()
+                run.assert_not_called()
+
     def test_sql_probe_uses_the_production_connection_contract(self):
         completed = SimpleNamespace(
             returncode=0,
@@ -241,12 +253,12 @@ class SqlReadinessTests(unittest.TestCase):
         self.assertEqual(child_env["SQLCMDPASSWORD"], "top-secret")
         self.assertNotIn("MSSQL_PASSWORD", child_env)
 
-    def test_sql_probe_names_missing_settings_without_values(self):
+    def test_partially_configured_sql_names_missing_settings_without_values(self):
         with (
-            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.dict(os.environ, {"MSSQL_HOST": "db.example"}, clear=True),
             self.assertRaisesRegex(
                 doctor.DoctorError,
-                "MSSQL_HOST.*MSSQL_USER.*MSSQL_PASSWORD.*MSSQL_DB",
+                "MSSQL_USER.*MSSQL_PASSWORD.*MSSQL_DB",
             ),
         ):
             doctor._check_sql_connection()

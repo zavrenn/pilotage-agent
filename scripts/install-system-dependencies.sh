@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build the Ubuntu 24.04 container runtime before running install.sh as the
+# Build the Ubuntu 24.04 runtime before running scripts/install.sh as the
 # unprivileged Pilotage service user. This script is intentionally root-only;
 # the resident agent never installs packages.
 
@@ -13,7 +13,7 @@ fail() {
   exit 1
 }
 
-[ "$(id -u)" -eq 0 ] || fail "run this script as root inside the container"
+[ "$(id -u)" -eq 0 ] || fail "run this script as root on Ubuntu 24.04"
 
 . /etc/os-release
 [ "${ID:-}" = "ubuntu" ] || fail "Ubuntu 24.04 is required"

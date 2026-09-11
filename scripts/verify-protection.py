@@ -20,7 +20,7 @@ from pilotage.env import read_env_values
 
 def main():
     if sys.platform != "linux" or os.geteuid() != 0:
-        raise SystemExit("Run this verification as root inside the Ubuntu LXC.")
+        raise SystemExit("Run this verification as root on Ubuntu.")
     agent = pwd.getpwnam("agent")
     manifest = Path("/etc/pilotage-agent.json")
     info = manifest.lstat()

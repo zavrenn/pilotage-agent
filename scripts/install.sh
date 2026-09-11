@@ -4,7 +4,7 @@
 # pulling changes.
 #
 # Python 3.11-3.13, uv, and Node 20+ are expected to be on the machine already — they
-# belong to the container, not to the agent.
+# belong to the host environment, not to the agent.
 
 set -euo pipefail
 
