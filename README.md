@@ -45,10 +45,17 @@ It is still evolving and has no stable public API or compatibility guarantee.
 
 ## Install on Ubuntu
 
-For a fresh protected LXC deployment, follow
-[Pilotage Deploy](https://github.com/zavrenn/pilotage-deploy). The original
-single-account installation remains available for development and existing
-deployments; `pilotage update` does not silently migrate them.
+Install directly on an existing Ubuntu Server 24.04 amd64 environment using
+the scripts in this repository. The runtime installers do not require LXC/LXD
+or the separate Pilotage Deploy repository.
+
+[Pilotage Deploy](https://github.com/zavrenn/pilotage-deploy) is optional: it
+automates creating and preparing a fresh protected LXC, including separate
+operator and agent accounts, the runtime, and dependencies. You can also set up
+the [protected deployment](#protected-lxc-deployment) manually.
+
+The single-account installation below remains available for development and
+existing deployments; `pilotage update` does not silently migrate them.
 
 Clone the repository as the unprivileged service user:
 
