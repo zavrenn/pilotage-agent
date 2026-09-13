@@ -232,7 +232,9 @@ relative times such as `30m` or a timestamp such as `"2026-09-08 20:39:00"`.
 
 Each container runs one agent with its own `SOUL.md` identity, configuration,
 ChatGPT authentication, channel sessions, conversations, memory, skills,
-workspace, and cron jobs. These remain under `~/.pilotage-agent`.
+workspace, and cron jobs. Agent state lives under `~/.pilotage-agent`;
+the default workspace is its sibling `~/workspace`, with `inputs/`, `tmp/`,
+and `exports/` directories. `terminal.cwd` overrides the working location.
 There is no profile manager, state selection, or authentication fallback.
 Only one live runtime may own the agent state directory.
 `display.language` selects English, French, or Arabic for static
@@ -261,8 +263,11 @@ diagnostics remain available through the CLI and logs.
 
 `gateway.media_delivery_allow_dirs` is the complete native-file delivery allowlist
 when configured: only those directories are allowed, and `[]` disables file
-delivery. When omitted, the agent workspace remains the default. Existing
-configurations needing that workspace as well must now list it explicitly.
+delivery. When omitted, only `exports/` under the configured working location
+is deliverable: normally `~/workspace/exports`, or `<terminal.cwd>/exports`.
+In isolated-workspace mode, each conversation is confined to its own session's
+`exports/` directory. For isolated cron jobs with a custom `workdir`, include
+that directory's `exports/` in `gateway.media_delivery_allow_dirs`.
 This controls file paths, not disclosure of copied content or text.
 
 Recovery suppresses recognized obsolete technical notices from earlier versions,
@@ -344,8 +349,10 @@ git status
 The installer preserves runtime state and `.env`, replaces bootstrap config and
 identity, and refuses existing asset conflicts or an existing checkout. Git runs
 as the operator, with its authentication in the operator home. `/home/agent`
-and `.git` belong to the operator; `.git` is private. Skills have inherited ACLs
-so both accounts can edit them without granting agent access to Git or settings.
+and `.git` belong to the operator; `.git` is private. Skills and `workspace/`
+have inherited ACLs so both accounts can edit existing and new files there.
+Git metadata and settings remain protected. The installer adds no workspace
+ignore rules; use your repository's `.gitignore` for any exclusions you want.
 The only retained asset checkout is `/home/agent`; there is no copy step.
 
 Review agent edits using `git status` and `git diff` as the operator. Stop the

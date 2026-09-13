@@ -41,7 +41,8 @@ class LegacyNoticeDeliveryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name) / ".pilotage-agent"
+        self.root.mkdir()
         environment = mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.root)})
         environment.start()
         self.addCleanup(environment.stop)
@@ -52,7 +53,7 @@ class LegacyNoticeDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     def channel(self, platform, language="fr"):
         config = replace(Config.load(channel=platform), language=language)
-        config.workspace_dir.mkdir(parents=True, exist_ok=True)
+        (config.workspace_dir / "exports").mkdir(parents=True, exist_ok=True)
         fixture = SimpleNamespace(platform=platform, calls=[], reject=set())
         if platform == "whatsapp":
             fixture.module = whatsapp
@@ -124,7 +125,7 @@ class LegacyNoticeDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     def old_reply(self, fixture, *, long=False, attachment=False):
         business = ("📈" * 2100 + "\n\n" if long else "") + "**Revenue: 400 MAD**"
-        report = fixture.channel._config.workspace_dir / "report.pdf"
+        report = fixture.channel._config.workspace_dir / "exports/report.pdf"
         report.write_bytes(b"%PDF")
         if attachment:
             business += f"\nMEDIA:{report}"
@@ -205,7 +206,7 @@ class LegacyNoticeDeliveryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(r"\(2/2\)", expected)
                 else:
                     self.assertNotIn("replyTo", fixture.calls[0][1])
-                    self.assertEqual(fixture.calls[1][1]["filePath"], str(fixture.channel._config.workspace_dir / "report.pdf"))
+                    self.assertEqual(fixture.calls[1][1]["filePath"], str(fixture.channel._config.workspace_dir / "exports/report.pdf"))
                 self.assertEqual(self.rows(path, "delivery_obligations")[0]["obligation_id"], oid)
 
     async def test_already_accepted_notice_is_never_resent_while_recovering_a_file(self):

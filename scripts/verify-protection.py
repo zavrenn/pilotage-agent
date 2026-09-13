@@ -52,14 +52,15 @@ def main():
         assert stat.S_ISDIR(info.st_mode) and info.st_uid == operator.pw_uid
         assert stat.S_IMODE(info.st_mode) == 0o700
         run("import os,sys; assert not os.access(sys.argv[1], os.R_OK | os.X_OK)", metadata)
-        # Inherited skill access must survive either account's restrictive umask.
-        probe = Path(tempfile.mkdtemp(prefix=".checkout-check-", dir=state / "skills"))
-        os.chown(probe, operator.pw_uid, agent.pw_gid)
-        probe.chmod(0o770)  # Restore the inherited ACL mask after mkdtemp's 0700.
-        try:
-            for creator, reviewer in ((agent, operator), (operator, agent)):
-                nested = probe / creator.pw_name
-                run('''
+        # Shared access must survive either account's restrictive umask.
+        for directory in (state / "skills", home / "workspace"):
+            probe = Path(tempfile.mkdtemp(prefix=".checkout-check-", dir=directory))
+            os.chown(probe, operator.pw_uid, agent.pw_gid)
+            probe.chmod(0o770)  # Restore the inherited ACL mask after mkdtemp's 0700.
+            try:
+                for creator, reviewer in ((agent, operator), (operator, agent)):
+                    nested = probe / creator.pw_name
+                    run('''
 import os, pathlib, subprocess, sys
 from pilotage.tools.file_operations import ShellFileOperations
 os.umask(0o077)
@@ -73,15 +74,15 @@ class Terminal:
 result = ShellFileOperations(Terminal())._atomic_write(str(p / "change.txt"), "created")
 assert result.exit_code == 0, result.stdout
 ''', nested, account=creator)
-                run('''
+                    run('''
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]) / "change.txt"
 assert p.read_text() == "created"
 p.write_text("reviewed")
 p.unlink()
 ''', nested, account=reviewer)
-        finally:
-            shutil.rmtree(probe)
+            finally:
+                shutil.rmtree(probe)
     info = state.lstat()
     assert stat.S_ISDIR(info.st_mode) and info.st_uid in {0, operator.pw_uid}
     assert info.st_gid == agent.pw_gid
@@ -131,8 +132,8 @@ assert p.read_text() == ""
     run('''
 import pathlib, sqlite3, sys, tempfile
 root = pathlib.Path(sys.argv[1])
-for name in ("workspace", "memories", "skills", "cron"):
-    folder = root / name
+for folder in (root.parent / "workspace", root.parent / "workspace/exports",
+               *(root / name for name in ("memories", "skills", "cron"))):
     folder.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".protection-check-", dir=folder) as temporary:
         p = pathlib.Path(temporary) / "probe"

@@ -112,7 +112,8 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name) / ".pilotage-agent"
+        self.root.mkdir()
         environment = mock.patch.dict(
             os.environ,
             {
@@ -1110,8 +1111,8 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_workspace_media_directive_sends_a_native_document(self):
         channel, _, _ = self._channel()
-        channel._config.workspace_dir.mkdir(parents=True)
-        document = channel._config.workspace_dir / "report.pdf"
+        (channel._config.workspace_dir / "exports").mkdir(parents=True)
+        document = channel._config.workspace_dir / "exports/report.pdf"
         document.write_bytes(b"%PDF")
         bot = SimpleNamespace(
             send_message=mock.AsyncMock(),
@@ -1129,8 +1130,8 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unit_ledger_retries_only_missing_attachment_with_fresh_handle(self):
         channel, _, _ = self._channel()
-        channel._config.workspace_dir.mkdir(parents=True)
-        document = channel._config.workspace_dir / "report.pdf"
+        (channel._config.workspace_dir / "exports").mkdir(parents=True)
+        document = channel._config.workspace_dir / "exports/report.pdf"
         document.write_bytes(b"%PDF")
         streams = []
 
@@ -1240,8 +1241,8 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_system_echo_cannot_turn_media_text_into_delivery(self):
         channel, _, _ = self._channel()
-        channel._config.workspace_dir.mkdir(parents=True)
-        document = channel._config.workspace_dir / "report.pdf"
+        (channel._config.workspace_dir / "exports").mkdir(parents=True)
+        document = channel._config.workspace_dir / "exports/report.pdf"
         document.write_bytes(b"%PDF")
         bot = SimpleNamespace(
             send_message=mock.AsyncMock(),

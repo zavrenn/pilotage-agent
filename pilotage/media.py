@@ -329,6 +329,48 @@ def _mask_json_media_values(content: str) -> str:
     return "".join(chars)
 
 
+def delivery_roots(config: Any, content: str) -> tuple[Path, ...]:
+    """Resolve transport roots, including only isolated session exports folders.
+
+    Agent confines isolated replies to the exact originating session before
+    recording them for delivery. The transport also checks the exports subtree,
+    including during restart recovery, without admitting session inputs or tmp.
+    Explicit allowlists always replace these defaults.
+    """
+
+    roots = tuple(config.outbound_media_roots)
+    if (
+        not roots
+        or not getattr(config, "session_isolated_workspaces", False)
+        or config.settings.get("gateway.media_delivery_allow_dirs") is not None
+    ):
+        return roots
+
+    configured_cwd = config.settings.text("terminal.cwd", "")
+    workspace = (
+        Path(configured_cwd).expanduser() if configured_cwd else config.workspace_dir
+    ).resolve(strict=False)
+    session_roots = []
+    for match in MEDIA_TAG_RE.finditer(content):
+        raw = _normalize_media_tag_path(match.group("path"))
+        try:
+            relative = Path(raw).expanduser().resolve(strict=False).relative_to(workspace)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        parts = relative.parts
+        if (
+            len(parts) > 4
+            and parts[0] == "sessions"
+            and re.fullmatch(r"c-[0-9a-f]{20}", parts[1])
+            and re.fullmatch(r"session-[1-9][0-9]*", parts[2])
+            and parts[3] == "exports"
+        ):
+            root = workspace.joinpath(*parts[:4])
+            if root not in session_roots:
+                session_roots.append(root)
+    return (*roots, *session_roots)
+
+
 def extract_outbound(
     content: str,
     roots: Sequence[Path],

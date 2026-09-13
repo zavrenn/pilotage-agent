@@ -507,8 +507,8 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         home = self.root / "profile"
         with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
             config = Config.load()
-        config.workspace_dir.mkdir(parents=True)
-        generated = config.workspace_dir / "generated-images" / "result.png"
+        (config.workspace_dir / "exports").mkdir(parents=True)
+        generated = config.workspace_dir / "exports/generated-images" / "result.png"
         generated.parent.mkdir()
         generated.write_bytes(b"png")
         agent = Agent(
@@ -565,7 +565,7 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_image_reply_keeps_failure_for_undeliverable_media(self):
         with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.root / "image-state")}):
             config = Config.load()
-        config.workspace_dir.mkdir(parents=True)
+        (config.workspace_dir / "exports").mkdir(parents=True)
         outside = self.root / "outside.png"
         outside.write_bytes(b"png")
         agent = Agent(config, ConversationStore(self.root / "image-failures.db"))
@@ -597,8 +597,8 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         home = self.root / "profile-dedup"
         with mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(home)}):
             config = Config.load()
-        config.workspace_dir.mkdir(parents=True)
-        generated = config.workspace_dir / "result.png"
+        (config.workspace_dir / "exports").mkdir(parents=True)
+        generated = config.workspace_dir / "exports/result.png"
         generated.write_bytes(b"png")
         agent = Agent(
             config,

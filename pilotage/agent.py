@@ -382,7 +382,7 @@ class Agent:
 
         configured_cwd = config.settings.text("terminal.cwd", "")
         default_workspace = getattr(
-            config, "workspace_dir", Path(config.state_dir) / "workspace"
+            config, "workspace_dir", Path(config.state_dir).parent / "workspace"
         )
         self._context_cwd = (
             Path(working_directory).expanduser()
@@ -447,6 +447,14 @@ class Agent:
                     root=working_directory,
                     exports=working_directory / "exports",
                 )
+            )
+        if not getattr(self._config, "session_isolated_workspaces", False):
+            roots = getattr(self._config, "outbound_media_roots", ())
+            blocks.append(
+                "Save files intended for delivery inside these directories: "
+                + ", ".join(str(root) for root in roots)
+                + ". Files elsewhere cannot be sent with MEDIA."
+                if roots else "Native file delivery is disabled."
             )
         if "skills" in self._tool_groups:
             # Keep an established session's prompt prefix frozen, but discover
@@ -1878,9 +1886,11 @@ class Agent:
                     workspace = getattr(
                         self._config,
                         "workspace_dir",
-                        Path(self._config.state_dir) / "workspace",
+                        Path(self._config.state_dir).parent / "workspace",
                     )
-                    outbound_roots = (workspace,)
+                    configured_cwd = self._config.settings.text("terminal.cwd", "")
+                    workspace = Path(configured_cwd).expanduser() if configured_cwd else workspace
+                    outbound_roots = (workspace / "exports",)
             finished_text = _append_generated_media(
                 text,
                 items,

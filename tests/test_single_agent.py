@@ -41,7 +41,8 @@ class SingleAgentTests(unittest.TestCase):
         self.assertEqual(config.credentials_path, self.state / "codex-auth.json")
         self.assertEqual(config.conversations_path, self.state / "conversations.db")
         self.assertEqual(config.memory_dir, self.state / "memories")
-        self.assertEqual(config.workspace_dir, self.state / "workspace")
+        self.assertEqual(config.workspace_dir, self.root / "workspace")
+        self.assertEqual(config.outbound_media_roots, ((self.root / "workspace/exports").resolve(),))
         self.assertFalse(hasattr(config, "main_credentials_path"))
         self.assertFalse((self.state / "profiles").exists())
 

@@ -372,7 +372,7 @@ class GenerationTests(unittest.TestCase):
         saved = Path(result["image"])
         self.assertTrue(saved.is_file())
         self.assertEqual(saved.read_bytes(), _PNG_BYTES)
-        self.assertEqual(saved.parent, self.context.config.workspace_dir / "generated-images")
+        self.assertEqual(saved.parent, self.context.config.workspace_dir / "exports/generated-images")
         self.assertEqual(captured["quality"], "high")
 
     def test_external_working_directory_uses_its_declared_exports_root(self):
@@ -439,6 +439,9 @@ class GenerationTests(unittest.TestCase):
         self.context.config.session_isolated_workspaces = True
         self.context.working_directory = self.root / "session"
         self.context.config.outbound_media_roots = (self.root / "other-session",)
+        self.context.config.settings = Settings({
+            "gateway": {"media_delivery_allow_dirs": [str(self.root / "other-session")]},
+        })
         with mock.patch.object(image, "_collect_image_b64") as collect:
             result = image._generate({"prompt": "a warehouse"}, self.context)
         self.assertFalse(result["success"])

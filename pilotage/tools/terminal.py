@@ -74,7 +74,9 @@ def shell_cwd(context: ToolContext) -> str:
     state_dir = getattr(context.config, "state_dir", None)
     if state_dir is None:
         return ""
-    workspace = Path(state_dir) / "workspace"
+    workspace = getattr(
+        context.config, "workspace_dir", Path(state_dir).parent / "workspace"
+    )
     workspace.mkdir(parents=True, exist_ok=True)
     return str(workspace)
 

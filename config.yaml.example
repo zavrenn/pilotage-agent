@@ -43,10 +43,11 @@ sessions:
   # native file delivery limited to that session's exports directory.
   isolated_workspaces: false
 
-gateway:
-  # Complete allowlist of directories from which MEDIA: files may be delivered.
-  # [] disables file delivery. Omit the setting to use the agent workspace.
-  media_delivery_allow_dirs: []
+# By default, MEDIA: files may be delivered only from <workspace>/exports.
+# An explicit list replaces the default and must use existing absolute paths.
+# [] disables file delivery. Isolated sessions use their own exports directory.
+# gateway:
+#   media_delivery_allow_dirs: []
 
 whatsapp:
   enabled: false
@@ -126,7 +127,8 @@ cron:
   output_retention: 50
 
 terminal:
-  # Defaults to this agent's isolated workspace directory.
+  # Defaults to workspace beside .pilotage-agent (normally ~/workspace).
+  # The default media delivery directory follows this cwd: <cwd>/exports.
   # Its AGENTS.md instructions are loaded when each conversation starts.
   # Relative file-tool paths follow the terminal session's current directory.
   # cwd: /srv/agents/my-agent

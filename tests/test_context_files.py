@@ -144,14 +144,15 @@ class AgentContextSnapshotTests(unittest.IsolatedAsyncioTestCase):
 
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        home = Path(temporary.name).resolve()
+        home = Path(temporary.name).resolve() / ".pilotage-agent"
+        home.mkdir()
         (home / "config.yaml").write_text(
             "agent:\n  instructions: Include implementation details for maintenance.\n"
             "tools:\n  enabled: [memory, skills, file]\n",
             encoding="utf-8",
         )
         (home / "SOUL.md").write_text("Serve the customer's business.", encoding="utf-8")
-        workspace = home / "workspace"
+        workspace = home.parent / "workspace"
         workspace.mkdir()
         (workspace / "AGENTS.md").write_text(
             "Maintenance answers include internal workflow files.", encoding="utf-8"
@@ -195,8 +196,9 @@ class AgentContextSnapshotTests(unittest.IsolatedAsyncioTestCase):
     async def test_workspace_context_is_frozen_per_chat_and_refreshes_after_new(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        home = Path(temporary.name).resolve()
-        workspace = home / "workspace"
+        home = Path(temporary.name).resolve() / ".pilotage-agent"
+        home.mkdir()
+        workspace = home.parent / "workspace"
         workspace.mkdir()
         context_file = workspace / "AGENTS.md"
         context_file.write_text("First workspace rule.", encoding="utf-8")
@@ -232,8 +234,9 @@ class AgentContextSnapshotTests(unittest.IsolatedAsyncioTestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name).resolve()
-        home = root / "home"
-        default_workspace = home / "workspace"
+        home = root / ".pilotage-agent"
+        home.mkdir()
+        default_workspace = home.parent / "workspace"
         configured_workspace = root / "project"
         default_workspace.mkdir(parents=True)
         configured_workspace.mkdir()

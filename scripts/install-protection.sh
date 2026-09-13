@@ -94,7 +94,7 @@ if env_file.exists():
 # replace the state directory or Git metadata.
 chown "$operator":agent /home/agent
 chmod 755 /home/agent
-for directory in .cache .local .config .npm workspace; do
+for directory in .cache .local .config .npm workspace workspace/inputs workspace/tmp workspace/exports; do
   if [ ! -e "/home/agent/$directory" ]; then
     install -d -o agent -g agent -m 0700 "/home/agent/$directory"
   fi

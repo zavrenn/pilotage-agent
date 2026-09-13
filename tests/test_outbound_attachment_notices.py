@@ -37,8 +37,8 @@ class OutboundAttachmentNoticeTests(unittest.IsolatedAsyncioTestCase):
 
     def channel(self, platform, language="en", *, declared_root=False, deny_files=False):
         self.counter += 1
-        home = self.root / str(self.counter)
-        home.mkdir()
+        home = self.root / str(self.counter) / ".pilotage-agent"
+        home.mkdir(parents=True)
         reports = home / "reports"
         reports.mkdir()
         settings = f"display:\n  language: {language}\n"
@@ -59,7 +59,7 @@ class OutboundAttachmentNoticeTests(unittest.IsolatedAsyncioTestCase):
             "TELEGRAM_WEBHOOK_SECRET": "",
         }):
             config = Config.load(channel=platform)
-        config.workspace_dir.mkdir(parents=True)
+        (config.workspace_dir / "exports").mkdir(parents=True)
         fixture = SimpleNamespace(
             home=home, reports=reports, config=config, platform=platform,
             calls=[], reject_file=False,
@@ -146,11 +146,11 @@ class OutboundAttachmentNoticeTests(unittest.IsolatedAsyncioTestCase):
         for platform in ("whatsapp", "telegram"):
             with self.subTest(platform=platform):
                 fixture = self.channel(platform, "fr")
-                report = fixture.config.workspace_dir / "report.pdf"
+                report = fixture.config.workspace_dir / "exports/report.pdf"
                 report.write_bytes(b"%PDF")
                 outside = fixture.home / "private.pdf"
                 outside.write_bytes(b"private")
-                missing = fixture.config.workspace_dir / "missing.pdf"
+                missing = fixture.config.workspace_dir / "exports/missing.pdf"
                 content = (
                     f"Your reports are attached\nMEDIA:{report}\n"
                     f"MEDIA:{outside}\nMEDIA:{missing}"
@@ -244,7 +244,7 @@ class OutboundAttachmentNoticeTests(unittest.IsolatedAsyncioTestCase):
         for platform in ("whatsapp", "telegram"):
             with self.subTest(platform=platform):
                 fixture = self.channel(platform, deny_files=True)
-                report = fixture.config.workspace_dir / "report.pdf"
+                report = fixture.config.workspace_dir / "exports/report.pdf"
                 report.write_bytes(b"%PDF")
 
                 self.assertTrue(await self.send(fixture, f"MEDIA:{report}"))
@@ -280,7 +280,7 @@ class OutboundAttachmentNoticeTests(unittest.IsolatedAsyncioTestCase):
 
     async def check_attachment_restart(self, platform, language):
         fixture = self.channel(platform, language)
-        report = fixture.config.workspace_dir / "report.pdf"
+        report = fixture.config.workspace_dir / "exports/report.pdf"
         report.write_bytes(b"%PDF")
         content = f"Ready\nMEDIA:{report}\nMEDIA:{fixture.home / 'private.pdf'}"
         store, obligation_id = self.record(fixture, content)
@@ -327,7 +327,7 @@ class OutboundAttachmentNoticeTests(unittest.IsolatedAsyncioTestCase):
             for language in SUPPORTED_LANGUAGES:
                 with self.subTest(platform=platform, language=language):
                     fixture = self.channel(platform, language)
-                    report = fixture.config.workspace_dir / "report.pdf"
+                    report = fixture.config.workspace_dir / "exports/report.pdf"
                     report.write_bytes(b"%PDF")
                     prefix = "A" * (4096 - len(t("media.delivery_unavailable", language)) // 2)
                     content = f"{prefix}\nMEDIA:{report}\nMEDIA:{fixture.home / 'private.pdf'}"
@@ -377,7 +377,7 @@ class OutboundAttachmentNoticeTests(unittest.IsolatedAsyncioTestCase):
                 for crash_at in ("before_plan", "before_send"):
                     with self.subTest(platform=platform, language=language, crash_at=crash_at):
                         fixture = self.channel(platform, language)
-                        report = fixture.config.workspace_dir / "report.pdf"
+                        report = fixture.config.workspace_dir / "exports/report.pdf"
                         report.write_bytes(b"%PDF")
                         content = f"Ready\nMEDIA:{report}\nMEDIA:{fixture.home / 'private.pdf'}"
                         store, obligation_id = self.record(fixture, content)

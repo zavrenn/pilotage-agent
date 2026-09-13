@@ -280,7 +280,8 @@ class ConfigFileTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.home = Path(tmp.name)
+        self.home = Path(tmp.name) / ".pilotage-agent"
+        self.home.mkdir()
         patch = mock.patch.dict(os.environ, {"PILOTAGE_HOME": str(self.home)})
         patch.start()
         self.addCleanup(patch.stop)
@@ -746,7 +747,7 @@ class ConfigFileTests(unittest.TestCase):
     def test_omitted_delivery_roots_keep_default_but_explicit_empty_denies_files(self):
         self._write("{}\n")
         config = Config.load()
-        self.assertEqual(config.outbound_media_roots, (config.workspace_dir.resolve(),))
+        self.assertEqual(config.outbound_media_roots, ((config.workspace_dir / "exports").resolve(),))
 
         self._write("gateway:\n  media_delivery_allow_dirs: []\n")
         self.assertEqual(Config.load().outbound_media_roots, ())
@@ -785,7 +786,7 @@ class ConfigFileTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "working_notice_text"):
             Config.load()
 
-    def test_isolated_workspaces_require_a_deliverable_terminal_root(self):
+    def test_isolated_workspaces_follow_the_configured_terminal_root(self):
         external = self.home / "external"
         external.mkdir()
         terminal = external.as_posix()
@@ -795,8 +796,8 @@ class ConfigFileTests(unittest.TestCase):
             "terminal:\n"
             f"  cwd: '{terminal}'\n"
         )
-        with self.assertRaisesRegex(ConfigError, "terminal.cwd"):
-            Config.load()
+        config = Config.load()
+        self.assertEqual(config.outbound_media_roots, ((external / "exports").resolve(),))
 
         self._write(
             "sessions:\n"

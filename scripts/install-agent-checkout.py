@@ -37,7 +37,7 @@ def asset_paths(source: Path, home: Path) -> list[Path]:
         parts = relative.parts
         allowed = (
             (len(parts) == 1 and parts[0] in ROOT_FILES and path.is_file())
-            or parts[0] == ".resources"
+            or parts[0] in {".resources", "workspace"}
             or (parts[0] == ".pilotage-agent" and (
                 len(parts) == 1
                 or parts[1] == "skills"
@@ -91,20 +91,22 @@ def install_assets(source, home, paths, operator_uid, agent_gid):
         target.chmod(mode)
 
 
-def share_skills(skills, operator_uid, agent_uid):
-    """Keep new settings read-only to agent; share new and existing skills."""
+def share_writable_assets(home, operator_uid, agent_uid):
+    """Keep settings read-only to agent; share skills and workspace with both accounts."""
+    state = home / ".pilotage-agent"
     # Git replaces files on pull. The state directory's setgid group is agent, so an
     # operator umask of 0002 alone would make replacement settings writable.
     subprocess.run([
-        "setfacl", "-d", "--set", "u::rwx,g::r-x,o::---", str(skills.parent),
+        "setfacl", "-d", "--set", "u::rwx,g::r-x,o::---", str(state),
     ], check=True)
-    skills.mkdir(exist_ok=True)
     access = f"u:{operator_uid}:rwX,u:{agent_uid}:rwX,m::rwX,o::---"
-    subprocess.run(["setfacl", "-R", "-P", "-m", access, str(skills)], check=True)
     default = f"u::rwx,u:{operator_uid}:rwx,u:{agent_uid}:rwx,g::---,m::rwx,o::---"
-    for path in [skills, *skills.rglob("*")]:
-        if path.is_dir() and not path.is_symlink():
-            subprocess.run(["setfacl", "-d", "-m", default, str(path)], check=True)
+    for directory in (state / "skills", home / "workspace"):
+        directory.mkdir(exist_ok=True)
+        subprocess.run(["setfacl", "-R", "-P", "-m", access, str(directory)], check=True)
+        for path in [directory, *directory.rglob("*")]:
+            if path.is_dir() and not path.is_symlink():
+                subprocess.run(["setfacl", "-d", "-m", default, str(path)], check=True)
 
 
 def main():
@@ -150,7 +152,7 @@ def main():
         subprocess.run([*git, "clone", "--", sys.argv[1], str(source)], cwd=operator.pw_dir, check=True)
         paths = asset_paths(source, home)
         install_assets(source, home, paths, operator.pw_uid, agent.pw_gid)
-        share_skills(STATE / "skills", operator.pw_uid, agent.pw_uid)
+        share_writable_assets(home, operator.pw_uid, agent.pw_uid)
         metadata = home / ".git"
         shutil.move(str(source / ".git"), metadata)
         metadata.chmod(0o700)
@@ -158,7 +160,7 @@ def main():
         exclude = metadata / "info/exclude"
         with exclude.open("a") as handle:
             handle.write("\n# Local container state\n/.bash*\n/.profile\n/.ssh/\n/.git-credentials\n"
-                         "/.gitconfig\n/.cache/\n/.config/\n/.local/\n/.npm/\n/workspace/\n"
+                         "/.gitconfig\n/.cache/\n/.config/\n/.local/\n/.npm/\n"
                          "/.pilotage-agent/*\n!/.pilotage-agent/config.yaml\n"
                          "!/.pilotage-agent/SOUL.md\n!/.pilotage-agent/.env.example\n"
                          "!/.pilotage-agent/skills/\n")

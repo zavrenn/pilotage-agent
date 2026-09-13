@@ -247,7 +247,8 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name) / ".pilotage-agent"
+        self.root.mkdir()
         environment = mock.patch.dict(
             os.environ,
             {
@@ -258,7 +259,7 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         environment.start()
         self.addCleanup(environment.stop)
         self.config = Config.load(channel="whatsapp")
-        self.config.workspace_dir.mkdir(parents=True)
+        (self.config.workspace_dir / "exports").mkdir(parents=True)
         self.channel = WhatsAppChannel(self.config, _handle, _command)
         self.http = FakeHttp()
         self.channel._http = self.http
@@ -268,7 +269,7 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(WHATSAPP_MEDIA_NOTE, Config.load().instructions)
 
     async def test_text_is_sent_before_native_image(self):
-        chart = self.config.workspace_dir / "chart.png"
+        chart = self.config.workspace_dir / "exports/chart.png"
         chart.write_bytes(b"png")
 
         sent = await self.channel.send(
@@ -341,7 +342,7 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(edited.retryable)
 
     async def test_media_only_document_is_sent_without_empty_text(self):
-        report = self.config.workspace_dir / "report.xlsx"
+        report = self.config.workspace_dir / "exports/report.xlsx"
         report.write_bytes(b"xlsx")
 
         self.assertTrue(await self.channel.send(CHAT_ID, f"MEDIA:{report}"))
@@ -359,7 +360,7 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_unit_ledger_retries_only_missing_media(self):
-        report = self.config.workspace_dir / "report.pdf"
+        report = self.config.workspace_dir / "exports/report.pdf"
         report.write_bytes(b"pdf")
         content = f"ready\nMEDIA:{report}"
         obligation_id = compute_obligation_id("session", "message", content)
@@ -509,7 +510,7 @@ class WhatsAppMediaSendTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_plain_text_echo_cannot_turn_media_text_into_an_attachment(self):
-        report = self.config.workspace_dir / "report.xlsx"
+        report = self.config.workspace_dir / "exports/report.xlsx"
         report.write_bytes(b"xlsx")
 
         self.assertTrue(

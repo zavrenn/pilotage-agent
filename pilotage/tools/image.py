@@ -434,9 +434,11 @@ def _output_root(context: ToolContext) -> Path:
         strict=False
     )
     raw_roots = getattr(config, "outbound_media_roots", None)
+    if isolated and config.settings.get("gateway.media_delivery_allow_dirs") is None:
+        raw_roots = (working,)
     declared_roots = tuple(
         Path(root).expanduser().resolve(strict=False)
-        for root in (raw_roots if raw_roots is not None else (agent_workspace,))
+        for root in (raw_roots if raw_roots is not None else (agent_workspace / "exports",))
     )
     if not declared_roots:
         raise ValueError("File delivery is disabled by configuration")

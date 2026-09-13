@@ -224,6 +224,45 @@ class UbuntuDependencyTests(unittest.TestCase):
                     self.assertIn("Python 3.11 through 3.13", result.stderr)
                     self.assertEqual(calls, [])
 
+    def test_fresh_install_creates_sibling_workspace_and_exports(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        source = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
+        source = source.replace("/opt/pilotage-python/bin", self.path(self.root / "managed"))
+        (scripts / "install.sh").write_text(source, encoding="utf-8", newline="\n")
+        self.executable(scripts, "setup-runtime-environments.sh", "exit 0")
+        host = self.root / "host"
+        for command, body in (
+            ("python3", "echo 3.13"),
+            ("node", "echo 22"),
+            ("uv", "exit 0"),
+            ("npm", "exit 0"),
+        ):
+            self.executable(host, command, body)
+        (self.root / "bridge").mkdir()
+        self.executable(self.root / ".venv/bin", "pilotage", "exit 0")
+        (self.root / "config.yaml.example").write_text(
+            (ROOT / "config.yaml.example").read_text(encoding="utf-8"), encoding="utf-8",
+        )
+        for custom in (False, True):
+            with self.subTest(custom_state=custom):
+                home = self.root / ("custom-home" if custom else "default-home")
+                home.mkdir()
+                state = home / "named agent/.pilotage-agent" if custom else home / ".pilotage-agent"
+                result = self.shell(
+                    f'export PATH={shlex.quote(self.path(host))}:"$PATH"\n'
+                    f'export HOME={shlex.quote(self.path(home))}\n'
+                    + (f'export PILOTAGE_HOME={shlex.quote(self.path(state))}\n' if custom else "unset PILOTAGE_HOME\n")
+                    + "bash scripts/install.sh\n"
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((state / "config.yaml").is_file())
+                workspace = state.parent / "workspace"
+                for name in ("inputs", "tmp", "exports"):
+                    self.assertTrue((workspace / name).is_dir())
+                self.assertFalse((state / "workspace").exists())
+                self.assertFalse((workspace / "export").exists())
+
     def sql_install(self, *, download_status=0, candidate="18.6.1", install_status=0):
         source = (ROOT / "scripts" / "install-system-dependencies.sh").read_text(encoding="utf-8")
         function = "install_sql_tools() {" + source.split("install_sql_tools() {", 1)[1].split("\ninstall_sql_tools\n", 1)[0]

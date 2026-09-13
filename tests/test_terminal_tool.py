@@ -115,14 +115,14 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_workspace_and_hermes_runtime_env_are_profile_scoped(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        state_dir = Path(temporary.name)
+        state_dir = Path(temporary.name) / ".pilotage-agent"
         context = _context(chat_id="wa-session", state_dir=state_dir)
 
         await self._run({"command": "pwd"}, context)
 
         shell = _FakeShell.instances[0]
-        self.assertEqual(Path(shell.cwd), state_dir / "workspace")
-        self.assertTrue((state_dir / "workspace").is_dir())
+        self.assertEqual(Path(shell.cwd), state_dir.parent / "workspace")
+        self.assertTrue((state_dir.parent / "workspace").is_dir())
         self.assertEqual(
             shell.env,
             {

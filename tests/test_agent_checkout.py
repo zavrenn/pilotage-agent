@@ -18,7 +18,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts/install-agent-checkout.p
 HELPERS = runpy.run_path(str(SCRIPT))
 asset_paths = HELPERS["asset_paths"]
 install_assets = HELPERS["install_assets"]
-share_skills = HELPERS["share_skills"]
+share_writable_assets = HELPERS["share_writable_assets"]
 
 
 class CheckoutAssetsTests(unittest.TestCase):
@@ -34,6 +34,7 @@ class CheckoutAssetsTests(unittest.TestCase):
         self.write(self.source, ".pilotage-agent/config.yaml", "model: demo\n")
         self.write(self.source, ".pilotage-agent/SOUL.md", "Demo identity\n")
         self.write(self.source, ".pilotage-agent/skills/example/SKILL.md", "Demo skill\n")
+        self.write(self.source, "workspace/records/example.md", "Demo record\n")
         self.write(self.home, ".pilotage-agent/config.yaml", "bootstrap default\n")
         self.write(self.home, ".pilotage-agent/SOUL.md", "")
         self.write(self.home, ".pilotage-agent/.env", "KEEP=secret\n")
@@ -50,6 +51,7 @@ class CheckoutAssetsTests(unittest.TestCase):
         paths = asset_paths(self.source, self.home)
         self.assertIn(Path(".pilotage-agent/config.yaml"), paths)
         self.assertIn(Path(".pilotage-agent/skills/example/SKILL.md"), paths)
+        self.assertIn(Path("workspace/records/example.md"), paths)
         self.assertNotIn(Path(".git/config"), paths)
         self.assertNotIn(Path(".pilotage-agent/.env"), paths)
         self.assertEqual((self.home / ".pilotage-agent/.env").read_text(), "KEEP=secret\n")
@@ -64,6 +66,7 @@ class CheckoutAssetsTests(unittest.TestCase):
         self.assertEqual(state.stat().st_mode, before)
         self.assertEqual((state / "config.yaml").read_text(), "model: demo\n")
         self.assertEqual((state / "skills/example/SKILL.md").read_text(), "Demo skill\n")
+        self.assertEqual((self.home / "workspace/records/example.md").read_text(), "Demo record\n")
 
     def test_existing_settings_are_updated_without_create_or_inode_replacement(self):
         settings = {self.home / ".pilotage-agent" / name for name in ("config.yaml", "SOUL.md")}
@@ -125,16 +128,18 @@ class CheckoutAssetsTests(unittest.TestCase):
             install_assets(self.source, self.home, paths, 1000, 1001)
         shutil.move(str(self.source / ".git"), self.home / ".git")
         self.assertEqual(git(self.home, "status", "--porcelain"), "")
-        skill = self.home / ".pilotage-agent/skills/example/SKILL.md"
-        skill.write_text("Edit from the running agent\n")
-        self.assertIn(".pilotage-agent/skills/example/SKILL.md", git(self.home, "status", "--porcelain"))
+        for relative in (".pilotage-agent/skills/example/SKILL.md", "workspace/records/example.md"):
+            (self.home / relative).write_text("Edit from the running agent\n")
+            self.assertIn(relative, git(self.home, "status", "--porcelain"))
         self.assertIn("Edit from the running agent", git(self.home, "diff", "--no-ext-diff", "--no-textconv"))
+        self.write(self.home, "workspace/records/new.md", "New record\n")
+        self.assertIn("?? workspace/records/new.md", git(self.home, "status", "--porcelain"))
         self.assertNotIn(".env", git(self.home, "status", "--porcelain"))
 
     def test_runtime_and_account_files_cannot_be_supplied_by_repository(self):
         for name in (".pilotage-agent/.env", ".pilotage-agent/.runtime.lock",
                      ".pilotage-agent/codex-auth.json", ".pilotage-agent/profiles/other/config.yaml",
-                     ".ssh/config", ".bashrc", "workspace/data.txt", ".gitconfig"):
+                     ".ssh/config", ".bashrc", ".gitconfig"):
             with self.subTest(name=name):
                 path = self.write(self.source, name, "unsafe")
                 with self.assertRaisesRegex(ValueError, "non-asset"):
@@ -200,7 +205,7 @@ class CheckoutAssetsTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix" and hasattr(os, "geteuid")
                          and os.geteuid() == 0 and shutil.which("setfacl")
                          and shutil.which("git"), "Requires Linux root, Git and ACL support")
-    def test_live_git_detects_agent_edits_and_both_users_can_replace_skill_files(self):
+    def test_live_git_detects_agent_edits_and_both_users_can_replace_shared_files(self):
         operator_uid, agent_uid = 61000, 61001
         self.root.chmod(0o755)
         os.chown(self.home, operator_uid, agent_uid)
@@ -208,9 +213,13 @@ class CheckoutAssetsTests(unittest.TestCase):
         state = self.home / ".pilotage-agent"
         os.chown(state, 0, agent_uid)
         state.chmod(0o3770)
+        workspace = self.home / "workspace"
+        workspace.mkdir()
+        os.chown(workspace, agent_uid, agent_uid)
+        workspace.chmod(0o700)  # Match the workspace created by bootstrap.
         paths = asset_paths(self.source, self.home)
         install_assets(self.source, self.home, paths, operator_uid, agent_uid)
-        share_skills(state / "skills", operator_uid, agent_uid)
+        share_writable_assets(self.home, operator_uid, agent_uid)
         self.assertEqual((state / ".env").read_text(), "KEEP=secret\n")
         operator_home = self.root / "operator"
         operator_home.mkdir()
@@ -244,17 +253,17 @@ p.unlink()
 p.write_text('model: demo\\n')
 assert p.stat().st_mode & 0o777 == 0o640
 """)
-        file = ".pilotage-agent/skills/example/SKILL.md"
-        run(agent_uid, "/usr/bin/python3", "-c",
-            "from pathlib import Path; Path('" + file + "').write_text('agent edit')")
-        self.assertIn(file, git("status", "--porcelain"))
-        self.assertIn("agent edit", git("diff", "--no-ext-diff", "--no-textconv"))
-        git("add", file)
-        git("commit", "-m", "Keep agent edit")
-        # Exercise the checkout file replacement used by pull, without a network.
-        git("restore", "--source=" + old_head, "--", file)
-        run(agent_uid, "/usr/bin/python3", "-c",
-            "from pathlib import Path; Path('" + file + "').write_text('agent edit after checkout')")
+        for file in (".pilotage-agent/skills/example/SKILL.md", "workspace/records/example.md"):
+            run(agent_uid, "/usr/bin/python3", "-c",
+                "from pathlib import Path; Path('" + file + "').write_text('agent edit')")
+            self.assertIn(file, git("status", "--porcelain"))
+            self.assertIn("agent edit", git("diff", "--no-ext-diff", "--no-textconv"))
+            git("add", file)
+            git("commit", "-m", "Keep agent edit")
+            # Exercise the checkout file replacement used by pull, without a network.
+            git("restore", "--source=" + old_head, "--", file)
+            run(agent_uid, "/usr/bin/python3", "-c",
+                "from pathlib import Path; Path('" + file + "').write_text('agent edit after checkout')")
         def write_with_file_tool(uid, target, content):
             operations = ShellFileOperations(None, cwd=str(self.home))
             with patch.object(operations, "_exec") as execute:
@@ -264,13 +273,14 @@ assert p.stat().st_mode & 0o777 == 0o640
 
         # mktemp + chmod in the actual file tool previously masked the ACL and
         # left these files unreadable to the other account.
-        for creator, reviewer in ((agent_uid, operator_uid), (operator_uid, agent_uid)):
-            folder = f".pilotage-agent/skills/new-{creator}"
-            write_with_file_tool(creator, self.home / folder / "SKILL.md", "new")
-            git("add", folder)  # Must be able to read and stage agent-created files.
-            run(reviewer, "/usr/bin/python3", "-c",
-                f"from pathlib import Path; p=Path('{folder}/SKILL.md'); "
-                "assert p.read_text()=='new'; p.unlink(); p.write_text('replaced')")
+        for directory in (".pilotage-agent/skills", "workspace/records"):
+            for creator, reviewer in ((agent_uid, operator_uid), (operator_uid, agent_uid)):
+                folder = f"{directory}/new-{creator}"
+                write_with_file_tool(creator, self.home / folder / "record.md", "new")
+                git("add", folder)  # Must be able to read and stage agent-created files.
+                run(reviewer, "/usr/bin/python3", "-c",
+                    f"from pathlib import Path; p=Path('{folder}/record.md'); "
+                    "assert p.read_text()=='new'; p.unlink(); p.write_text('replaced')")
         private = self.root / "private-agent-data"
         private.mkdir()
         os.chown(private, agent_uid, agent_uid)

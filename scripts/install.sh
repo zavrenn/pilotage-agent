@@ -68,10 +68,11 @@ if $dependencies_only; then
 fi
 
 state_dir="${PILOTAGE_HOME:-$HOME/.pilotage-agent}"
+workspace="$(dirname -- "$state_dir")/workspace"
 umask 077
-mkdir -p "$state_dir" "$state_dir/workspace"
+mkdir -p "$state_dir" "$workspace"/{inputs,tmp,exports}
 chmod 700 "$state_dir"
-chmod 700 "$state_dir/workspace"
+chmod 700 "$workspace" "$workspace"/{inputs,tmp,exports}
 if [ ! -f "$state_dir/.env" ] && [ -f .env.example ]; then
   cp .env.example "$state_dir/.env"
   echo "==> Wrote $state_dir/.env — channel setup commands will add their credentials."

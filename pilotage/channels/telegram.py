@@ -2688,7 +2688,7 @@ class TelegramChannel:
             if delivery_ledger is not None and "MEDIA:" in (text or ""):
                 notice = await delivery_ledger.attachment_notice(text, notice)
             attachments, cleaned = media.extract_outbound(
-                text or "", self._config.outbound_media_roots,
+                text or "", media.delivery_roots(self._config, text or ""),
                 denied_notice=notice,
             )
         else:

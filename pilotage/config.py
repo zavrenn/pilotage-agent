@@ -189,16 +189,6 @@ def _number_in_range(name: str, value: float, *, minimum: float, inclusive: bool
     return value
 
 
-def _path_is_within(path: Path, root: Path) -> bool:
-    """Whether a resolved path is inside one resolved trusted root."""
-
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
 @dataclass(frozen=True)
 class Config:
     model: str
@@ -318,14 +308,19 @@ class Config:
     @property
     def workspace_dir(self) -> Path:
         """The agent-local default root for terminal and file tools."""
-        return self.state_dir / "workspace"
+        return self.state_dir.parent / "workspace"
 
     @property
     def outbound_media_roots(self) -> tuple[Path, ...]:
         """An explicit allowlist replaces the default; an empty list denies files."""
 
         if self.settings.get("gateway.media_delivery_allow_dirs") is None:
-            return (self.workspace_dir.resolve(strict=False),)
+            configured_cwd = self.settings.text("terminal.cwd", "")
+            workspace = (
+                Path(configured_cwd).expanduser()
+                if configured_cwd else self.workspace_dir
+            )
+            return ((workspace / "exports").resolve(strict=False),)
         roots = []
         for written in self.settings.names("gateway.media_delivery_allow_dirs"):
             resolved = Path(written).expanduser().resolve(strict=False)
@@ -465,24 +460,6 @@ class Config:
             if not expanded_cwd.is_absolute():
                 raise ConfigError(
                     "terminal.cwd must be absolute when "
-                    "sessions.isolated_workspaces is enabled"
-                )
-            resolved_cwd = expanded_cwd.resolve(strict=False)
-            trusted_roots = [
-                (home / "workspace").resolve(strict=False),
-                *[
-                    Path(written).expanduser().resolve(strict=False)
-                    for written in settings.names(
-                        "gateway.media_delivery_allow_dirs"
-                    )
-                ],
-            ]
-            if not any(
-                _path_is_within(resolved_cwd, root) for root in trusted_roots
-            ):
-                raise ConfigError(
-                    "terminal.cwd must be inside the agent workspace or a "
-                    "gateway.media_delivery_allow_dirs path when "
                     "sessions.isolated_workspaces is enabled"
                 )
         for retired_group_setting in (
