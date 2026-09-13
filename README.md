@@ -351,8 +351,8 @@ identity, and refuses existing asset conflicts or an existing checkout. Git runs
 as the operator, with its authentication in the operator home. `/home/agent`
 and `.git` belong to the operator; `.git` is private. Skills and `workspace/`
 have inherited ACLs so both accounts can edit existing and new files there.
-Git metadata and settings remain protected. The installer adds no workspace
-ignore rules; use your repository's `.gitignore` for any exclusions you want.
+Git metadata and settings remain protected. Manage exclusions in your repository's
+`.gitignore`; the installer leaves `.git/info/exclude` untouched.
 The only retained asset checkout is `/home/agent`; there is no copy step.
 
 Review agent edits using `git status` and `git diff` as the operator. Stop the

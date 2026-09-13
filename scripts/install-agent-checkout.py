@@ -156,14 +156,6 @@ def main():
         metadata = home / ".git"
         shutil.move(str(source / ".git"), metadata)
         metadata.chmod(0o700)
-        # Protect local runtime files even if an agent repository omits ignores.
-        exclude = metadata / "info/exclude"
-        with exclude.open("a") as handle:
-            handle.write("\n# Local container state\n/.bash*\n/.profile\n/.ssh/\n/.git-credentials\n"
-                         "/.gitconfig\n/.cache/\n/.config/\n/.local/\n/.npm/\n"
-                         "/.pilotage-agent/*\n!/.pilotage-agent/config.yaml\n"
-                         "!/.pilotage-agent/SOUL.md\n!/.pilotage-agent/.env.example\n"
-                         "!/.pilotage-agent/skills/\n")
         subprocess.run([*git, "-C", str(home), "status", "--short"], cwd=operator.pw_dir, check=True)
     subprocess.run([sys.executable, "-I", "-B", str(CHECKOUT / "scripts/verify-protection.py")], check=True)
     print("Live agent checkout installed at /home/agent. Services remain stopped.")
