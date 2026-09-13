@@ -53,7 +53,7 @@ def main():
         assert stat.S_IMODE(info.st_mode) == 0o700
         run("import os,sys; assert not os.access(sys.argv[1], os.R_OK | os.X_OK)", metadata)
         # Shared access must survive either account's restrictive umask.
-        for directory in (state / "skills", state / "cron", home / "workspace"):
+        for directory in (state / "memories", state / "skills", state / "cron", home / "workspace"):
             probe = Path(tempfile.mkdtemp(prefix=".checkout-check-", dir=directory))
             os.chown(probe, operator.pw_uid, agent.pw_gid)
             probe.chmod(0o770)  # Restore the inherited ACL mask after mkdtemp's 0700.
@@ -71,7 +71,13 @@ class Terminal:
         result = subprocess.run(["bash", "-c", command], cwd=cwd,
                                 input=stdin_data, text=True, capture_output=True)
         return {"returncode": result.returncode, "output": result.stdout + result.stderr}
-if sys.argv[2] == "cron":
+if sys.argv[2] == "memories":
+    from pilotage.tools.memory import MemoryStore
+    store = MemoryStore(p)
+    store.load_from_disk()
+    assert store.add("memory", "initial")["success"]
+    assert store.replace("memory", "initial", "created")["success"]
+elif sys.argv[2] == "cron":
     from pilotage.cron.jobs import CronStore, _atomic_write
     store = CronStore(p)
     store.ensure_dirs()
@@ -84,11 +90,15 @@ else:
 ''', nested, directory.name, account=creator)
                     run('''
 import pathlib, sys
-p = pathlib.Path(sys.argv[1]) / "change.txt"
+p = pathlib.Path(sys.argv[1])
 assert p.read_text() == "created"
 p.write_text("reviewed")
 p.unlink()
-''', nested / 'cron/output' if directory == state / 'cron' else nested, account=reviewer)
+''', nested / (
+                        "MEMORY.md" if directory == state / "memories" else
+                        "cron/output/change.txt" if directory == state / "cron" else
+                        "change.txt"
+                    ), account=reviewer)
             finally:
                 shutil.rmtree(probe)
     info = state.lstat()

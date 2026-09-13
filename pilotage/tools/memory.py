@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..approvals import approval_error
+from ..cron.jobs import _chmod_preserving_acl
 from .registry import Tool, ToolContext, tool_error
 from .threat_patterns import first_threat_message as _first_threat_message
 
@@ -44,6 +45,8 @@ def _atomic_write_text(path: Path, content: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
             handle.flush()
+            # mkstemp masks inherited ACL grants; retain the operator's access.
+            _chmod_preserving_acl(Path(temporary), 0o600)
             os.fsync(handle.fileno())
         os.replace(temporary, path)
     except BaseException:

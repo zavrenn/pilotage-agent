@@ -356,8 +356,8 @@ private home for later Git operations.
 The installer preserves runtime state and `.env`, replaces bootstrap config and
 identity, and refuses existing asset conflicts or an existing checkout. Git runs
 as the operator, with its authentication in the operator home. `/home/agent`
-and `.git` belong to the operator; `.git` is private. Skills, cron records, and `workspace/`
-have inherited ACLs so both accounts can edit existing and new files there.
+and `.git` belong to the operator; `.git` is private. Memories, skills, cron records,
+and `workspace/` have inherited ACLs so both accounts can edit existing and new files there.
 Git metadata and settings remain protected. Manage exclusions in your repository's
 `.gitignore`; the installer leaves `.git/info/exclude` untouched.
 The only retained asset checkout is `/home/agent`; there is no copy step.

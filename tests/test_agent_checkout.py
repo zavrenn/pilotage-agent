@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import io
+import inspect
 import os
 from pathlib import Path
 import runpy
@@ -11,7 +12,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pilotage.cron.jobs import _chmod_preserving_acl
 from pilotage.tools.file_operations import ShellFileOperations
+from pilotage.tools.memory import _atomic_write_text
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/install-agent-checkout.py"
@@ -344,6 +347,33 @@ for p in Path('.pilotage-agent/cron').rglob('*'):
         with p.open('a') as stream:
             stream.write(' reviewed')
 """)
+
+        # Run the actual atomic memory writer without requiring the dropped
+        # UID to traverse the development checkout or its virtual environment.
+        memory_writer = (
+            "import os, sys, tempfile\nfrom pathlib import Path\n"
+            + inspect.getsource(_chmod_preserving_acl)
+            + inspect.getsource(_atomic_write_text)
+            + "\nos.umask(0o077)\np = Path(sys.argv[1])\n"
+              "_atomic_write_text(p, 'initial')\n"
+              "_atomic_write_text(p, sys.argv[2])\n"
+        )
+        for filename in ("MEMORY.md", "USER.md"):
+            target = f".pilotage-agent/memories/{filename}"
+            for creator, reviewer in ((agent_uid, operator_uid), (operator_uid, agent_uid),
+                                      (agent_uid, operator_uid)):
+                content = f"Fact from {creator}"
+                run(creator, "/usr/bin/python3", "-c", memory_writer, target, content)
+                run(reviewer, "/usr/bin/python3", "-c", """
+import os, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+assert p.read_text() == sys.argv[2]
+assert os.access(p, os.R_OK | os.W_OK)
+assert p.stat().st_mode & 0o007 == 0
+""", target, content)
+                git("add", target)
+                self.assertEqual(git("show", ":" + target), content)
 
         private = self.root / "private-agent-data"
         private.mkdir()

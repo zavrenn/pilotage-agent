@@ -88,6 +88,13 @@ class MemoryStoreTests(MemoryCase):
         self.assertEqual(restored.memory_entries, ["Python 3.12 project"])
         self.assertEqual(restored.user_entries, [])
 
+    @unittest.skipUnless(os.name == "posix", "Requires POSIX file permissions")
+    def test_unshared_memory_stays_private_after_repeated_updates(self):
+        for target, filename in (("memory", "MEMORY.md"), ("user", "USER.md")):
+            self.assertTrue(self.store.add(target, "Initial fact")["success"])
+            self.assertTrue(self.store.replace(target, "Initial fact", "Updated fact")["success"])
+            self.assertEqual((self.root / filename).stat().st_mode & 0o777, 0o600)
+
     def test_duplicates_are_idempotent(self):
         self.store.add("memory", "same fact")
         result = self.store.add("memory", "same fact")
