@@ -29,13 +29,15 @@ class RegistryTests(unittest.TestCase):
         self.assertIs(resolve_command("/reset"), resolve_command("new"))
         self.assertIs(resolve_command("/commands"), resolve_command("help"))
 
-    def test_only_a_whole_message_known_slash_command_is_intercepted(self):
+    def test_slash_commands_are_intercepted_without_treating_prose_or_paths_as_commands(self):
         invocation = parse_command("  /STATUS  ")
         self.assertIsNotNone(invocation)
         self.assertEqual(invocation.command.name, "status")
         self.assertIsNone(parse_command("what does /status mean?"))
-        self.assertIsNone(parse_command("/not-a-command"))
-        self.assertIsNone(parse_command("/profile"))
+        self.assertIsNone(parse_command("/tmp/notes.md"))
+        self.assertIsNone(parse_command("/"))
+        self.assertEqual(parse_command("/not-a-command").command.name, "not-a-command")
+        self.assertEqual(parse_command("/profile").command.name, "profile")
 
     def test_arguments_are_preserved_for_usage_validation(self):
         invocation = parse_command("/new unexpected")
@@ -223,6 +225,17 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/new", await self.execute("/help"))
         self.assertEqual(await self.execute("/status"), t("commands.ready", "en"))
         self.assertEqual(self.agent.forgotten, [])
+
+    async def test_unknown_commands_return_a_static_reply_even_with_arguments(self):
+        for language in ("en", "fr", "ar"):
+            self.config.language = language
+            for text in ("/model", "/model gpt-test", "/not-a-command"):
+                with self.subTest(language=language, text=text):
+                    answer = await self.execute(text)
+                    self.assertEqual(answer, t("commands.unknown", language))
+                    self.assertIn("/help", answer)
+        self.assertEqual(self.agent.forgotten, [])
+        self.assertEqual(self.agent.stopped, [])
 
     async def test_legacy_commands_never_authorize_or_expose_operator_details(self):
         for written in ("/approve", "/approve anything", "/deny", "/deny not this change"):

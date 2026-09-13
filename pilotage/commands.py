@@ -9,6 +9,7 @@ available or behaving correctly.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -67,15 +68,18 @@ class CommandInvocation:
 
 
 def parse_command(text: str) -> Optional[CommandInvocation]:
-    """Parse a whole-message slash command; ordinary prose remains model input."""
+    """Intercept known and unknown slash commands; leave prose and paths as text."""
 
     written = str(text or "").strip()
     if not written.startswith("/"):
         return None
     parts = written.split(maxsplit=1)
+    name = parts[0][1:].lower()
+    if re.fullmatch(r"[a-z0-9_-]+", name) is None:
+        return None
     command = resolve_command(parts[0])
     if command is None:
-        return None
+        command = CommandDef(name, "", "Unknown")
     arguments = parts[1].strip() if len(parts) == 2 else ""
     return CommandInvocation(command, arguments)
 
@@ -182,6 +186,8 @@ async def execute_command(
 
     name = invocation.command.name
     language = str(getattr(config, "language", DEFAULT_LANGUAGE))
+    if resolve_command(name) is None:
+        return t("commands.unknown", language)
     if name in _RETIRED_COMMANDS:
         return t("capability.unavailable", language)
     if name == "effort":
@@ -210,4 +216,4 @@ async def execute_command(
         return t("commands.nothing_to_stop", language)
     if name == "status":
         return t("commands.ready", language)
-    return t("commands.unknown", language, command=name)
+    return t("commands.unknown", language)

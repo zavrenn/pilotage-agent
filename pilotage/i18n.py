@@ -87,7 +87,7 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "I'm still working on a request. Send /stop to stop it, "
             "then /new to start a new conversation."
         ),
-        "commands.unknown": "Unknown command: /{command}",
+        "commands.unknown": "Unknown command. Use /help to see available commands.",
         "commands.state": "State: {state}",
         "commands.auth": "ChatGPT auth: {scope}",
         "commands.model": "Model: {model}",
@@ -167,7 +167,7 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "Je traite encore une demande. Envoyez /stop pour l'arrêter, "
             "puis /new pour commencer une nouvelle conversation."
         ),
-        "commands.unknown": "Commande inconnue : /{command}",
+        "commands.unknown": "Commande inconnue. Utilisez /help pour voir les commandes disponibles.",
         "commands.state": "État : {state}",
         "commands.auth": "Authentification ChatGPT : {scope}",
         "commands.model": "Modèle : {model}",
@@ -243,7 +243,7 @@ _CATALOGS: Final[dict[str, dict[str, str]]] = {
             "ما زلت أعمل على طلب. أرسل /stop لإيقافه، "
             "ثم /new لبدء محادثة جديدة."
         ),
-        "commands.unknown": "أمر غير معروف: /{command}",
+        "commands.unknown": "أمر غير معروف. استخدم /help لعرض الأوامر المتاحة.",
         "commands.state": "الحالة: {state}",
         "commands.auth": "مصادقة ChatGPT: {scope}",
         "commands.model": "النموذج: {model}",

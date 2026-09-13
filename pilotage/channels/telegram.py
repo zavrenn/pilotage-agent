@@ -38,7 +38,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .. import media
-from ..commands import CommandInvocation, parse_command
+from ..commands import COMMAND_REGISTRY, CommandInvocation, parse_command
 from ..delivery import (
     DeliveryUnitLedger,
     SendResult,
@@ -61,7 +61,14 @@ from .telegram_formatting import (
 logger = logging.getLogger(__name__)
 
 try:  # Optional until the Telegram channel is enabled.
-    from telegram import LinkPreviewOptions, Update
+    from telegram import (
+        BotCommandScopeAllGroupChats,
+        BotCommandScopeAllPrivateChats,
+        BotCommandScopeChat,
+        BotCommandScopeDefault,
+        LinkPreviewOptions,
+        Update,
+    )
     from telegram.constants import ChatAction, ParseMode
     from telegram.error import (
         BadRequest,
@@ -78,6 +85,8 @@ try:  # Optional until the Telegram channel is enabled.
     TELEGRAM_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised through preflight
     LinkPreviewOptions = Update = ChatAction = ParseMode = Any
+    BotCommandScopeAllGroupChats = BotCommandScopeAllPrivateChats = Any
+    BotCommandScopeChat = BotCommandScopeDefault = Any
     BadRequest = Conflict = Forbidden = InvalidToken = RuntimeError
     NetworkError = RetryAfter = TimedOut = RuntimeError
     Application = MessageHandler = HTTPXRequest = Any
@@ -1186,6 +1195,7 @@ class TelegramChannel:
                 .lstrip("@")
                 .lower()
             )
+            await self._register_command_menu()
             # Replay locally committed work before accepting new server work.
             await self._update_queue.replay_pending(self._bot)
             await app.start()
@@ -1219,6 +1229,31 @@ class TelegramChannel:
             ) from exc
 
         self._log_ready()
+
+    async def _register_command_menu(self) -> None:
+        """Publish the same commands as /help, replacing the previous bot menu."""
+        commands = [
+            (command.name, t(f"commands.description_{command.name}", self._config.language))
+            for command in COMMAND_REGISTRY
+        ]
+        scopes = [
+            BotCommandScopeDefault(),
+            BotCommandScopeAllPrivateChats(),
+            BotCommandScopeAllGroupChats(),
+        ]
+        # A forum's old chat-specific menu takes precedence over the group menu.
+        if self._config.home_chat_id:
+            scopes.append(BotCommandScopeChat(normalize_telegram_chat_id(self._config.home_chat_id)))
+        for scope in scopes:
+            try:
+                await asyncio.wait_for(
+                    self._bot.set_my_commands(commands, scope=scope), timeout=10.0
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Telegram command menu update failed for %s: %s",
+                    scope.type, _redact_error(exc, self._token),
+                )
 
     async def _start_update_intake(self) -> None:
         if self._intake_started:

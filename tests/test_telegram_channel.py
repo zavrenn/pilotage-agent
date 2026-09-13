@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from pilotage.channels import telegram
+from pilotage.commands import execute_command
 from pilotage.config import (
     Config,
     TELEGRAM_DEFAULT_INSTRUCTIONS,
@@ -29,6 +30,7 @@ from pilotage.delivery import (
     recover_deliveries,
 )
 from pilotage.settings import ConfigError
+from pilotage.i18n import t
 
 
 def _entity(kind: str, text: str, *, offset: int = 0):
@@ -675,6 +677,65 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(invocation.command.name, "new")
         self.assertEqual(command_handler.await_args.args[-1], "")
         await channel.stop()
+
+    async def test_unknown_commands_reply_without_model_input_and_complete_their_claims(self):
+        channel, handler, command_handler = self._channel("display:\n  language: en\n")
+        self.addAsyncCleanup(channel.stop)
+        replies = []
+
+        async def reply(_chat, session_id, _message, _thread, invocation, _claim):
+            replies.append(await execute_command(
+                invocation, agent=object(), config=channel._config,
+                session_id=session_id, reset_reply="unused",
+            ))
+
+        command_handler.side_effect = reply
+        for update_id, text in enumerate(("/model", "/model gpt-test"), start=705):
+            update = _telegram_update(update_id, text)
+            channel._inbound_store.record(update)
+            await channel._handle_command(update, None)
+            await asyncio.gather(*list(channel._background_tasks))
+
+        self.assertEqual(replies, [
+            "Unknown command. Use /help to see available commands.",
+            "Unknown command. Use /help to see available commands.",
+        ])
+        handler.assert_not_awaited()
+        self.assertFalse(channel._pending)
+        self.assertEqual(channel._inbound_store.pending(), [])
+
+    async def test_command_menu_replaces_old_scopes_and_uses_display_language(self):
+        with mock.patch.dict(os.environ, {"TELEGRAM_HOME_CHANNEL": "-100"}):
+            channel, _, _ = self._channel("display:\n  language: fr\n")
+        channel._bot.set_my_commands = mock.AsyncMock()
+
+        await channel._register_command_menu()
+
+        calls = channel._bot.set_my_commands.await_args_list
+        self.assertEqual([call.kwargs["scope"].type for call in calls], [
+            "default", "all_private_chats", "all_group_chats", "chat",
+        ])
+        self.assertEqual(calls[-1].kwargs["scope"].chat_id, -100)
+        for call in calls:
+            commands = call.args[0]
+            self.assertEqual([name for name, _ in commands], [
+                "help", "new", "stop", "effort", "status",
+            ])
+            for name, description in commands:
+                self.assertEqual(description, t(f"commands.description_{name}", "fr"))
+
+    async def test_menu_failure_keeps_other_scopes_reachable_and_redacts_token(self):
+        channel, _, _ = self._channel()
+        channel._bot.set_my_commands = mock.AsyncMock(
+            side_effect=[RuntimeError(f"Request failed for {channel._token}"), True, True],
+        )
+
+        with self.assertLogs(telegram.logger, level="WARNING") as logs:
+            await channel._register_command_menu()
+
+        self.assertEqual(channel._bot.set_my_commands.await_count, 3)
+        self.assertNotIn(channel._token, "\n".join(logs.output))
+        self.assertIsNone(channel.failure)
 
     async def test_invalid_new_command_does_not_discard_pending_input(self):
         channel, handler, command_handler = self._channel(
@@ -1682,6 +1743,7 @@ class TelegramLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     id=999,
                     username="pilotage_bot",
                     delete_webhook=mock.AsyncMock(),
+                    set_my_commands=mock.AsyncMock(),
                 )
 
                 async def start_polling(**_kwargs):
@@ -1718,6 +1780,7 @@ class TelegramLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     await channel.stop()
 
         app.initialize.assert_awaited_once()
+        self.assertEqual(bot.set_my_commands.await_count, 3)
         bot.delete_webhook.assert_awaited_once_with(
             drop_pending_updates=False
         )
@@ -1752,6 +1815,7 @@ class TelegramLifecycleTests(unittest.IsolatedAsyncioTestCase):
         bot = SimpleNamespace(
             username="pilotage_bot",
             delete_webhook=mock.AsyncMock(),
+            set_my_commands=mock.AsyncMock(),
         )
         updater = SimpleNamespace(
             running=True,
@@ -1843,6 +1907,7 @@ class TelegramLifecycleTests(unittest.IsolatedAsyncioTestCase):
         bot = SimpleNamespace(
             username="pilotage_bot",
             delete_webhook=mock.AsyncMock(),
+            set_my_commands=mock.AsyncMock(),
         )
         updater = SimpleNamespace(
             running=True,
@@ -2011,6 +2076,7 @@ class TelegramWebhookTests(unittest.IsolatedAsyncioTestCase):
                     id=999,
                     username="pilotage_bot",
                     delete_webhook=mock.AsyncMock(),
+                    set_my_commands=mock.AsyncMock(),
                 )
                 updater = SimpleNamespace(
                     running=True,
@@ -2052,6 +2118,7 @@ class TelegramWebhookTests(unittest.IsolatedAsyncioTestCase):
         )
         updater.start_polling.assert_not_awaited()
         bot.delete_webhook.assert_not_awaited()
+        self.assertEqual(bot.set_my_commands.await_count, 3)
 
 
 
