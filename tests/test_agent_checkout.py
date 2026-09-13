@@ -19,6 +19,7 @@ HELPERS = runpy.run_path(str(SCRIPT))
 asset_paths = HELPERS["asset_paths"]
 install_assets = HELPERS["install_assets"]
 share_writable_assets = HELPERS["share_writable_assets"]
+configure_credential_helper = HELPERS["configure_credential_helper"]
 
 
 class CheckoutAssetsTests(unittest.TestCase):
@@ -135,6 +136,34 @@ class CheckoutAssetsTests(unittest.TestCase):
         self.write(self.home, "workspace/records/new.md", "New record\n")
         self.assertIn("?? workspace/records/new.md", git(self.home, "status", "--porcelain"))
         self.assertNotIn(".env", git(self.home, "status", "--porcelain"))
+
+    @unittest.skipUnless(shutil.which("git"), "Git is unavailable")
+    def test_credential_helper_defaults_to_store_and_preserves_existing_choices(self):
+        operator_home = self.root / "operator"
+        operator_home.mkdir()
+        config = operator_home / ".gitconfig"
+        env = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(config),
+               "HOME": str(operator_home)}
+        for initial in (
+            None,
+            "[credential]\n    helper = cache\n",
+            "[credential]\n    helper = \n",
+            "[credential]\n    helper = \n    helper = cache\n",
+            '[credential "https://github.com"]\n    helper = cache\n',
+        ):
+            with self.subTest(initial=initial), patch.dict(os.environ, env):
+                if initial is not None:
+                    config.write_text(initial)
+                    before = config.read_bytes()
+                configure_credential_helper(["git"], operator_home)
+                if initial is None:
+                    result = subprocess.run(
+                        ["git", "config", "--global", "--get-all", "credential.helper"],
+                        cwd=operator_home, check=True, capture_output=True, text=True,
+                    )
+                    self.assertEqual(result.stdout.strip(), "store")
+                else:
+                    self.assertEqual(config.read_bytes(), before)
 
     def test_runtime_and_account_files_cannot_be_supplied_by_repository(self):
         for name in (".pilotage-agent/.env", ".pilotage-agent/.runtime.lock",

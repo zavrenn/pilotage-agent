@@ -346,6 +346,10 @@ cd /home/agent
 git status
 ```
 
+If the operator has no Git credential helper configured, the installer enables
+`store` globally before cloning. It saves credentials unencrypted in the operator's
+private home for later Git operations.
+
 The installer preserves runtime state and `.env`, replaces bootstrap config and
 identity, and refuses existing asset conflicts or an existing checkout. Git runs
 as the operator, with its authentication in the operator home. `/home/agent`

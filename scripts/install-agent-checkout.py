@@ -109,6 +109,22 @@ def share_writable_assets(home, operator_uid, agent_uid):
                 subprocess.run(["setfacl", "-d", "-m", default, str(path)], check=True)
 
 
+def configure_credential_helper(git, operator_home):
+    """Use store only when the operator has no configured credential helper."""
+    # Include host-specific helpers and preserve intentionally empty values.
+    result = subprocess.run(
+        [*git, "config", "--get-regexp", r"^credential(\..*)?\.helper$"],
+        cwd=operator_home, stdout=subprocess.DEVNULL,
+    )
+    if result.returncode == 1:  # No matching configuration entry.
+        subprocess.run(
+            [*git, "config", "--global", "credential.helper", "store"],
+            cwd=operator_home, check=True,
+        )
+    else:
+        result.check_returncode()
+
+
 def main():
     if sys.platform != "linux" or os.geteuid() != 0:
         raise SystemExit("Run with sudo inside the protected Ubuntu container.")
@@ -149,6 +165,7 @@ def main():
         stage = Path(staging)
         os.chown(stage, operator.pw_uid, operator.pw_gid)
         source = stage / "checkout"
+        configure_credential_helper(git, operator.pw_dir)
         subprocess.run([*git, "clone", "--", sys.argv[1], str(source)], cwd=operator.pw_dir, check=True)
         paths = asset_paths(source, home)
         install_assets(source, home, paths, operator.pw_uid, agent.pw_gid)
