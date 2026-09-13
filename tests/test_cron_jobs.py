@@ -80,6 +80,19 @@ class ScheduleTests(unittest.TestCase):
                 parse_schedule(schedule, now=self.now)
 
 
+class PermissionTests(StoreCase):
+    @unittest.skipUnless(os.name == "posix", "Requires POSIX file permissions")
+    def test_cron_without_sharing_keeps_records_private_after_replacement(self):
+        job = self.create()
+        self.store.update_job(job["id"], {"prompt": "Updated report"})
+        output = self.store.save_output(job["id"], "report")
+        self.store.ensure_dirs()
+        for directory in (self.store.cron_dir, self.store.output_dir, output.parent):
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+        for file in (self.store.jobs_path, output):
+            self.assertEqual(file.stat().st_mode & 0o777, 0o600)
+
+
 class CrudTests(StoreCase):
     def test_create_persists_complete_profile_local_record(self):
         job = self.create(

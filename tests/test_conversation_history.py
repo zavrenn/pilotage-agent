@@ -42,6 +42,35 @@ class StoreTests(unittest.TestCase):
         self.path = Path(tmp.name) / "state" / "conversations.db"
         self.store = ConversationStore(self.path)
 
+    def test_incoming_time_survives_restart_and_all_completion_paths(self):
+        sent = datetime(2026, 1, 1, 23, 59, tzinfo=timezone.utc).timestamp()
+        stored = sent + 180
+        for completion in ("direct", "ready", "stopped"):
+            with self.subTest(completion=completion):
+                with patch("pilotage.history.time.time", return_value=sent + 60):
+                    self.store.begin_turn(completion, "midnight record", message_at=sent)
+                if completion == "ready":
+                    self.store.checkpoint_answer(completion, "midnight record", "saved")
+                elif completion == "stopped":
+                    checkpoint = self.store.request_stop(completion, "stopped")
+                restarted = ConversationStore(self.path)
+                active = restarted.list_active_turns()[0]
+                self.assertEqual(active.message_at, sent)
+                with patch("pilotage.history.time.time", return_value=stored):
+                    if completion == "direct":
+                        restarted.complete_turn(completion, "midnight record", "saved")
+                    elif completion == "ready":
+                        restarted.complete_ready_turn(completion)
+                    else:
+                        restarted.complete_stopped_turn(checkpoint)
+                with closing(sqlite3.connect(self.path)) as connection:
+                    rows = connection.execute(
+                        "SELECT role, message_at, written_at FROM turns"
+                        " WHERE chat_id = ? ORDER BY id", (completion,),
+                    ).fetchall()
+                self.assertEqual(rows, [("user", sent, stored), ("assistant", None, stored)])
+                self.assertEqual(restarted.list_active_turns(), [])
+
     def test_turns_come_back_in_the_order_they_were_said(self):
         self.store.append("chat", [("user", "first"), ("assistant", "second")])
         self.store.append("chat", [("user", "third"), ("assistant", "fourth")])
@@ -542,6 +571,23 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.list_active_turns()[0].phase, "unknown")
         with self.assertRaisesRegex(ConversationError, "previous turn"):
             store.begin_turn("chat", "must remain fenced")
+
+    async def test_incoming_time_survives_agent_delivery_recovery(self):
+        sent = datetime(2026, 1, 1, 23, 59, tzinfo=timezone.utc).timestamp()
+        first = self._agent()
+        await first.respond("chat", "midnight record", message_at=sent, defer_completion=True)
+        store = ConversationStore(self.path)
+        active = store.list_active_turns()[0]
+        self.assertEqual(active.message_at, sent)
+        second = self._agent()
+        await second.recover_turn(active, defer_completion=True)
+        await second.finalize_ready_turn("chat")
+        with closing(sqlite3.connect(self.path)) as connection:
+            row = connection.execute(
+                "SELECT message_at, written_at FROM turns WHERE role = 'user'"
+            ).fetchone()
+        self.assertEqual(row[0], sent)
+        self.assertGreater(row[1], sent)
 
     async def test_a_conversation_survives_the_process(self):
         first = self._agent()

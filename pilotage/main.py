@@ -1478,6 +1478,7 @@ async def _run_enabled_channels(
                                     },
                                     approval_notify=None,
                                     claim_ids=message.claim_ids,
+                                    message_at=message.message_at,
                                     defer_completion=True,
                                     prepared_execution=prepared_execution,
                                 )
@@ -1794,6 +1795,7 @@ async def _run_enabled_channels(
                                     origin=origin,
                                     approval_notify=None,
                                     claim_ids=message.claim_ids,
+                                    message_at=message.message_at,
                                     defer_completion=True,
                                     prepared_execution=prepared_execution,
                                 )

@@ -18,6 +18,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ..cron.jobs import timezone_for_name
 from ..history import ConversationSearchError
 from .ansi_strip import strip_ansi
 from .registry import Tool, ToolContext, tool_error
@@ -92,9 +93,9 @@ def sanitize_fts5_query(query: str) -> str:
     return sanitized.strip()
 
 
-def _timestamp(value: Any) -> str:
+def _timestamp(value: Any, tz=None) -> str:
     try:
-        return datetime.fromtimestamp(float(value)).astimezone().isoformat(
+        return datetime.fromtimestamp(float(value), tz=tz).astimezone(tz).isoformat(
             timespec="seconds"
         )
     except (OSError, OverflowError, TypeError, ValueError):
@@ -121,12 +122,14 @@ def _shape_message(
     *,
     anchor_id: Optional[int] = None,
     content_limit: int = MESSAGE_CONTENT_LIMIT,
+    tz=None,
 ) -> Dict[str, Any]:
     shaped = {
         "id": int(message["id"]),
         "role": str(message["role"]),
         "content": _cap(message.get("content"), content_limit),
-        "timestamp": _timestamp(message.get("written_at")),
+        "timestamp": _timestamp(message.get("message_at") or message.get("written_at"), tz),
+        "stored_at": _timestamp(message.get("written_at"), tz),
     }
     if anchor_id is not None and shaped["id"] == anchor_id:
         shaped["match"] = True
@@ -159,7 +162,7 @@ def _roles(value: Any) -> Tuple[str, ...]:
     return requested
 
 
-def _browse(store: Any, current_chat_id: str, limit: int) -> str:
+def _browse(store: Any, current_chat_id: str, limit: int, tz=None) -> str:
     sessions = store.recent_sessions(
         current_chat_id=current_chat_id,
         limit=limit,
@@ -167,8 +170,8 @@ def _browse(store: Any, current_chat_id: str, limit: int) -> str:
     results = [
         {
             "session_id": item["session_id"],
-            "started_at": _timestamp(item["started_at"]),
-            "last_active": _timestamp(item["last_active"]),
+            "started_at": _timestamp(item["started_at"], tz),
+            "last_active": _timestamp(item["last_active"], tz),
             "message_count": item["message_count"],
             "preview": _preview(item["preview"]),
         }
@@ -189,7 +192,7 @@ def _browse(store: Any, current_chat_id: str, limit: int) -> str:
     )
 
 
-def _read(store: Any, session_id: str) -> str:
+def _read(store: Any, session_id: str, tz=None) -> str:
     session = store.read_session(session_id)
     if session is None:
         return tool_error(
@@ -197,7 +200,7 @@ def _read(store: Any, session_id: str) -> str:
             success=False,
         )
     messages = [
-        _shape_message(message) for message in session["messages"]
+        _shape_message(message, tz=tz) for message in session["messages"]
     ]
     total = len(messages)
     truncated = total > 30
@@ -206,8 +209,8 @@ def _read(store: Any, session_id: str) -> str:
         "success": True,
         "mode": "read",
         "session_id": session["session_id"],
-        "started_at": _timestamp(session["started_at"]),
-        "last_active": _timestamp(session["last_active"]),
+        "started_at": _timestamp(session["started_at"], tz),
+        "last_active": _timestamp(session["last_active"], tz),
         "message_count": total,
         "truncated": truncated,
         "messages": visible,
@@ -225,6 +228,7 @@ def _scroll(
     session_id: str,
     around_message_id: Any,
     window: int,
+    tz=None,
 ) -> str:
     try:
         anchor = int(around_message_id)
@@ -251,7 +255,7 @@ def _scroll(
             "around_message_id": anchor,
             "window": window,
             "messages": [
-                _shape_message(message, anchor_id=anchor)
+                _shape_message(message, anchor_id=anchor, tz=tz)
                 for message in view["messages"]
             ],
             "messages_before": view["messages_before"],
@@ -269,6 +273,7 @@ def _discover(
     limit: int,
     sort: Optional[str],
     detail: str,
+    tz=None,
 ) -> str:
     sanitized = sanitize_fts5_query(query)
     if not sanitized:
@@ -302,13 +307,14 @@ def _discover(
 
         if result_detail == "full":
             messages = [
-                _shape_message(message, anchor_id=anchor)
+                _shape_message(message, anchor_id=anchor, tz=tz)
                 for message in view["messages"]
             ]
             bookend_start = [
                 _shape_message(
                     message,
                     content_limit=BOOKEND_CONTENT_LIMIT,
+                    tz=tz,
                 )
                 for message in view["bookend_start"]
             ]
@@ -316,12 +322,13 @@ def _discover(
                 _shape_message(
                     message,
                     content_limit=BOOKEND_CONTENT_LIMIT,
+                    tz=tz,
                 )
                 for message in view["bookend_end"]
             ]
         else:
             messages = [
-                _shape_message(hit, anchor_id=anchor)
+                _shape_message(hit, anchor_id=anchor, tz=tz)
             ]
             bookend_start = []
             bookend_end = []
@@ -329,7 +336,7 @@ def _discover(
         results.append(
             {
                 "session_id": view["session_id"],
-                "when": _timestamp(hit["written_at"]),
+                "when": _timestamp(hit.get("message_at") or hit["written_at"], tz),
                 "matched_role": hit["role"],
                 "match_message_id": anchor,
                 "snippet": _cap(hit["snippet"], MESSAGE_CONTENT_LIMIT),
@@ -362,7 +369,7 @@ def _discover(
     )
 
 
-def _run(args: Dict[str, Any], store: Any, current_chat_id: str) -> str:
+def _run(args: Dict[str, Any], store: Any, current_chat_id: str, tz=None) -> str:
     session_id_value = args.get("session_id")
     session_id = (
         str(session_id_value).strip()
@@ -378,15 +385,15 @@ def _run(args: Dict[str, Any], store: Any, current_chat_id: str) -> str:
             success=False,
         )
     if session_id and around_message_id is not None:
-        return _scroll(store, session_id, around_message_id, window)
+        return _scroll(store, session_id, around_message_id, window, tz)
     if session_id:
-        return _read(store, session_id)
+        return _read(store, session_id, tz)
 
     query_value = args.get("query")
     query = str(query_value or "").strip()
     limit = _integer(args.get("limit"), 3, 1, 10)
     if not query:
-        return _browse(store, current_chat_id, limit)
+        return _browse(store, current_chat_id, limit, tz)
 
     sort_value = args.get("sort")
     sort = str(sort_value).strip().lower() if sort_value is not None else None
@@ -413,6 +420,7 @@ def _run(args: Dict[str, Any], store: Any, current_chat_id: str) -> str:
         limit,
         sort or None,
         detail_value,
+        tz,
     )
 
 
@@ -423,12 +431,14 @@ async def handle(args: Dict[str, Any], context: ToolContext) -> str:
             "Conversation history is unavailable",
             success=False,
         )
+    zone_name = getattr(context.config, "timezone", "")
     try:
         return await asyncio.to_thread(
             _run,
             args,
             store,
             context.chat_id,
+            timezone_for_name(zone_name) if zone_name else None,
         )
     except ConversationSearchError as exc:
         return tool_error(str(exc), success=False)
@@ -439,7 +449,10 @@ SESSION_SEARCH_SCHEMA = {
     "description": (
         "Search past conversations stored in this agent's local SQLite "
         "history, or read and scroll inside one. FTS5-backed; makes no LLM "
-        "calls and returns actual stored messages. Use this as historical "
+        "calls and returns actual stored messages. Timestamps use the agent timezone. "
+        "User timestamps preserve incoming message time (the first in a batch); "
+        "older records without it fall back to stored_at, the storage time. "
+        "Use this as historical "
         "context, not as proof of a current external source. Four shapes: "
         "(1) pass query to discover matching sessions; adaptive detail fully "
         "hydrates the top result and keeps later results compact, while "

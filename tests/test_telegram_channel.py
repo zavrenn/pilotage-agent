@@ -88,13 +88,13 @@ def _message(
     return SimpleNamespace(**values)
 
 
-def _telegram_update(update_id: int, text: str = "hello", *, user_id: int = 42):
+def _telegram_update(update_id: int, text: str = "hello", *, user_id: int = 42, date: int = 0):
     return telegram.Update.de_json(
         {
             "update_id": update_id,
             "message": {
                 "message_id": update_id,
-                "date": 0,
+                "date": date,
                 "chat": {"id": 42, "type": "private"},
                 "from": {
                     "id": user_id,
@@ -1267,7 +1267,10 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
             "telegram:\n  batch_delay: 0\n  batch_hard_cap: 1\n"
         )
         self.addAsyncCleanup(channel.stop)
-        updates = [_telegram_update(701, "one"), _telegram_update(702, "two")]
+        updates = [
+            _telegram_update(701, "one", date=1767311940),
+            _telegram_update(702, "two", date=1767312060),
+        ]
         expected = [channel._inbound_store.record(update)[0] for update in updates]
 
         await channel._handle_text(updates[0], None)
@@ -1277,6 +1280,7 @@ class TelegramChannelTests(unittest.IsolatedAsyncioTestCase):
         handler.assert_awaited_once()
         inbound = handler.await_args.args[0]
         self.assertEqual(inbound.claim_ids, expected)
+        self.assertEqual(inbound.message_at, 1767311940)
         self.assertTrue(all(len(claim) == 64 for claim in inbound.claim_ids))
         self.assertEqual(channel._inbound_store.pending(), [])
 

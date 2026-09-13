@@ -53,7 +53,7 @@ def main():
         assert stat.S_IMODE(info.st_mode) == 0o700
         run("import os,sys; assert not os.access(sys.argv[1], os.R_OK | os.X_OK)", metadata)
         # Shared access must survive either account's restrictive umask.
-        for directory in (state / "skills", home / "workspace"):
+        for directory in (state / "skills", state / "cron", home / "workspace"):
             probe = Path(tempfile.mkdtemp(prefix=".checkout-check-", dir=directory))
             os.chown(probe, operator.pw_uid, agent.pw_gid)
             probe.chmod(0o770)  # Restore the inherited ACL mask after mkdtemp's 0700.
@@ -71,16 +71,24 @@ class Terminal:
         result = subprocess.run(["bash", "-c", command], cwd=cwd,
                                 input=stdin_data, text=True, capture_output=True)
         return {"returncode": result.returncode, "output": result.stdout + result.stderr}
-result = ShellFileOperations(Terminal())._atomic_write(str(p / "change.txt"), "created")
-assert result.exit_code == 0, result.stdout
-''', nested, account=creator)
+if sys.argv[2] == "cron":
+    from pilotage.cron.jobs import CronStore, _atomic_write
+    store = CronStore(p)
+    store.ensure_dirs()
+    _atomic_write(store.output_dir / "change.txt", "initial")
+    store.ensure_dirs()
+    _atomic_write(store.output_dir / "change.txt", "created")
+else:
+    result = ShellFileOperations(Terminal())._atomic_write(str(p / "change.txt"), "created")
+    assert result.exit_code == 0, result.stdout
+''', nested, directory.name, account=creator)
                     run('''
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]) / "change.txt"
 assert p.read_text() == "created"
 p.write_text("reviewed")
 p.unlink()
-''', nested, account=reviewer)
+''', nested / 'cron/output' if directory == state / 'cron' else nested, account=reviewer)
             finally:
                 shutil.rmtree(probe)
     info = state.lstat()

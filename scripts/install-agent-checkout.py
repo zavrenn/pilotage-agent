@@ -92,7 +92,7 @@ def install_assets(source, home, paths, operator_uid, agent_gid):
 
 
 def share_writable_assets(home, operator_uid, agent_uid):
-    """Keep settings read-only to agent; share skills and workspace with both accounts."""
+    """Keep settings protected; share skills, cron and workspace with both accounts."""
     state = home / ".pilotage-agent"
     # Git replaces files on pull. The state directory's setgid group is agent, so an
     # operator umask of 0002 alone would make replacement settings writable.
@@ -101,7 +101,7 @@ def share_writable_assets(home, operator_uid, agent_uid):
     ], check=True)
     access = f"u:{operator_uid}:rwX,u:{agent_uid}:rwX,m::rwX,o::---"
     default = f"u::rwx,u:{operator_uid}:rwx,u:{agent_uid}:rwx,g::---,m::rwx,o::---"
-    for directory in (state / "skills", home / "workspace"):
+    for directory in (state / "skills", state / "cron", home / "workspace"):
         directory.mkdir(exist_ok=True)
         subprocess.run(["setfacl", "-R", "-P", "-m", access, str(directory)], check=True)
         for path in [directory, *directory.rglob("*")]:

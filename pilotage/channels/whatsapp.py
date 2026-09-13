@@ -33,6 +33,7 @@ from ..delivery import (
     delivery_fingerprint,
     file_delivery_fingerprint,
 )
+from ..history import message_timestamp
 from ..i18n import DEFAULT_AGENT_LANGUAGE, t
 from ..legacy_notices import attachment_notice_replacements
 from ..redact import identity_key_path, identity_pseudonym
@@ -544,6 +545,7 @@ class InboundMessage:
     # Files the bridge downloaded for this turn, already checked against the
     # media cache roots.
     attachments: List[media.Attachment] = field(default_factory=list)
+    message_at: float = field(default_factory=message_timestamp)
 
 
 Handler = Callable[[InboundMessage], Awaitable[None]]
@@ -1266,6 +1268,7 @@ class WhatsAppChannel:
             sender_id=sender_id,
             sender_number=sender_number,
             push_name=str(event.get("pushName") or ""),
+            message_at=message_timestamp(event.get("timestamp")),
             text=text,
             is_group=is_group,
             message_ids=[message_id],
@@ -1482,6 +1485,8 @@ class WhatsAppChannel:
             pending.text = (
                 f"{pending.text}\n{message.text}" if pending.text else message.text
             )
+        # One history turn represents the batch, starting at its first message.
+        pending.message_at = min(pending.message_at, message.message_at)
         pending.message_ids.extend(message.message_ids)
         pending.dedup_ids.extend(message.dedup_ids)
         pending.claim_ids.extend(message.claim_ids)

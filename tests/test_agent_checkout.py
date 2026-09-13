@@ -310,6 +310,41 @@ assert p.stat().st_mode & 0o777 == 0o640
                 run(reviewer, "/usr/bin/python3", "-c",
                     f"from pathlib import Path; p=Path('{folder}/record.md'); "
                     "assert p.read_text()=='new'; p.unlink(); p.write_text('replaced')")
+        # Exercise the real cron writer under both UIDs. Copy the standalone
+        # module so the probe needs neither repository traversal nor installation.
+        cron_module = self.root / "cron_jobs.py"
+        shutil.copyfile(SCRIPT.parent.parent / "pilotage/cron/jobs.py", cron_module)
+        cron_module.chmod(0o644)
+        cron_writer = """
+import os, runpy, sys
+from pathlib import Path
+os.umask(0o077)
+CronStore = runpy.run_path(sys.argv[1])["CronStore"]
+store = CronStore(Path('.pilotage-agent'), timezone_name='UTC')
+jobs = store.load_jobs()
+job = jobs[0] if jobs else store.create_job(prompt='Initial report', schedule='0m')
+store.update_job(job['id'], {'prompt': sys.argv[2]})
+store.save_output(job['id'], sys.argv[2])
+store.ensure_dirs()
+"""
+        for creator, reviewer in ((agent_uid, operator_uid), (operator_uid, agent_uid),
+                                  (agent_uid, operator_uid)):
+            content = f"Report by {creator}"
+            run(creator, "/usr/bin/python3", "-c", cron_writer, str(cron_module), content)
+            git("add", ".pilotage-agent/cron")
+            self.assertIn(content, git("show", ":.pilotage-agent/cron/jobs.json"))
+            # Operator can stage every output; both users retain write access.
+            run(reviewer, "/usr/bin/python3", "-c", """
+import os
+from pathlib import Path
+for p in Path('.pilotage-agent/cron').rglob('*'):
+    assert os.access(p, os.R_OK | os.W_OK), p
+    assert p.stat().st_mode & 0o007 == 0, p
+    if p.is_file() and p.suffix == '.md':
+        with p.open('a') as stream:
+            stream.write(' reviewed')
+""")
+
         private = self.root / "private-agent-data"
         private.mkdir()
         os.chown(private, agent_uid, agent_uid)

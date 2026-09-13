@@ -458,6 +458,20 @@ def _normalize_repeat_count(value: Any) -> Optional[int]:
     return count
 
 
+def _chmod_preserving_acl(path: Path, mode: int) -> None:
+    """Keep private paths private and retain explicitly granted account access."""
+    if hasattr(os, "getxattr"):
+        try:
+            os.getxattr(path, "system.posix_acl_access")
+        except OSError:
+            pass
+        else:
+            # With an extended ACL, group bits are its mask. Restore the
+            # inherited grants without adding users or granting other access.
+            mode |= (mode & 0o700) >> 3
+    os.chmod(path, mode)
+
+
 def _atomic_write(path: Path, text: str) -> None:
     """Hermes' tempfile, fsync, replace pattern."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -470,11 +484,11 @@ def _atomic_write(path: Path, text: str) -> None:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp_path, path)
         try:
-            os.chmod(path, 0o600)
+            _chmod_preserving_acl(temp_path, 0o600)
         except OSError:
             pass
+        os.replace(temp_path, path)
         if os.name != "nt":
             directory_fd = os.open(path.parent, os.O_RDONLY)
             try:
@@ -532,7 +546,7 @@ class CronStore:
             directory.mkdir(parents=True, exist_ok=True)
             self._assert_local_path(directory, "directory")
             try:
-                os.chmod(directory, 0o700)
+                _chmod_preserving_acl(directory, 0o700)
             except OSError:
                 pass
         for path, label in (
@@ -1280,7 +1294,7 @@ class CronStore:
     def _save_output_file(self, job_id: str, output: str) -> Path:
         directory = self._job_output_dir(job_id, create=True)
         try:
-            os.chmod(directory, 0o700)
+            _chmod_preserving_acl(directory, 0o700)
         except OSError:
             pass
         path = directory / f"{self.now().strftime('%Y-%m-%d_%H-%M-%S_%f')}.md"

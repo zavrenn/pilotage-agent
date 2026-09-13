@@ -46,6 +46,7 @@ from ..delivery import (
     delivery_fingerprint,
     file_delivery_fingerprint,
 )
+from ..history import message_timestamp
 from ..i18n import DEFAULT_AGENT_LANGUAGE, t
 from ..legacy_notices import attachment_notice_replacements
 from ..redact import identity_pseudonym, redact_channel_identities
@@ -325,6 +326,7 @@ class InboundMessage:
     message_ids: List[str] = field(default_factory=list)
     claim_ids: List[str] = field(default_factory=list)
     attachments: List[media.Attachment] = field(default_factory=list)
+    message_at: float = field(default_factory=message_timestamp)
 
 
 @dataclass
@@ -2078,11 +2080,13 @@ class TelegramChannel:
 
         username = str(getattr(user, "username", "") or "")
         full_name = str(getattr(user, "full_name", "") or "").strip()
+        sent_at = getattr(message, "date", None)
         inbound = InboundMessage(
             chat_id=chat_id,
             session_id=session_id,
             user_id=user_id,
             user_name=full_name or (f"@{username}" if username else user_id),
+            message_at=message_timestamp(sent_at.timestamp() if sent_at else None),
             text=body,
             is_group=is_group,
             thread_id=thread_id,
@@ -2401,6 +2405,8 @@ class TelegramChannel:
                 if pending.text
                 else message.text
             )
+        # One history turn represents the batch, starting at its first message.
+        pending.message_at = min(pending.message_at, message.message_at)
         pending.message_ids.extend(message.message_ids)
         pending.claim_ids.extend(message.claim_ids)
         pending.attachments.extend(message.attachments)

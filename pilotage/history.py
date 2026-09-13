@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS turns (
     role       TEXT    NOT NULL,
     content    TEXT    NOT NULL,
     replay     TEXT    NOT NULL DEFAULT '',
-    written_at REAL    NOT NULL
+    written_at REAL    NOT NULL,
+    message_at REAL
 );
 CREATE INDEX IF NOT EXISTS turns_by_session ON turns (chat_id, session, id);
 
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS active_turns (
     terminal_completed INTEGER NOT NULL DEFAULT 0,
     reasoning_effort TEXT NOT NULL DEFAULT '',
     updated_at   REAL    NOT NULL,
+    message_at   REAL,
     PRIMARY KEY (chat_id, session)
 );
 """
@@ -165,6 +167,7 @@ class ActiveTurn:
     terminal_completed: bool
     updated_at: float
     reasoning_effort: str = ""
+    message_at: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +181,15 @@ class StopCheckpoint:
 
 
 _WHATSAPP_CLAIM_ID_RE = re.compile(r"^[a-f0-9]{64}$")
+
+
+def message_timestamp(value: Any = None) -> float:
+    """Use the channel's event time, or receipt time when it is unavailable."""
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return time.time()
+    return timestamp if math.isfinite(timestamp) and timestamp > 0 else time.time()
 
 
 def _automatic_reset_reason(
@@ -288,6 +300,8 @@ class ConversationStore:
                     connection.execute(
                         "ALTER TABLE turns ADD COLUMN replay TEXT NOT NULL DEFAULT ''"
                     )
+                if "message_at" not in columns:
+                    connection.execute("ALTER TABLE turns ADD COLUMN message_at REAL")
                 chat_columns = {
                     row[1] for row in connection.execute("PRAGMA table_info(chats)")
                 }
@@ -321,6 +335,7 @@ class ConversationStore:
                     ("answer_replay", "TEXT NOT NULL DEFAULT '[]'"),
                     ("terminal_completed", "INTEGER NOT NULL DEFAULT 0"),
                     ("reasoning_effort", "TEXT NOT NULL DEFAULT ''"),
+                    ("message_at", "REAL"),
                 ):
                     if column not in active_columns:
                         connection.execute(
@@ -643,6 +658,7 @@ class ConversationStore:
         claim_ids: Sequence[str] = (),
         image_manifest: Sequence[Dict[str, Any]] = (),
         reasoning_effort: str = "",
+        message_at: Optional[float] = None,
     ) -> int:
         """Durably accept one user turn before the model can act on it."""
 
@@ -691,8 +707,8 @@ class ConversationStore:
                 connection.execute(
                     "INSERT INTO active_turns"
                     " (chat_id, session, user_content, trajectory, phase,"
-                    " iteration, origin, claim_ids, image_manifest, reasoning_effort, updated_at)"
-                    " VALUES (?, ?, ?, '[]', 'started', 0, ?, ?, ?, ?, ?)",
+                    " iteration, origin, claim_ids, image_manifest, reasoning_effort, updated_at, message_at)"
+                    " VALUES (?, ?, ?, '[]', 'started', 0, ?, ?, ?, ?, ?, ?)",
                     (
                         chat_id,
                         session,
@@ -702,6 +718,7 @@ class ConversationStore:
                         encoded_images,
                         reasoning_effort,
                         now,
+                        message_timestamp(message_at),
                     ),
                 )
                 return session
@@ -873,7 +890,7 @@ class ConversationStore:
                 session = self._session(connection, chat_id)
                 row = connection.execute(
                     "SELECT user_content, answer_content, answer_replay,"
-                    " terminal_completed FROM active_turns"
+                    " terminal_completed, message_at FROM active_turns"
                     " WHERE chat_id = ? AND session = ? AND phase = 'answer_ready'",
                     (chat_id, session),
                 ).fetchone()
@@ -896,10 +913,10 @@ class ConversationStore:
                 )
                 connection.executemany(
                     "INSERT INTO turns"
-                    " (chat_id, session, role, content, replay, written_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    " (chat_id, session, role, content, replay, written_at, message_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     [
-                        (chat_id, session, "user", user_content, "", now),
+                        (chat_id, session, "user", user_content, "", now, row["message_at"]),
                         (
                             chat_id,
                             session,
@@ -907,6 +924,7 @@ class ConversationStore:
                             assistant_content,
                             encoded_replay,
                             now,
+                            None,
                         ),
                     ],
                 )
@@ -935,7 +953,8 @@ class ConversationStore:
                     "SELECT a.chat_id, a.session, a.user_content, a.trajectory,"
                     " a.phase, a.iteration, a.origin, a.claim_ids,"
                     " a.image_manifest, a.answer_content, a.answer_replay,"
-                    " a.terminal_completed, a.reasoning_effort, a.updated_at, c.session AS current_session"
+                    " a.terminal_completed, a.reasoning_effort, a.updated_at, a.message_at,"
+                    " c.session AS current_session"
                     " FROM active_turns a"
                     " LEFT JOIN chats c ON c.chat_id = a.chat_id"
                     " ORDER BY a.updated_at, a.chat_id"
@@ -1021,6 +1040,7 @@ class ConversationStore:
                         terminal_completed=bool(terminal_completed),
                         updated_at=updated_at,
                         reasoning_effort=reasoning_effort,
+                        message_at=row["message_at"],
                     )
                 )
             return active
@@ -1177,7 +1197,7 @@ class ConversationStore:
             with self._connect() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 row = connection.execute(
-                    "SELECT user_content, answer_content FROM active_turns"
+                    "SELECT user_content, answer_content, message_at FROM active_turns"
                     " WHERE chat_id = ? AND session = ? AND phase = 'stopped'",
                     (checkpoint.chat_id, checkpoint.session),
                 ).fetchone()
@@ -1191,8 +1211,8 @@ class ConversationStore:
                     raise ConversationError("The stopped turn has no history marker")
                 connection.executemany(
                     "INSERT INTO turns"
-                    " (chat_id, session, role, content, replay, written_at)"
-                    " VALUES (?, ?, ?, ?, '', ?)",
+                    " (chat_id, session, role, content, replay, written_at, message_at)"
+                    " VALUES (?, ?, ?, ?, '', ?, ?)",
                     [
                         (
                             checkpoint.chat_id,
@@ -1200,6 +1220,7 @@ class ConversationStore:
                             "user",
                             user_content,
                             now,
+                            row["message_at"],
                         ),
                         (
                             checkpoint.chat_id,
@@ -1207,6 +1228,7 @@ class ConversationStore:
                             "assistant",
                             assistant_content,
                             now,
+                            None,
                         ),
                     ],
                 )
@@ -1272,7 +1294,7 @@ class ConversationStore:
                 connection.execute("BEGIN IMMEDIATE")
                 session = self._session(connection, chat_id)
                 active = connection.execute(
-                    "SELECT phase FROM active_turns"
+                    "SELECT phase, message_at FROM active_turns"
                     " WHERE chat_id = ? AND session = ? AND user_content = ?",
                     (chat_id, session, user_content),
                 ).fetchone()
@@ -1297,10 +1319,10 @@ class ConversationStore:
                 )
                 connection.executemany(
                     "INSERT INTO turns"
-                    " (chat_id, session, role, content, replay, written_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    " (chat_id, session, role, content, replay, written_at, message_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     [
-                        (chat_id, session, "user", user_content, "", now),
+                        (chat_id, session, "user", user_content, "", now, active["message_at"]),
                         (
                             chat_id,
                             session,
@@ -1308,6 +1330,7 @@ class ConversationStore:
                             assistant_content,
                             encoded_replay,
                             now,
+                            None,
                         ),
                     ],
                 )
@@ -1450,6 +1473,7 @@ class ConversationStore:
             "role": str(row["role"]),
             "content": str(row["content"]),
             "written_at": float(row["written_at"]),
+            "message_at": row["message_at"],
         }
 
     @staticmethod
@@ -1505,9 +1529,9 @@ class ConversationStore:
         # scheduled runs cannot starve out the user's conversations.
         order_sql = "automation_rank, score"
         if sort == "newest":
-            order_sql = "automation_rank, t.written_at DESC, score"
+            order_sql = "automation_rank, COALESCE(t.message_at, t.written_at) DESC, score"
         elif sort == "oldest":
-            order_sql = "automation_rank, t.written_at ASC, score"
+            order_sql = "automation_rank, COALESCE(t.message_at, t.written_at) ASC, score"
 
         try:
             with self._connect() as connection:
@@ -1519,7 +1543,7 @@ class ConversationStore:
                 role_placeholders = ",".join("?" for _ in roles)
                 rows = connection.execute(
                     "SELECT t.id, t.chat_id, t.session, t.role, t.content,"
-                    " t.written_at,"
+                    " t.written_at, t.message_at,"
                     " snippet(turns_fts, 0, '>>>', '<<<', '...', 40) AS snippet,"
                     " bm25(turns_fts) AS score,"
                     " CASE WHEN t.chat_id LIKE 'cron:%' THEN 1"
@@ -1555,6 +1579,7 @@ class ConversationStore:
                             "content": str(row["content"]),
                             "snippet": str(row["snippet"] or ""),
                             "written_at": float(row["written_at"]),
+                            "message_at": row["message_at"],
                         }
                     )
                 return results
@@ -1577,7 +1602,7 @@ class ConversationStore:
                 current_session = self._session(connection, current_chat_id)
                 rows = connection.execute(
                     "SELECT chat_id, session, MIN(id) AS session_id,"
-                    " MIN(written_at) AS started_at,"
+                    " MIN(COALESCE(message_at, written_at)) AS started_at,"
                     " MAX(written_at) AS last_active, COUNT(*) AS message_count"
                     " FROM turns"
                     " WHERE NOT (chat_id = ? AND session = ?)"
@@ -1627,7 +1652,7 @@ class ConversationStore:
                     return None
                 chat_id, session = key
                 rows = connection.execute(
-                    "SELECT id, role, content, written_at FROM turns"
+                    "SELECT id, role, content, written_at, message_at FROM turns"
                     " WHERE chat_id = ? AND session = ? ORDER BY id",
                     key,
                 ).fetchall()
@@ -1637,7 +1662,7 @@ class ConversationStore:
                     "session_id": self._session_reference(
                         connection, chat_id, session
                     ),
-                    "started_at": float(rows[0]["written_at"]),
+                    "started_at": float(rows[0]["message_at"] or rows[0]["written_at"]),
                     "last_active": float(rows[-1]["written_at"]),
                     "messages": [self._stored_message(row) for row in rows],
                 }
@@ -1681,14 +1706,14 @@ class ConversationStore:
                     return None
 
                 before = connection.execute(
-                    "SELECT id, role, content, written_at FROM turns"
+                    "SELECT id, role, content, written_at, message_at FROM turns"
                     " WHERE chat_id = ? AND session = ? AND id <= ?"
                     " ORDER BY id DESC LIMIT ?",
                     (*key, anchor, window + 1),
                 ).fetchall()
                 before.reverse()
                 after = connection.execute(
-                    "SELECT id, role, content, written_at FROM turns"
+                    "SELECT id, role, content, written_at, message_at FROM turns"
                     " WHERE chat_id = ? AND session = ? AND id > ?"
                     " ORDER BY id LIMIT ?",
                     (*key, anchor, window),
@@ -1711,13 +1736,13 @@ class ConversationStore:
                 end_rows: Sequence[sqlite3.Row] = ()
                 if bookend:
                     start_rows = connection.execute(
-                        "SELECT id, role, content, written_at FROM turns"
+                        "SELECT id, role, content, written_at, message_at FROM turns"
                         " WHERE chat_id = ? AND session = ?"
                         " ORDER BY id LIMIT ?",
                         (*key, bookend),
                     ).fetchall()
                     end_rows = connection.execute(
-                        "SELECT id, role, content, written_at FROM turns"
+                        "SELECT id, role, content, written_at, message_at FROM turns"
                         " WHERE chat_id = ? AND session = ?"
                         " ORDER BY id DESC LIMIT ?",
                         (*key, bookend),

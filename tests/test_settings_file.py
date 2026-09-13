@@ -1375,6 +1375,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
         instances = []
         prepared_turns = []
         prepared_responses = []
+        message_times = []
 
         def inbound(text: str, message_id: str, claim_id: str):
             if channel_name == "whatsapp":
@@ -1385,6 +1386,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                     sender_number="212600000000",
                     push_name="Operator",
                     text=text,
+                    message_at=1767311940,
                     is_group=False,
                     message_ids=[message_id],
                     dedup_ids=[claim_id],
@@ -1396,6 +1398,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 user_id=chat_id,
                 user_name="Operator",
                 text=text,
+                message_at=1767311940,
                 is_group=False,
                 thread_id=thread_id,
                 message_ids=[message_id],
@@ -1427,6 +1430,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             async def respond(self, _session_id, text, *_args, **kwargs):
                 model_inputs.append(text)
                 prepared_responses.append(kwargs.get("prepared_execution"))
+                message_times.append(kwargs.get("message_at"))
                 return "normal answer"
 
             async def forget(self, target_session):
@@ -1604,6 +1608,9 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(main.auth, "read_credentials"),
         ):
             self.assertEqual(await main.command_run(config), 0)
+
+        self.assertTrue(message_times)
+        self.assertEqual(set(message_times), {1767311940})
 
         interrupted = main.t("runtime.interrupted_unknown", config.language)
         blocked_notices = [
@@ -1861,12 +1868,14 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 *,
                 on_notice,
                 origin,
+                message_at,
                 approval_notify,
                 claim_ids,
                 defer_completion,
                 prepared_execution,
             ):
                 seen["origin"] = origin
+                seen["message_at"] = message_at
                 seen["approval_notify"] = approval_notify
                 seen["claim_ids"] = claim_ids
                 seen["defer_completion"] = defer_completion
@@ -1911,6 +1920,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                         sender_number="123",
                         push_name="User",
                         text="hello",
+                        message_at=1767311940,
                         is_group=False,
                         message_ids=["m1"],
                         claim_ids=[claim_id],
@@ -1939,6 +1949,7 @@ class RuntimeChannelTests(unittest.IsolatedAsyncioTestCase):
                 "reply_to": "m1",
             },
         )
+        self.assertEqual(seen["message_at"], 1767311940)
         self.assertIsNone(seen["approval_notify"])
         self.assertEqual(seen["claim_ids"], [claim_id])
         self.assertEqual(seen["persisted_claim_ids"], [claim_id])

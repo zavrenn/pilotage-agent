@@ -79,6 +79,7 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 *,
                 on_notice,
                 origin,
+                message_at,
                 approval_notify,
                 claim_ids,
                 defer_completion,
@@ -88,6 +89,7 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 seen["text"] = text
                 seen["attachments"] = attachments
                 seen["origin"] = origin
+                seen["message_at"] = message_at
                 seen["approval_notify"] = approval_notify
                 seen["claim_ids"] = claim_ids
                 seen["defer_completion"] = defer_completion
@@ -131,6 +133,7 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                         user_id="42",
                         user_name="Owner",
                         text="voice",
+                        message_at=1767311940,
                         is_group=False,
                         thread_id="9",
                         message_ids=["99"],
@@ -213,6 +216,7 @@ class TelegramRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 ).fetchall(),
                 [("telegram", "42", "9", "delivered")],
         )
+        self.assertEqual(seen["message_at"], 1767311940)
         self.assertIsNone(seen["approval_notify"])
 
     async def test_telegram_plan_failure_does_not_complete_inbound_claim(self):

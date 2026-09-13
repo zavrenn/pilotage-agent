@@ -239,7 +239,10 @@ There is no profile manager, state selection, or authentication fallback.
 Only one live runtime may own the agent state directory.
 `display.language` selects English, French, or Arabic for static
 runtime messages; the agent's own language and register remain in `SOUL.md`.
-The top-level `timezone` is shared by cron and daily conversation resets.
+The top-level `timezone` is shared by cron, daily conversation resets, and
+history search. History keeps incoming user message time separately from storage
+time, including across restart recovery. A batched turn uses its first message's
+time; older records without an incoming timestamp use storage time.
 An optional `AGENTS.md` in
 the working directory supplies workspace instructions to each new conversation.
 
@@ -353,7 +356,7 @@ private home for later Git operations.
 The installer preserves runtime state and `.env`, replaces bootstrap config and
 identity, and refuses existing asset conflicts or an existing checkout. Git runs
 as the operator, with its authentication in the operator home. `/home/agent`
-and `.git` belong to the operator; `.git` is private. Skills and `workspace/`
+and `.git` belong to the operator; `.git` is private. Skills, cron records, and `workspace/`
 have inherited ACLs so both accounts can edit existing and new files there.
 Git metadata and settings remain protected. Manage exclusions in your repository's
 `.gitignore`; the installer leaves `.git/info/exclude` untouched.

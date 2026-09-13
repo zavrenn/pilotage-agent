@@ -6,7 +6,10 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from pilotage.agent import Agent
 from pilotage.codex import stream as codex_stream
@@ -40,6 +43,47 @@ class SessionSearchTests(unittest.IsolatedAsyncioTestCase):
             allowed_groups=["session_search"],
         )
         return json.loads(raw)
+
+    async def test_all_search_views_use_incoming_time_in_the_agent_timezone(self):
+        self.context.config = SimpleNamespace(timezone="Africa/Casablanca")
+        sent = datetime(2026, 1, 1, 22, 59, tzinfo=timezone.utc).timestamp()
+        self.store.begin_turn("old", "midnight record", message_at=sent)
+        with patch("pilotage.history.time.time", return_value=sent + 180):
+            self.store.complete_turn("old", "midnight record", "saved")
+        expected = "2026-01-01T23:59:00+01:00"
+        stored = "2026-01-02T00:02:00+01:00"
+        browse = (await self.call())["results"][0]
+        self.assertEqual(browse["started_at"], expected)
+        self.assertEqual(browse["last_active"], stored)
+        read = await self.call(session_id=browse["session_id"])
+        scroll = await self.call(
+            session_id=browse["session_id"], around_message_id=read["messages"][0]["id"],
+        )
+        discovered = (await self.call(query="midnight", role_filter="user"))["results"][0]
+        self.assertEqual(discovered["when"], expected)
+        for view in (read, scroll, discovered):
+            self.assertEqual(view["messages"][0]["timestamp"], expected)
+            self.assertEqual(view["messages"][0]["stored_at"], stored)
+            self.assertEqual(view["messages"][1]["timestamp"], stored)
+
+    async def test_temporal_search_orders_by_message_time_and_supports_old_records(self):
+        sent = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()
+        self.store.begin_turn("earlier", "midnight earlier", message_at=sent)
+        self.store.begin_turn("later", "midnight later", message_at=sent + 60)
+        # The earlier message finishes last; storage order must not change its date.
+        self.store.complete_turn("later", "midnight later", "saved")
+        self.store.complete_turn("earlier", "midnight earlier", "saved")
+        with patch("pilotage.history.time.time", return_value=sent + 30):
+            self.seed("legacy", [("user", "midnight legacy")])
+        for sort, expected in (
+            ("oldest", ["earlier", "legacy", "later"]),
+            ("newest", ["later", "legacy", "earlier"]),
+        ):
+            result = await self.call(query="midnight", role_filter="user", sort=sort)
+            messages = [next(m for m in r["messages"] if m.get("match")) for r in result["results"]]
+            self.assertEqual([m["content"].split()[-1] for m in messages], expected)
+            legacy = messages[1]
+            self.assertEqual(legacy["timestamp"], legacy["stored_at"])
 
     async def test_discovery_finds_a_prior_session_but_not_active_context(self):
         self.seed(

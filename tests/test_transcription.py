@@ -480,12 +480,14 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
                     *,
                     on_notice,
                     origin,
+                    message_at,
                     approval_notify,
                     claim_ids,
                     defer_completion,
                     prepared_execution,
                 ):
                     seen["text"] = text
+                    seen["message_at"] = message_at
                     return "answer"
 
                 async def finalize_ready_turn(self, _session_id):
@@ -514,6 +516,7 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
                             sender_number="123",
                             push_name="User",
                             text="",
+                            message_at=1767311940,
                             is_group=False,
                             message_ids=["m1"],
                         )
@@ -538,6 +541,7 @@ class RuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
             ):
                 self.assertEqual(await main.command_run(config), 0)
 
+        self.assertEqual(seen["message_at"], 1767311940)
         self.assertEqual(seen["text"], '"spoken"')
         self.assertEqual(
             sent[0],

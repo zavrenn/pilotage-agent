@@ -69,6 +69,20 @@ class GroupAdmissionTests(unittest.IsolatedAsyncioTestCase):
         )
         return event
 
+    async def test_batch_keeps_original_platform_time(self):
+        for message_id, timestamp in (("later", 1767312060), ("first", 1767311940)):
+            self.channel._accept(self._event(
+                message_id, messageId=message_id, timestamp=timestamp, isGroup=False,
+            ))
+        pending = next(iter(self.channel._pending.values()))
+        self.assertEqual(pending.message_at, 1767311940)
+        self.assertEqual(pending.message_ids, ["later", "first"])
+
+    async def test_missing_platform_time_falls_back_to_receipt(self):
+        with mock.patch("pilotage.history.time.time", return_value=1767311940):
+            self.channel._accept(self._event(isGroup=False))
+        self.assertEqual(next(iter(self.channel._pending.values())).message_at, 1767311940)
+
     async def test_unmentioned_group_message_is_ignored(self):
         self.channel._accept(self._event())
         self.assertEqual(self.channel._pending, {})
